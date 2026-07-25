@@ -25,4 +25,8 @@ npm run preview   # serve the production build locally
 
 ## Deployment
 
-Static output (`dist/`) is deployed via Cloudflare Pages, connected to this GitHub repo. Dev-only for now — no custom domain, unlisted `*.pages.dev` URL, never announced as live.
+Deployed to Cloudflare Workers (static assets), connected to this GitHub repo via Workers Builds — Cloudflare has merged the old separate "Pages" product into the unified Workers dashboard/config model. `wrangler.jsonc` points at the Vite build output (`dist/`); no server-side Worker code is used.
+
+Dev-only for now — no custom domain, unlisted `*.workers.dev` URL, never announced as live.
+
+To deploy manually: `npm run deploy` (requires `wrangler login` once, locally).
