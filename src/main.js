@@ -31,6 +31,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
 controls.enableDamping = true;
+// Cap zoom-out short of the camera's far clipping plane (below) so the
+// landlet can't be zoomed past the point where the camera stops rendering it.
+controls.maxDistance = LANDLET_SIDE_M * 5;
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
@@ -42,7 +45,9 @@ scene.add(sunLight);
 // PlaneGeometry is built flat in the XY plane by default; rotating -90 deg
 // around X lays it down onto the XZ ground plane (Y = up).
 const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
-const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50 }); // placeholder grass
+// DoubleSide so the plane stays visible from below during dev orbiting;
+// the finished game will never let a shopper get under the ground plane.
+const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 landlet.rotation.x = -Math.PI / 2;
 scene.add(landlet);
