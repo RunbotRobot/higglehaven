@@ -9,6 +9,9 @@ const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
 
 const canvas = document.getElementById('app');
 
+document.getElementById('build-info').textContent =
+  `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
 
