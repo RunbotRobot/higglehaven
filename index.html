@@ -28,6 +28,18 @@
         pointer-events: none;
         z-index: 10;
       }
+      #camera-debug {
+        position: fixed;
+        bottom: 44px;
+        right: 8px;
+        color: rgba(255, 255, 255, 0.75);
+        font: 11px/1.4 monospace;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+        pointer-events: none;
+        z-index: 10;
+        text-align: right;
+        white-space: pre;
+      }
       #product-info {
         position: fixed;
         top: 12px;
@@ -71,6 +83,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="build-info"></div>
+    <div id="camera-debug"></div>
     <div id="product-info"></div>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>

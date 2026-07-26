@@ -226,9 +226,42 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
-function animate() {
+// OrbitControls panning translates the camera AND its orbit target together
+// (that's how it keeps the same view angle while panning). Nothing stops
+// the target drifting upward off the ground plane, and once it has, zoom
+// (dolly) is zooming toward that floating point instead of the landlet —
+// which reads as "stuck", unable to get close to the ground no matter how
+// far you zoom in. Re-anchoring target.y to 0 every frame, while shifting
+// camera.position.y by the same amount (so the camera doesn't visibly
+// jump), keeps the zoom focus pinned to ground level. Revisit this once
+// there's anything worth focusing on above/below ground (multi-level
+// builds, §1).
+function reanchorOrbitTargetToGround() {
+  if (controls.target.y === 0) return;
+  camera.position.y -= controls.target.y;
+  controls.target.y = 0;
+}
+
+const cameraDebugEl = document.getElementById('camera-debug');
+const cameraDirection = new THREE.Vector3();
+let lastDebugUpdate = 0;
+
+function updateCameraDebug(now) {
+  if (now - lastDebugUpdate < 200) return;
+  lastDebugUpdate = now;
+  camera.getWorldDirection(cameraDirection);
+  const fmt = (v) => v.toFixed(2);
+  cameraDebugEl.textContent =
+    `cam  ${fmt(camera.position.x)}, ${fmt(camera.position.y)}, ${fmt(camera.position.z)}\n` +
+    `tgt  ${fmt(controls.target.x)}, ${fmt(controls.target.y)}, ${fmt(controls.target.z)}\n` +
+    `dir  ${fmt(cameraDirection.x)}, ${fmt(cameraDirection.y)}, ${fmt(cameraDirection.z)}`;
+}
+
+function animate(now) {
   requestAnimationFrame(animate);
   controls.update();
+  reanchorOrbitTargetToGround();
+  updateCameraDebug(now);
   renderer.render(scene, camera);
 }
-animate();
+animate(0);
