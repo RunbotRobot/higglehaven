@@ -72,6 +72,10 @@ for (const product of PRODUCTS) {
   const material = new THREE.MeshStandardMaterial({ color: product.color });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(x, height / 2, z);
+  // Nullish, not a plain ternary on `saved` — a layout saved before rotation
+  // existed has no rotationY field, which must fall back to 0 rather than
+  // becoming NaN.
+  mesh.rotation.y = saved?.rotationY ?? 0;
   mesh.userData.product = product;
   scene.add(mesh);
   productMeshes.push(mesh);
@@ -80,7 +84,11 @@ for (const product of PRODUCTS) {
 function persistLayout() {
   const positionsById = {};
   for (const mesh of productMeshes) {
-    positionsById[mesh.userData.product.id] = { x: mesh.position.x, z: mesh.position.z };
+    positionsById[mesh.userData.product.id] = {
+      x: mesh.position.x,
+      z: mesh.position.z,
+      rotationY: mesh.rotation.y,
+    };
   }
   saveLayout(positionsById);
 }
@@ -88,6 +96,11 @@ function persistLayout() {
 const productInfoEl = document.getElementById('product-info');
 const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
+
+const rotateControlsEl = document.getElementById('rotate-controls');
+const rotateLeftBtn = document.getElementById('rotate-left');
+const rotateRightBtn = document.getElementById('rotate-right');
+const ROTATE_STEP = Math.PI / 12; // 15 degrees per tap
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -100,10 +113,20 @@ function setSelected(mesh) {
   if (selectedMesh) {
     selectedMesh.material.emissive.setHex(0x444444);
     productInfoEl.textContent = `${selectedMesh.userData.product.name} — drag to move`;
+    rotateControlsEl.classList.add('visible');
   } else {
     productInfoEl.textContent = HINT_TEXT;
+    rotateControlsEl.classList.remove('visible');
   }
 }
+
+function rotateSelected(direction) {
+  if (!selectedMesh) return;
+  selectedMesh.rotation.y += direction * ROTATE_STEP;
+  persistLayout();
+}
+rotateLeftBtn.addEventListener('click', () => rotateSelected(1));
+rotateRightBtn.addEventListener('click', () => rotateSelected(-1));
 
 function ndcFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
