@@ -98,6 +98,9 @@ translateControls.addEventListener('objectChange', () => {
   const { x, z } = clampToLandlet(object, object.position.x, object.position.z);
   object.position.x = x;
   object.position.z = z;
+  // Keep orbit centered on the product as it's dragged, not wherever it
+  // started before the move.
+  controls.target.copy(object.position);
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -191,6 +194,11 @@ function setSelected(mesh) {
     productInfoEl.textContent = selectedMesh.userData.product.name;
     modeControlsEl.classList.add('visible');
     setGizmoMode('translate');
+    // Re-center orbit on the selected product, at whatever the *actual*
+    // current camera distance to it is — otherwise one-finger rotate keeps
+    // swinging at whatever radius the view happened to have before
+    // selecting anything, which feels enormous once you've flown in close.
+    controls.target.copy(selectedMesh.position);
   } else {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
@@ -250,6 +258,13 @@ window.addEventListener('resize', onResize);
 // continuously redefined as "wherever is dollyDelta ahead of me" rather
 // than a stale world-space location.
 //
+// This only applies with nothing selected, though. With a product selected,
+// target is pinned to *it* (see setSelected / the translate objectChange
+// handler above) specifically so one-finger rotate orbits at the real
+// distance to that product instead of whatever radius free-flying left
+// behind — and for the same reason, zoom while inspecting a product should
+// be a normal dolly toward/away from it, not a truck past it.
+//
 // This has to hook OrbitControls' own "change" event rather than run once
 // per animation frame: wheel/pinch handlers call update() (and dispatch
 // "change") synchronously the moment the input event fires, not on the
@@ -258,10 +273,12 @@ window.addEventListener('resize', onResize);
 let lastKnownDistance = camera.position.distanceTo(controls.target);
 controls.addEventListener('change', () => {
   const newDistance = camera.position.distanceTo(controls.target);
-  const dollyDelta = lastKnownDistance - newDistance;
-  if (Math.abs(dollyDelta) > 1e-6) {
-    camera.getWorldDirection(cameraDirection);
-    controls.target.addScaledVector(cameraDirection, dollyDelta);
+  if (!selectedMesh) {
+    const dollyDelta = lastKnownDistance - newDistance;
+    if (Math.abs(dollyDelta) > 1e-6) {
+      camera.getWorldDirection(cameraDirection);
+      controls.target.addScaledVector(cameraDirection, dollyDelta);
+    }
   }
   lastKnownDistance = camera.position.distanceTo(controls.target);
 });
