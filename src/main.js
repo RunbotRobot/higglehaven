@@ -37,8 +37,10 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
 controls.enableDamping = true;
-// Cap zoom-out short of the camera's far clipping plane (below) so the
-// landlet can't be zoomed past the point where the camera stops rendering it.
+// Bounds how far a single scroll/pinch tick can move the camera (see the
+// dolly-to-truck conversion below) — not an overall travel limit, since
+// "zoom" here is really "fly forward/backward" and can cover any distance
+// over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 
 function clampToLandlet(mesh, x, z) {
@@ -76,9 +78,18 @@ wireDraggingBehavior(rotateControls);
 // Move: X/Z (ground plane) only — no vertical placement yet. Setting
 // showY = false also hides the XY/YZ plane handles (their names contain
 // "Y"), leaving the X arrow, Z arrow, and the XZ plane square.
+//
+// space = 'local' (instead of the default 'world') is what makes moving a
+// bookcase along a wall feel natural even when the wall isn't aligned to
+// higglehaven's world grid: the handles follow the *object's own* rotation
+// (set with the Rotate gizmo) rather than always pointing along world X/Z.
+// Rotate the object to match the wall once, and its move handles are then
+// "along the wall" / "into the wall" — no need to think in world axes at
+// all.
 const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
 translateControls.showY = false;
+translateControls.space = 'local';
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 translateControls.addEventListener('objectChange', () => {
@@ -226,23 +237,37 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
-// OrbitControls panning translates the camera AND its orbit target together
-// (that's how it keeps the same view angle while panning). Nothing stops
-// the target drifting upward off the ground plane, and once it has, zoom
-// (dolly) is zooming toward that floating point instead of the landlet —
-// which reads as "stuck", unable to get close to the ground no matter how
-// far you zoom in. Re-anchoring target.y to 0 every frame, while shifting
-// camera.position.y by the same amount (so the camera doesn't visibly
-// jump), keeps the zoom focus pinned to ground level. Revisit this once
-// there's anything worth focusing on above/below ground (multi-level
-// builds, §1).
-function reanchorOrbitTargetToGround() {
-  if (controls.target.y === 0) return;
-  camera.position.y -= controls.target.y;
-  controls.target.y = 0;
-}
+// OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
+// distance between the camera and a fixed orbit target. That's "zoom to a
+// point" — and it has a real failure mode, which is what made zoom feel
+// stuck after panning: wherever the target currently sits becomes a wall
+// you can approach but never get past. Converting every dolly step into a
+// *truck* — moving the camera AND the target forward together, by the same
+// amount, along the camera's current view direction — turns "zoom" into
+// what it's actually meant to feel like here: flying forward or backward,
+// same as e.g. SketchUp's walk tool or a game's fly-camera. There's no
+// longer a fixed focus point to get stuck against, since the target is
+// continuously redefined as "wherever is dollyDelta ahead of me" rather
+// than a stale world-space location.
+//
+// This has to hook OrbitControls' own "change" event rather than run once
+// per animation frame: wheel/pinch handlers call update() (and dispatch
+// "change") synchronously the moment the input event fires, not on the
+// next frame — so by the time our own animate() loop calls update(), the
+// dolly has already happened and there's nothing left to measure.
+let lastKnownDistance = camera.position.distanceTo(controls.target);
+controls.addEventListener('change', () => {
+  const newDistance = camera.position.distanceTo(controls.target);
+  const dollyDelta = lastKnownDistance - newDistance;
+  if (Math.abs(dollyDelta) > 1e-6) {
+    camera.getWorldDirection(cameraDirection);
+    controls.target.addScaledVector(cameraDirection, dollyDelta);
+  }
+  lastKnownDistance = camera.position.distanceTo(controls.target);
+});
 
 const cameraDebugEl = document.getElementById('camera-debug');
+const cameraDebugCopyBtn = document.getElementById('camera-debug-copy');
 const cameraDirection = new THREE.Vector3();
 let lastDebugUpdate = 0;
 
@@ -257,10 +282,21 @@ function updateCameraDebug(now) {
     `dir  ${fmt(cameraDirection.x)}, ${fmt(cameraDirection.y)}, ${fmt(cameraDirection.z)}`;
 }
 
+cameraDebugCopyBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(cameraDebugEl.textContent);
+    cameraDebugCopyBtn.textContent = 'Copied!';
+  } catch {
+    cameraDebugCopyBtn.textContent = "Couldn't copy";
+  }
+  setTimeout(() => {
+    cameraDebugCopyBtn.textContent = 'Copy';
+  }, 1200);
+});
+
 function animate(now) {
   requestAnimationFrame(animate);
   controls.update();
-  reanchorOrbitTargetToGround();
   updateCameraDebug(now);
   renderer.render(scene, camera);
 }

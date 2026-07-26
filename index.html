@@ -28,17 +28,32 @@
         pointer-events: none;
         z-index: 10;
       }
-      #camera-debug {
+      #camera-debug-panel {
         position: fixed;
         bottom: 44px;
         right: 8px;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+      }
+      #camera-debug {
         color: rgba(255, 255, 255, 0.75);
         font: 11px/1.4 monospace;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-        pointer-events: none;
-        z-index: 10;
         text-align: right;
         white-space: pre;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      #camera-debug-copy {
+        padding: 3px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgba(0, 0, 0, 0.5);
+        color: rgba(255, 255, 255, 0.85);
+        font: 11px/1.4 sans-serif;
       }
       #product-info {
         position: fixed;
@@ -83,7 +98,10 @@
   <body>
     <canvas id="app"></canvas>
     <div id="build-info"></div>
-    <div id="camera-debug"></div>
+    <div id="camera-debug-panel">
+      <div id="camera-debug"></div>
+      <button id="camera-debug-copy" type="button">Copy</button>
+    </div>
     <div id="product-info"></div>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
