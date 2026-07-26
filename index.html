@@ -42,12 +42,40 @@
         pointer-events: none;
         z-index: 10;
       }
+      #gizmo-mode-controls {
+        position: fixed;
+        top: 64px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 8px;
+        z-index: 10;
+      }
+      #gizmo-mode-controls.visible {
+        display: flex;
+      }
+      #gizmo-mode-controls button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgba(0, 0, 0, 0.4);
+        color: rgba(255, 255, 255, 0.7);
+        font: 14px/1.4 sans-serif;
+      }
+      #gizmo-mode-controls button.active {
+        background: rgba(255, 255, 255, 0.9);
+        color: #111;
+      }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div id="build-info"></div>
     <div id="product-info"></div>
+    <div id="gizmo-mode-controls">
+      <button id="mode-move" type="button">Move</button>
+      <button id="mode-rotate" type="button">Rotate</button>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

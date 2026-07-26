@@ -41,22 +41,52 @@ controls.enableDamping = true;
 // landlet can't be zoomed past the point where the camera stops rendering it.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 
-// Standard Blender/Unity-style transform gizmo (spec §3) for rotating the
-// selected product, restricted to the Y (yaw) axis only — these are ground-
-// resting items, so X/Z tilt handles would just be a way to break them.
-// Constructed here (before the drag-to-move listener below is registered)
-// so its own pointerdown handling runs first on every gesture; the
-// drag-to-move handler then checks `transformControls.dragging` to yield
-// to the gizmo whenever a tap/drag actually grabbed the rotate ring.
-const transformControls = new TransformControls(camera, renderer.domElement);
-transformControls.setMode('rotate');
-transformControls.showX = false;
-transformControls.showZ = false;
-transformControls.showXYZE = false;
-scene.add(transformControls.getHelper());
-transformControls.addEventListener('dragging-changed', (event) => {
-  controls.enabled = !event.value;
-  if (!event.value) persistLayout();
+function clampToLandlet(mesh, x, z) {
+  const { width, depth } = mesh.userData.product.dimensions;
+  const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+  const halfSpanZ = LANDLET_SIDE_M / 2 - depth / 2;
+  return {
+    x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
+    z: THREE.MathUtils.clamp(z, -halfSpanZ, halfSpanZ),
+  };
+}
+
+// Standard Blender/Unity-style transform gizmos (spec §3) for manipulating
+// the selected product — one for rotating, one for moving. Handles are
+// offset from the object itself specifically so a touch-drag doesn't put
+// your finger over the thing you're trying to look at, unlike dragging the
+// object's own body directly.
+function wireDraggingBehavior(transformControls) {
+  transformControls.addEventListener('dragging-changed', (event) => {
+    controls.enabled = !event.value;
+    if (!event.value) persistLayout();
+  });
+}
+
+// Rotate: Y (yaw) axis only — these are ground-resting items, so X/Z tilt
+// handles would just be a way to break them.
+const rotateControls = new TransformControls(camera, renderer.domElement);
+rotateControls.setMode('rotate');
+rotateControls.showX = false;
+rotateControls.showZ = false;
+rotateControls.showXYZE = false;
+scene.add(rotateControls.getHelper());
+wireDraggingBehavior(rotateControls);
+
+// Move: X/Z (ground plane) only — no vertical placement yet. Setting
+// showY = false also hides the XY/YZ plane handles (their names contain
+// "Y"), leaving the X arrow, Z arrow, and the XZ plane square.
+const translateControls = new TransformControls(camera, renderer.domElement);
+translateControls.setMode('translate');
+translateControls.showY = false;
+scene.add(translateControls.getHelper());
+wireDraggingBehavior(translateControls);
+translateControls.addEventListener('objectChange', () => {
+  const object = translateControls.object;
+  if (!object) return;
+  const { x, z } = clampToLandlet(object, object.position.x, object.position.z);
+  object.position.x = x;
+  object.position.z = z;
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -116,6 +146,27 @@ const productInfoEl = document.getElementById('product-info');
 const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
 
+// Only one gizmo is ever attached at a time. Showing both simultaneously
+// was tried first and rejected: the rotate ring and the translate handles
+// can occupy the same screen pixels at some angles/zoom levels, and each
+// TransformControls instance hit-tests independently, so a single drag
+// could trigger both at once (move AND rotate from one gesture). A mode
+// toggle — the same convention Blender/Unity use — avoids that outright.
+const modeControlsEl = document.getElementById('gizmo-mode-controls');
+const modeMoveBtn = document.getElementById('mode-move');
+const modeRotateBtn = document.getElementById('mode-rotate');
+
+function setGizmoMode(mode) {
+  modeMoveBtn.classList.toggle('active', mode === 'translate');
+  modeRotateBtn.classList.toggle('active', mode === 'rotate');
+  translateControls.detach();
+  rotateControls.detach();
+  if (!selectedMesh) return;
+  (mode === 'translate' ? translateControls : rotateControls).attach(selectedMesh);
+}
+modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
+modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
+
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 let selectedMesh = null;
@@ -126,11 +177,14 @@ function setSelected(mesh) {
   selectedMesh = mesh;
   if (selectedMesh) {
     selectedMesh.material.emissive.setHex(0x444444);
-    productInfoEl.textContent = `${selectedMesh.userData.product.name} — drag to move, or use the ring to rotate`;
-    transformControls.attach(selectedMesh);
+    productInfoEl.textContent = selectedMesh.userData.product.name;
+    modeControlsEl.classList.add('visible');
+    setGizmoMode('translate');
   } else {
     productInfoEl.textContent = HINT_TEXT;
-    transformControls.detach();
+    modeControlsEl.classList.remove('visible');
+    translateControls.detach();
+    rotateControls.detach();
   }
 }
 
@@ -163,57 +217,6 @@ renderer.domElement.addEventListener('click', (event) => {
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const hits = raycaster.intersectObjects(productMeshes);
   setSelected(hits.length > 0 ? hits[0].object : null);
-});
-
-// Dragging a product: only engages when the drag *starts* on the already-
-// selected mesh, so a plain drag elsewhere still orbits the camera as
-// normal. While dragging, OrbitControls is disabled so its own pointermove
-// handling doesn't also rotate the camera during the same gesture.
-const dragPlane = new THREE.Plane();
-const dragPoint = new THREE.Vector3();
-let draggedMesh = null;
-
-function clampToLandlet(mesh, x, z) {
-  const { width, depth } = mesh.userData.product.dimensions;
-  const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-  const halfSpanZ = LANDLET_SIDE_M / 2 - depth / 2;
-  return {
-    x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
-    z: THREE.MathUtils.clamp(z, -halfSpanZ, halfSpanZ),
-  };
-}
-
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  // Yield to the rotate gizmo if this same press already grabbed its ring
-  // (relies on transformControls' own pointerdown listener, registered
-  // above, having run first and set `dragging`).
-  if (!selectedMesh || transformControls.dragging) return;
-  raycaster.setFromCamera(ndcFromEvent(event), camera);
-  const hits = raycaster.intersectObject(selectedMesh);
-  if (hits.length === 0) return;
-
-  draggedMesh = selectedMesh;
-  controls.enabled = false;
-  dragPlane.setFromNormalAndCoplanarPoint(
-    new THREE.Vector3(0, 1, 0),
-    draggedMesh.position,
-  );
-});
-
-window.addEventListener('pointermove', (event) => {
-  if (!draggedMesh) return;
-  raycaster.setFromCamera(ndcFromEvent(event), camera);
-  if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return;
-  const { x, z } = clampToLandlet(draggedMesh, dragPoint.x, dragPoint.z);
-  draggedMesh.position.x = x;
-  draggedMesh.position.z = z;
-});
-
-window.addEventListener('pointerup', () => {
-  if (!draggedMesh) return;
-  draggedMesh = null;
-  controls.enabled = true;
-  persistLayout();
 });
 
 function onResize() {
