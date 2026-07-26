@@ -85,21 +85,88 @@ function setSelected(mesh) {
   selectedMesh = mesh;
   if (selectedMesh) {
     selectedMesh.material.emissive.setHex(0x444444);
-    productInfoEl.textContent = selectedMesh.userData.product.name;
+    productInfoEl.textContent = `${selectedMesh.userData.product.name} — drag to move`;
   } else {
     productInfoEl.textContent = HINT_TEXT;
   }
 }
 
-// "click" (not pointerdown/up) so a drag-to-orbit gesture on the canvas
-// doesn't get misread as tapping a product underneath it.
-renderer.domElement.addEventListener('click', (event) => {
+function ndcFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointerNdc, camera);
+  return pointerNdc;
+}
+
+// The browser's "click" event fires on pointerup as long as press and
+// release happened over the same element — it does NOT get suppressed just
+// because the pointer moved a lot in between. So an orbit-drag across the
+// canvas still fires a click at the release point, which would otherwise
+// misread as tapping (or missing) a product. Tracking the press position
+// and ignoring clicks that moved more than a few pixels fixes that.
+const CLICK_DRAG_THRESHOLD_PX = 8;
+let pointerDownPos = null;
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  pointerDownPos = { x: event.clientX, y: event.clientY };
+});
+
+renderer.domElement.addEventListener('click', (event) => {
+  if (pointerDownPos) {
+    const dx = event.clientX - pointerDownPos.x;
+    const dy = event.clientY - pointerDownPos.y;
+    if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) return;
+  }
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
   const hits = raycaster.intersectObjects(productMeshes);
   setSelected(hits.length > 0 ? hits[0].object : null);
+});
+
+// Dragging a product: only engages when the drag *starts* on the already-
+// selected mesh, so a plain drag elsewhere still orbits the camera as
+// normal. While dragging, OrbitControls is disabled so its own pointermove
+// handling doesn't also rotate the camera during the same gesture.
+const dragPlane = new THREE.Plane();
+const dragPoint = new THREE.Vector3();
+let draggedMesh = null;
+
+function clampToLandlet(mesh, x, z) {
+  const { width, depth } = mesh.userData.product.dimensions;
+  const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+  const halfSpanZ = LANDLET_SIDE_M / 2 - depth / 2;
+  return {
+    x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
+    z: THREE.MathUtils.clamp(z, -halfSpanZ, halfSpanZ),
+  };
+}
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (!selectedMesh) return;
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const hits = raycaster.intersectObject(selectedMesh);
+  if (hits.length === 0) return;
+
+  draggedMesh = selectedMesh;
+  controls.enabled = false;
+  dragPlane.setFromNormalAndCoplanarPoint(
+    new THREE.Vector3(0, 1, 0),
+    draggedMesh.position,
+  );
+});
+
+window.addEventListener('pointermove', (event) => {
+  if (!draggedMesh) return;
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return;
+  const { x, z } = clampToLandlet(draggedMesh, dragPoint.x, dragPoint.z);
+  draggedMesh.position.x = x;
+  draggedMesh.position.z = z;
+});
+
+window.addEventListener('pointerup', () => {
+  if (!draggedMesh) return;
+  draggedMesh = null;
+  controls.enabled = true;
 });
 
 function onResize() {
