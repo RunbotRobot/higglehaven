@@ -28,11 +28,26 @@
         pointer-events: none;
         z-index: 10;
       }
+      #product-info {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #fff;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 8px 14px;
+        border-radius: 8px;
+        font: 14px/1.4 sans-serif;
+        text-align: center;
+        pointer-events: none;
+        z-index: 10;
+      }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div id="build-info"></div>
+    <div id="product-info"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

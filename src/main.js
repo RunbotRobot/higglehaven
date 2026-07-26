@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PRODUCTS } from './products.js';
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -54,6 +55,52 @@ const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: 
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 landlet.rotation.x = -Math.PI / 2;
 scene.add(landlet);
+
+// Placeholder products: plain boxes standing in for real 3D models, sized
+// and colored per the dummy data in products.js. Resting on the ground
+// (y = height / 2) since there's no builder tool yet to place them otherwise.
+const productMeshes = [];
+for (const product of PRODUCTS) {
+  const { width, height, depth } = product.dimensions;
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const material = new THREE.MeshStandardMaterial({ color: product.color });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(product.position.x, height / 2, product.position.z);
+  mesh.userData.product = product;
+  scene.add(mesh);
+  productMeshes.push(mesh);
+}
+
+const productInfoEl = document.getElementById('product-info');
+const HINT_TEXT = 'Tap a product to inspect it';
+productInfoEl.textContent = HINT_TEXT;
+
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
+let selectedMesh = null;
+
+function setSelected(mesh) {
+  if (selectedMesh === mesh) return;
+  if (selectedMesh) selectedMesh.material.emissive.setHex(0x000000);
+  selectedMesh = mesh;
+  if (selectedMesh) {
+    selectedMesh.material.emissive.setHex(0x444444);
+    productInfoEl.textContent = selectedMesh.userData.product.name;
+  } else {
+    productInfoEl.textContent = HINT_TEXT;
+  }
+}
+
+// "click" (not pointerdown/up) so a drag-to-orbit gesture on the canvas
+// doesn't get misread as tapping a product underneath it.
+renderer.domElement.addEventListener('click', (event) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNdc, camera);
+  const hits = raycaster.intersectObjects(productMeshes);
+  setSelected(hits.length > 0 ? hits[0].object : null);
+});
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
