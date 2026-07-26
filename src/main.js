@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PRODUCTS } from './products.js';
 import { loadLayout, saveLayout } from './layoutStorage.js';
 
@@ -39,6 +40,24 @@ controls.enableDamping = true;
 // Cap zoom-out short of the camera's far clipping plane (below) so the
 // landlet can't be zoomed past the point where the camera stops rendering it.
 controls.maxDistance = LANDLET_SIDE_M * 5;
+
+// Standard Blender/Unity-style transform gizmo (spec §3) for rotating the
+// selected product, restricted to the Y (yaw) axis only — these are ground-
+// resting items, so X/Z tilt handles would just be a way to break them.
+// Constructed here (before the drag-to-move listener below is registered)
+// so its own pointerdown handling runs first on every gesture; the
+// drag-to-move handler then checks `transformControls.dragging` to yield
+// to the gizmo whenever a tap/drag actually grabbed the rotate ring.
+const transformControls = new TransformControls(camera, renderer.domElement);
+transformControls.setMode('rotate');
+transformControls.showX = false;
+transformControls.showZ = false;
+transformControls.showXYZE = false;
+scene.add(transformControls.getHelper());
+transformControls.addEventListener('dragging-changed', (event) => {
+  controls.enabled = !event.value;
+  if (!event.value) persistLayout();
+});
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
@@ -97,11 +116,6 @@ const productInfoEl = document.getElementById('product-info');
 const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
 
-const rotateControlsEl = document.getElementById('rotate-controls');
-const rotateLeftBtn = document.getElementById('rotate-left');
-const rotateRightBtn = document.getElementById('rotate-right');
-const ROTATE_STEP = Math.PI / 12; // 15 degrees per tap
-
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 let selectedMesh = null;
@@ -112,21 +126,13 @@ function setSelected(mesh) {
   selectedMesh = mesh;
   if (selectedMesh) {
     selectedMesh.material.emissive.setHex(0x444444);
-    productInfoEl.textContent = `${selectedMesh.userData.product.name} — drag to move`;
-    rotateControlsEl.classList.add('visible');
+    productInfoEl.textContent = `${selectedMesh.userData.product.name} — drag to move, or use the ring to rotate`;
+    transformControls.attach(selectedMesh);
   } else {
     productInfoEl.textContent = HINT_TEXT;
-    rotateControlsEl.classList.remove('visible');
+    transformControls.detach();
   }
 }
-
-function rotateSelected(direction) {
-  if (!selectedMesh) return;
-  selectedMesh.rotation.y += direction * ROTATE_STEP;
-  persistLayout();
-}
-rotateLeftBtn.addEventListener('click', () => rotateSelected(1));
-rotateRightBtn.addEventListener('click', () => rotateSelected(-1));
 
 function ndcFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -178,7 +184,10 @@ function clampToLandlet(mesh, x, z) {
 }
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (!selectedMesh) return;
+  // Yield to the rotate gizmo if this same press already grabbed its ring
+  // (relies on transformControls' own pointerdown listener, registered
+  // above, having run first and set `dragging`).
+  if (!selectedMesh || transformControls.dragging) return;
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const hits = raycaster.intersectObject(selectedMesh);
   if (hits.length === 0) return;

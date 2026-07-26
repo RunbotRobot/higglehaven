@@ -42,38 +42,12 @@
         pointer-events: none;
         z-index: 10;
       }
-      #rotate-controls {
-        position: fixed;
-        top: 64px;
-        left: 50%;
-        transform: translateX(-50%);
-        display: none;
-        gap: 12px;
-        z-index: 10;
-      }
-      #rotate-controls.visible {
-        display: flex;
-      }
-      #rotate-controls button {
-        width: 48px;
-        height: 48px;
-        border-radius: 50%;
-        border: none;
-        background: rgba(0, 0, 0, 0.55);
-        color: #fff;
-        font-size: 20px;
-        line-height: 1;
-      }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div id="build-info"></div>
     <div id="product-info"></div>
-    <div id="rotate-controls">
-      <button id="rotate-left" type="button" aria-label="Rotate left">⟲</button>
-      <button id="rotate-right" type="button" aria-label="Rotate right">⟳</button>
-    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
