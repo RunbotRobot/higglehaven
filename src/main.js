@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PRODUCTS } from './products.js';
+import { loadLayout, saveLayout } from './layoutStorage.js';
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -59,16 +60,29 @@ scene.add(landlet);
 // Placeholder products: plain boxes standing in for real 3D models, sized
 // and colored per the dummy data in products.js. Resting on the ground
 // (y = height / 2) since there's no builder tool yet to place them otherwise.
+// A saved layout (from a previous drag) overrides the default position.
+const savedLayout = loadLayout();
 const productMeshes = [];
 for (const product of PRODUCTS) {
   const { width, height, depth } = product.dimensions;
+  const saved = savedLayout[product.id];
+  const x = saved ? saved.x : product.position.x;
+  const z = saved ? saved.z : product.position.z;
   const geometry = new THREE.BoxGeometry(width, height, depth);
   const material = new THREE.MeshStandardMaterial({ color: product.color });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(product.position.x, height / 2, product.position.z);
+  mesh.position.set(x, height / 2, z);
   mesh.userData.product = product;
   scene.add(mesh);
   productMeshes.push(mesh);
+}
+
+function persistLayout() {
+  const positionsById = {};
+  for (const mesh of productMeshes) {
+    positionsById[mesh.userData.product.id] = { x: mesh.position.x, z: mesh.position.z };
+  }
+  saveLayout(positionsById);
 }
 
 const productInfoEl = document.getElementById('product-info');
@@ -167,6 +181,7 @@ window.addEventListener('pointerup', () => {
   if (!draggedMesh) return;
   draggedMesh = null;
   controls.enabled = true;
+  persistLayout();
 });
 
 function onResize() {
