@@ -98,9 +98,6 @@ translateControls.addEventListener('objectChange', () => {
   const { x, z } = clampToLandlet(object, object.position.x, object.position.z);
   object.position.x = x;
   object.position.z = z;
-  // Keep orbit centered on the product as it's dragged, not wherever it
-  // started before the move.
-  controls.target.copy(object.position);
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -194,11 +191,6 @@ function setSelected(mesh) {
     productInfoEl.textContent = selectedMesh.userData.product.name;
     modeControlsEl.classList.add('visible');
     setGizmoMode('translate');
-    // Re-center orbit on the selected product, at whatever the *actual*
-    // current camera distance to it is — otherwise one-finger rotate keeps
-    // swinging at whatever radius the view happened to have before
-    // selecting anything, which feels enormous once you've flown in close.
-    controls.target.copy(selectedMesh.position);
   } else {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
@@ -225,6 +217,20 @@ let pointerDownPos = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDownPos = { x: event.clientX, y: event.clientY };
+
+  // Re-center orbit on the selected product right as a camera gesture
+  // starts (not at selection time, and not while dragging the product
+  // itself with the move gizmo) — reassigning OrbitControls' target always
+  // forces an immediate camera.lookAt() snap on the next frame, so doing it
+  // at selection/move time visibly recenters the view. Doing it here means
+  // that reorientation happens as part of the drag the user is already
+  // making, rather than as a jump beforehand. rotateControls/translateControls
+  // were constructed earlier, so their own pointerdown handling (which sets
+  // `dragging`) has already run by the time this listener fires — if either
+  // grabbed this press, it's a gizmo interaction, not a camera gesture.
+  if (selectedMesh && !rotateControls.dragging && !translateControls.dragging) {
+    controls.target.copy(selectedMesh.position);
+  }
 });
 
 renderer.domElement.addEventListener('click', (event) => {
@@ -259,8 +265,8 @@ window.addEventListener('resize', onResize);
 // than a stale world-space location.
 //
 // This only applies with nothing selected, though. With a product selected,
-// target is pinned to *it* (see setSelected / the translate objectChange
-// handler above) specifically so one-finger rotate orbits at the real
+// target gets pinned to it the moment a camera gesture starts (see the
+// pointerdown listener below) so one-finger rotate orbits at the real
 // distance to that product instead of whatever radius free-flying left
 // behind — and for the same reason, zoom while inspecting a product should
 // be a normal dolly toward/away from it, not a truck past it.
