@@ -265,17 +265,29 @@ window.addEventListener('resize', onResize);
 let lastKnownDistance = camera.position.distanceTo(controls.target);
 
 // Re-centering on the selected product needs to happen only for an actual
-// one-finger rotate — not a two-finger pan. That's harder than it sounds:
-// touch gestures fire a "start" event (and set controls.state) on *every*
-// finger landing, and a two-finger pan's first finger briefly looks
-// identical to a one-finger rotate until the second finger lands a moment
-// later and corrects the state. Retargeting straight from "start" (as a
-// first attempt did) fires on that first finger and wrongly recenters
-// pans too. Waiting for the first "change" event instead — which only
-// fires once OrbitControls actually applies a movement — reads whatever
-// controls.state has *settled to* by the time real motion begins, which
-// is correct by then since a genuine two-finger gesture has both fingers
-// down before any meaningful movement in practice.
+// one-finger rotate — not a two-finger pan, and not the tail end of a pan
+// where one finger lifts a moment before the other. Both are harder than
+// they sound:
+//
+// - A two-finger pan's first finger briefly looks identical to a one-finger
+//   rotate until the second finger lands and corrects OrbitControls'
+//   internal state. Checking controls.state on OrbitControls' "start" event
+//   (a first attempt) fires on that first finger and wrongly recenters.
+// - Releasing a two-finger pan by lifting one finger before the other hits
+//   this same problem from the other end: OrbitControls treats the
+//   now-solo remaining finger as if it just started a brand new one-finger
+//   rotate (see its onPointerUp, case 1 — "minimal placeholder event -
+//   allows state correction on pointer-up"), and dispatches a fresh "start"
+//   for it. If we're listening for "start" at all, this false-restart
+//   retargets right as you're trying to let go of a pan.
+//
+// Both are solved by arming the check ourselves, only on a genuine new
+// press (our own tracked pointer count going 0 -> 1) rather than on
+// OrbitControls' "start" event — that reclassification-on-release never
+// fires a pointerdown, so it can't trigger this. We still wait for the
+// first "change" event to actually read controls.state, since a real
+// two-finger gesture's second finger lands (correcting the state) before
+// any meaningful movement happens in practice.
 //
 // ROTATE (mouse) = 0, TOUCH_ROTATE = 1 finger = 3: OrbitControls' state
 // enum isn't exported, so these are hardcoded from its source (pinned
@@ -283,8 +295,18 @@ let lastKnownDistance = camera.position.distanceTo(controls.target);
 const ROTATE_STATE = 0;
 const TOUCH_ROTATE_STATE = 3;
 let pendingGestureCheck = false;
-controls.addEventListener('start', () => {
-  pendingGestureCheck = true;
+let activePointerCount = 0;
+renderer.domElement.addEventListener('pointerdown', () => {
+  activePointerCount++;
+  if (activePointerCount === 1) {
+    pendingGestureCheck = true;
+  }
+});
+window.addEventListener('pointerup', () => {
+  activePointerCount = Math.max(0, activePointerCount - 1);
+});
+window.addEventListener('pointercancel', () => {
+  activePointerCount = Math.max(0, activePointerCount - 1);
 });
 
 controls.addEventListener('change', () => {
