@@ -217,20 +217,6 @@ let pointerDownPos = null;
 
 renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDownPos = { x: event.clientX, y: event.clientY };
-
-  // Re-center orbit on the selected product right as a camera gesture
-  // starts (not at selection time, and not while dragging the product
-  // itself with the move gizmo) — reassigning OrbitControls' target always
-  // forces an immediate camera.lookAt() snap on the next frame, so doing it
-  // at selection/move time visibly recenters the view. Doing it here means
-  // that reorientation happens as part of the drag the user is already
-  // making, rather than as a jump beforehand. rotateControls/translateControls
-  // were constructed earlier, so their own pointerdown handling (which sets
-  // `dragging`) has already run by the time this listener fires — if either
-  // grabbed this press, it's a gizmo interaction, not a camera gesture.
-  if (selectedMesh && !rotateControls.dragging && !translateControls.dragging) {
-    controls.target.copy(selectedMesh.position);
-  }
 });
 
 renderer.domElement.addEventListener('click', (event) => {
@@ -265,11 +251,11 @@ window.addEventListener('resize', onResize);
 // than a stale world-space location.
 //
 // This only applies with nothing selected, though. With a product selected,
-// target gets pinned to it the moment a camera gesture starts (see the
-// pointerdown listener below) so one-finger rotate orbits at the real
-// distance to that product instead of whatever radius free-flying left
-// behind — and for the same reason, zoom while inspecting a product should
-// be a normal dolly toward/away from it, not a truck past it.
+// target gets pinned to it right as a one-finger rotate begins (see below)
+// so rotate orbits at the real distance to that product instead of
+// whatever radius free-flying left behind — and for the same reason, zoom
+// while inspecting a product should be a normal dolly toward/away from it,
+// not a truck past it.
 //
 // This has to hook OrbitControls' own "change" event rather than run once
 // per animation frame: wheel/pinch handlers call update() (and dispatch
@@ -277,7 +263,39 @@ window.addEventListener('resize', onResize);
 // next frame — so by the time our own animate() loop calls update(), the
 // dolly has already happened and there's nothing left to measure.
 let lastKnownDistance = camera.position.distanceTo(controls.target);
+
+// Re-centering on the selected product needs to happen only for an actual
+// one-finger rotate — not a two-finger pan. That's harder than it sounds:
+// touch gestures fire a "start" event (and set controls.state) on *every*
+// finger landing, and a two-finger pan's first finger briefly looks
+// identical to a one-finger rotate until the second finger lands a moment
+// later and corrects the state. Retargeting straight from "start" (as a
+// first attempt did) fires on that first finger and wrongly recenters
+// pans too. Waiting for the first "change" event instead — which only
+// fires once OrbitControls actually applies a movement — reads whatever
+// controls.state has *settled to* by the time real motion begins, which
+// is correct by then since a genuine two-finger gesture has both fingers
+// down before any meaningful movement in practice.
+//
+// ROTATE (mouse) = 0, TOUCH_ROTATE = 1 finger = 3: OrbitControls' state
+// enum isn't exported, so these are hardcoded from its source (pinned
+// three version, see package.json) — see _STATE in OrbitControls.js.
+const ROTATE_STATE = 0;
+const TOUCH_ROTATE_STATE = 3;
+let pendingGestureCheck = false;
+controls.addEventListener('start', () => {
+  pendingGestureCheck = true;
+});
+
 controls.addEventListener('change', () => {
+  if (pendingGestureCheck) {
+    pendingGestureCheck = false;
+    const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
+    if (isRotate && selectedMesh) {
+      controls.target.copy(selectedMesh.position);
+    }
+  }
+
   const newDistance = camera.position.distanceTo(controls.target);
   if (!selectedMesh) {
     const dollyDelta = lastKnownDistance - newDistance;
