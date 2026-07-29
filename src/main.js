@@ -9,6 +9,13 @@ import { loadLayout, saveLayout } from './layoutStorage.js';
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
+// Placeholder buildable volume: a plain cuboid extending 3 levels (10m/level
+// per spec §3) straight up, rather than the spec's actual cone-shaped volume
+// (cross-section changes with distance from Earth's center once curvature is
+// modeled). Same simplification as using a flat plane instead of a curved
+// one for the ground right now — get the mechanic working, model the real
+// geometry later.
+const LANDLET_HEIGHT_M = 30;
 
 const canvas = document.getElementById('app');
 
@@ -24,8 +31,17 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000,
 );
-// Positioned up and back so the whole plot is in frame; Three.js is Y-up.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5, LANDLET_SIDE_M * 0.6);
+// Three.js defaults to Y-up, which reads as backwards for a project whose
+// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
+// the odd one out — Z-up matches that better. OrbitControls (and
+// Object3D.lookAt, used just below) both key off `camera.up` rather than
+// hard-coding Y, so this is enough to retarget the whole "vertical axis"
+// convention with no library patching. It has to happen before
+// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
+// construction, to build its internal up-axis-correction quaternion.
+camera.up.set(0, 0, 1);
+// Positioned up and back so the whole plot is in frame.
+camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
 camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -43,13 +59,16 @@ controls.enableDamping = true;
 // over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 
-function clampToLandlet(mesh, x, z) {
-  const { width, depth } = mesh.userData.product.dimensions;
+// Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
+// clamped to the placeholder cuboid volume above — see LANDLET_HEIGHT_M.
+function clampToLandlet(mesh, x, y, z) {
+  const { width, depth, height } = mesh.userData.product.dimensions;
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-  const halfSpanZ = LANDLET_SIDE_M / 2 - depth / 2;
+  const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
   return {
     x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
-    z: THREE.MathUtils.clamp(z, -halfSpanZ, halfSpanZ),
+    y: THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY),
+    z: THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2),
   };
 }
 
@@ -65,77 +84,82 @@ function wireDraggingBehavior(transformControls) {
   });
 }
 
-// Rotate: Y (yaw) axis only — these are ground-resting items, so X/Z tilt
-// handles would just be a way to break them.
+// Rotate: Z (yaw, our vertical axis) only — these are ground-resting items,
+// so X/Y tilt handles would just be a way to break them.
 const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
 rotateControls.showX = false;
-rotateControls.showZ = false;
+rotateControls.showY = false;
 rotateControls.showXYZE = false;
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
-// Move: X/Z (ground plane) only — no vertical placement yet. Setting
-// showY = false also hides the XY/YZ plane handles (their names contain
-// "Y"), leaving the X arrow, Z arrow, and the XZ plane square.
+// Move: all three axes — X/Y ground-plane arrows and plane handles, plus a
+// Z arrow for vertical placement within the buildable volume
+// (LANDLET_HEIGHT_M, clamped in clampToLandlet).
 //
 // space = 'local' (instead of the default 'world') is what makes moving a
 // bookcase along a wall feel natural even when the wall isn't aligned to
 // higglehaven's world grid: the handles follow the *object's own* rotation
-// (set with the Rotate gizmo) rather than always pointing along world X/Z.
+// (set with the Rotate gizmo) rather than always pointing along world X/Y.
 // Rotate the object to match the wall once, and its move handles are then
 // "along the wall" / "into the wall" — no need to think in world axes at
 // all.
 const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
-translateControls.showY = false;
 translateControls.space = 'local';
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
 translateControls.addEventListener('objectChange', () => {
   const object = translateControls.object;
   if (!object) return;
-  const { x, z } = clampToLandlet(object, object.position.x, object.position.z);
-  object.position.x = x;
-  object.position.z = z;
+  const { x, y, z } = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
+  object.position.set(x, y, z);
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
-sunLight.position.set(20, 30, 10);
+sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
 
-// PlaneGeometry is built flat in the XY plane by default; rotating -90 deg
-// around X lays it down onto the XZ ground plane (Y = up).
+// PlaneGeometry already lies flat in the XY plane by default — which is
+// now our ground plane (Z-up), so unlike before, no rotation is needed.
 const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
 // DoubleSide so the plane stays visible from below during dev orbiting;
 // the finished game will never let a shopper get under the ground plane.
 const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
-landlet.rotation.x = -Math.PI / 2;
 scene.add(landlet);
 
 // Placeholder products: plain boxes standing in for real 3D models, sized
 // and colored per the dummy data in products.js. Resting on the ground
-// (y = height / 2) since there's no builder tool yet to place them otherwise.
+// (z = height / 2) since there's no builder tool yet to place them otherwise.
 // A saved layout (from a previous drag) overrides the default position.
+//
+// BoxGeometry's arguments are always (X-size, Y-size, Z-size) regardless of
+// which axis a scene treats as "up" — it has no idea about camera.up. Since
+// Z is our vertical axis, `height` (the product's real-world tallness) has
+// to go in the third argument, not the second.
 const savedLayout = loadLayout();
 const productMeshes = [];
 for (const product of PRODUCTS) {
   const { width, height, depth } = product.dimensions;
   const saved = savedLayout[product.id];
   const x = saved ? saved.x : product.position.x;
-  const z = saved ? saved.z : product.position.z;
-  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const y = saved ? saved.y : product.position.y;
+  // Nullish, not a plain ternary on `saved` — a layout saved before vertical
+  // placement existed has no z field, which must fall back to resting on
+  // the ground rather than becoming NaN.
+  const z = saved?.z ?? height / 2;
+  const geometry = new THREE.BoxGeometry(width, depth, height);
   const material = new THREE.MeshStandardMaterial({ color: product.color });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(x, height / 2, z);
-  // Nullish, not a plain ternary on `saved` — a layout saved before rotation
-  // existed has no rotationY field, which must fall back to 0 rather than
-  // becoming NaN.
-  mesh.rotation.y = saved?.rotationY ?? 0;
+  mesh.position.set(x, y, z);
+  // Same nullish reasoning: a layout saved before rotation existed has no
+  // rotationZ field.
+  mesh.rotation.z = saved?.rotationZ ?? 0;
   mesh.userData.product = product;
   scene.add(mesh);
   productMeshes.push(mesh);
@@ -146,8 +170,9 @@ function persistLayout() {
   for (const mesh of productMeshes) {
     positionsById[mesh.userData.product.id] = {
       x: mesh.position.x,
+      y: mesh.position.y,
       z: mesh.position.z,
-      rotationY: mesh.rotation.y,
+      rotationZ: mesh.rotation.z,
     };
   }
   saveLayout(positionsById);
