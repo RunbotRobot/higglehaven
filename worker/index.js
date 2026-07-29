@@ -110,6 +110,8 @@ async function handleInstances(request, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const instance = validateInstance(input, crypto.randomUUID());
+    await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
+    await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await db.prepare(`
       INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_z_rad, label)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -122,6 +124,8 @@ async function handleInstances(request, db, route, url) {
     if (!existing) return json({ error: 'Instance not found' }, 404);
     const input = await readJson(request);
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
+    await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
+    await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await db.prepare(`
       UPDATE placed_instances
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_z_rad = ?, label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -146,7 +150,21 @@ async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) {
     throw new HttpError('Expected application/json request body', 415);
   }
-  return request.json();
+  try {
+    return await request.json();
+  } catch {
+    throw new HttpError('Request body is not valid JSON', 400);
+  }
+}
+
+// placed_instances has FK columns for landlet_id/template_id, but a
+// nonexistent reference otherwise surfaces as a raw SQLite constraint
+// failure — caught by the generic top-level handler as an opaque 500
+// instead of a useful 400. Checking existence up front gives a clear error
+// instead of the client needing to reverse-engineer a database error.
+async function assertReferenceExists(db, table, column, value, field) {
+  const row = await db.prepare(`SELECT 1 FROM ${table} WHERE ${column} = ?`).bind(value).first();
+  if (!row) throw new HttpError(`${field} "${value}" does not exist`, 400);
 }
 
 function validateTemplate(input, fallbackId) {
