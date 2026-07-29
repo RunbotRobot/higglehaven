@@ -1,9 +1,4 @@
-// Placeholder product catalog — no real product database exists yet.
-// These are *templates* a builder can add instances of; an instance's own
-// placement (position/rotation) is tracked separately once placed, not here.
-// Dimensions in meters.
-//
-// This is now fallback-only data: main.js fetches the real catalog and
+// Fallback-only product catalog — main.js fetches the real catalog and
 // instance list from the Worker API (worker/index.js) first, and only
 // drops back to this file's CATALOG/DEFAULT_INSTANCES if that fetch fails
 // (API unreachable, Worker not deployed, offline, etc). The backend's
@@ -12,30 +7,50 @@
 // single session (see main.js's bootstrap, which falls back to both
 // together rather than pairing one source's catalog with the other's
 // instances).
+//
+// Every template here now points at a real glTF model (public/models/) —
+// no more generic shared box standing in for every product. `dimensions`
+// stays alongside modelUrl regardless: it's the *collision* footprint
+// (see main.js's clampToLandlet/resolveByAxis), kept as simple declared
+// metadata independent of the visual mesh's actual geometry, same as most
+// 3D engines separate a render mesh from its (simpler) collision shape.
+// `color` is now only a fallback tint, used if a template has no modelUrl
+// or the model fails to load.
 export const CATALOG = [
   {
     templateId: 'crate',
-    name: 'Placeholder Crate',
+    name: 'Crate',
     dimensions: { width: 1, height: 1, depth: 1 },
     color: 0xd2691e,
+    modelUrl: '/models/crate.glb',
   },
   {
     templateId: 'planter',
-    name: 'Placeholder Planter',
+    name: 'Planter',
     dimensions: { width: 0.6, height: 0.8, depth: 0.6 },
     color: 0x8b5a2b,
+    modelUrl: '/models/planter.glb',
   },
   {
     templateId: 'lamp',
-    name: 'Placeholder Lamp',
+    name: 'Lamp',
     dimensions: { width: 0.3, height: 1.6, depth: 0.3 },
     color: 0xffd166,
+    modelUrl: '/models/lamp.glb',
   },
   {
     templateId: 'table',
-    name: 'Placeholder Table',
+    name: 'Table',
     dimensions: { width: 1.4, height: 0.75, depth: 0.8 },
     color: 0x795548,
+    modelUrl: '/models/table.glb',
+  },
+  {
+    templateId: 'brick',
+    name: 'Brick',
+    dimensions: { width: 0.2, height: 0.057, depth: 0.095 },
+    color: 0xa0522d,
+    modelUrl: '/models/brick.glb',
   },
 ];
 

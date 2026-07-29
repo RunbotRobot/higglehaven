@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import { fetchCatalog, fetchInstances, createInstanceRemote, updateInstanceRemote, deleteInstanceRemote } from './api.js';
@@ -67,9 +68,12 @@ controls.enableDamping = true;
 // over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 
-// Products are placeholder boxes with no real physics — nothing stops one
-// from sliding straight through another vertically (a lamp dragged over a
-// table just clips into it) unless we check for that ourselves. The fix:
+// Every product's *collision* footprint is a simple box (see dimensions on
+// its catalog template), independent of whatever its actual visual model
+// looks like — same separation most engines keep between a render mesh and
+// a simpler collision shape. Nothing stops one box from sliding straight
+// through another vertically (a lamp dragged over a table just clips into
+// it) unless we check for that ourselves. The fix:
 // treat every other product as a potential support surface. A dragged
 // object's footprint (its X/Y rectangle, rotated by rotationZ) is tested
 // for overlap against every other product's footprint; wherever they
@@ -300,16 +304,63 @@ function findTemplate(templateId) {
   return activeCatalog.find((template) => template.templateId === templateId);
 }
 
-// Placeholder products: plain boxes standing in for real 3D models, sized
-// and colored per the catalog template each instance references. Resting
-// on the ground (z = height / 2) by default since a fresh instance has no
+// Real product models (glTF/.glb — see public/models/ and catalog.js's
+// modelUrl fields), not a generic box standing in for every product.
+// Loaded once per URL and cached; every placed instance after the first
+// gets a clone of the cached scene instead of re-fetching/re-parsing it.
+const gltfLoader = new GLTFLoader();
+const modelSceneCache = new Map(); // modelUrl -> Promise<THREE.Object3D> (uncloned)
+
+function loadModelScene(url) {
+  if (!modelSceneCache.has(url)) {
+    modelSceneCache.set(url, gltfLoader.loadAsync(url).then((gltf) => gltf.scene));
+  }
+  return modelSceneCache.get(url);
+}
+
+// glTF is authored Y-up by convention (whatever tool exported it — Blender,
+// etc.) — our scene is Z-up (see camera.up.set above), and nothing about
+// loading a glTF file auto-corrects that; the raw vertex data just gets
+// used as-is. Wrapping the loaded scene in a container and rotating *that
+// inner copy* +90 degrees about X converts "up" from the model's Y to the
+// container's Z, so the container's own position/rotation.z then behaves
+// exactly like every other product's. This is the real correction any
+// future genuine seller-uploaded model will also need, not a shortcut
+// specific to these placeholder assets — which is why the placeholder
+// models here are deliberately authored in standard Y-up space rather than
+// pre-rotated to dodge it.
+async function loadModelInstance(url) {
+  const cachedScene = await loadModelScene(url);
+  const model = cachedScene.clone();
+  // Object3D.clone() shares materials/geometries by reference. Geometry
+  // being shared is fine (read-only), but materials need independent
+  // copies per instance — otherwise highlighting one selected brick (see
+  // setEmissive below) would light up every other brick sharing the same
+  // cached material.
+  model.traverse((child) => {
+    if (child.isMesh) {
+      child.material = Array.isArray(child.material)
+        ? child.material.map((material) => material.clone())
+        : child.material.clone();
+    }
+  });
+  model.rotation.x = Math.PI / 2;
+  const container = new THREE.Group();
+  container.add(model);
+  return container;
+}
+
+// Builds the Object3D for a placed instance: its catalog template's real
+// model if it has one, falling back to a colored box (still used by any
+// template without a model yet, and if a model fails to load). Resting on
+// the ground (z = height / 2) by default since a fresh instance has no
 // saved z yet.
 //
 // BoxGeometry's arguments are always (X-size, Y-size, Z-size) regardless of
 // which axis a scene treats as "up" — it has no idea about camera.up. Since
 // Z is our vertical axis, `height` (the product's real-world tallness) has
 // to go in the third argument, not the second.
-function createMeshForInstance(instance) {
+async function createMeshForInstance(instance) {
   const template = findTemplate(instance.templateId);
   if (!template) {
     // Catalog and instance list came from different sources (e.g. one
@@ -321,14 +372,24 @@ function createMeshForInstance(instance) {
     return null;
   }
   const { width, height, depth } = template.dimensions;
-  const geometry = new THREE.BoxGeometry(width, depth, height);
-  const material = new THREE.MeshStandardMaterial({ color: template.color });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
-  mesh.rotation.z = instance.rotationZ ?? 0;
-  mesh.userData.instanceId = instance.instanceId ?? instance.id;
-  mesh.userData.template = template;
-  return mesh;
+  let object;
+  if (template.modelUrl) {
+    try {
+      object = await loadModelInstance(template.modelUrl);
+    } catch (err) {
+      console.warn(`Failed to load model for "${template.templateId}" (${template.modelUrl}), falling back to a colored box:`, err);
+    }
+  }
+  if (!object) {
+    const geometry = new THREE.BoxGeometry(width, depth, height);
+    const material = new THREE.MeshStandardMaterial({ color: template.color });
+    object = new THREE.Mesh(geometry, material);
+  }
+  object.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
+  object.rotation.z = instance.rotationZ ?? 0;
+  object.userData.instanceId = instance.instanceId ?? instance.id;
+  object.userData.template = template;
+  return object;
 }
 
 // Populated by bootstrap() once instance data (API or fallback) is
@@ -338,12 +399,12 @@ function createMeshForInstance(instance) {
 // bootstrap() has long since filled it in.
 const productMeshes = [];
 
-function addInstanceToScene(instance) {
-  const mesh = createMeshForInstance(instance);
-  if (!mesh) return null;
-  scene.add(mesh);
-  productMeshes.push(mesh);
-  return mesh;
+async function addInstanceToScene(instance) {
+  const object = await createMeshForInstance(instance);
+  if (!object) return null;
+  scene.add(object);
+  productMeshes.push(object);
+  return object;
 }
 
 function persistLayout() {
@@ -400,7 +461,7 @@ async function syncDelete(instanceId) {
 }
 
 let instanceCounter = 0;
-function spawnInstance(template) {
+async function spawnInstance(template) {
   instanceCounter += 1;
   const instance = {
     instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
@@ -410,10 +471,23 @@ function spawnInstance(template) {
     x: (Math.random() - 0.5) * 6,
     y: (Math.random() - 0.5) * 6,
   };
-  const mesh = addInstanceToScene(instance);
+  const mesh = await addInstanceToScene(instance);
   persistLayout();
   syncCreate(mesh);
   return mesh;
+}
+
+// A product's Object3D might be a single Mesh (the box fallback) or a
+// Group wrapping a loaded model's own node hierarchy — traverse either way
+// rather than assuming a flat single-mesh shape, since a real seller-
+// uploaded model could have any number of parts/materials.
+function disposeObject(object) {
+  object.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) material.dispose();
+  });
 }
 
 function deleteInstance(mesh) {
@@ -422,8 +496,7 @@ function deleteInstance(mesh) {
   const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
   scene.remove(mesh);
-  mesh.geometry.dispose();
-  mesh.material.dispose();
+  disposeObject(mesh);
   persistLayout();
   syncDelete(instanceId);
 }
@@ -444,10 +517,10 @@ function buildCatalogPickerButtons() {
   for (const template of activeCatalog) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = template.name.replace('Placeholder ', '');
-    button.addEventListener('click', () => {
-      const mesh = spawnInstance(template);
+    button.textContent = template.name;
+    button.addEventListener('click', async () => {
       catalogPickerEl.classList.remove('visible');
+      const mesh = await spawnInstance(template);
       setSelected(mesh);
     });
     catalogPickerEl.appendChild(button);
@@ -501,12 +574,25 @@ const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 let selectedMesh = null;
 
+// Same Mesh-or-Group reasoning as disposeObject: a model's visual content
+// can be spread across several child meshes/materials, so the highlight
+// has to be applied to all of them, not just a single top-level material.
+function setEmissive(object, hex) {
+  object.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) {
+      if (material.emissive) material.emissive.setHex(hex);
+    }
+  });
+}
+
 function setSelected(mesh) {
   if (selectedMesh === mesh) return;
-  if (selectedMesh) selectedMesh.material.emissive.setHex(0x000000);
+  if (selectedMesh) setEmissive(selectedMesh, 0x000000);
   selectedMesh = mesh;
   if (selectedMesh) {
-    selectedMesh.material.emissive.setHex(0x444444);
+    setEmissive(selectedMesh, 0x444444);
     productInfoEl.textContent = selectedMesh.userData.template.name;
     modeControlsEl.classList.add('visible');
     setGizmoMode('translate');
@@ -516,6 +602,17 @@ function setSelected(mesh) {
     translateControls.detach();
     rotateControls.detach();
   }
+}
+
+// A raycast hit against a model's nested mesh (see loadModelInstance)
+// returns that inner mesh, not the top-level product Object3D tracked in
+// productMeshes — walk back up the parent chain to find it.
+function findRootProduct(object) {
+  let current = object;
+  while (current && !productMeshes.includes(current)) {
+    current = current.parent;
+  }
+  return current;
 }
 
 function ndcFromEvent(event) {
@@ -549,8 +646,11 @@ renderer.domElement.addEventListener('click', (event) => {
   // so the catalog picker (if left open) should collapse either way.
   catalogPickerEl.classList.remove('visible');
   raycaster.setFromCamera(ndcFromEvent(event), camera);
-  const hits = raycaster.intersectObjects(productMeshes);
-  setSelected(hits.length > 0 ? hits[0].object : null);
+  // recursive: true, since a model's own geometry sits on nested child
+  // meshes (see loadModelInstance) rather than directly on the top-level
+  // Object3D pushed into productMeshes.
+  const hits = raycaster.intersectObjects(productMeshes, true);
+  setSelected(hits.length > 0 ? findRootProduct(hits[0].object) : null);
 });
 
 function onResize() {
@@ -796,8 +896,9 @@ async function bootstrap() {
   }
 
   buildCatalogPickerButtons();
-  for (const instance of instances) {
-    addInstanceToScene(instance);
-  }
+  // In parallel: each instance's model load is an independent fetch (and
+  // most placed instances share just a handful of cached model URLs), so
+  // there's no reason to load them one at a time.
+  await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
 }
 bootstrap();
