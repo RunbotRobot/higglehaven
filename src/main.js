@@ -147,16 +147,25 @@ function restingSurfaceZ(mesh, x, y) {
   return surfaceZ;
 }
 
+// Toggled by the "Snap" button (see gizmo-mode-controls wiring below). On
+// by default; switching it off lets the selected product overlap others
+// freely, for the rare case a builder actually wants that (a sign embedded
+// in a wall, a rug under a table leg, ...) instead of always resting on top.
+let snapToSurfaces = true;
+
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
 // clamped between whatever it's currently resting on (see restingSurfaceZ
 // above) and the placeholder cuboid volume's ceiling — see LANDLET_HEIGHT_M.
+// The resting floor only applies when snapToSurfaces is on; with it off,
+// the only vertical limits left are the ground and the buildable ceiling.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = mesh.userData.template.dimensions;
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
   const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
   const clampedX = THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX);
   const clampedY = THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY);
-  const minZ = restingSurfaceZ(mesh, clampedX, clampedY) + height / 2;
+  const restingZ = snapToSurfaces ? restingSurfaceZ(mesh, clampedX, clampedY) : 0;
+  const minZ = restingZ + height / 2;
   return {
     x: clampedX,
     y: clampedY,
@@ -398,6 +407,7 @@ addItemBtn.addEventListener('click', () => {
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
+const snapToggleBtn = document.getElementById('toggle-snap');
 const deleteBtn = document.getElementById('delete-item');
 
 function setGizmoMode(mode) {
@@ -410,6 +420,18 @@ function setGizmoMode(mode) {
 }
 modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
 modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
+
+// Resting-on-other-products (see clampToLandlet/restingSurfaceZ above) is a
+// helpful default, not a hard rule — a builder might genuinely want a sign
+// embedded in a wall, or a rug overlapping a table leg. Snap starts on;
+// toggling it off just switches clampToLandlet's z floor back to the plain
+// ground level, letting the selected item overlap anything freely until
+// it's switched back on.
+snapToggleBtn.classList.add('active');
+snapToggleBtn.addEventListener('click', () => {
+  snapToSurfaces = !snapToSurfaces;
+  snapToggleBtn.classList.toggle('active', snapToSurfaces);
+});
 deleteBtn.addEventListener('click', () => {
   if (!selectedMesh) return;
   const mesh = selectedMesh;

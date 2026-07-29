@@ -28,6 +28,25 @@
         pointer-events: none;
         z-index: 10;
       }
+      #wordmark {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        height: 26px;
+        width: auto;
+        z-index: 10;
+        pointer-events: none;
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+      }
+      /* #product-info is centered and can grow wide enough (its "Tap a
+         product to inspect it" hint text especially) to reach the
+         wordmark's corner on narrow phone screens — shrink the wordmark
+         there rather than fight over the same space. */
+      @media (max-width: 480px) {
+        #wordmark {
+          height: 18px;
+        }
+      }
       #camera-debug-panel {
         position: fixed;
         bottom: 44px;
@@ -141,6 +160,7 @@
   </head>
   <body>
     <canvas id="app"></canvas>
+    <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     <div id="build-info"></div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
@@ -150,6 +170,7 @@
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
+      <button id="toggle-snap" type="button">Snap</button>
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="add-item-panel">
