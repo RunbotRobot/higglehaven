@@ -2,6 +2,16 @@
 // These are *templates* a builder can add instances of; an instance's own
 // placement (position/rotation) is tracked separately once placed, not here.
 // Dimensions in meters.
+//
+// This is now fallback-only data: main.js fetches the real catalog and
+// instance list from the Worker API (worker/index.js) first, and only
+// drops back to this file's CATALOG/DEFAULT_INSTANCES if that fetch fails
+// (API unreachable, Worker not deployed, offline, etc). The backend's
+// seeded catalog uses different templateIds (placeholder-table/chair/tree)
+// than the ones below — that's fine since the two are never mixed within a
+// single session (see main.js's bootstrap, which falls back to both
+// together rather than pairing one source's catalog with the other's
+// instances).
 export const CATALOG = [
   {
     templateId: 'crate',

@@ -1,8 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { CATALOG, DEFAULT_INSTANCES } from './catalog.js';
+import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
+import { fetchCatalog, fetchInstances, createInstanceRemote, updateInstanceRemote, deleteInstanceRemote } from './api.js';
+
+// The API (worker/index.js + D1) is authoritative when reachable; the
+// catalog.js constants above are only used if fetching it fails. This is
+// reassigned once, in bootstrap() below, before anything reads it — every
+// other reference to the catalog goes through this variable rather than
+// FALLBACK_CATALOG directly.
+let activeCatalog = FALLBACK_CATALOG;
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -80,7 +88,10 @@ function clampToLandlet(mesh, x, y, z) {
 function wireDraggingBehavior(transformControls) {
   transformControls.addEventListener('dragging-changed', (event) => {
     controls.enabled = !event.value;
-    if (!event.value) persistLayout();
+    if (!event.value) {
+      persistLayout();
+      if (transformControls.object) syncUpdate(transformControls.object);
+    }
   });
 }
 
@@ -134,7 +145,7 @@ const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 scene.add(landlet);
 
 function findTemplate(templateId) {
-  return CATALOG.find((template) => template.templateId === templateId);
+  return activeCatalog.find((template) => template.templateId === templateId);
 }
 
 // Placeholder products: plain boxes standing in for real 3D models, sized
@@ -148,27 +159,39 @@ function findTemplate(templateId) {
 // to go in the third argument, not the second.
 function createMeshForInstance(instance) {
   const template = findTemplate(instance.templateId);
+  if (!template) {
+    // Catalog and instance list came from different sources (e.g. one
+    // fetched from the API, the other loaded from a stale local cache) and
+    // disagree on templateIds. bootstrap() below fetches both together
+    // specifically to avoid this, but a defensive skip here is cheap
+    // insurance against crashing the whole scene over one bad instance.
+    console.warn(`No catalog template "${instance.templateId}" — skipping instance ${instance.instanceId ?? instance.id}`);
+    return null;
+  }
   const { width, height, depth } = template.dimensions;
   const geometry = new THREE.BoxGeometry(width, depth, height);
   const material = new THREE.MeshStandardMaterial({ color: template.color });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
   mesh.rotation.z = instance.rotationZ ?? 0;
-  mesh.userData.instanceId = instance.id;
+  mesh.userData.instanceId = instance.instanceId ?? instance.id;
   mesh.userData.template = template;
   return mesh;
 }
 
-// A previously-saved instance list (builder additions/removals/moves)
-// entirely replaces the starter set — not merged with it — since the
-// starter set is just a first-visit default, not content to preserve
-// alongside whatever the builder has actually done.
-const initialInstances = loadInstances() ?? DEFAULT_INSTANCES;
+// Populated by bootstrap() once instance data (API or fallback) is
+// available. Declared here, empty, so everything below that references it
+// — the click/raycast handler in particular — can be wired up immediately;
+// none of that code runs until the user actually interacts, by which point
+// bootstrap() has long since filled it in.
 const productMeshes = [];
-for (const instance of initialInstances) {
+
+function addInstanceToScene(instance) {
   const mesh = createMeshForInstance(instance);
+  if (!mesh) return null;
   scene.add(mesh);
   productMeshes.push(mesh);
+  return mesh;
 }
 
 function persistLayout() {
@@ -183,52 +206,100 @@ function persistLayout() {
   saveInstances(instances);
 }
 
+// Best-effort sync to the backend: every call here is fire-and-forget and
+// swallows its own errors. persistLayout()'s localStorage write is the
+// source of truth the app can always rely on; these just try to keep the
+// server copy current so a reload (or another device, eventually) sees the
+// same layout. A failure here never blocks or rolls back the local change.
+function instanceFromMesh(mesh) {
+  return {
+    instanceId: mesh.userData.instanceId,
+    templateId: mesh.userData.template.templateId,
+    x: mesh.position.x,
+    y: mesh.position.y,
+    z: mesh.position.z,
+    rotationZ: mesh.rotation.z,
+  };
+}
+
+async function syncCreate(mesh) {
+  try {
+    await createInstanceRemote(instanceFromMesh(mesh));
+  } catch (err) {
+    console.warn('Failed to sync new instance to backend:', err);
+  }
+}
+
+async function syncUpdate(mesh) {
+  try {
+    const { instanceId, ...patch } = instanceFromMesh(mesh);
+    await updateInstanceRemote(instanceId, patch);
+  } catch (err) {
+    console.warn('Failed to sync instance update to backend:', err);
+  }
+}
+
+async function syncDelete(instanceId) {
+  try {
+    await deleteInstanceRemote(instanceId);
+  } catch (err) {
+    console.warn('Failed to sync instance delete to backend:', err);
+  }
+}
+
 let instanceCounter = 0;
 function spawnInstance(template) {
   instanceCounter += 1;
   const instance = {
-    id: `${template.templateId}-${Date.now()}-${instanceCounter}`,
+    instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
     templateId: template.templateId,
     // Small random spread near the center so repeated adds don't stack
     // exactly on top of each other; still well within the landlet bounds.
     x: (Math.random() - 0.5) * 6,
     y: (Math.random() - 0.5) * 6,
   };
-  const mesh = createMeshForInstance(instance);
-  scene.add(mesh);
-  productMeshes.push(mesh);
+  const mesh = addInstanceToScene(instance);
   persistLayout();
+  syncCreate(mesh);
   return mesh;
 }
 
 function deleteInstance(mesh) {
   const index = productMeshes.indexOf(mesh);
   if (index === -1) return;
+  const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
   scene.remove(mesh);
   mesh.geometry.dispose();
   mesh.material.dispose();
   persistLayout();
+  syncDelete(instanceId);
 }
 
 const productInfoEl = document.getElementById('product-info');
 const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
 
-// Add-item catalog picker: a toggled panel listing every CATALOG template.
-// Tapping one spawns and selects a new instance of it, ready to reposition.
+// Add-item catalog picker: a toggled panel listing every activeCatalog
+// template. Tapping one spawns and selects a new instance of it, ready to
+// reposition. Buttons are (re)built in bootstrap() once activeCatalog is
+// settled, since the API's catalog isn't known until that fetch resolves.
 const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
-for (const template of CATALOG) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.textContent = template.name.replace('Placeholder ', '');
-  button.addEventListener('click', () => {
-    const mesh = spawnInstance(template);
-    catalogPickerEl.classList.remove('visible');
-    setSelected(mesh);
-  });
-  catalogPickerEl.appendChild(button);
+
+function buildCatalogPickerButtons() {
+  catalogPickerEl.replaceChildren();
+  for (const template of activeCatalog) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = template.name.replace('Placeholder ', '');
+    button.addEventListener('click', () => {
+      const mesh = spawnInstance(template);
+      catalogPickerEl.classList.remove('visible');
+      setSelected(mesh);
+    });
+    catalogPickerEl.appendChild(button);
+  }
 }
 addItemBtn.addEventListener('click', () => {
   catalogPickerEl.classList.toggle('visible');
@@ -532,3 +603,37 @@ function animate(now) {
   renderer.render(scene, camera);
 }
 animate(0);
+
+// Loads the real catalog + instance list from the backend API, falling
+// back to catalog.js's placeholder data (and the localStorage cache) if
+// either fetch fails. Catalog and instances are fetched together with a
+// single Promise.all specifically so a failure in either one falls both
+// back together — the API's seeded catalog (placeholder-table/chair/tree)
+// and the local fallback catalog (crate/planter/lamp/table) use different
+// templateIds, so pairing one source's catalog with the other's instances
+// would leave every instance unable to find its template.
+//
+// Runs after animate() has already started so the (empty, for now) scene
+// renders immediately rather than waiting on the network.
+async function bootstrap() {
+  let instances;
+  try {
+    const [catalog, remoteInstances] = await Promise.all([fetchCatalog(), fetchInstances()]);
+    activeCatalog = catalog;
+    instances = remoteInstances;
+  } catch (err) {
+    console.warn('Backend unreachable, falling back to local/placeholder data:', err);
+    activeCatalog = FALLBACK_CATALOG;
+    // A previously-saved instance list (builder additions/removals/moves)
+    // entirely replaces the starter set — not merged with it — since the
+    // starter set is just a first-visit default, not content to preserve
+    // alongside whatever the builder has actually done.
+    instances = loadInstances() ?? DEFAULT_INSTANCES;
+  }
+
+  buildCatalogPickerButtons();
+  for (const instance of instances) {
+    addInstanceToScene(instance);
+  }
+}
+bootstrap();
