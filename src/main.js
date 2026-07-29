@@ -146,19 +146,23 @@ const savedLayout = loadLayout();
 const productMeshes = [];
 for (const product of PRODUCTS) {
   const { width, height, depth } = product.dimensions;
-  const saved = savedLayout[product.id];
-  const x = saved ? saved.x : product.position.x;
-  const y = saved ? saved.y : product.position.y;
-  // Nullish, not a plain ternary on `saved` — a layout saved before vertical
-  // placement existed has no z field, which must fall back to resting on
-  // the ground rather than becoming NaN.
+  // A layout saved before this schema change used {x, z, rotationY}, where
+  // `z` meant a ground-plane coordinate, not height — a totally different
+  // meaning than the new `z`. That makes it unsafe to reuse even the fields
+  // that share a name: picking up an old `z` as the new vertical position
+  // could bury a product underground. Detecting old-shaped data by the
+  // presence of `rotationZ` (only ever written by this new code) and
+  // discarding it wholesale — rather than field-by-field — avoids
+  // cross-contamination between the two schemas.
+  const rawSaved = savedLayout[product.id];
+  const saved = rawSaved?.rotationZ !== undefined ? rawSaved : undefined;
+  const x = saved?.x ?? product.position.x;
+  const y = saved?.y ?? product.position.y;
   const z = saved?.z ?? height / 2;
   const geometry = new THREE.BoxGeometry(width, depth, height);
   const material = new THREE.MeshStandardMaterial({ color: product.color });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(x, y, z);
-  // Same nullish reasoning: a layout saved before rotation existed has no
-  // rotationZ field.
   mesh.rotation.z = saved?.rotationZ ?? 0;
   mesh.userData.product = product;
   scene.add(mesh);
