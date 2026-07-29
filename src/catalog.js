@@ -52,6 +52,20 @@ export const CATALOG = [
     color: 0xa0522d,
     modelUrl: '/models/brick.glb',
   },
+  {
+    templateId: 'chair',
+    name: 'Chair',
+    dimensions: { width: 0.7, height: 1.0, depth: 0.7 },
+    color: 0x3366cc,
+    modelUrl: '/models/chair.glb',
+  },
+  {
+    templateId: 'tree',
+    name: 'Tree',
+    dimensions: { width: 1.5, height: 4.0, depth: 1.5 },
+    color: 0x2f8f46,
+    modelUrl: '/models/tree.glb',
+  },
 ];
 
 // What a fresh landlet starts with, before any builder edits.
