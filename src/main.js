@@ -131,45 +131,90 @@ function footprintsOverlap(cornersA, cornersB) {
   return true;
 }
 
-// Highest surface the dragged mesh's footprint (at candidate x, y) is
-// currently over — the ground plane (z = 0) if nothing's underneath it,
-// otherwise the top of whichever overlapping product is tallest.
-function restingSurfaceZ(mesh, x, y) {
-  const draggedCorners = footprintCorners(mesh, x, y);
-  let surfaceZ = 0;
+function boxesOverlap3D(mesh, x, y, z, other) {
+  if (!footprintsOverlap(footprintCorners(mesh, x, y), footprintCorners(other, other.position.x, other.position.y))) {
+    return false;
+  }
+  const height = mesh.userData.template.dimensions.height;
+  const otherHeight = other.userData.template.dimensions.height;
+  const zMinA = z - height / 2;
+  const zMaxA = z + height / 2;
+  const zMinB = other.position.z - otherHeight / 2;
+  const zMaxB = other.position.z + otherHeight / 2;
+  return !(zMaxA < zMinB || zMaxB < zMinA);
+}
+
+function collidesWithAny(mesh, x, y, z) {
   for (const other of productMeshes) {
     if (other === mesh) continue;
-    const otherCorners = footprintCorners(other, other.position.x, other.position.y);
-    if (!footprintsOverlap(draggedCorners, otherCorners)) continue;
-    const otherTop = other.position.z + other.userData.template.dimensions.height / 2;
-    surfaceZ = Math.max(surfaceZ, otherTop);
+    if (boxesOverlap3D(mesh, x, y, z, other)) return true;
   }
-  return surfaceZ;
+  return false;
 }
 
 // Toggled by the "Snap" button (see gizmo-mode-controls wiring below). On
 // by default; switching it off lets the selected product overlap others
 // freely, for the rare case a builder actually wants that (a sign embedded
-// in a wall, a rug under a table leg, ...) instead of always resting on top.
+// in a wall, a rug under a table leg, ...) instead of colliding with them.
 let snapToSurfaces = true;
 
+// Resolves motion along a single axis, using `safeVal` (assumed to already
+// be collision-free) as the search origin and `buildPos(v)` to fill in the
+// other two, fixed coordinates. If moving all the way to `candidateVal`
+// doesn't collide, the full move is allowed; otherwise binary-searches the
+// segment between the two for the exact point contact begins.
+//
+// A first attempt at collision resolution compared *penetration depth*
+// across all axes at once (a standard SAT/MTV technique) and always pushed
+// out along whichever was shallowest. That mishandled the very case this
+// was built for: a small item's footprint fully contained within a larger
+// surface's (a lamp centered on a table) has a *shallow* horizontal
+// containment depth (the lamp's own small width) versus a much *deeper*
+// vertical one (the table's height) — so depth-comparison alone shoved it
+// sideways off the table instead of resting it on top. Resolving strictly
+// along whichever axis is actually being dragged sidesteps that ambiguity
+// entirely: moving the Z arrow only ever resolves in Z (rests on top),
+// moving an X/Y arrow only ever resolves in X/Y (stops flush against a
+// side) — same principle Minecraft-style engines use for axis-separated
+// collision.
+function sweepAxis(mesh, buildPos, safeVal, candidateVal) {
+  if (candidateVal === safeVal) return safeVal;
+  const [cx, cy, cz] = buildPos(candidateVal);
+  if (!collidesWithAny(mesh, cx, cy, cz)) return candidateVal;
+  let lo = safeVal;
+  let hi = candidateVal;
+  for (let i = 0; i < 25; i++) {
+    const mid = (lo + hi) / 2;
+    const [mx, my, mz] = buildPos(mid);
+    if (collidesWithAny(mesh, mx, my, mz)) hi = mid;
+    else lo = mid;
+  }
+  return lo;
+}
+
+// Resolves a requested move from `safe` (mesh's last known collision-free
+// position) toward `requested`, one axis at a time (X, then Y, then Z) so
+// combined diagonal motion (e.g. a plane handle) still stops correctly
+// against whatever it meets along the way.
+function resolveByAxis(mesh, safe, requested) {
+  const x = sweepAxis(mesh, (v) => [v, safe.y, safe.z], safe.x, requested.x);
+  const y = sweepAxis(mesh, (v) => [x, v, safe.z], safe.y, requested.y);
+  const z = sweepAxis(mesh, (v) => [x, y, v], safe.z, requested.z);
+  return { x, y, z };
+}
+
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
-// clamped between whatever it's currently resting on (see restingSurfaceZ
-// above) and the placeholder cuboid volume's ceiling — see LANDLET_HEIGHT_M.
-// The resting floor only applies when snapToSurfaces is on; with it off,
-// the only vertical limits left are the ground and the buildable ceiling.
+// clamped between the ground and the placeholder cuboid volume's ceiling —
+// see LANDLET_HEIGHT_M. Collision with other products (resolveByAxis,
+// above) is applied separately, after this.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = mesh.userData.template.dimensions;
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
   const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-  const clampedX = THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX);
-  const clampedY = THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY);
-  const restingZ = snapToSurfaces ? restingSurfaceZ(mesh, clampedX, clampedY) : 0;
-  const minZ = restingZ + height / 2;
   return {
-    x: clampedX,
-    y: clampedY,
-    z: THREE.MathUtils.clamp(z, minZ, LANDLET_HEIGHT_M - height / 2),
+    x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
+    y: THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY),
+    z: THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2),
   };
 }
 
@@ -214,11 +259,25 @@ translateControls.setMode('translate');
 translateControls.space = 'local';
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
+// resolveByAxis needs a known-good starting point to sweep from — captured
+// fresh at the start of every drag, since the object's position right
+// before a drag begins is by definition already collision-free.
+translateControls.addEventListener('dragging-changed', (event) => {
+  if (event.value && translateControls.object) {
+    translateControls.object.userData.safePosition = translateControls.object.position.clone();
+  }
+});
 translateControls.addEventListener('objectChange', () => {
   const object = translateControls.object;
   if (!object) return;
-  const { x, y, z } = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
-  object.position.set(x, y, z);
+  const requested = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
+  let resolved = requested;
+  if (snapToSurfaces) {
+    const safe = object.userData.safePosition ?? object.position;
+    resolved = resolveByAxis(object, safe, requested);
+  }
+  object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
+  object.position.set(resolved.x, resolved.y, resolved.z);
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -421,12 +480,11 @@ function setGizmoMode(mode) {
 modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
 modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
 
-// Resting-on-other-products (see clampToLandlet/restingSurfaceZ above) is a
-// helpful default, not a hard rule — a builder might genuinely want a sign
-// embedded in a wall, or a rug overlapping a table leg. Snap starts on;
-// toggling it off just switches clampToLandlet's z floor back to the plain
-// ground level, letting the selected item overlap anything freely until
-// it's switched back on.
+// Colliding with other products (see resolveByAxis above) is a helpful
+// default, not a hard rule — a builder might genuinely want a sign embedded
+// in a wall, or a rug overlapping a table leg. Snap starts on; toggling it
+// off skips collision resolution entirely, letting the selected item
+// overlap anything freely until it's switched back on.
 snapToggleBtn.classList.add('active');
 snapToggleBtn.addEventListener('click', () => {
   snapToSurfaces = !snapToSurfaces;

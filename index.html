@@ -28,15 +28,29 @@
         pointer-events: none;
         z-index: 10;
       }
-      #wordmark {
+      /* The wordmark's own green-on-transparent art has no contrast
+         guarantee against an arbitrary background — great against the
+         ground plane and most products, unreadable against the sky. Same
+         translucent-dark-pill treatment as every other text overlay
+         (#product-info, the gizmo buttons, ...) fixes that uniformly,
+         since it controls the pixels immediately behind the logo instead
+         of depending on whatever happens to be in the 3D scene there. */
+      #wordmark-panel {
         position: fixed;
         top: 10px;
         left: 12px;
-        height: 26px;
-        width: auto;
         z-index: 10;
         pointer-events: none;
-        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+        background: rgba(0, 0, 0, 0.45);
+        border-radius: 8px;
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+      }
+      #wordmark {
+        height: 26px;
+        width: auto;
+        display: block;
       }
       /* #product-info is centered and can grow wide enough (its "Tap a
          product to inspect it" hint text especially) to reach the
@@ -45,6 +59,9 @@
       @media (max-width: 480px) {
         #wordmark {
           height: 18px;
+        }
+        #wordmark-panel {
+          padding: 3px 8px;
         }
       }
       #camera-debug-panel {
@@ -160,7 +177,9 @@
   </head>
   <body>
     <canvas id="app"></canvas>
-    <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
+    <div id="wordmark-panel">
+      <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
+    </div>
     <div id="build-info"></div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
