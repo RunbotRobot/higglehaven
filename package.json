@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply higglehaven-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply higglehaven-db --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply higglehaven-db --remote",
+    "deploy:ci": "npm run db:migrate:remote && wrangler deploy"
   },
   "dependencies": {
     "three": "^0.185.1"
