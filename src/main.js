@@ -9,13 +9,13 @@ import { loadLayout, saveLayout } from './layoutStorage.js';
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Placeholder buildable volume: a plain cuboid extending 3 levels (10m/level
-// per spec §3) straight up, rather than the spec's actual cone-shaped volume
-// (cross-section changes with distance from Earth's center once curvature is
-// modeled). Same simplification as using a flat plane instead of a curved
-// one for the ground right now — get the mechanic working, model the real
-// geometry later.
-const LANDLET_HEIGHT_M = 30;
+// Placeholder buildable volume: a basic single-level landlet, one level
+// (10m, per spec §3) straight up, modeled as a plain cuboid rather than the
+// spec's actual cone-shaped volume (cross-section changes with distance
+// from Earth's center once curvature is modeled). Same simplification as
+// using a flat plane instead of a curved one for the ground right now — get
+// the mechanic working, model the real geometry later.
+const LANDLET_HEIGHT_M = 10;
 
 const canvas = document.getElementById('app');
 
