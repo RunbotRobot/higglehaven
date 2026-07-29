@@ -67,16 +67,100 @@ controls.enableDamping = true;
 // over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 
+// Products are placeholder boxes with no real physics — nothing stops one
+// from sliding straight through another vertically (a lamp dragged over a
+// table just clips into it) unless we check for that ourselves. The fix:
+// treat every other product as a potential support surface. A dragged
+// object's footprint (its X/Y rectangle, rotated by rotationZ) is tested
+// for overlap against every other product's footprint; wherever they
+// overlap, the dragged object can't rest any lower than that product's top
+// surface. clampToLandlet folds this in as the *minimum* z it clamps to —
+// it only ever pushes an object up onto something, never pulls it down, so
+// lifting an object off a shelf and setting it back on the ground still
+// works normally.
+//
+// Rectangle-vs-rectangle overlap (rather than a simpler bounding-circle
+// check) matters here because a bounding circle would over-approximate a
+// long, thin object like a table and trigger "resting" for things nowhere
+// near its actual top — e.g. a lamp near the table's leg, at floor level,
+// popping up onto the tabletop just for being within the table's diagonal
+// radius. The standard fix for two arbitrarily-rotated rectangles is the
+// separating axis theorem (SAT): project both onto each rectangle's own
+// two edge directions (4 axes total, since opposite edges are parallel)
+// and check for a gap on any of them — if every axis shows overlap, the
+// rectangles truly intersect.
+function footprintCorners(mesh, x, y) {
+  const { width, depth } = mesh.userData.template.dimensions;
+  const halfWidth = width / 2;
+  const halfDepth = depth / 2;
+  const cos = Math.cos(mesh.rotation.z);
+  const sin = Math.sin(mesh.rotation.z);
+  return [
+    [halfWidth, halfDepth],
+    [halfWidth, -halfDepth],
+    [-halfWidth, -halfDepth],
+    [-halfWidth, halfDepth],
+  ].map(([localX, localY]) => [
+    x + localX * cos - localY * sin,
+    y + localX * sin + localY * cos,
+  ]);
+}
+
+function footprintsOverlap(cornersA, cornersB) {
+  const axes = [
+    [cornersA[0][0] - cornersA[1][0], cornersA[0][1] - cornersA[1][1]],
+    [cornersA[1][0] - cornersA[2][0], cornersA[1][1] - cornersA[2][1]],
+    [cornersB[0][0] - cornersB[1][0], cornersB[0][1] - cornersB[1][1]],
+    [cornersB[1][0] - cornersB[2][0], cornersB[1][1] - cornersB[2][1]],
+  ];
+  for (const [ax, ay] of axes) {
+    const project = (corners) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const [cx, cy] of corners) {
+        const dot = cx * ax + cy * ay;
+        min = Math.min(min, dot);
+        max = Math.max(max, dot);
+      }
+      return [min, max];
+    };
+    const [minA, maxA] = project(cornersA);
+    const [minB, maxB] = project(cornersB);
+    if (maxA < minB || maxB < minA) return false; // gap found along this axis
+  }
+  return true;
+}
+
+// Highest surface the dragged mesh's footprint (at candidate x, y) is
+// currently over — the ground plane (z = 0) if nothing's underneath it,
+// otherwise the top of whichever overlapping product is tallest.
+function restingSurfaceZ(mesh, x, y) {
+  const draggedCorners = footprintCorners(mesh, x, y);
+  let surfaceZ = 0;
+  for (const other of productMeshes) {
+    if (other === mesh) continue;
+    const otherCorners = footprintCorners(other, other.position.x, other.position.y);
+    if (!footprintsOverlap(draggedCorners, otherCorners)) continue;
+    const otherTop = other.position.z + other.userData.template.dimensions.height / 2;
+    surfaceZ = Math.max(surfaceZ, otherTop);
+  }
+  return surfaceZ;
+}
+
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
-// clamped to the placeholder cuboid volume above — see LANDLET_HEIGHT_M.
+// clamped between whatever it's currently resting on (see restingSurfaceZ
+// above) and the placeholder cuboid volume's ceiling — see LANDLET_HEIGHT_M.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = mesh.userData.template.dimensions;
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
   const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+  const clampedX = THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX);
+  const clampedY = THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY);
+  const minZ = restingSurfaceZ(mesh, clampedX, clampedY) + height / 2;
   return {
-    x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
-    y: THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY),
-    z: THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2),
+    x: clampedX,
+    y: clampedY,
+    z: THREE.MathUtils.clamp(z, minZ, LANDLET_HEIGHT_M - height / 2),
   };
 }
 
