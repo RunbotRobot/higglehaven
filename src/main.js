@@ -309,12 +309,39 @@ window.addEventListener('pointercancel', () => {
   activePointerCount = Math.max(0, activePointerCount - 1);
 });
 
+// Re-centering used to jump straight to the product's position the instant
+// it was triggered. Easing it in over a short tween instead — nudging
+// target toward the product a little each frame rather than all at once —
+// reads as a deliberate part of the rotate gesture instead of a jump cut.
+const TARGET_TWEEN_DURATION_MS = 250;
+const targetTween = {
+  active: false,
+  from: new THREE.Vector3(),
+  to: new THREE.Vector3(),
+  startTime: 0,
+};
+
+function beginTargetTween(destination) {
+  targetTween.active = true;
+  targetTween.from.copy(controls.target);
+  targetTween.to.copy(destination);
+  targetTween.startTime = performance.now();
+}
+
+function updateTargetTween(now) {
+  if (!targetTween.active) return;
+  const t = Math.min((now - targetTween.startTime) / TARGET_TWEEN_DURATION_MS, 1);
+  const eased = t * t * (3 - 2 * t); // smoothstep
+  controls.target.lerpVectors(targetTween.from, targetTween.to, eased);
+  if (t >= 1) targetTween.active = false;
+}
+
 controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
     pendingGestureCheck = false;
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
     if (isRotate && selectedMesh) {
-      controls.target.copy(selectedMesh.position);
+      beginTargetTween(selectedMesh.position);
     }
   }
 
@@ -357,8 +384,61 @@ cameraDebugCopyBtn.addEventListener('click', async () => {
   }, 1200);
 });
 
+// Auto-pan the camera while dragging a product near a screen edge, so it
+// can be moved further than what's currently in view — same idea as
+// Figma/Slides' edge-scrolling. Only while the move gizmo itself is being
+// dragged (not for camera rotate/pan), and driven every frame (not just on
+// pointermove) so holding still right at the edge keeps panning.
+const EDGE_PAN_ZONE_PX = 60;
+const EDGE_PAN_SPEED_PX = 14;
+let lastPointerClientPos = null;
+window.addEventListener('pointermove', (event) => {
+  lastPointerClientPos = { x: event.clientX, y: event.clientY };
+});
+
+// Standard perspective-camera screen-space pan math (same formula
+// OrbitControls itself uses internally): scaling by the target's distance
+// and tan(fov/2) makes a given pixel amount correspond to a consistent
+// screen-space shift regardless of current zoom.
+function panCameraByScreenPixels(dxPixels, dyPixels) {
+  const targetDistance =
+    camera.position.distanceTo(controls.target) * Math.tan((camera.fov / 2) * (Math.PI / 180));
+  const scale = (2 * targetDistance) / renderer.domElement.clientHeight;
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+  const offset = new THREE.Vector3()
+    .addScaledVector(right, dxPixels * scale)
+    .addScaledVector(up, dyPixels * scale);
+  camera.position.add(offset);
+  controls.target.add(offset);
+}
+
+function edgeStrength(distanceFromEdge) {
+  if (distanceFromEdge >= EDGE_PAN_ZONE_PX) return 0;
+  return 1 - Math.max(distanceFromEdge, 0) / EDGE_PAN_ZONE_PX;
+}
+
+function applyEdgePanWhileDraggingProduct() {
+  if (!translateControls.dragging || !lastPointerClientPos) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const { x, y } = lastPointerClientPos;
+
+  const rightStrength = edgeStrength(rect.right - x);
+  const leftStrength = edgeStrength(x - rect.left);
+  const topStrength = edgeStrength(y - rect.top);
+  const bottomStrength = edgeStrength(rect.bottom - y);
+
+  const dx = (rightStrength - leftStrength) * EDGE_PAN_SPEED_PX;
+  const dy = (topStrength - bottomStrength) * EDGE_PAN_SPEED_PX;
+  if (dx !== 0 || dy !== 0) {
+    panCameraByScreenPixels(dx, dy);
+  }
+}
+
 function animate(now) {
   requestAnimationFrame(animate);
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
   controls.update();
   updateCameraDebug(now);
   renderer.render(scene, camera);
