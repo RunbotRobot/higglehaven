@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "higglehaven-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "3d9ad5a2-7529-4fd2-9b2f-60604b0499a1",
       "migrations_dir": "migrations"
     }
   ]
