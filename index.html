@@ -99,11 +99,13 @@
       }
       #add-item-panel {
         position: fixed;
-        top: 12px;
-        left: 12px;
+        bottom: 44px;
+        left: 8px;
         z-index: 10;
         display: flex;
-        flex-direction: column;
+        /* Reversed so the catalog picker opens upward, above the button,
+           since the panel is anchored to the bottom of the screen. */
+        flex-direction: column-reverse;
         gap: 8px;
       }
       #add-item-btn {
