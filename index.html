@@ -6,6 +6,15 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>higglehaven (dev)</title>
     <style>
+      /* Shared brand colors for every translucent UI pill. --pill-rgb is a
+         dark, desaturated version of the wordmark's green (rather than
+         plain black) so product-info, the gizmo buttons, etc. all read as
+         "this app" instead of a generic gray overlay. Space-separated RGB
+         so each usage can pick its own alpha via rgb(var(--pill-rgb) / a). */
+      :root {
+        --pill-rgb: 36, 56, 20;
+        --brand-green: #6ca42e;
+      }
       html, body {
         margin: 0;
         padding: 0;
@@ -41,7 +50,7 @@
         left: 12px;
         z-index: 10;
         pointer-events: none;
-        background: rgba(0, 0, 0, 0.45);
+        background: rgb(var(--pill-rgb) / 0.55);
         border-radius: 8px;
         padding: 4px 10px;
         display: flex;
@@ -87,7 +96,7 @@
         padding: 3px 10px;
         border-radius: 6px;
         border: none;
-        background: rgba(0, 0, 0, 0.5);
+        background: rgb(var(--pill-rgb) / 0.6);
         color: rgba(255, 255, 255, 0.85);
         font: 11px/1.4 sans-serif;
       }
@@ -97,7 +106,7 @@
         left: 50%;
         transform: translateX(-50%);
         color: #fff;
-        background: rgba(0, 0, 0, 0.55);
+        background: rgb(var(--pill-rgb) / 0.65);
         padding: 8px 14px;
         border-radius: 8px;
         font: 14px/1.4 sans-serif;
@@ -121,13 +130,13 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgba(0, 0, 0, 0.4);
-        color: rgba(255, 255, 255, 0.7);
+        background: rgb(var(--pill-rgb) / 0.5);
+        color: rgba(255, 255, 255, 0.8);
         font: 14px/1.4 sans-serif;
       }
       #gizmo-mode-controls button.active {
-        background: rgba(255, 255, 255, 0.9);
-        color: #111;
+        background: var(--brand-green);
+        color: #16240a;
       }
       #delete-item {
         background: rgba(140, 20, 20, 0.55);
@@ -148,7 +157,7 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgba(0, 0, 0, 0.55);
+        background: rgb(var(--pill-rgb) / 0.65);
         color: #fff;
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
@@ -157,7 +166,7 @@
         display: none;
         flex-direction: column;
         gap: 6px;
-        background: rgba(0, 0, 0, 0.55);
+        background: rgb(var(--pill-rgb) / 0.65);
         border-radius: 10px;
         padding: 8px;
       }
@@ -168,7 +177,7 @@
         padding: 8px 14px;
         border-radius: 8px;
         border: none;
-        background: rgba(255, 255, 255, 0.15);
+        background: rgb(255 255 255 / 0.15);
         color: #fff;
         font: 14px/1.4 sans-serif;
         text-align: left;
