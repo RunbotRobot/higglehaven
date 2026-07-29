@@ -309,6 +309,10 @@ renderer.domElement.addEventListener('click', (event) => {
     const dy = event.clientY - pointerDownPos.y;
     if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) return;
   }
+  // Any genuine tap into the world — whether it selects a product or hits
+  // empty ground — means the builder has moved on from the add-item flow,
+  // so the catalog picker (if left open) should collapse either way.
+  catalogPickerEl.classList.remove('visible');
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const hits = raycaster.intersectObjects(productMeshes);
   setSelected(hits.length > 0 ? hits[0].object : null);
