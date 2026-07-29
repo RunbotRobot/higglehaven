@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { PRODUCTS } from './products.js';
-import { loadLayout, saveLayout } from './layoutStorage.js';
+import { CATALOG, DEFAULT_INSTANCES } from './catalog.js';
+import { loadInstances, saveInstances } from './layoutStorage.js';
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -62,7 +62,7 @@ controls.maxDistance = LANDLET_SIDE_M * 5;
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
 // clamped to the placeholder cuboid volume above — see LANDLET_HEIGHT_M.
 function clampToLandlet(mesh, x, y, z) {
-  const { width, depth, height } = mesh.userData.product.dimensions;
+  const { width, depth, height } = mesh.userData.template.dimensions;
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
   const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
   return {
@@ -133,58 +133,106 @@ const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: 
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 scene.add(landlet);
 
+function findTemplate(templateId) {
+  return CATALOG.find((template) => template.templateId === templateId);
+}
+
 // Placeholder products: plain boxes standing in for real 3D models, sized
-// and colored per the dummy data in products.js. Resting on the ground
-// (z = height / 2) since there's no builder tool yet to place them otherwise.
-// A saved layout (from a previous drag) overrides the default position.
+// and colored per the catalog template each instance references. Resting
+// on the ground (z = height / 2) by default since a fresh instance has no
+// saved z yet.
 //
 // BoxGeometry's arguments are always (X-size, Y-size, Z-size) regardless of
 // which axis a scene treats as "up" — it has no idea about camera.up. Since
 // Z is our vertical axis, `height` (the product's real-world tallness) has
 // to go in the third argument, not the second.
-const savedLayout = loadLayout();
-const productMeshes = [];
-for (const product of PRODUCTS) {
-  const { width, height, depth } = product.dimensions;
-  // A layout saved before this schema change used {x, z, rotationY}, where
-  // `z` meant a ground-plane coordinate, not height — a totally different
-  // meaning than the new `z`. That makes it unsafe to reuse even the fields
-  // that share a name: picking up an old `z` as the new vertical position
-  // could bury a product underground. Detecting old-shaped data by the
-  // presence of `rotationZ` (only ever written by this new code) and
-  // discarding it wholesale — rather than field-by-field — avoids
-  // cross-contamination between the two schemas.
-  const rawSaved = savedLayout[product.id];
-  const saved = rawSaved?.rotationZ !== undefined ? rawSaved : undefined;
-  const x = saved?.x ?? product.position.x;
-  const y = saved?.y ?? product.position.y;
-  const z = saved?.z ?? height / 2;
+function createMeshForInstance(instance) {
+  const template = findTemplate(instance.templateId);
+  const { width, height, depth } = template.dimensions;
   const geometry = new THREE.BoxGeometry(width, depth, height);
-  const material = new THREE.MeshStandardMaterial({ color: product.color });
+  const material = new THREE.MeshStandardMaterial({ color: template.color });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(x, y, z);
-  mesh.rotation.z = saved?.rotationZ ?? 0;
-  mesh.userData.product = product;
+  mesh.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
+  mesh.rotation.z = instance.rotationZ ?? 0;
+  mesh.userData.instanceId = instance.id;
+  mesh.userData.template = template;
+  return mesh;
+}
+
+// A previously-saved instance list (builder additions/removals/moves)
+// entirely replaces the starter set — not merged with it — since the
+// starter set is just a first-visit default, not content to preserve
+// alongside whatever the builder has actually done.
+const initialInstances = loadInstances() ?? DEFAULT_INSTANCES;
+const productMeshes = [];
+for (const instance of initialInstances) {
+  const mesh = createMeshForInstance(instance);
   scene.add(mesh);
   productMeshes.push(mesh);
 }
 
 function persistLayout() {
-  const positionsById = {};
-  for (const mesh of productMeshes) {
-    positionsById[mesh.userData.product.id] = {
-      x: mesh.position.x,
-      y: mesh.position.y,
-      z: mesh.position.z,
-      rotationZ: mesh.rotation.z,
-    };
-  }
-  saveLayout(positionsById);
+  const instances = productMeshes.map((mesh) => ({
+    id: mesh.userData.instanceId,
+    templateId: mesh.userData.template.templateId,
+    x: mesh.position.x,
+    y: mesh.position.y,
+    z: mesh.position.z,
+    rotationZ: mesh.rotation.z,
+  }));
+  saveInstances(instances);
+}
+
+let instanceCounter = 0;
+function spawnInstance(template) {
+  instanceCounter += 1;
+  const instance = {
+    id: `${template.templateId}-${Date.now()}-${instanceCounter}`,
+    templateId: template.templateId,
+    // Small random spread near the center so repeated adds don't stack
+    // exactly on top of each other; still well within the landlet bounds.
+    x: (Math.random() - 0.5) * 6,
+    y: (Math.random() - 0.5) * 6,
+  };
+  const mesh = createMeshForInstance(instance);
+  scene.add(mesh);
+  productMeshes.push(mesh);
+  persistLayout();
+  return mesh;
+}
+
+function deleteInstance(mesh) {
+  const index = productMeshes.indexOf(mesh);
+  if (index === -1) return;
+  productMeshes.splice(index, 1);
+  scene.remove(mesh);
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+  persistLayout();
 }
 
 const productInfoEl = document.getElementById('product-info');
 const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
+
+// Add-item catalog picker: a toggled panel listing every CATALOG template.
+// Tapping one spawns and selects a new instance of it, ready to reposition.
+const addItemBtn = document.getElementById('add-item-btn');
+const catalogPickerEl = document.getElementById('catalog-picker');
+for (const template of CATALOG) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = template.name.replace('Placeholder ', '');
+  button.addEventListener('click', () => {
+    const mesh = spawnInstance(template);
+    catalogPickerEl.classList.remove('visible');
+    setSelected(mesh);
+  });
+  catalogPickerEl.appendChild(button);
+}
+addItemBtn.addEventListener('click', () => {
+  catalogPickerEl.classList.toggle('visible');
+});
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously
 // was tried first and rejected: the rotate ring and the translate handles
@@ -195,6 +243,7 @@ productInfoEl.textContent = HINT_TEXT;
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
+const deleteBtn = document.getElementById('delete-item');
 
 function setGizmoMode(mode) {
   modeMoveBtn.classList.toggle('active', mode === 'translate');
@@ -206,6 +255,12 @@ function setGizmoMode(mode) {
 }
 modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
 modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
+deleteBtn.addEventListener('click', () => {
+  if (!selectedMesh) return;
+  const mesh = selectedMesh;
+  setSelected(null);
+  deleteInstance(mesh);
+});
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -217,7 +272,7 @@ function setSelected(mesh) {
   selectedMesh = mesh;
   if (selectedMesh) {
     selectedMesh.material.emissive.setHex(0x444444);
-    productInfoEl.textContent = selectedMesh.userData.product.name;
+    productInfoEl.textContent = selectedMesh.userData.template.name;
     modeControlsEl.classList.add('visible');
     setGizmoMode('translate');
   } else {
