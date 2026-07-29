@@ -45,6 +45,11 @@ Errors use this shape:
 }
 ```
 
+Malformed JSON and recognized D1 constraint failures are treated as client
+errors rather than generic server failures. Duplicate resources return `409`,
+foreign-key conflicts return `409`, and database check violations return `400`.
+Raw SQL and internal D1 error details are never included in API responses.
+
 The Worker currently sets permissive CORS headers for dev use.
 
 ## Health endpoint
@@ -544,6 +549,5 @@ landlet claiming. Test storage does not modify the local development D1 state.
   Cloudflare resources.
 - Add real land generation and circle-overlap calculations behind the world and
   landlet records.
-- Add clearer D1 constraint handling for foreign-key and uniqueness errors.
 - Add auth/trust/payment/account concepts only after the single-player dev
   backend is stable; they are intentionally out of scope now.

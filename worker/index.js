@@ -15,7 +15,8 @@ export default {
 
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url).catch((error) => {
-        if (error instanceof HttpError) return json({ error: error.message }, error.status);
+        const httpError = error instanceof HttpError ? error : databaseHttpError(error);
+        if (httpError) return json({ error: httpError.message }, httpError.status);
         console.error(error);
         return json({ error: 'Internal server error' }, 500);
       });
@@ -289,7 +290,40 @@ async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) {
     throw new HttpError('Expected application/json request body', 415);
   }
-  return request.json();
+  try {
+    return await request.json();
+  } catch {
+    throw new HttpError('Request body must contain valid JSON', 400);
+  }
+}
+
+function databaseHttpError(error) {
+  const message = errorMessages(error);
+
+  if (message.includes('UNIQUE constraint failed: landlets.owner_builder_id')) {
+    return new HttpError('Builder already owns a claimed landlet', 409);
+  }
+  if (message.includes('UNIQUE constraint failed')) {
+    return new HttpError('Resource already exists', 409);
+  }
+  if (message.includes('FOREIGN KEY constraint failed')) {
+    return new HttpError('Referenced resource does not exist or is still in use', 409);
+  }
+  if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
+    return new HttpError('Request violates a database constraint', 400);
+  }
+
+  return null;
+}
+
+function errorMessages(error) {
+  const messages = [];
+  let current = error;
+  while (current && !messages.includes(current.message)) {
+    if (typeof current.message === 'string') messages.push(current.message);
+    current = current.cause;
+  }
+  return messages.join(' ');
 }
 
 function validateTemplate(input, fallbackId) {
