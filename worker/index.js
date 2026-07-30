@@ -15,6 +15,8 @@ const JSON_HEADERS = {
 // files anywhere near it.
 const MAX_MODEL_BYTES = 20 * 1024 * 1024;
 const GLB_MAGIC = 0x46546c67; // ascii "glTF", little-endian uint32
+const GLB_VERSION = 2;
+const GLB_JSON_CHUNK = 0x4e4f534a;
 
 // R2's free tier is 10GB of storage per month. This is our OWN
 // application-level backstop well under that — checked live against R2's
@@ -167,13 +169,46 @@ async function handleModelUpload(request, env) {
   }
 
   const bytes = await file.arrayBuffer();
-  if (bytes.byteLength < 12 || new DataView(bytes).getUint32(0, true) !== GLB_MAGIC) {
-    throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
-  }
+  validateGlb(bytes);
 
   const key = `models/${crypto.randomUUID()}.glb`;
   await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
   return json({ modelUrl: `/uploads/${key}`, sourceName: file.name || 'model.glb', sizeBytes: bytes.byteLength }, 201);
+}
+
+function validateGlb(bytes) {
+  const view = new DataView(bytes);
+  if (bytes.byteLength < 20 || view.getUint32(0, true) !== GLB_MAGIC) {
+    throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
+  }
+  if (view.getUint32(4, true) !== GLB_VERSION) {
+    throw new HttpError('Only glTF 2.0 .glb models are supported', 400);
+  }
+  if (view.getUint32(8, true) !== bytes.byteLength) {
+    throw new HttpError('GLB header length does not match the uploaded file', 400);
+  }
+
+  let offset = 12;
+  let chunkIndex = 0;
+  while (offset < bytes.byteLength) {
+    if (offset + 8 > bytes.byteLength) throw new HttpError('GLB contains a truncated chunk header', 400);
+    const chunkLength = view.getUint32(offset, true);
+    const chunkType = view.getUint32(offset + 4, true);
+    const chunkEnd = offset + 8 + chunkLength;
+    if (chunkLength % 4 !== 0 || chunkEnd > bytes.byteLength) {
+      throw new HttpError('GLB contains an invalid chunk length', 400);
+    }
+    if (chunkIndex === 0) {
+      if (chunkType !== GLB_JSON_CHUNK) throw new HttpError('GLB must begin with a JSON chunk', 400);
+      try {
+        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
+      } catch {
+        throw new HttpError('GLB contains invalid JSON metadata', 400);
+      }
+    }
+    offset = chunkEnd;
+    chunkIndex += 1;
+  }
 }
 
 function formatBytes(bytes) {

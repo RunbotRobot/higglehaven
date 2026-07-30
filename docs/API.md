@@ -737,7 +737,8 @@ to support builder-uploaded photogrammetry/scanned models rather than only
 the built-in catalog:
 
 - `POST /api/models` — accepts a `.glb` file as `multipart/form-data` (field
-  name `file`), validates it (glTF binary magic bytes, a 20MB hard size cap,
+  name `file`), validates it (glTF 2.0 header, declared file length, chunk
+  boundaries, required JSON metadata chunk, a 20MB hard size cap,
   and a live application-level 8GB total-R2-storage cap), stores it in the
   `MODELS` R2 bucket under a random `models/<uuid>.glb` key, and returns
   `{ modelUrl, sourceName, sizeBytes }`. The returned `modelUrl` is then used
