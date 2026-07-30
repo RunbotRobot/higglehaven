@@ -14,6 +14,7 @@ import {
   importModelFromUrl,
   createCatalogTemplate,
 } from './api.js';
+import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -576,6 +577,12 @@ function setUploadStatus(text, isError) {
   uploadStatusEl.classList.toggle('error', Boolean(isError));
 }
 
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${bytes}B`;
+}
+
 function openUploadModal() {
   catalogPickerEl.classList.remove('visible');
   uploadNameInput.value = '';
@@ -626,8 +633,34 @@ uploadSubmitBtn.addEventListener('click', async () => {
 
   uploadSubmitBtn.disabled = true;
   try {
-    setUploadStatus(uploadMode === 'file' ? 'Uploading…' : 'Fetching from link…');
-    const { modelUrl } = uploadMode === 'file' ? await uploadModelFile(file) : await importModelFromUrl(sourceUrl);
+    let modelUrl;
+    if (uploadMode === 'file') {
+      // Only the direct-file path can optimize client-side — a URL-import
+      // is fetched by the Worker itself specifically so the file never
+      // has to pass through this browser at all (see api.js), and
+      // there's no point routing it back through here just to shrink it.
+      let uploadable = file;
+      try {
+        const optimized = await optimizeModelFile(file, (status) => setUploadStatus(status));
+        uploadable = new File([optimized.blob], file.name, { type: 'model/gltf-binary' });
+        const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
+        setUploadStatus(
+          `Reduced ${optimized.trianglesBefore.toLocaleString()} -> ${optimized.trianglesAfter.toLocaleString()} triangles ` +
+            `(${trianglePct}%), ${formatBytes(optimized.bytesBefore)} -> ${formatBytes(optimized.bytesAfter)}. Uploading…`,
+        );
+      } catch (err) {
+        // Optimization is a nice-to-have, not a requirement — if it fails
+        // for any reason (an unusual mesh the simplifier chokes on, etc.)
+        // fall back to uploading the original file rather than blocking
+        // the whole thing on it.
+        console.warn('Client-side model optimization failed, uploading original file:', err);
+        setUploadStatus('Could not auto-reduce the model — uploading as-is…');
+      }
+      ({ modelUrl } = await uploadModelFile(uploadable));
+    } else {
+      setUploadStatus('Fetching from link…');
+      ({ modelUrl } = await importModelFromUrl(sourceUrl));
+    }
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
