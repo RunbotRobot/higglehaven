@@ -4,7 +4,16 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
-import { fetchCatalog, fetchInstances, createInstanceRemote, updateInstanceRemote, deleteInstanceRemote } from './api.js';
+import {
+  fetchCatalog,
+  fetchInstances,
+  createInstanceRemote,
+  updateInstanceRemote,
+  deleteInstanceRemote,
+  uploadModelFile,
+  importModelFromUrl,
+  createCatalogTemplate,
+} from './api.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -528,6 +537,121 @@ function buildCatalogPickerButtons() {
 }
 addItemBtn.addEventListener('click', () => {
   catalogPickerEl.classList.toggle('visible');
+});
+
+// Custom product upload: a builder's own model (photogrammetry scan,
+// etc.) becomes a real catalog_templates row via two independent backend
+// calls — POST /api/models to get bytes into storage and back a modelUrl,
+// then the ordinary POST /api/catalog to register a product using it.
+// This only works with the real backend reachable — creating a new
+// persistent catalog entry has nowhere to live in offline/fallback mode,
+// since catalog.js is a static file, not a runtime data store.
+const uploadModalEl = document.getElementById('upload-modal');
+const uploadNameInput = document.getElementById('upload-name');
+const uploadModeFileBtn = document.getElementById('upload-mode-file');
+const uploadModeUrlBtn = document.getElementById('upload-mode-url');
+const uploadFileLabel = document.getElementById('upload-file-label');
+const uploadUrlLabel = document.getElementById('upload-url-label');
+const uploadFileInput = document.getElementById('upload-file-input');
+const uploadUrlInput = document.getElementById('upload-url-input');
+const uploadStatusEl = document.getElementById('upload-status');
+const uploadCancelBtn = document.getElementById('upload-cancel-btn');
+const uploadSubmitBtn = document.getElementById('upload-submit-btn');
+const uploadModelBtn = document.getElementById('upload-model-btn');
+
+let uploadMode = 'file';
+
+function setUploadMode(mode) {
+  uploadMode = mode;
+  uploadModeFileBtn.classList.toggle('active', mode === 'file');
+  uploadModeUrlBtn.classList.toggle('active', mode === 'url');
+  uploadFileLabel.style.display = mode === 'file' ? '' : 'none';
+  uploadUrlLabel.style.display = mode === 'url' ? '' : 'none';
+}
+uploadModeFileBtn.addEventListener('click', () => setUploadMode('file'));
+uploadModeUrlBtn.addEventListener('click', () => setUploadMode('url'));
+
+function setUploadStatus(text, isError) {
+  uploadStatusEl.textContent = text;
+  uploadStatusEl.classList.toggle('error', Boolean(isError));
+}
+
+function openUploadModal() {
+  catalogPickerEl.classList.remove('visible');
+  uploadNameInput.value = '';
+  uploadFileInput.value = '';
+  uploadUrlInput.value = '';
+  setUploadMode('file');
+  setUploadStatus('');
+  uploadSubmitBtn.disabled = false;
+  uploadModalEl.classList.add('visible');
+}
+
+function closeUploadModal() {
+  uploadModalEl.classList.remove('visible');
+}
+
+uploadModelBtn.addEventListener('click', openUploadModal);
+uploadCancelBtn.addEventListener('click', closeUploadModal);
+
+// Measures a freshly-uploaded model's own real-world size by loading it
+// through the exact same path every placed instance uses (loadModelInstance
+// — including the Y-up -> Z-up correction), rather than trusting whatever
+// the source tool claims. The measured container is never added to the
+// scene, just disposed once its bounding box is read.
+async function measureModelDimensions(modelUrl) {
+  const container = await loadModelInstance(modelUrl);
+  const box = new THREE.Box3().setFromObject(container);
+  const size = box.getSize(new THREE.Vector3());
+  disposeObject(container);
+  return { width: size.x, depth: size.y, height: size.z };
+}
+
+uploadSubmitBtn.addEventListener('click', async () => {
+  const name = uploadNameInput.value.trim();
+  if (!name) {
+    setUploadStatus('Name is required.', true);
+    return;
+  }
+  const file = uploadFileInput.files[0];
+  const sourceUrl = uploadUrlInput.value.trim();
+  if (uploadMode === 'file' && !file) {
+    setUploadStatus('Choose a .glb file first.', true);
+    return;
+  }
+  if (uploadMode === 'url' && !sourceUrl) {
+    setUploadStatus('Paste a link to a .glb file first.', true);
+    return;
+  }
+
+  uploadSubmitBtn.disabled = true;
+  try {
+    setUploadStatus(uploadMode === 'file' ? 'Uploading…' : 'Fetching from link…');
+    const { modelUrl } = uploadMode === 'file' ? await uploadModelFile(file) : await importModelFromUrl(sourceUrl);
+
+    setUploadStatus('Measuring model…');
+    const dimensions = await measureModelDimensions(modelUrl);
+
+    setUploadStatus('Creating product…');
+    const template = await createCatalogTemplate({
+      name,
+      dimensions,
+      color: '#999999', // only ever used if the model itself fails to load later
+      modelUrl,
+    });
+
+    activeCatalog.push(template);
+    buildCatalogPickerButtons();
+    closeUploadModal();
+
+    const mesh = await spawnInstance(template);
+    setSelected(mesh);
+  } catch (err) {
+    console.error('Custom product upload failed:', err);
+    setUploadStatus(err.message || 'Something went wrong.', true);
+  } finally {
+    uploadSubmitBtn.disabled = false;
+  }
 });
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously

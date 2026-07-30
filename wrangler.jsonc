@@ -14,5 +14,15 @@
       "database_id": "3d9ad5a2-7529-4fd2-9b2f-60604b0499a1",
       "migrations_dir": "migrations"
     }
+  ],
+  // Placeholder bucket_name — wrangler dev --local emulates R2 locally
+  // without needing a real bucket to exist yet, but this needs to become
+  // the actual bucket name (created in the Cloudflare dashboard) before
+  // this ever gets deployed for real, same as database_id did for D1.
+  "r2_buckets": [
+    {
+      "binding": "MODELS",
+      "bucket_name": "higglehaven-models"
+    }
   ]
 }

@@ -44,3 +44,35 @@ export async function updateInstanceRemote(instanceId, patch) {
 export async function deleteInstanceRemote(instanceId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
 }
+
+// Uploads a .glb file directly. Distinct from requestJson above since this
+// needs a raw multipart body, not a JSON one.
+export async function uploadModelFile(file) {
+  const form = new FormData();
+  form.append('file', file);
+  const response = await fetch(`${API_BASE}/models`, { method: 'POST', body: form });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Model upload failed with HTTP ${response.status}`);
+  }
+  return response.json(); // { modelUrl, sourceName, sizeBytes }
+}
+
+// Hands the Worker a URL to fetch server-side instead — the file never
+// passes through this browser/device at all.
+export async function importModelFromUrl(url) {
+  return requestJson('/models', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url }),
+  }); // { modelUrl, sourceName, sizeBytes }
+}
+
+export async function createCatalogTemplate(template) {
+  const { template: created } = await requestJson('/catalog', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(template),
+  });
+  return created;
+}

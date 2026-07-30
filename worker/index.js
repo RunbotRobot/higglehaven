@@ -5,6 +5,15 @@ const JSON_HEADERS = {
   'access-control-allow-headers': 'content-type',
 };
 
+// Real-time web/mobile products should be tiny — see catalog.js's own
+// comments and the size guidance given when this endpoint was built.
+// 20MB is a generous ceiling above that guidance (most uploads should land
+// well under 2MB), not a target: it exists to reject an accidentally-huge
+// raw photogrammetry export before it ever reaches R2, not to encourage
+// files anywhere near it.
+const MAX_MODEL_BYTES = 20 * 1024 * 1024;
+const GLB_MAGIC = 0x46546c67; // ascii "glTF", little-endian uint32
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -21,9 +30,37 @@ export default {
       });
     }
 
+    // Uploaded/imported model files live in R2, not the static ASSETS
+    // bundle (which only has whatever shipped with the build) — served
+    // from their own path prefix so they never collide with the built-in
+    // models under /models/.
+    if (url.pathname.startsWith('/uploads/')) {
+      return handleUploadedAsset(request, env).catch((error) => {
+        console.error(error);
+        if (error instanceof HttpError) return json({ error: error.message }, error.status);
+        return json({ error: 'Internal server error' }, 500);
+      });
+    }
+
     return env.ASSETS.fetch(request);
   },
 };
+
+async function handleUploadedAsset(request, env) {
+  if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
+  const key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/uploads\//, ''));
+  const object = await env.MODELS.get(key);
+  if (!object) return json({ error: 'Not found' }, 404);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('access-control-allow-origin', '*');
+  // Uploaded files are content-addressed-ish (random key per upload, never
+  // overwritten in place — see handleModelUpload) and never change once
+  // stored, so a long-lived cache is always safe.
+  headers.set('cache-control', 'public, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
+}
 
 async function handleApi(request, env, url) {
   if (!env.DB) {
@@ -44,7 +81,83 @@ async function handleApi(request, env, url) {
     return handleInstances(request, env.DB, route, url);
   }
 
+  if (route[0] === 'models' && route.length === 1 && request.method === 'POST') {
+    return handleModelUpload(request, env);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// Accepts a model file two ways: a direct multipart/form-data upload (a
+// "file" field), or a JSON { url } for the Worker itself to fetch —
+// letting a file move from wherever it already lives (a cloud drive link,
+// etc.) straight into R2 without passing through the uploading device at
+// all. Either way, this only ever returns a modelUrl; creating the actual
+// catalog_templates row referencing it is a separate POST /api/catalog
+// call (unchanged), keeping "get bytes into storage" and "register a
+// product" as two independent steps.
+async function handleModelUpload(request, env) {
+  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+
+  const contentType = request.headers.get('content-type') || '';
+  let bytes;
+  let sourceName = 'model.glb';
+
+  if (contentType.includes('multipart/form-data')) {
+    const form = await request.formData().catch(() => {
+      throw new HttpError('Request body is not valid multipart/form-data', 400);
+    });
+    const file = form.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      throw new HttpError('Expected a "file" field in the form data', 400);
+    }
+    if (file.size > MAX_MODEL_BYTES) {
+      throw new HttpError(`File is ${formatBytes(file.size)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
+    }
+    bytes = await file.arrayBuffer();
+    if (file.name) sourceName = file.name;
+  } else if (contentType.includes('application/json')) {
+    const { url: sourceUrl } = await readJson(request);
+    if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
+      throw new HttpError('url is required', 400);
+    }
+    let response;
+    try {
+      response = await fetch(sourceUrl);
+    } catch (err) {
+      throw new HttpError(`Could not fetch url: ${err.message}`, 400);
+    }
+    if (!response.ok) {
+      throw new HttpError(`Fetching url returned HTTP ${response.status}`, 400);
+    }
+    // Fast-path rejection using the header when the source is honest about
+    // size, before spending the time/memory to download it at all.
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_MODEL_BYTES) {
+      throw new HttpError(`Remote file is ${formatBytes(declaredLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
+    }
+    bytes = await response.arrayBuffer();
+    sourceName = sourceUrl.split('/').pop() || sourceName;
+  } else {
+    throw new HttpError('Expected multipart/form-data or application/json', 415);
+  }
+
+  if (bytes.byteLength > MAX_MODEL_BYTES) {
+    throw new HttpError(`File is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
+  }
+  if (bytes.byteLength < 12 || new DataView(bytes).getUint32(0, true) !== GLB_MAGIC) {
+    throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
+  }
+
+  const key = `models/${crypto.randomUUID()}.glb`;
+  await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
+  return json({ modelUrl: `/uploads/${key}`, sourceName, sizeBytes: bytes.byteLength }, 201);
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${bytes}B`;
 }
 
 async function handleCatalog(request, db, route, url) {
