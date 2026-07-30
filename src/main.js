@@ -351,9 +351,9 @@ async function loadModelInstance(url) {
   const model = cachedScene.clone();
   // Object3D.clone() shares materials/geometries by reference. Geometry
   // being shared is fine (read-only), but materials need independent
-  // copies per instance — otherwise highlighting one selected brick (see
-  // setEmissive below) would light up every other brick sharing the same
-  // cached material.
+  // copies per instance so a future per-material tweak on one placed
+  // instance (recoloring, damage states, etc.) can't leak into every other
+  // instance sharing the same cached material.
   model.traverse((child) => {
     if (child.isMesh) {
       child.material = Array.isArray(child.material)
@@ -748,25 +748,32 @@ const pointerNdc = new THREE.Vector2();
 const selectedMeshes = new Set();
 let multiSelectMode = false;
 
-// A dim gray emissive tint is nearly invisible against most product colors
-// (measured: a tan/gray table on green grass showed no perceptible change),
-// especially outdoors on a phone screen. A strong, saturated color reads as
-// a highlight regardless of the item's own hue, the way "selected" usually
-// looks in CAD/building tools.
-const SELECTED_EMISSIVE_HEX = 0xff8c00;
-const DESELECTED_EMISSIVE_HEX = 0x000000;
+// Highlighting via emissive tint (an earlier approach) silently did nothing
+// on builder-uploaded models: RealityScan/Sketchfab-style exports commonly
+// bake lighting into the texture and mark the material unlit (glTF's
+// KHR_materials_unlit), which GLTFLoader turns into a MeshBasicMaterial —
+// a material with no `emissive` property at all. A bounding-box outline
+// (THREE.BoxHelper) is a separate line object, not a material tweak, so it
+// highlights any mesh regardless of material type. Green to match the
+// higglehaven brand (--brand-green in index.html) rather than an arbitrary
+// accent color.
+const SELECTION_OUTLINE_COLOR = 0x6ca42e;
+const selectionOutlines = new Map(); // mesh -> THREE.BoxHelper
 
-// Same Mesh-or-Group reasoning as disposeObject: a model's visual content
-// can be spread across several child meshes/materials, so the highlight
-// has to be applied to all of them, not just a single top-level material.
-function setEmissive(object, hex) {
-  object.traverse((child) => {
-    if (!child.isMesh || !child.material) return;
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      if (material.emissive) material.emissive.setHex(hex);
-    }
-  });
+function addSelectionOutline(mesh) {
+  if (selectionOutlines.has(mesh)) return;
+  const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
+  scene.add(helper);
+  selectionOutlines.set(mesh, helper);
+}
+
+function removeSelectionOutline(mesh) {
+  const helper = selectionOutlines.get(mesh);
+  if (!helper) return;
+  scene.remove(helper);
+  helper.geometry.dispose();
+  helper.material.dispose();
+  selectionOutlines.delete(mesh);
 }
 
 // Reconciles every visible bit of "what's selected" UI (highlight already
@@ -797,7 +804,7 @@ function updateSelectionUI() {
 }
 
 function clearSelection() {
-  for (const mesh of selectedMeshes) setEmissive(mesh, DESELECTED_EMISSIVE_HEX);
+  for (const mesh of selectedMeshes) removeSelectionOutline(mesh);
   selectedMeshes.clear();
 }
 
@@ -810,7 +817,7 @@ function selectOnly(mesh) {
   clearSelection();
   if (mesh) {
     selectedMeshes.add(mesh);
-    setEmissive(mesh, SELECTED_EMISSIVE_HEX);
+    addSelectionOutline(mesh);
   }
   updateSelectionUI();
 }
@@ -820,10 +827,10 @@ function selectOnly(mesh) {
 function toggleInSelection(mesh) {
   if (selectedMeshes.has(mesh)) {
     selectedMeshes.delete(mesh);
-    setEmissive(mesh, DESELECTED_EMISSIVE_HEX);
+    removeSelectionOutline(mesh);
   } else {
     selectedMeshes.add(mesh);
-    setEmissive(mesh, SELECTED_EMISSIVE_HEX);
+    addSelectionOutline(mesh);
   }
   updateSelectionUI();
 }
@@ -989,7 +996,7 @@ async function handlePlacementClick() {
     clearSelection();
     for (const mesh of placed) {
       selectedMeshes.add(mesh);
-      setEmissive(mesh, SELECTED_EMISSIVE_HEX);
+      addSelectionOutline(mesh);
     }
     updateSelectionUI();
   }
@@ -1236,6 +1243,10 @@ function animate(now) {
   applyEdgePanWhileDraggingProduct();
   controls.update();
   updateCameraDebug(now);
+  // A selected item's outline must track it live while the translate/rotate
+  // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
+  // every frame rather than only on selection change.
+  for (const helper of selectionOutlines.values()) helper.update();
   renderer.render(scene, camera);
 }
 animate(0);
