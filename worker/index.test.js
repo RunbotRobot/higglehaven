@@ -26,7 +26,53 @@ async function createGreenbeltLandlet(landletId) {
   });
 }
 
+function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
+  const encoded = new TextEncoder().encode(json);
+  const chunkLength = Math.ceil(encoded.length / 4) * 4;
+  const bytes = new Uint8Array(20 + chunkLength);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, version, true);
+  view.setUint32(8, declaredLength ?? bytes.length, true);
+  view.setUint32(12, chunkLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  bytes.set(encoded, 20);
+  bytes.fill(0x20, 20 + encoded.length);
+  return new File([bytes], 'chair.glb', { type: 'model/gltf-binary' });
+}
+
 describe('Worker API', () => {
+  it('validates, stores, and serves complete glTF 2.0 binary models', async () => {
+    const form = new FormData();
+    form.set('file', glbFile());
+    const response = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({ sourceName: 'chair.glb', sizeBytes: 24 });
+    expect(body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f-]+\.glb$/);
+
+    const uploaded = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`);
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.headers.get('content-type')).toBe('model/gltf-binary');
+    expect(uploaded.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect((await uploaded.arrayBuffer()).byteLength).toBe(24);
+  });
+
+  it('rejects unsupported or structurally incomplete GLB uploads', async () => {
+    for (const [file, error] of [
+      [glbFile({ version: 1 }), 'Only glTF 2.0 .glb models are supported'],
+      [glbFile({ declaredLength: 999 }), 'GLB header length does not match the uploaded file'],
+      [glbFile({ json: '{]' }), 'GLB contains invalid JSON metadata'],
+    ]) {
+      const form = new FormData();
+      form.set('file', file);
+      const response = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error });
+    }
+  });
+
   it('reports health and serves migrated seed data', async () => {
     const health = await api('/health');
     expect(health.response.status).toBe(200);
