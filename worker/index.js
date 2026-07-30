@@ -109,86 +109,56 @@ async function handleApi(request, env, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Accepts a model file two ways: a direct multipart/form-data upload (a
-// "file" field), or a JSON { url } for the Worker itself to fetch —
-// letting a file move from wherever it already lives (a cloud drive link,
-// etc.) straight into R2 without passing through the uploading device at
-// all. Either way, this only ever returns a modelUrl; creating the actual
+// Accepts a model file as a direct multipart/form-data upload (a "file"
+// field). This only ever returns a modelUrl; creating the actual
 // catalog_templates row referencing it is a separate POST /api/catalog
 // call (unchanged), keeping "get bytes into storage" and "register a
 // product" as two independent steps.
+//
+// A URL-import mode (the Worker fetching a link server-side) used to live
+// here too, dropped for now: in practice it was hard to get a plain,
+// directly-fetchable file link out of consumer cloud/share tools, and that
+// path can't benefit from the client-side model optimization pipeline
+// (src/modelOptimizer.js) since the browser never sees the bytes. It was
+// also an open server-side-request-forgery surface — this endpoint has no
+// auth, so anyone could have asked the Worker to fetch arbitrary URLs on
+// its behalf.
 async function handleModelUpload(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
 
+  const contentType = request.headers.get('content-type') || '';
+  if (!contentType.includes('multipart/form-data')) {
+    throw new HttpError('Expected multipart/form-data', 415);
+  }
+
   const currentTotal = await getTotalStorageBytes(env.MODELS);
   const remainingBudget = MAX_TOTAL_STORAGE_BYTES - currentTotal;
-  const assertWithinBudget = (size, label) => {
-    if (size > remainingBudget) {
-      throw new HttpError(
-        `${label} is ${formatBytes(size)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
-        507,
-      );
-    }
-  };
 
-  const contentType = request.headers.get('content-type') || '';
-  let bytes;
-  let sourceName = 'model.glb';
-
-  if (contentType.includes('multipart/form-data')) {
-    const form = await request.formData().catch(() => {
-      throw new HttpError('Request body is not valid multipart/form-data', 400);
-    });
-    const file = form.get('file');
-    if (!file || typeof file.arrayBuffer !== 'function') {
-      throw new HttpError('Expected a "file" field in the form data', 400);
-    }
-    if (file.size > MAX_MODEL_BYTES) {
-      throw new HttpError(`File is ${formatBytes(file.size)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
-    }
-    assertWithinBudget(file.size, 'File');
-    bytes = await file.arrayBuffer();
-    if (file.name) sourceName = file.name;
-  } else if (contentType.includes('application/json')) {
-    const { url: sourceUrl } = await readJson(request);
-    if (typeof sourceUrl !== 'string' || !sourceUrl.trim()) {
-      throw new HttpError('url is required', 400);
-    }
-    let response;
-    try {
-      response = await fetch(sourceUrl);
-    } catch (err) {
-      throw new HttpError(`Could not fetch url: ${err.message}`, 400);
-    }
-    if (!response.ok) {
-      throw new HttpError(`Fetching url returned HTTP ${response.status}`, 400);
-    }
-    // Fast-path rejection using the header when the source is honest about
-    // size, before spending the time/memory to download it at all.
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_MODEL_BYTES) {
-      throw new HttpError(`Remote file is ${formatBytes(declaredLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
-    }
-    if (Number.isFinite(declaredLength)) assertWithinBudget(declaredLength, 'Remote file');
-    bytes = await response.arrayBuffer();
-    sourceName = sourceUrl.split('/').pop() || sourceName;
-  } else {
-    throw new HttpError('Expected multipart/form-data or application/json', 415);
+  const form = await request.formData().catch(() => {
+    throw new HttpError('Request body is not valid multipart/form-data', 400);
+  });
+  const file = form.get('file');
+  if (!file || typeof file.arrayBuffer !== 'function') {
+    throw new HttpError('Expected a "file" field in the form data', 400);
+  }
+  if (file.size > MAX_MODEL_BYTES) {
+    throw new HttpError(`File is ${formatBytes(file.size)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
+  }
+  if (file.size > remainingBudget) {
+    throw new HttpError(
+      `File is ${formatBytes(file.size)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
+      507,
+    );
   }
 
-  if (bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new HttpError(`File is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
-  }
-  // Re-checked against the actual downloaded bytes too, in case a remote
-  // server's Content-Length header was missing or wrong.
-  assertWithinBudget(bytes.byteLength, 'File');
+  const bytes = await file.arrayBuffer();
   if (bytes.byteLength < 12 || new DataView(bytes).getUint32(0, true) !== GLB_MAGIC) {
     throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
   }
 
   const key = `models/${crypto.randomUUID()}.glb`;
   await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
-  return json({ modelUrl: `/uploads/${key}`, sourceName, sizeBytes: bytes.byteLength }, 201);
+  return json({ modelUrl: `/uploads/${key}`, sourceName: file.name || 'model.glb', sizeBytes: bytes.byteLength }, 201);
 }
 
 function formatBytes(bytes) {

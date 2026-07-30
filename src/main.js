@@ -11,7 +11,6 @@ import {
   updateInstanceRemote,
   deleteInstanceRemote,
   uploadModelFile,
-  importModelFromUrl,
   createCatalogTemplate,
 } from './api.js';
 import { optimizeModelFile } from './modelOptimizer.js';
@@ -355,6 +354,26 @@ async function loadModelInstance(url) {
     }
   });
   model.rotation.x = Math.PI / 2;
+
+  // Every placeholder model in this file is deliberately authored centered
+  // on its own local origin, so "z = height / 2 rests it on the ground"
+  // (see createMeshForInstance) holds by construction. A real uploaded
+  // model can't be trusted to follow that convention — RealityScan (and
+  // photogrammetry tools generally) keep whatever pivot the original
+  // capture volume had, which does not move back to the geometry's center
+  // after cropping away part of a scan. An uncentered model was exactly
+  // this: cropping ~1.5in off the bottom of a 3in scan left the remaining
+  // geometry sitting off-center relative to its own origin, so the
+  // declared (correctly measured) height was right but the visual mesh
+  // rendered shifted from where the collision system placed it — the
+  // brick appeared to float exactly by the cropped-away amount whenever
+  // Snap rested it on the ground. Recentering here, once per loaded
+  // instance, makes the convention hold for any model regardless of the
+  // source tool's own pivot.
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.sub(center);
+
   const container = new THREE.Group();
   container.add(model);
   return container;
@@ -549,28 +568,11 @@ addItemBtn.addEventListener('click', () => {
 // since catalog.js is a static file, not a runtime data store.
 const uploadModalEl = document.getElementById('upload-modal');
 const uploadNameInput = document.getElementById('upload-name');
-const uploadModeFileBtn = document.getElementById('upload-mode-file');
-const uploadModeUrlBtn = document.getElementById('upload-mode-url');
-const uploadFileLabel = document.getElementById('upload-file-label');
-const uploadUrlLabel = document.getElementById('upload-url-label');
 const uploadFileInput = document.getElementById('upload-file-input');
-const uploadUrlInput = document.getElementById('upload-url-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
 const uploadModelBtn = document.getElementById('upload-model-btn');
-
-let uploadMode = 'file';
-
-function setUploadMode(mode) {
-  uploadMode = mode;
-  uploadModeFileBtn.classList.toggle('active', mode === 'file');
-  uploadModeUrlBtn.classList.toggle('active', mode === 'url');
-  uploadFileLabel.style.display = mode === 'file' ? '' : 'none';
-  uploadUrlLabel.style.display = mode === 'url' ? '' : 'none';
-}
-uploadModeFileBtn.addEventListener('click', () => setUploadMode('file'));
-uploadModeUrlBtn.addEventListener('click', () => setUploadMode('url'));
 
 function setUploadStatus(text, isError) {
   uploadStatusEl.textContent = text;
@@ -587,8 +589,6 @@ function openUploadModal() {
   catalogPickerEl.classList.remove('visible');
   uploadNameInput.value = '';
   uploadFileInput.value = '';
-  uploadUrlInput.value = '';
-  setUploadMode('file');
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
   uploadModalEl.classList.add('visible');
@@ -621,46 +621,31 @@ uploadSubmitBtn.addEventListener('click', async () => {
     return;
   }
   const file = uploadFileInput.files[0];
-  const sourceUrl = uploadUrlInput.value.trim();
-  if (uploadMode === 'file' && !file) {
+  if (!file) {
     setUploadStatus('Choose a .glb file first.', true);
-    return;
-  }
-  if (uploadMode === 'url' && !sourceUrl) {
-    setUploadStatus('Paste a link to a .glb file first.', true);
     return;
   }
 
   uploadSubmitBtn.disabled = true;
   try {
-    let modelUrl;
-    if (uploadMode === 'file') {
-      // Only the direct-file path can optimize client-side — a URL-import
-      // is fetched by the Worker itself specifically so the file never
-      // has to pass through this browser at all (see api.js), and
-      // there's no point routing it back through here just to shrink it.
-      let uploadable = file;
-      try {
-        const optimized = await optimizeModelFile(file, (status) => setUploadStatus(status));
-        uploadable = new File([optimized.blob], file.name, { type: 'model/gltf-binary' });
-        const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
-        setUploadStatus(
-          `Reduced ${optimized.trianglesBefore.toLocaleString()} -> ${optimized.trianglesAfter.toLocaleString()} triangles ` +
-            `(${trianglePct}%), ${formatBytes(optimized.bytesBefore)} -> ${formatBytes(optimized.bytesAfter)}. Uploading…`,
-        );
-      } catch (err) {
-        // Optimization is a nice-to-have, not a requirement — if it fails
-        // for any reason (an unusual mesh the simplifier chokes on, etc.)
-        // fall back to uploading the original file rather than blocking
-        // the whole thing on it.
-        console.warn('Client-side model optimization failed, uploading original file:', err);
-        setUploadStatus('Could not auto-reduce the model — uploading as-is…');
-      }
-      ({ modelUrl } = await uploadModelFile(uploadable));
-    } else {
-      setUploadStatus('Fetching from link…');
-      ({ modelUrl } = await importModelFromUrl(sourceUrl));
+    let uploadable = file;
+    try {
+      const optimized = await optimizeModelFile(file, (status) => setUploadStatus(status));
+      uploadable = new File([optimized.blob], file.name, { type: 'model/gltf-binary' });
+      const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
+      setUploadStatus(
+        `Reduced ${optimized.trianglesBefore.toLocaleString()} -> ${optimized.trianglesAfter.toLocaleString()} triangles ` +
+          `(${trianglePct}%), ${formatBytes(optimized.bytesBefore)} -> ${formatBytes(optimized.bytesAfter)}. Uploading…`,
+      );
+    } catch (err) {
+      // Optimization is a nice-to-have, not a requirement — if it fails
+      // for any reason (an unusual mesh the simplifier chokes on, etc.)
+      // fall back to uploading the original file rather than blocking
+      // the whole thing on it.
+      console.warn('Client-side model optimization failed, uploading original file:', err);
+      setUploadStatus('Could not auto-reduce the model — uploading as-is…');
     }
+    const { modelUrl } = await uploadModelFile(uploadable);
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);

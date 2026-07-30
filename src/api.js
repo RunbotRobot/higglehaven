@@ -58,16 +58,6 @@ export async function uploadModelFile(file) {
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
 
-// Hands the Worker a URL to fetch server-side instead — the file never
-// passes through this browser/device at all.
-export async function importModelFromUrl(url) {
-  return requestJson('/models', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ url }),
-  }); // { modelUrl, sourceName, sizeBytes }
-}
-
 export async function createCatalogTemplate(template) {
   const { template: created } = await requestJson('/catalog', {
     method: 'POST',

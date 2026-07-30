@@ -229,31 +229,13 @@
         font-size: 13px;
         color: rgb(255 255 255 / 0.85);
       }
-      #upload-modal-content input[type='text'],
-      #upload-modal-content input[type='url'] {
+      #upload-modal-content input[type='text'] {
         padding: 8px 10px;
         border-radius: 8px;
         border: 1px solid rgb(255 255 255 / 0.25);
         background: rgb(255 255 255 / 0.1);
         color: #fff;
         font: 14px/1.4 sans-serif;
-      }
-      #upload-mode-tabs {
-        display: flex;
-        gap: 6px;
-      }
-      #upload-mode-tabs button {
-        flex: 1;
-        padding: 6px 10px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(255 255 255 / 0.12);
-        color: rgb(255 255 255 / 0.7);
-        font: 13px/1.4 sans-serif;
-      }
-      #upload-mode-tabs button.active {
-        background: var(--brand-green);
-        color: #16240a;
       }
       #upload-hint {
         font-size: 12px;
@@ -319,19 +301,14 @@
           Name
           <input id="upload-name" type="text" placeholder="e.g. Brick" />
         </label>
-        <div id="upload-mode-tabs">
-          <button id="upload-mode-file" type="button" class="active">Upload file</button>
-          <button id="upload-mode-url" type="button">Paste link</button>
-        </div>
         <label id="upload-file-label">
           .glb file
           <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary" />
         </label>
-        <label id="upload-url-label" style="display: none">
-          Link to a .glb file
-          <input id="upload-url-input" type="url" placeholder="https://..." />
-        </label>
-        <div id="upload-hint">Models should be well under 2MB for good performance (20MB hard limit).</div>
+        <div id="upload-hint">
+          We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
+          80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster.
+        </div>
         <div id="upload-status"></div>
         <div id="upload-modal-actions">
           <button id="upload-cancel-btn" type="button">Cancel</button>
