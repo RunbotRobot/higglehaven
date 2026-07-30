@@ -246,9 +246,19 @@ function clampToLandlet(mesh, x, y, z) {
 function wireDraggingBehavior(transformControls) {
   transformControls.addEventListener('dragging-changed', (event) => {
     controls.enabled = !event.value;
-    if (!event.value) {
-      persistLayout();
-      if (transformControls.object) syncUpdate(transformControls.object);
+    if (event.value) {
+      pushUndoSnapshot();
+      return;
+    }
+    persistLayout();
+    // The group-move pivot (see groupMovePivot below) isn't a real product
+    // itself — it's an invisible anchor the gizmo needed something to
+    // attach to. Sync every mesh that actually moved instead of it.
+    if (transformControls.object === groupMovePivot) {
+      for (const mesh of groupMoveMeshes ?? []) syncUpdate(mesh);
+      groupMoveMeshes = null;
+    } else if (transformControls.object) {
+      syncUpdate(transformControls.object);
     }
   });
 }
@@ -280,17 +290,48 @@ translateControls.setMode('translate');
 translateControls.space = 'local';
 scene.add(translateControls.getHelper());
 wireDraggingBehavior(translateControls);
+
+// An invisible anchor the Move gizmo attaches to instead of a real product
+// when several items are selected at once — TransformControls only ever
+// knows how to attach to one Object3D. Dragging it doesn't move anything
+// itself; each frame's delta gets applied identically to every selected
+// mesh instead (see objectChange below), which is what keeps the group's
+// relative arrangement intact while moving it as a unit.
+const groupMovePivot = new THREE.Object3D();
+scene.add(groupMovePivot);
+let groupMoveMeshes = null; // meshes being moved together, captured at drag start
+const groupMovePivotLastPosition = new THREE.Vector3();
+
 // resolveByAxis needs a known-good starting point to sweep from — captured
 // fresh at the start of every drag, since the object's position right
 // before a drag begins is by definition already collision-free.
 translateControls.addEventListener('dragging-changed', (event) => {
-  if (event.value && translateControls.object) {
-    translateControls.object.userData.safePosition = translateControls.object.position.clone();
+  if (!event.value || !translateControls.object) return;
+  if (translateControls.object === groupMovePivot) {
+    groupMoveMeshes = [...selectedMeshes];
+    groupMovePivotLastPosition.copy(groupMovePivot.position);
+    return;
   }
+  translateControls.object.userData.safePosition = translateControls.object.position.clone();
 });
 translateControls.addEventListener('objectChange', () => {
   const object = translateControls.object;
   if (!object) return;
+  if (object === groupMovePivot) {
+    // Collision-sweeping each moved mesh against the others (resolveByAxis)
+    // would immediately block on the group's *own* touching members — a
+    // brick course sweeping against its own neighbors — so a group move
+    // only clamps each item to the landlet's bounds, skipping collision
+    // resolution entirely. Simple direct translation is also just the
+    // expected feel for "pick this course up and set it down over there."
+    const delta = object.position.clone().sub(groupMovePivotLastPosition);
+    for (const mesh of groupMoveMeshes ?? []) {
+      const moved = clampToLandlet(mesh, mesh.position.x + delta.x, mesh.position.y + delta.y, mesh.position.z + delta.z);
+      mesh.position.set(moved.x, moved.y, moved.z);
+    }
+    groupMovePivotLastPosition.copy(object.position);
+    return;
+  }
   const requested = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
   let resolved = requested;
   if (snapToSurfaces) {
@@ -711,6 +752,85 @@ const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const pasteBtn = document.getElementById('paste-btn');
+const undoBtn = document.getElementById('undo-btn');
+const redoBtn = document.getElementById('redo-btn');
+
+// Snapshot-based rather than per-action command objects: a "snapshot" is
+// just the same plain instance-shape persistLayout()/instanceFromMesh()
+// already produce, so undo/redo is "swap the whole layout for an earlier
+// one" instead of needing a separate inverse operation authored for each
+// of place/delete/move/rotate/paste. Simpler to get right, and this app's
+// instance counts are small enough that diffing/rebuilding the scene on
+// every undo is cheap.
+const undoStack = [];
+const redoStack = [];
+const UNDO_HISTORY_LIMIT = 50;
+
+function captureSnapshot() {
+  return productMeshes.map((mesh) => instanceFromMesh(mesh));
+}
+
+function updateUndoRedoButtons() {
+  undoBtn.disabled = undoStack.length === 0;
+  redoBtn.disabled = redoStack.length === 0;
+}
+
+// Called right *before* any action that mutates the placed layout (place,
+// delete, and the start of a move/rotate drag) — capturing the state as it
+// was going into that action, so undoing it restores exactly that.
+function pushUndoSnapshot() {
+  undoStack.push(captureSnapshot());
+  if (undoStack.length > UNDO_HISTORY_LIMIT) undoStack.shift();
+  redoStack.length = 0; // a new action invalidates whatever redo history existed
+  updateUndoRedoButtons();
+}
+
+// Reconciles the live scene to match a target snapshot: removes whatever's
+// no longer in it, repositions/re-syncs whatever's still there, and
+// re-creates whatever's missing (e.g. undoing a delete). Selection is
+// cleared rather than preserved across a jump, since a selected mesh could
+// itself have just been removed.
+async function restoreSnapshot(snapshot) {
+  const targetIds = new Set(snapshot.map((inst) => inst.instanceId));
+  for (const mesh of [...productMeshes]) {
+    if (!targetIds.has(mesh.userData.instanceId)) deleteInstance(mesh);
+  }
+  const currentById = new Map(productMeshes.map((mesh) => [mesh.userData.instanceId, mesh]));
+  for (const inst of snapshot) {
+    const mesh = currentById.get(inst.instanceId);
+    if (mesh) {
+      mesh.position.set(inst.x, inst.y, inst.z);
+      mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
+      mesh.userData.safePosition = mesh.position.clone();
+      syncUpdate(mesh);
+    } else {
+      const newMesh = await addInstanceToScene(inst);
+      if (newMesh) syncCreate(newMesh);
+    }
+  }
+  clearSelection();
+  updateSelectionUI();
+  persistLayout();
+}
+
+async function undo() {
+  if (undoStack.length === 0) return;
+  const previous = undoStack.pop();
+  redoStack.push(captureSnapshot());
+  await restoreSnapshot(previous);
+  updateUndoRedoButtons();
+}
+
+async function redo() {
+  if (redoStack.length === 0) return;
+  const next = redoStack.pop();
+  undoStack.push(captureSnapshot());
+  await restoreSnapshot(next);
+  updateUndoRedoButtons();
+}
+
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
 
 let currentGizmoMode = 'translate';
 function setGizmoMode(mode) {
@@ -719,9 +839,22 @@ function setGizmoMode(mode) {
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
   translateControls.detach();
   rotateControls.detach();
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
+  if (selectedMeshes.size === 1) {
+    const [mesh] = selectedMeshes;
+    // 'local' is what makes moving a single item along its own rotated
+    // orientation feel natural (see translateControls' own setup comment);
+    // a group has no single orientation to align to, so the pivot below
+    // uses 'world' instead — this restores 'local' when coming back to a
+    // single selection.
+    translateControls.space = 'local';
+    (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
+    return;
+  }
+  if (selectedMeshes.size > 1 && mode === 'translate') {
+    groupMovePivot.position.copy(getSelectionPivot());
+    translateControls.space = 'world';
+    translateControls.attach(groupMovePivot);
+  }
 }
 modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
 modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
@@ -824,10 +957,14 @@ function updateSelectionUI() {
   } else {
     productInfoEl.textContent = `${count} items selected`;
     modeControlsEl.classList.add('visible');
-    modeMoveBtn.style.display = 'none';
+    // Rotate has no group form (rotating several items around a shared
+    // pivot while also spinning each one's own orientation is a much
+    // harder problem than was asked for) — only Move is offered for a
+    // multi-item selection.
+    modeMoveBtn.style.display = '';
     modeRotateBtn.style.display = 'none';
-    translateControls.detach();
-    rotateControls.detach();
+    currentGizmoMode = 'translate';
+    setGizmoMode('translate');
   }
 }
 
@@ -889,6 +1026,7 @@ multiSelectBtn.addEventListener('click', () => {
 
 deleteBtn.addEventListener('click', () => {
   if (selectedMeshes.size === 0) return;
+  pushUndoSnapshot();
   const meshes = [...selectedMeshes];
   clearSelection();
   updateSelectionUI();
@@ -920,6 +1058,13 @@ function copySelection() {
   pasteBtn.disabled = false;
   const count = meshes.length;
   productInfoEl.textContent = `Copied ${count} item${count === 1 ? '' : 's'}`;
+  // The status text above is easy to miss since it's well away from the
+  // button itself — flashing the button's own label (same pattern as the
+  // camera-debug Copy button) gives feedback right where the tap happened.
+  copyBtn.textContent = 'Copied!';
+  setTimeout(() => {
+    copyBtn.textContent = 'Copy';
+  }, 1200);
   setTimeout(updateSelectionUI, 1200);
 }
 copyBtn.addEventListener('click', copySelection);
@@ -1009,6 +1154,7 @@ async function handlePlacementClick() {
   const pending = pendingPlacement;
   pendingPlacement = null;
   addItemBtn.textContent = '+ Add Item';
+  pushUndoSnapshot();
 
   if (pending.type === 'template') {
     const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);

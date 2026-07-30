@@ -83,6 +83,29 @@
         align-items: flex-end;
         gap: 4px;
       }
+      /* Top-right is otherwise empty (wordmark owns top-left, camera debug
+         owns bottom-right) — undo/redo are always-relevant, not tied to a
+         selection, so they get their own persistent spot rather than
+         crowding into the selection-only gizmo-mode-controls row. */
+      #undo-redo-panel {
+        position: fixed;
+        top: 10px;
+        right: 8px;
+        z-index: 10;
+        display: flex;
+        gap: 8px;
+      }
+      #undo-redo-panel button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+      }
+      #undo-redo-panel button:disabled {
+        opacity: 0.4;
+      }
       #camera-debug {
         color: rgba(255, 255, 255, 0.75);
         font: 11px/1.4 monospace;
@@ -288,6 +311,10 @@
     <canvas id="app"></canvas>
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
+    </div>
+    <div id="undo-redo-panel">
+      <button id="undo-btn" type="button" disabled>Undo</button>
+      <button id="redo-btn" type="button" disabled>Redo</button>
     </div>
     <div id="build-info"></div>
     <div id="camera-debug-panel">
