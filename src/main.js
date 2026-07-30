@@ -758,21 +758,49 @@ let multiSelectMode = false;
 // higglehaven brand (--brand-green in index.html) rather than an arbitrary
 // accent color.
 const SELECTION_OUTLINE_COLOR = 0x6ca42e;
-const selectionOutlines = new Map(); // mesh -> THREE.BoxHelper
+const selectionOutlines = new Map(); // mesh -> { helper: THREE.BoxHelper, fill: THREE.Mesh }
+
+// A row of touching, identically-shaped items (a brick course, say) makes a
+// wireframe-only outline ambiguous — the shared edge between a selected
+// brick and its unselected neighbor looks the same either way. Adding a
+// translucent fill over the selected item's own bounding volume (not just
+// its edges) makes it unambiguous which volume is selected. The fill reuses
+// a unit BoxGeometry and is rescaled/repositioned every frame (see animate)
+// rather than rebuilding geometry, since BoxGeometry itself can't resize.
+// Slightly padded larger than the helper's own box to avoid z-fighting
+// against the item's own surface, which a same-size box would sit flush
+// against.
+const SELECTION_FILL_PADDING = 1.04;
+const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
+const scratchBox = new THREE.Box3();
+const scratchBoxSize = new THREE.Vector3();
+const scratchBoxCenter = new THREE.Vector3();
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
   const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
   scene.add(helper);
-  selectionOutlines.set(mesh, helper);
+
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: SELECTION_OUTLINE_COLOR,
+    transparent: true,
+    opacity: 0.25,
+    depthWrite: false,
+  });
+  const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
+  scene.add(fill);
+
+  selectionOutlines.set(mesh, { helper, fill });
 }
 
 function removeSelectionOutline(mesh) {
-  const helper = selectionOutlines.get(mesh);
-  if (!helper) return;
-  scene.remove(helper);
-  helper.geometry.dispose();
-  helper.material.dispose();
+  const entry = selectionOutlines.get(mesh);
+  if (!entry) return;
+  scene.remove(entry.helper);
+  entry.helper.geometry.dispose();
+  entry.helper.material.dispose();
+  scene.remove(entry.fill);
+  entry.fill.material.dispose();
   selectionOutlines.delete(mesh);
 }
 
@@ -851,6 +879,10 @@ function getSelectionPivot() {
 multiSelectBtn.addEventListener('click', () => {
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
+  // One-finger drag is repurposed as a selection swipe while multi-select
+  // is on (see the swipe-select handlers below) instead of orbiting the
+  // camera — two-finger pan/pinch-zoom are untouched.
+  controls.enableRotate = !multiSelectMode;
   clearSelection();
   updateSelectionUI();
 });
@@ -1031,6 +1063,77 @@ renderer.domElement.addEventListener('click', (event) => {
   }
 });
 
+// Swipe-to-select: while multi-select is on, dragging across several items
+// (a course of bricks, say) adds every one the finger passes over, instead
+// of requiring a separate tap per item. One-finger drag is free for this
+// because multi-select mode already disables OrbitControls' rotate (see
+// the multiSelectBtn handler above); two-finger pan/pinch still work
+// normally throughout.
+//
+// A plain tap-to-toggle (the click handler above) must keep working too, so
+// this only starts actually adding items once the drag has moved past the
+// same threshold the click handler uses to tell a tap from a drag — a
+// stationary tap never triggers this, only a genuine swipe does.
+let swipePointerId = null;
+let swipeStartPos = null;
+let swipeArmed = false; // true once this gesture has moved enough to count as a swipe, not a tap
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  // A single selected item still shows its move/rotate gizmo even in
+  // multi-select mode (see updateSelectionUI) — grabbing that gizmo must
+  // not also be read as the start of a selection swipe. TransformControls'
+  // own pointerdown handling (registered earlier, so it runs first) sets
+  // `.dragging` synchronously when a handle is grabbed, so it's already
+  // accurate by the time this listener runs.
+  if (!multiSelectMode || pendingPlacement || swipePointerId !== null) return;
+  if (translateControls.dragging || rotateControls.dragging) return;
+  swipePointerId = event.pointerId;
+  swipeStartPos = { x: event.clientX, y: event.clientY };
+  swipeArmed = false;
+});
+
+function addToSelectionBySwipe(mesh) {
+  if (!mesh || selectedMeshes.has(mesh)) return;
+  selectedMeshes.add(mesh);
+  addSelectionOutline(mesh);
+  updateSelectionUI();
+}
+
+function addWhateverIsAtClientPos(x, y) {
+  raycaster.setFromCamera(ndcFromEvent({ clientX: x, clientY: y }), camera);
+  const hits = raycaster.intersectObjects(productMeshes, true);
+  if (hits.length === 0) return;
+  addToSelectionBySwipe(findRootProduct(hits[0].object));
+}
+
+window.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== swipePointerId || !swipeStartPos) return;
+  if (translateControls.dragging || rotateControls.dragging) return;
+  const dx = event.clientX - swipeStartPos.x;
+  const dy = event.clientY - swipeStartPos.y;
+  if (!swipeArmed) {
+    if (Math.hypot(dx, dy) <= CLICK_DRAG_THRESHOLD_PX) return;
+    swipeArmed = true;
+    // A real swipe starts by touching down ON an item — without this, that
+    // first item (whatever the finger landed on, before crossing the
+    // tap-vs-drag threshold above) never gets a chance to be raycast at all
+    // and silently drops out of the swipe, which is exactly wrong for
+    // closely-packed items like a course of bricks where the threshold
+    // alone can already cover the gap to the *next* one.
+    addWhateverIsAtClientPos(swipeStartPos.x, swipeStartPos.y);
+  }
+  addWhateverIsAtClientPos(event.clientX, event.clientY);
+});
+
+function endSwipe(event) {
+  if (event.pointerId !== swipePointerId) return;
+  swipePointerId = null;
+  swipeStartPos = null;
+  swipeArmed = false;
+}
+window.addEventListener('pointerup', endSwipe);
+window.addEventListener('pointercancel', endSwipe);
+
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -1105,9 +1208,14 @@ renderer.domElement.addEventListener('pointerdown', () => {
 });
 window.addEventListener('pointerup', () => {
   activePointerCount = Math.max(0, activePointerCount - 1);
+  // A tap-to-select that never moved enough to count as a rotate (see the
+  // "change" handler below) never got the chance to consume this itself —
+  // clear it here so it can't leak into whatever gesture comes next.
+  if (activePointerCount === 0) pendingGestureCheck = false;
 });
 window.addEventListener('pointercancel', () => {
   activePointerCount = Math.max(0, activePointerCount - 1);
+  if (activePointerCount === 0) pendingGestureCheck = false;
 });
 
 // Re-centering used to jump straight to the product's position the instant
@@ -1139,11 +1247,28 @@ function updateTargetTween(now) {
 
 controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
-    pendingGestureCheck = false;
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
-    const pivot = isRotate ? getSelectionPivot() : null;
-    if (pivot) {
-      beginTargetTween(pivot);
+    if (!isRotate) {
+      pendingGestureCheck = false;
+    } else {
+      // A tap that's about to *select* a different product also starts out
+      // looking exactly like a one-finger rotate to OrbitControls (touch
+      // jitter between press and release is enough to fire this "change"
+      // event) — recentering here immediately would jump to whatever's
+      // *currently* selected for an instant, since the tap's own "click"
+      // handler (which would change the selection) hasn't run yet at this
+      // point. Only committing to the recenter once real movement has
+      // happened — reusing the same threshold the click handler itself
+      // uses to tell a tap from a drag — means a plain tap never triggers
+      // this at all, only an actual rotate does.
+      const moved = lastPointerClientPos && pointerDownPos
+        ? Math.hypot(lastPointerClientPos.x - pointerDownPos.x, lastPointerClientPos.y - pointerDownPos.y)
+        : 0;
+      if (moved > CLICK_DRAG_THRESHOLD_PX) {
+        pendingGestureCheck = false;
+        const pivot = getSelectionPivot();
+        if (pivot) beginTargetTween(pivot);
+      }
     }
   }
 
@@ -1245,8 +1370,21 @@ function animate(now) {
   updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
-  // every frame rather than only on selection change.
-  for (const helper of selectionOutlines.values()) helper.update();
+  // every frame rather than only on selection change. The fill mesh reuses
+  // the helper's own freshly-computed box rather than recomputing its own,
+  // so the two never drift out of sync with each other.
+  for (const [mesh, { helper, fill }] of selectionOutlines) {
+    helper.update();
+    // BoxHelper computes its world-aligned box internally without exposing
+    // it (no public `.box` on this three.js version), so the fill mesh
+    // recomputes the same box independently rather than reading it back off
+    // the helper.
+    scratchBox.setFromObject(mesh);
+    scratchBox.getSize(scratchBoxSize);
+    scratchBox.getCenter(scratchBoxCenter);
+    fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+    fill.position.copy(scratchBoxCenter);
+  }
   renderer.render(scene, camera);
 }
 animate(0);
