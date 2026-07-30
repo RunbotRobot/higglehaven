@@ -120,6 +120,9 @@
         left: 50%;
         transform: translateX(-50%);
         display: none;
+        flex-wrap: wrap;
+        justify-content: center;
+        max-width: 94vw;
         gap: 8px;
         z-index: 10;
       }
@@ -182,7 +185,9 @@
         font: 14px/1.4 sans-serif;
         text-align: left;
       }
-      #upload-model-btn {
+      #upload-model-btn,
+      #toggle-multiselect,
+      #paste-btn {
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
@@ -190,6 +195,13 @@
         color: #fff;
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
+      }
+      #toggle-multiselect.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #paste-btn:disabled {
+        opacity: 0.4;
       }
       #upload-modal {
         position: fixed;
@@ -287,11 +299,14 @@
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
       <button id="toggle-snap" type="button">Snap</button>
+      <button id="copy-item" type="button">Copy</button>
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="add-item-panel">
       <button id="add-item-btn" type="button">+ Add Item</button>
       <button id="upload-model-btn" type="button">+ Upload Model</button>
+      <button id="toggle-multiselect" type="button">Multi-Select</button>
+      <button id="paste-btn" type="button" disabled>Paste</button>
       <div id="catalog-picker"></div>
     </div>
     <div id="upload-modal">

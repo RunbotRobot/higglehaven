@@ -102,6 +102,13 @@ controls.maxDistance = LANDLET_SIDE_M * 5;
 // two edge directions (4 axes total, since opposite edges are parallel)
 // and check for a gap on any of them — if every axis shows overlap, the
 // rectangles truly intersect.
+//
+// Only rotation.z (yaw) factors in here, even though the rotate gizmo now
+// allows tilting on any axis (see rotateControls below) — a fully tilted
+// footprint would need real 3D OBB math, not a flat rotated rectangle.
+// Deliberately left as this simpler approximation for now: the main
+// reason to tilt a product is correcting an off-level scan back toward
+// upright, not building on a deliberately tilted footprint.
 function footprintCorners(mesh, x, y) {
   const { width, depth } = mesh.userData.template.dimensions;
   const halfWidth = width / 2;
@@ -246,13 +253,14 @@ function wireDraggingBehavior(transformControls) {
   });
 }
 
-// Rotate: Z (yaw, our vertical axis) only — these are ground-resting items,
-// so X/Y tilt handles would just be a way to break them.
+// Rotate: all three axes. Originally Z (yaw) only, on the assumption
+// these are ground-resting items where X/Y tilt would just be a way to
+// break them — but a real uploaded scan isn't guaranteed to have been
+// captured level/upright (a real RealityScan brick scan came out tilted),
+// so a builder needs to be able to correct that on any axis, not just
+// spin the product in place.
 const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
-rotateControls.showX = false;
-rotateControls.showY = false;
-rotateControls.showXYZE = false;
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
 
@@ -415,7 +423,7 @@ async function createMeshForInstance(instance) {
     object = new THREE.Mesh(geometry, material);
   }
   object.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
-  object.rotation.z = instance.rotationZ ?? 0;
+  object.rotation.set(instance.rotationX ?? 0, instance.rotationY ?? 0, instance.rotationZ ?? 0);
   object.userData.instanceId = instance.instanceId ?? instance.id;
   object.userData.template = template;
   return object;
@@ -443,6 +451,8 @@ function persistLayout() {
     x: mesh.position.x,
     y: mesh.position.y,
     z: mesh.position.z,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
   }));
   saveInstances(instances);
@@ -460,6 +470,8 @@ function instanceFromMesh(mesh) {
     x: mesh.position.x,
     y: mesh.position.y,
     z: mesh.position.z,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
   };
 }
@@ -489,18 +501,27 @@ async function syncDelete(instanceId) {
   }
 }
 
+// Places a fresh instance at an exact spot — the world position the
+// builder just tapped (see handlePlacementClick) — rather than a random
+// offset near the center that then has to be dragged into place.
 let instanceCounter = 0;
-async function spawnInstance(template) {
+async function spawnInstanceAt(template, x, y, z, rotation = {}) {
   instanceCounter += 1;
   const instance = {
     instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
     templateId: template.templateId,
-    // Small random spread near the center so repeated adds don't stack
-    // exactly on top of each other; still well within the landlet bounds.
-    x: (Math.random() - 0.5) * 6,
-    y: (Math.random() - 0.5) * 6,
+    x,
+    y,
+    z,
+    rotationX: rotation.rotationX ?? 0,
+    rotationY: rotation.rotationY ?? 0,
+    rotationZ: rotation.rotationZ ?? 0,
   };
   const mesh = await addInstanceToScene(instance);
+  if (!mesh) return null;
+  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
+  mesh.position.set(clamped.x, clamped.y, clamped.z);
+  mesh.userData.safePosition = mesh.position.clone();
   persistLayout();
   syncCreate(mesh);
   return mesh;
@@ -535,9 +556,11 @@ const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
-// template. Tapping one spawns and selects a new instance of it, ready to
-// reposition. Buttons are (re)built in bootstrap() once activeCatalog is
-// settled, since the API's catalog isn't known until that fetch resolves.
+// template. Tapping one doesn't place anything yet — it arms placement
+// mode (see enterPlacementMode) so the next tap in the world, wherever
+// that is, is where the item actually goes. Buttons are (re)built in
+// bootstrap() once activeCatalog is settled, since the API's catalog
+// isn't known until that fetch resolves.
 const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
 
@@ -547,15 +570,18 @@ function buildCatalogPickerButtons() {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = template.name;
-    button.addEventListener('click', async () => {
+    button.addEventListener('click', () => {
       catalogPickerEl.classList.remove('visible');
-      const mesh = await spawnInstance(template);
-      setSelected(mesh);
+      enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
     });
     catalogPickerEl.appendChild(button);
   }
 }
 addItemBtn.addEventListener('click', () => {
+  if (pendingPlacement) {
+    cancelPlacementMode();
+    return;
+  }
   catalogPickerEl.classList.toggle('visible');
 });
 
@@ -662,8 +688,7 @@ uploadSubmitBtn.addEventListener('click', async () => {
     buildCatalogPickerButtons();
     closeUploadModal();
 
-    const mesh = await spawnInstance(template);
-    setSelected(mesh);
+    enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
   } catch (err) {
     console.error('Custom product upload failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
@@ -682,15 +707,21 @@ const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
 const snapToggleBtn = document.getElementById('toggle-snap');
+const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
+const multiSelectBtn = document.getElementById('toggle-multiselect');
+const pasteBtn = document.getElementById('paste-btn');
 
+let currentGizmoMode = 'translate';
 function setGizmoMode(mode) {
+  currentGizmoMode = mode;
   modeMoveBtn.classList.toggle('active', mode === 'translate');
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
   translateControls.detach();
   rotateControls.detach();
-  if (!selectedMesh) return;
-  (mode === 'translate' ? translateControls : rotateControls).attach(selectedMesh);
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
 }
 modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
 modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
@@ -705,16 +736,17 @@ snapToggleBtn.addEventListener('click', () => {
   snapToSurfaces = !snapToSurfaces;
   snapToggleBtn.classList.toggle('active', snapToSurfaces);
 });
-deleteBtn.addEventListener('click', () => {
-  if (!selectedMesh) return;
-  const mesh = selectedMesh;
-  setSelected(null);
-  deleteInstance(mesh);
-});
 
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
-let selectedMesh = null;
+
+// Selection is always a set, even for the common "just tapped one thing"
+// case — multi-select mode (below) just changes how a tap modifies it
+// (replace vs. add/remove) rather than needing two entirely separate
+// selection systems. The move/rotate gizmos can only ever attach to one
+// object, so they're only shown when the set holds exactly one.
+const selectedMeshes = new Set();
+let multiSelectMode = false;
 
 // Same Mesh-or-Group reasoning as disposeObject: a model's visual content
 // can be spread across several child meshes/materials, so the highlight
@@ -729,22 +761,151 @@ function setEmissive(object, hex) {
   });
 }
 
-function setSelected(mesh) {
-  if (selectedMesh === mesh) return;
-  if (selectedMesh) setEmissive(selectedMesh, 0x000000);
-  selectedMesh = mesh;
-  if (selectedMesh) {
-    setEmissive(selectedMesh, 0x444444);
-    productInfoEl.textContent = selectedMesh.userData.template.name;
-    modeControlsEl.classList.add('visible');
-    setGizmoMode('translate');
-  } else {
+// Reconciles every visible bit of "what's selected" UI (highlight already
+// applied by the caller — this only handles text/panels/gizmo) with the
+// current selectedMeshes set. Called after any change to that set.
+function updateSelectionUI() {
+  const count = selectedMeshes.size;
+  if (count === 0) {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
+  } else if (count === 1) {
+    const [mesh] = selectedMeshes;
+    productInfoEl.textContent = mesh.userData.template.name;
+    modeControlsEl.classList.add('visible');
+    modeMoveBtn.style.display = '';
+    modeRotateBtn.style.display = '';
+    setGizmoMode(currentGizmoMode);
+  } else {
+    productInfoEl.textContent = `${count} items selected`;
+    modeControlsEl.classList.add('visible');
+    modeMoveBtn.style.display = 'none';
+    modeRotateBtn.style.display = 'none';
+    translateControls.detach();
+    rotateControls.detach();
   }
 }
+
+function clearSelection() {
+  for (const mesh of selectedMeshes) setEmissive(mesh, 0x000000);
+  selectedMeshes.clear();
+}
+
+// Single-select: replaces the whole selection with just this one item (or
+// clears it, for `mesh === null`) — the ordinary tap-a-product behavior,
+// used whether or not multi-select mode happens to be on (e.g. right after
+// a fresh placement).
+function selectOnly(mesh) {
+  if (selectedMeshes.size === 1 && selectedMeshes.has(mesh)) return;
+  clearSelection();
+  if (mesh) {
+    selectedMeshes.add(mesh);
+    setEmissive(mesh, 0x444444);
+  }
+  updateSelectionUI();
+}
+
+// Multi-select: adds or removes just this one item, leaving the rest of
+// the selection alone.
+function toggleInSelection(mesh) {
+  if (selectedMeshes.has(mesh)) {
+    selectedMeshes.delete(mesh);
+    setEmissive(mesh, 0x000000);
+  } else {
+    selectedMeshes.add(mesh);
+    setEmissive(mesh, 0x444444);
+  }
+  updateSelectionUI();
+}
+
+// Centroid of the current selection, used to pivot the camera around a
+// multi-item selection the same way it already does for a single item.
+function getSelectionPivot() {
+  if (selectedMeshes.size === 0) return null;
+  const centroid = new THREE.Vector3();
+  for (const mesh of selectedMeshes) centroid.add(mesh.position);
+  return centroid.divideScalar(selectedMeshes.size);
+}
+
+// Clearing on every toggle (not just when turning multi-select on) keeps the
+// semantics simple: whatever was selected under the old mode never silently
+// carries into the new one, where a tap that looks like "select" could
+// actually be a toggle-off of a mesh already selected from before.
+multiSelectBtn.addEventListener('click', () => {
+  multiSelectMode = !multiSelectMode;
+  multiSelectBtn.classList.toggle('active', multiSelectMode);
+  clearSelection();
+  updateSelectionUI();
+});
+
+deleteBtn.addEventListener('click', () => {
+  if (selectedMeshes.size === 0) return;
+  const meshes = [...selectedMeshes];
+  clearSelection();
+  updateSelectionUI();
+  for (const mesh of meshes) deleteInstance(mesh);
+});
+
+// Copy captures each selected item's position/rotation *relative* to the
+// group — offset from the group's centroid in X/Y, and height above the
+// group's lowest bottom surface in Z (its "base") — rather than absolute
+// coordinates, so Paste can reproduce the same relative arrangement
+// anchored whereever the builder taps next (see handlePlacementClick).
+// This is what lets a whole course of a brick wall get copy-pasted as one
+// unit instead of one brick at a time.
+function copySelection() {
+  if (selectedMeshes.size === 0) return;
+  const meshes = [...selectedMeshes];
+  const centroidX = meshes.reduce((sum, mesh) => sum + mesh.position.x, 0) / meshes.length;
+  const centroidY = meshes.reduce((sum, mesh) => sum + mesh.position.y, 0) / meshes.length;
+  const baseZ = Math.min(...meshes.map((mesh) => mesh.position.z - mesh.userData.template.dimensions.height / 2));
+  clipboard = meshes.map((mesh) => ({
+    templateId: mesh.userData.template.templateId,
+    dx: mesh.position.x - centroidX,
+    dy: mesh.position.y - centroidY,
+    dz: mesh.position.z - baseZ,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
+    rotationZ: mesh.rotation.z,
+  }));
+  pasteBtn.disabled = false;
+  const count = meshes.length;
+  productInfoEl.textContent = `Copied ${count} item${count === 1 ? '' : 's'}`;
+  setTimeout(updateSelectionUI, 1200);
+}
+copyBtn.addEventListener('click', copySelection);
+
+// Placement-pending state: set by tapping a catalog item, the upload
+// flow's freshly-created product, or Paste — none of those place anything
+// immediately anymore. The next world tap (see the click handler below)
+// consumes this and does the actual placing.
+let pendingPlacement = null;
+
+function enterPlacementMode(pending, statusText) {
+  clearSelection();
+  modeControlsEl.classList.remove('visible');
+  translateControls.detach();
+  rotateControls.detach();
+  pendingPlacement = pending;
+  productInfoEl.textContent = statusText;
+  addItemBtn.textContent = '✕ Cancel';
+}
+
+function cancelPlacementMode() {
+  pendingPlacement = null;
+  addItemBtn.textContent = '+ Add Item';
+  updateSelectionUI();
+}
+
+let clipboard = null;
+pasteBtn.addEventListener('click', () => {
+  if (!clipboard) return;
+  catalogPickerEl.classList.remove('visible');
+  const count = clipboard.length;
+  enterPlacementMode({ type: 'clipboard', items: clipboard }, `Tap a spot to paste ${count} item${count === 1 ? '' : 's'}`);
+});
 
 // A raycast hit against a model's nested mesh (see loadModelInstance)
 // returns that inner mesh, not the top-level product Object3D tracked in
@@ -777,6 +938,55 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDownPos = { x: event.clientX, y: event.clientY };
 });
 
+// Places whatever's pending (a fresh catalog template, or a copied group)
+// at wherever was just tapped — the ground, or directly on top of another
+// product if that's what the raycast actually hit, so tapping a tabletop
+// rests the new item there instead of on the ground beneath it.
+async function handlePlacementClick() {
+  const productHits = raycaster.intersectObjects(productMeshes, true);
+  const groundHits = raycaster.intersectObject(landlet);
+
+  let point;
+  let supportingMesh = null;
+  if (productHits.length > 0 && (groundHits.length === 0 || productHits[0].distance < groundHits[0].distance)) {
+    point = productHits[0].point;
+    supportingMesh = findRootProduct(productHits[0].object);
+  } else if (groundHits.length > 0) {
+    point = groundHits[0].point;
+  } else {
+    return; // tapped empty sky — nothing to place onto, leave placement pending
+  }
+
+  const supportZ = supportingMesh ? supportingMesh.position.z + supportingMesh.userData.template.dimensions.height / 2 : 0;
+
+  const pending = pendingPlacement;
+  pendingPlacement = null;
+  addItemBtn.textContent = '+ Add Item';
+
+  if (pending.type === 'template') {
+    const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
+    selectOnly(mesh);
+  } else {
+    const placed = [];
+    for (const item of pending.items) {
+      const template = findTemplate(item.templateId);
+      if (!template) continue;
+      const mesh = await spawnInstanceAt(template, point.x + item.dx, point.y + item.dy, supportZ + item.dz, {
+        rotationX: item.rotationX,
+        rotationY: item.rotationY,
+        rotationZ: item.rotationZ,
+      });
+      if (mesh) placed.push(mesh);
+    }
+    clearSelection();
+    for (const mesh of placed) {
+      selectedMeshes.add(mesh);
+      setEmissive(mesh, 0x444444);
+    }
+    updateSelectionUI();
+  }
+}
+
 renderer.domElement.addEventListener('click', (event) => {
   if (pointerDownPos) {
     const dx = event.clientX - pointerDownPos.x;
@@ -788,11 +998,22 @@ renderer.domElement.addEventListener('click', (event) => {
   // so the catalog picker (if left open) should collapse either way.
   catalogPickerEl.classList.remove('visible');
   raycaster.setFromCamera(ndcFromEvent(event), camera);
+
+  if (pendingPlacement) {
+    handlePlacementClick();
+    return;
+  }
+
   // recursive: true, since a model's own geometry sits on nested child
   // meshes (see loadModelInstance) rather than directly on the top-level
   // Object3D pushed into productMeshes.
   const hits = raycaster.intersectObjects(productMeshes, true);
-  setSelected(hits.length > 0 ? findRootProduct(hits[0].object) : null);
+  const hitRoot = hits.length > 0 ? findRootProduct(hits[0].object) : null;
+  if (multiSelectMode) {
+    if (hitRoot) toggleInSelection(hitRoot);
+  } else {
+    selectOnly(hitRoot);
+  }
 });
 
 function onResize() {
@@ -905,13 +1126,14 @@ controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
     pendingGestureCheck = false;
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
-    if (isRotate && selectedMesh) {
-      beginTargetTween(selectedMesh.position);
+    const pivot = isRotate ? getSelectionPivot() : null;
+    if (pivot) {
+      beginTargetTween(pivot);
     }
   }
 
   const newDistance = camera.position.distanceTo(controls.target);
-  if (!selectedMesh) {
+  if (selectedMeshes.size === 0) {
     const dollyDelta = lastKnownDistance - newDistance;
     if (Math.abs(dollyDelta) > 1e-6) {
       camera.getWorldDirection(cameraDirection);

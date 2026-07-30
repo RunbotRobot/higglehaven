@@ -233,9 +233,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_z_rad, label)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationZ, instance.label).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label).run();
     return json({ instance }, 201);
   }
 
@@ -248,9 +248,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_z_rad = ?, label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationZ, instance.label, route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, route[1]).run();
     return json({ instance });
   }
 
@@ -317,6 +317,8 @@ function validateInstance(input, fallbackId) {
     x: finiteNumber(input.x, 'x'),
     y: finiteNumber(input.y, 'y'),
     z: finiteNumber(input.z ?? 0, 'z'),
+    rotationX: finiteNumber(input.rotationX ?? 0, 'rotationX'),
+    rotationY: finiteNumber(input.rotationY ?? 0, 'rotationY'),
     rotationZ: finiteNumber(input.rotationZ ?? 0, 'rotationZ'),
     label: input.label || null,
   };
@@ -352,6 +354,8 @@ function instanceFromRow(row) {
     x: row.x_m,
     y: row.y_m,
     z: row.z_m,
+    rotationX: row.rotation_x_rad,
+    rotationY: row.rotation_y_rad,
     rotationZ: row.rotation_z_rad,
     label: row.label,
     createdAt: row.created_at,
