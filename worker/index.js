@@ -14,6 +14,27 @@ const JSON_HEADERS = {
 const MAX_MODEL_BYTES = 20 * 1024 * 1024;
 const GLB_MAGIC = 0x46546c67; // ascii "glTF", little-endian uint32
 
+// R2's free tier is 10GB of storage per month. This is our OWN
+// application-level backstop well under that — checked live against R2's
+// actual current contents on every upload — so a new upload gets rejected
+// before it would ever push real usage into paid territory, independent
+// of whatever Cloudflare's own billing dashboard does or doesn't warn
+// about. Only counts what's actually in R2 (this bucket only ever holds
+// builder-uploaded custom models — the built-in catalog's models ship as
+// static assets, not R2 objects, so they never count against this).
+const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
+
+async function getTotalStorageBytes(bucket) {
+  let total = 0;
+  let cursor;
+  do {
+    const listing = await bucket.list({ cursor, limit: 1000 });
+    for (const object of listing.objects) total += object.size;
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+  return total;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -99,6 +120,17 @@ async function handleApi(request, env, url) {
 async function handleModelUpload(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
 
+  const currentTotal = await getTotalStorageBytes(env.MODELS);
+  const remainingBudget = MAX_TOTAL_STORAGE_BYTES - currentTotal;
+  const assertWithinBudget = (size, label) => {
+    if (size > remainingBudget) {
+      throw new HttpError(
+        `${label} is ${formatBytes(size)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
+        507,
+      );
+    }
+  };
+
   const contentType = request.headers.get('content-type') || '';
   let bytes;
   let sourceName = 'model.glb';
@@ -114,6 +146,7 @@ async function handleModelUpload(request, env) {
     if (file.size > MAX_MODEL_BYTES) {
       throw new HttpError(`File is ${formatBytes(file.size)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
     }
+    assertWithinBudget(file.size, 'File');
     bytes = await file.arrayBuffer();
     if (file.name) sourceName = file.name;
   } else if (contentType.includes('application/json')) {
@@ -136,6 +169,7 @@ async function handleModelUpload(request, env) {
     if (Number.isFinite(declaredLength) && declaredLength > MAX_MODEL_BYTES) {
       throw new HttpError(`Remote file is ${formatBytes(declaredLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
     }
+    if (Number.isFinite(declaredLength)) assertWithinBudget(declaredLength, 'Remote file');
     bytes = await response.arrayBuffer();
     sourceName = sourceUrl.split('/').pop() || sourceName;
   } else {
@@ -145,6 +179,9 @@ async function handleModelUpload(request, env) {
   if (bytes.byteLength > MAX_MODEL_BYTES) {
     throw new HttpError(`File is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
   }
+  // Re-checked against the actual downloaded bytes too, in case a remote
+  // server's Content-Length header was missing or wrong.
+  assertWithinBudget(bytes.byteLength, 'File');
   if (bytes.byteLength < 12 || new DataView(bytes).getUint32(0, true) !== GLB_MAGIC) {
     throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
   }
