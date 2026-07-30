@@ -748,6 +748,14 @@ const pointerNdc = new THREE.Vector2();
 const selectedMeshes = new Set();
 let multiSelectMode = false;
 
+// A dim gray emissive tint is nearly invisible against most product colors
+// (measured: a tan/gray table on green grass showed no perceptible change),
+// especially outdoors on a phone screen. A strong, saturated color reads as
+// a highlight regardless of the item's own hue, the way "selected" usually
+// looks in CAD/building tools.
+const SELECTED_EMISSIVE_HEX = 0xff8c00;
+const DESELECTED_EMISSIVE_HEX = 0x000000;
+
 // Same Mesh-or-Group reasoning as disposeObject: a model's visual content
 // can be spread across several child meshes/materials, so the highlight
 // has to be applied to all of them, not just a single top-level material.
@@ -789,7 +797,7 @@ function updateSelectionUI() {
 }
 
 function clearSelection() {
-  for (const mesh of selectedMeshes) setEmissive(mesh, 0x000000);
+  for (const mesh of selectedMeshes) setEmissive(mesh, DESELECTED_EMISSIVE_HEX);
   selectedMeshes.clear();
 }
 
@@ -802,7 +810,7 @@ function selectOnly(mesh) {
   clearSelection();
   if (mesh) {
     selectedMeshes.add(mesh);
-    setEmissive(mesh, 0x444444);
+    setEmissive(mesh, SELECTED_EMISSIVE_HEX);
   }
   updateSelectionUI();
 }
@@ -812,10 +820,10 @@ function selectOnly(mesh) {
 function toggleInSelection(mesh) {
   if (selectedMeshes.has(mesh)) {
     selectedMeshes.delete(mesh);
-    setEmissive(mesh, 0x000000);
+    setEmissive(mesh, DESELECTED_EMISSIVE_HEX);
   } else {
     selectedMeshes.add(mesh);
-    setEmissive(mesh, 0x444444);
+    setEmissive(mesh, SELECTED_EMISSIVE_HEX);
   }
   updateSelectionUI();
 }
@@ -981,7 +989,7 @@ async function handlePlacementClick() {
     clearSelection();
     for (const mesh of placed) {
       selectedMeshes.add(mesh);
-      setEmissive(mesh, 0x444444);
+      setEmissive(mesh, SELECTED_EMISSIVE_HEX);
     }
     updateSelectionUI();
   }
