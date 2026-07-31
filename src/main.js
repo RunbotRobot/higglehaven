@@ -321,15 +321,53 @@ translateControls.addEventListener('objectChange', () => {
     // Collision-sweeping each moved mesh against the others (resolveByAxis)
     // would immediately block on the group's *own* touching members — a
     // brick course sweeping against its own neighbors — so a group move
-    // only clamps each item to the landlet's bounds, skipping collision
-    // resolution entirely. Simple direct translation is also just the
-    // expected feel for "pick this course up and set it down over there."
-    const delta = object.position.clone().sub(groupMovePivotLastPosition);
-    for (const mesh of groupMoveMeshes ?? []) {
-      const moved = clampToLandlet(mesh, mesh.position.x + delta.x, mesh.position.y + delta.y, mesh.position.z + delta.z);
-      mesh.position.set(moved.x, moved.y, moved.z);
+    // only clamps to the landlet's bounds, skipping collision resolution
+    // entirely. Simple direct translation is also just the expected feel
+    // for "pick this course up and set it down over there."
+    //
+    // The clamp has to be applied to the *delta*, uniformly across every
+    // member, rather than to each mesh's resulting position independently.
+    // Clamping positions independently let one mesh's stop (e.g. a bottom
+    // brick course hitting the ground) silently decouple from the rest of
+    // the group: since the pivot's tracked position kept following the raw
+    // gizmo drag, every subsequent frame recomputed the delta from an
+    // unclamped baseline and kept applying it in full to meshes that
+    // hadn't hit a bound yet — closing the gap and squishing stacked
+    // layers together. Instead, compute how far *every* mesh is still
+    // allowed to move on each axis, intersect those ranges across the
+    // whole group, clamp the raw delta to that shared range once, and
+    // apply the identical (possibly reduced) delta to each mesh — so the
+    // group's relative spacing never distorts, and a blocked member
+    // genuinely stops the whole group's movement on that axis.
+    const rawDelta = object.position.clone().sub(groupMovePivotLastPosition);
+    const meshes = groupMoveMeshes ?? [];
+    let minDeltaX = -Infinity, maxDeltaX = Infinity;
+    let minDeltaY = -Infinity, maxDeltaY = Infinity;
+    let minDeltaZ = -Infinity, maxDeltaZ = Infinity;
+    for (const mesh of meshes) {
+      const { width, depth, height } = mesh.userData.template.dimensions;
+      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+      minDeltaX = Math.max(minDeltaX, -halfSpanX - mesh.position.x);
+      maxDeltaX = Math.min(maxDeltaX, halfSpanX - mesh.position.x);
+      minDeltaY = Math.max(minDeltaY, -halfSpanY - mesh.position.y);
+      maxDeltaY = Math.min(maxDeltaY, halfSpanY - mesh.position.y);
+      minDeltaZ = Math.max(minDeltaZ, height / 2 - mesh.position.z);
+      maxDeltaZ = Math.min(maxDeltaZ, LANDLET_HEIGHT_M - height / 2 - mesh.position.z);
     }
-    groupMovePivotLastPosition.copy(object.position);
+    const delta = new THREE.Vector3(
+      THREE.MathUtils.clamp(rawDelta.x, minDeltaX, maxDeltaX),
+      THREE.MathUtils.clamp(rawDelta.y, minDeltaY, maxDeltaY),
+      THREE.MathUtils.clamp(rawDelta.z, minDeltaZ, maxDeltaZ),
+    );
+    for (const mesh of meshes) {
+      mesh.position.add(delta);
+    }
+    // Snap the pivot itself (and next frame's baseline) to the
+    // actually-applied delta rather than the raw gizmo position, so the
+    // gizmo can't drift ahead of where the group really stopped.
+    groupMovePivotLastPosition.add(delta);
+    object.position.copy(groupMovePivotLastPosition);
     return;
   }
   const requested = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
@@ -856,8 +894,25 @@ function setGizmoMode(mode) {
     translateControls.attach(groupMovePivot);
   }
 }
-modeMoveBtn.addEventListener('click', () => setGizmoMode('translate'));
-modeRotateBtn.addEventListener('click', () => setGizmoMode('rotate'));
+// Multi-Select and Move/Rotate are sibling tools that can't both be active
+// (see updateSelectionUI's multiSelectMode branch) — pressing either gizmo
+// button while multi-select is on exits multi-select first, without
+// touching the selection it just built, so "whatever's already selected"
+// is exactly what ends up under the gizmo.
+function exitMultiSelectMode() {
+  if (!multiSelectMode) return;
+  multiSelectMode = false;
+  multiSelectBtn.classList.remove('active');
+  controls.enableRotate = true;
+}
+modeMoveBtn.addEventListener('click', () => {
+  exitMultiSelectMode();
+  setGizmoMode('translate');
+});
+modeRotateBtn.addEventListener('click', () => {
+  exitMultiSelectMode();
+  setGizmoMode('rotate');
+});
 
 // Colliding with other products (see resolveByAxis above) is a helpful
 // default, not a hard rule — a builder might genuinely want a sign embedded
@@ -947,22 +1002,33 @@ function updateSelectionUI() {
     modeControlsEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
-  } else if (count === 1) {
-    const [mesh] = selectedMeshes;
-    productInfoEl.textContent = mesh.userData.template.name;
-    modeControlsEl.classList.add('visible');
-    modeMoveBtn.style.display = '';
-    modeRotateBtn.style.display = '';
+    return;
+  }
+  productInfoEl.textContent = count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`;
+  modeControlsEl.classList.add('visible');
+  // Rotate has no group form (rotating several items around a shared pivot
+  // while also spinning each one's own orientation is a much harder problem
+  // than was asked for) — only Move is offered for a multi-item selection.
+  modeMoveBtn.style.display = '';
+  modeRotateBtn.style.display = count === 1 ? '' : 'none';
+  if (multiSelectMode) {
+    // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
+    // — the gizmo stays hidden the whole time multi-select is on, so it
+    // can't clutter (or steal a drag from) the exact view a builder needs
+    // clear while tapping/swiping across items. The Move/Rotate buttons
+    // stay visible and clickable so the builder can jump straight from a
+    // freshly built selection into moving/rotating it — clicking either
+    // turns multi-select off itself (see their handlers below) and
+    // reattaches the gizmo to whatever's already selected here.
+    modeMoveBtn.classList.remove('active');
+    modeRotateBtn.classList.remove('active');
+    translateControls.detach();
+    rotateControls.detach();
+    return;
+  }
+  if (count === 1) {
     setGizmoMode(currentGizmoMode);
   } else {
-    productInfoEl.textContent = `${count} items selected`;
-    modeControlsEl.classList.add('visible');
-    // Rotate has no group form (rotating several items around a shared
-    // pivot while also spinning each one's own orientation is a much
-    // harder problem than was asked for) — only Move is offered for a
-    // multi-item selection.
-    modeMoveBtn.style.display = '';
-    modeRotateBtn.style.display = 'none';
     currentGizmoMode = 'translate';
     setGizmoMode('translate');
   }
@@ -1009,10 +1075,6 @@ function getSelectionPivot() {
   return centroid.divideScalar(selectedMeshes.size);
 }
 
-// Clearing on every toggle (not just when turning multi-select on) keeps the
-// semantics simple: whatever was selected under the old mode never silently
-// carries into the new one, where a tap that looks like "select" could
-// actually be a toggle-off of a mesh already selected from before.
 multiSelectBtn.addEventListener('click', () => {
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
@@ -1020,7 +1082,14 @@ multiSelectBtn.addEventListener('click', () => {
   // is on (see the swipe-select handlers below) instead of orbiting the
   // camera — two-finger pan/pinch-zoom are untouched.
   controls.enableRotate = !multiSelectMode;
-  clearSelection();
+  // Turning multi-select ON still clears first — starting a new selection
+  // shouldn't silently inherit whatever was selected under single-select,
+  // where a tap that looks like "select" could actually be a toggle-off of
+  // a mesh selected from before. Turning it OFF must NOT clear: that's the
+  // hand-off into Move/Rotate, which act on whatever was already selected
+  // (see modeMoveBtn/modeRotateBtn and updateSelectionUI's multiSelectMode
+  // branch, which is what actually hides the gizmo while this is true).
+  if (multiSelectMode) clearSelection();
   updateSelectionUI();
 });
 
@@ -1391,6 +1460,28 @@ function updateTargetTween(now) {
   if (t >= 1) targetTween.active = false;
 }
 
+// With nothing selected, getSelectionPivot() has nothing to offer, so a
+// rotate gesture used to spin around whatever controls.target already
+// happened to be — often wherever a previous selection or dolly left it,
+// unrelated to whatever's actually on screen now. That's what read as
+// "glitchy and unpredictable": the pivot bore no relationship to the
+// gesture. Raycasting from the gesture's own starting point (products
+// first, then the ground — same hit-priority as handlePlacementClick)
+// guesses a pivot the same way a real orbit tool would: whatever's under
+// your finger when you start rotating.
+function guessPivotUnderGesture() {
+  if (!pointerDownPos) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((pointerDownPos.x - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((pointerDownPos.y - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNdc, camera);
+  const productHits = raycaster.intersectObjects(productMeshes, true);
+  if (productHits.length > 0) return productHits[0].point;
+  const groundHits = raycaster.intersectObject(landlet);
+  if (groundHits.length > 0) return groundHits[0].point;
+  return null;
+}
+
 controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
@@ -1412,7 +1503,7 @@ controls.addEventListener('change', () => {
         : 0;
       if (moved > CLICK_DRAG_THRESHOLD_PX) {
         pendingGestureCheck = false;
-        const pivot = getSelectionPivot();
+        const pivot = getSelectionPivot() ?? guessPivotUnderGesture();
         if (pivot) beginTargetTween(pivot);
       }
     }
