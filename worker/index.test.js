@@ -57,6 +57,31 @@ describe('Worker API', () => {
     expect(uploaded.headers.get('content-type')).toBe('model/gltf-binary');
     expect(uploaded.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     expect((await uploaded.arrayBuffer()).byteLength).toBe(24);
+
+    const head = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(head.headers.get('etag')).toBe(uploaded.headers.get('etag'));
+    expect((await head.arrayBuffer()).byteLength).toBe(0);
+
+    const cached = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`, {
+      headers: { 'if-none-match': uploaded.headers.get('etag') },
+    });
+    expect(cached.status).toBe(304);
+    expect((await cached.arrayBuffer()).byteLength).toBe(0);
+
+    const rejected = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`, { method: 'POST' });
+    expect(rejected.status).toBe(405);
+    expect(rejected.headers.get('allow')).toBe('GET, HEAD');
+  });
+
+  it('rejects invalid uploaded-model paths', async () => {
+    const missingKey = await SELF.fetch('https://higglehaven.test/uploads/');
+    expect(missingKey.status).toBe(400);
+    expect(await missingKey.json()).toEqual({ error: 'Uploaded model key is required' });
+
+    const malformed = await SELF.fetch('https://higglehaven.test/uploads/%E0%A4%A');
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({ error: 'Invalid upload path encoding' });
   });
 
   it('rejects unsupported or structurally incomplete GLB uploads', async () => {

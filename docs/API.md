@@ -747,7 +747,9 @@ the built-in catalog:
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
-  keys are never reused.
+  keys are never reused. `HEAD` is also supported for metadata-only checks, and
+  matching `If-None-Match` requests receive `304 Not Modified`. Other methods
+  receive `405 Method Not Allowed`.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
