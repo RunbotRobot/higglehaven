@@ -314,6 +314,32 @@ Otherwise it remains lightweight until a later expansion first overlaps it.
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
 
+### `POST /api/land-candidates/batch`
+
+Atomically queues between 1 and 100 candidates for efficient world-generation
+work. The request wraps candidate objects matching the single-create endpoint:
+
+```json
+{
+  "candidates": [
+    {
+      "landletId": "generated-001",
+      "name": "Generated 001",
+      "areaM2": 1000,
+      "center": { "x": 50, "y": 0 },
+      "polygon": []
+    }
+  ]
+}
+```
+
+All candidates are validated before the D1 batch executes. IDs must be unique
+within the request, and any database conflict rolls back the complete batch.
+Candidates already overlapping the current world circle are materialized as
+generating landlets in the same batch. The `201` response returns all created
+`candidates` and a `landlets` array containing only those materialized
+immediately.
+
 ## Landlets
 
 Landlets are the first persistent world/plot records. They currently support
@@ -782,6 +808,7 @@ D1. Test storage does not modify the local development D1 state.
 ## Known gaps / future backend work
 
 - Add procedural puzzle-piece generation to populate land candidates; circle
-  overlap and materialization are already handled by the backend lifecycle.
+  overlap, atomic batch ingestion, and materialization are already handled by
+  the backend lifecycle.
 - Add auth/trust/payment/account concepts only after the single-player dev
   backend is stable; they are intentionally out of scope now.
