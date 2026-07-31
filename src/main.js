@@ -164,9 +164,13 @@ function boxesOverlap3D(mesh, x, y, z, other) {
   return !(zMaxA < zMinB || zMaxB < zMinA);
 }
 
-function collidesWithAny(mesh, x, y, z) {
+// excludeSet lets a group move (see groupMovePivot below) sweep each of its
+// own members against everything *else* without immediately blocking on
+// its own touching neighbors — a brick course sweeping against its own
+// adjacent bricks would stop instantly otherwise.
+function collidesWithAny(mesh, x, y, z, excludeSet) {
   for (const other of productMeshes) {
-    if (other === mesh) continue;
+    if (other === mesh || excludeSet?.has(other)) continue;
     if (boxesOverlap3D(mesh, x, y, z, other)) return true;
   }
   return false;
@@ -197,16 +201,16 @@ let snapToSurfaces = true;
 // moving an X/Y arrow only ever resolves in X/Y (stops flush against a
 // side) — same principle Minecraft-style engines use for axis-separated
 // collision.
-function sweepAxis(mesh, buildPos, safeVal, candidateVal) {
+function sweepAxis(mesh, buildPos, safeVal, candidateVal, excludeSet) {
   if (candidateVal === safeVal) return safeVal;
   const [cx, cy, cz] = buildPos(candidateVal);
-  if (!collidesWithAny(mesh, cx, cy, cz)) return candidateVal;
+  if (!collidesWithAny(mesh, cx, cy, cz, excludeSet)) return candidateVal;
   let lo = safeVal;
   let hi = candidateVal;
   for (let i = 0; i < 25; i++) {
     const mid = (lo + hi) / 2;
     const [mx, my, mz] = buildPos(mid);
-    if (collidesWithAny(mesh, mx, my, mz)) hi = mid;
+    if (collidesWithAny(mesh, mx, my, mz, excludeSet)) hi = mid;
     else lo = mid;
   }
   return lo;
@@ -216,11 +220,41 @@ function sweepAxis(mesh, buildPos, safeVal, candidateVal) {
 // position) toward `requested`, one axis at a time (X, then Y, then Z) so
 // combined diagonal motion (e.g. a plane handle) still stops correctly
 // against whatever it meets along the way.
-function resolveByAxis(mesh, safe, requested) {
-  const x = sweepAxis(mesh, (v) => [v, safe.y, safe.z], safe.x, requested.x);
-  const y = sweepAxis(mesh, (v) => [x, v, safe.z], safe.y, requested.y);
-  const z = sweepAxis(mesh, (v) => [x, y, v], safe.z, requested.z);
+function resolveByAxis(mesh, safe, requested, excludeSet) {
+  const x = sweepAxis(mesh, (v) => [v, safe.y, safe.z], safe.x, requested.x, excludeSet);
+  const y = sweepAxis(mesh, (v) => [x, v, safe.z], safe.y, requested.y, excludeSet);
+  const z = sweepAxis(mesh, (v) => [x, y, v], safe.z, requested.z, excludeSet);
   return { x, y, z };
+}
+
+// Group-move counterpart to resolveByAxis: instead of resolving one mesh's
+// position against a fixed safe/requested pair, this resolves how far the
+// *whole group* is allowed to move together along one axis, so relative
+// spacing survives a collision the same way it already does for the
+// landlet-bounds clamp above. Each mesh sweeps from its own drag-start
+// position (fixed for the whole drag — see groupMoveStartPositions) by the
+// same candidate offset, excluding the rest of the group so touching
+// members don't block each other; the most restrictive mesh's achieved
+// offset wins for the whole group. Sweeping from the fixed drag-start point
+// (rather than wherever the mesh currently sits) is what keeps this safe
+// from the same runaway-delta tunneling risk a "sweep from last frame"
+// approach would reintroduce — see the objectChange handler's own comment.
+function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, excludeSet) {
+  if (candidateOffset === 0) return 0;
+  let achieved = candidateOffset;
+  for (const mesh of meshes) {
+    const from = startPositions.get(mesh)[axis];
+    const buildPos = (v) => {
+      const p = mesh.position;
+      if (axis === 'x') return [v, p.y, p.z];
+      if (axis === 'y') return [p.x, v, p.z];
+      return [p.x, p.y, v];
+    };
+    const resolved = sweepAxis(mesh, buildPos, from, from + candidateOffset, excludeSet);
+    const meshAchieved = resolved - from;
+    achieved = candidateOffset > 0 ? Math.min(achieved, meshAchieved) : Math.max(achieved, meshAchieved);
+  }
+  return achieved;
 }
 
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
@@ -257,6 +291,8 @@ function wireDraggingBehavior(transformControls) {
     if (transformControls.object === groupMovePivot) {
       for (const mesh of groupMoveMeshes ?? []) syncUpdate(mesh);
       groupMoveMeshes = null;
+      groupMoveSet = null;
+      groupMoveStartPositions = null;
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
     }
@@ -300,7 +336,9 @@ wireDraggingBehavior(translateControls);
 const groupMovePivot = new THREE.Object3D();
 scene.add(groupMovePivot);
 let groupMoveMeshes = null; // meshes being moved together, captured at drag start
-const groupMovePivotLastPosition = new THREE.Vector3();
+let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" checks during collision sweeps
+let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
+const groupMovePivotStartPosition = new THREE.Vector3(); // pivot's position when the drag began (fixed for the whole drag)
 
 // resolveByAxis needs a known-good starting point to sweep from — captured
 // fresh at the start of every drag, since the object's position right
@@ -309,7 +347,9 @@ translateControls.addEventListener('dragging-changed', (event) => {
   if (!event.value || !translateControls.object) return;
   if (translateControls.object === groupMovePivot) {
     groupMoveMeshes = [...selectedMeshes];
-    groupMovePivotLastPosition.copy(groupMovePivot.position);
+    groupMoveSet = new Set(groupMoveMeshes);
+    groupMoveStartPositions = new Map(groupMoveMeshes.map((mesh) => [mesh, mesh.position.clone()]));
+    groupMovePivotStartPosition.copy(groupMovePivot.position);
     return;
   }
   translateControls.object.userData.safePosition = translateControls.object.position.clone();
@@ -318,56 +358,69 @@ translateControls.addEventListener('objectChange', () => {
   const object = translateControls.object;
   if (!object) return;
   if (object === groupMovePivot) {
-    // Collision-sweeping each moved mesh against the others (resolveByAxis)
-    // would immediately block on the group's *own* touching members — a
-    // brick course sweeping against its own neighbors — so a group move
-    // only clamps to the landlet's bounds, skipping collision resolution
-    // entirely. Simple direct translation is also just the expected feel
-    // for "pick this course up and set it down over there."
-    //
-    // The clamp has to be applied to the *delta*, uniformly across every
-    // member, rather than to each mesh's resulting position independently.
-    // Clamping positions independently let one mesh's stop (e.g. a bottom
-    // brick course hitting the ground) silently decouple from the rest of
-    // the group: since the pivot's tracked position kept following the raw
-    // gizmo drag, every subsequent frame recomputed the delta from an
-    // unclamped baseline and kept applying it in full to meshes that
-    // hadn't hit a bound yet — closing the gap and squishing stacked
-    // layers together. Instead, compute how far *every* mesh is still
-    // allowed to move on each axis, intersect those ranges across the
-    // whole group, clamp the raw delta to that shared range once, and
-    // apply the identical (possibly reduced) delta to each mesh — so the
-    // group's relative spacing never distorts, and a blocked member
-    // genuinely stops the whole group's movement on that axis.
-    const rawDelta = object.position.clone().sub(groupMovePivotLastPosition);
+    // TransformControls always computes the pivot's position as (position at
+    // drag start) + (cumulative pointer offset since drag start) — it has no
+    // memory of anything we do to object.position ourselves mid-drag. So the
+    // offset has to be measured against that same fixed start, not against
+    // wherever we last left the pivot: measuring against our own previous
+    // (possibly reduced, e.g. blocked-at-a-wall) position let the gap
+    // between "what the pointer is asking for" and "what actually happened"
+    // grow larger every subsequent frame the drag continued — eventually
+    // large enough that a single frame's requested move jumped clean through
+    // an obstacle (or, before collision was added here, corrupted the
+    // landlet-bounds clamp the same way — see the group-squish bug this
+    // replaced). Measuring from the fixed start keeps the offset tracking
+    // the pointer smoothly, frame to frame, exactly like a single item's own
+    // move already does.
+    const totalOffset = object.position.clone().sub(groupMovePivotStartPosition);
     const meshes = groupMoveMeshes ?? [];
-    let minDeltaX = -Infinity, maxDeltaX = Infinity;
-    let minDeltaY = -Infinity, maxDeltaY = Infinity;
-    let minDeltaZ = -Infinity, maxDeltaZ = Infinity;
+    let minOffsetX = -Infinity, maxOffsetX = Infinity;
+    let minOffsetY = -Infinity, maxOffsetY = Infinity;
+    let minOffsetZ = -Infinity, maxOffsetZ = Infinity;
     for (const mesh of meshes) {
+      const start = groupMoveStartPositions.get(mesh);
       const { width, depth, height } = mesh.userData.template.dimensions;
       const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
       const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
-      minDeltaX = Math.max(minDeltaX, -halfSpanX - mesh.position.x);
-      maxDeltaX = Math.min(maxDeltaX, halfSpanX - mesh.position.x);
-      minDeltaY = Math.max(minDeltaY, -halfSpanY - mesh.position.y);
-      maxDeltaY = Math.min(maxDeltaY, halfSpanY - mesh.position.y);
-      minDeltaZ = Math.max(minDeltaZ, height / 2 - mesh.position.z);
-      maxDeltaZ = Math.min(maxDeltaZ, LANDLET_HEIGHT_M - height / 2 - mesh.position.z);
+      minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
+      maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
+      minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
+      maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
+      minOffsetZ = Math.max(minOffsetZ, height / 2 - start.z);
+      maxOffsetZ = Math.min(maxOffsetZ, LANDLET_HEIGHT_M - height / 2 - start.z);
     }
-    const delta = new THREE.Vector3(
-      THREE.MathUtils.clamp(rawDelta.x, minDeltaX, maxDeltaX),
-      THREE.MathUtils.clamp(rawDelta.y, minDeltaY, maxDeltaY),
-      THREE.MathUtils.clamp(rawDelta.z, minDeltaZ, maxDeltaZ),
+    const offset = new THREE.Vector3(
+      THREE.MathUtils.clamp(totalOffset.x, minOffsetX, maxOffsetX),
+      THREE.MathUtils.clamp(totalOffset.y, minOffsetY, maxOffsetY),
+      THREE.MathUtils.clamp(totalOffset.z, minOffsetZ, maxOffsetZ),
     );
-    for (const mesh of meshes) {
-      mesh.position.add(delta);
+    if (snapToSurfaces) {
+      // Same idea as resolveByAxis for a single item, but resolved for the
+      // whole group at once per axis (resolveGroupAxisDelta) so the group's
+      // own touching members (excluded via groupMoveSet) never block each
+      // other, while anything outside the group still stops the move —
+      // sequential X, then Y, then Z, each updating positions before the
+      // next axis sweeps, same order resolveByAxis already uses.
+      offset.x = resolveGroupAxisDelta(meshes, groupMoveStartPositions, 'x', offset.x, groupMoveSet);
+      for (const mesh of meshes) mesh.position.x = groupMoveStartPositions.get(mesh).x + offset.x;
+      offset.y = resolveGroupAxisDelta(meshes, groupMoveStartPositions, 'y', offset.y, groupMoveSet);
+      for (const mesh of meshes) mesh.position.y = groupMoveStartPositions.get(mesh).y + offset.y;
+      offset.z = resolveGroupAxisDelta(meshes, groupMoveStartPositions, 'z', offset.z, groupMoveSet);
+      for (const mesh of meshes) mesh.position.z = groupMoveStartPositions.get(mesh).z + offset.z;
+    } else {
+      for (const mesh of meshes) {
+        const start = groupMoveStartPositions.get(mesh);
+        mesh.position.set(start.x + offset.x, start.y + offset.y, start.z + offset.z);
+      }
     }
-    // Snap the pivot itself (and next frame's baseline) to the
-    // actually-applied delta rather than the raw gizmo position, so the
-    // gizmo can't drift ahead of where the group really stopped.
-    groupMovePivotLastPosition.add(delta);
-    object.position.copy(groupMovePivotLastPosition);
+    // Snap the pivot itself to the actually-applied (possibly reduced)
+    // offset rather than the raw gizmo position, so the displayed gizmo
+    // can't visually drift ahead of where the group really stopped.
+    object.position.set(
+      groupMovePivotStartPosition.x + offset.x,
+      groupMovePivotStartPosition.y + offset.y,
+      groupMovePivotStartPosition.z + offset.z,
+    );
     return;
   }
   const requested = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
@@ -1463,18 +1516,18 @@ function updateTargetTween(now) {
 // With nothing selected, getSelectionPivot() has nothing to offer, so a
 // rotate gesture used to spin around whatever controls.target already
 // happened to be — often wherever a previous selection or dolly left it,
-// unrelated to whatever's actually on screen now. That's what read as
-// "glitchy and unpredictable": the pivot bore no relationship to the
-// gesture. Raycasting from the gesture's own starting point (products
-// first, then the ground — same hit-priority as handlePlacementClick)
-// guesses a pivot the same way a real orbit tool would: whatever's under
-// your finger when you start rotating.
-function guessPivotUnderGesture() {
-  if (!pointerDownPos) return null;
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointerNdc.x = ((pointerDownPos.x - rect.left) / rect.width) * 2 - 1;
-  pointerNdc.y = -((pointerDownPos.y - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointerNdc, camera);
+// unrelated to whatever's actually on screen now. That read as "glitchy and
+// unpredictable". Raycasting from the gesture's own starting point fixed
+// the "unrelated to what's on screen" half of that, but introduced a new
+// annoyance: the view would nudge itself toward wherever a finger happened
+// to land, which felt like the camera recentering on its own rather than
+// responding to the rotate itself. Raycasting straight out from the middle
+// of the screen instead settles onto whatever the camera is already
+// framing — consistent regardless of where on the screen the gesture
+// happens to start.
+const SCREEN_CENTER_NDC = new THREE.Vector2(0, 0);
+function guessPivotAtScreenCenter() {
+  raycaster.setFromCamera(SCREEN_CENTER_NDC, camera);
   const productHits = raycaster.intersectObjects(productMeshes, true);
   if (productHits.length > 0) return productHits[0].point;
   const groundHits = raycaster.intersectObject(landlet);
@@ -1503,7 +1556,7 @@ controls.addEventListener('change', () => {
         : 0;
       if (moved > CLICK_DRAG_THRESHOLD_PX) {
         pendingGestureCheck = false;
-        const pivot = getSelectionPivot() ?? guessPivotUnderGesture();
+        const pivot = getSelectionPivot() ?? guessPivotAtScreenCenter();
         if (pivot) beginTargetTween(pivot);
       }
     }
