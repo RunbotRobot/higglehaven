@@ -74,8 +74,20 @@ export default {
 
 async function handleUploadedAsset(request, env) {
   if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
-  const key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/uploads\//, ''));
-  const object = await env.MODELS.get(key);
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
+  }
+
+  let key;
+  try {
+    key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/uploads\//, ''));
+  } catch {
+    throw new HttpError('Invalid upload path encoding', 400);
+  }
+  if (!key) throw new HttpError('Uploaded model key is required', 400);
+
+  const conditionalRequest = request.method === 'HEAD' || request.headers.has('if-none-match');
+  let object = conditionalRequest ? await env.MODELS.head(key) : await env.MODELS.get(key);
   if (!object) return json({ error: 'Not found' }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -85,6 +97,17 @@ async function handleUploadedAsset(request, env) {
   // overwritten in place — see handleModelUpload) and never change once
   // stored, so a long-lived cache is always safe.
   headers.set('cache-control', 'public, max-age=31536000, immutable');
+  if (request.headers.get('if-none-match') === object.httpEtag) {
+    return new Response(null, { status: 304, headers });
+  }
+  if (request.method === 'HEAD') return new Response(null, { headers });
+
+  // A metadata lookup was enough to answer a matching conditional request.
+  // Fetch the body only when a stale conditional GET actually needs it.
+  if (!('body' in object)) {
+    object = await env.MODELS.get(key);
+    if (!object) return json({ error: 'Not found' }, 404);
+  }
   return new Response(object.body, { headers });
 }
 
