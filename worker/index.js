@@ -131,7 +131,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'land-candidates') {
-    return handleLandCandidates(request, env.DB, route);
+    return handleLandCandidates(request, env.DB, route, url);
   }
 
   if (route[0] === 'world') {
@@ -573,10 +573,33 @@ async function handleLandletDraft(request, db, landletId) {
   return json({ error: 'Not found' }, 404);
 }
 
-async function handleLandCandidates(request, db, route) {
+async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const { results } = await db.prepare('SELECT * FROM landlet_candidates ORDER BY created_at').all();
-    return json({ candidates: results.map(candidateFromRow) });
+    const state = url.searchParams.get('state');
+    if (state !== null && state !== 'pending' && state !== 'materialized') {
+      throw new HttpError('state must be pending or materialized', 400);
+    }
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (state) conditions.push(`materialized_at IS ${state === 'pending' ? '' : 'NOT '}NULL`);
+    if (cursor) {
+      conditions.push('(created_at > ? OR (created_at = ? AND landlet_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM landlet_candidates ${where}
+      ORDER BY created_at, landlet_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      candidates: page.map(candidateFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.landlet_id) : null,
+    });
   }
 
   if (request.method === 'GET' && route.length === 2) {
@@ -1134,6 +1157,32 @@ function optionalInteger(value, field) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
   return number;
+}
+
+function queryLimit(value, defaultValue) {
+  if (value === null) return defaultValue;
+  if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
+  const limit = Number(value);
+  if (limit < 1 || limit > 100) throw new HttpError('limit must be an integer between 1 and 100', 400);
+  return limit;
+}
+
+function encodeCursor(createdAt, id) {
+  const bytes = new TextEncoder().encode(JSON.stringify([createdAt, id]));
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function decodeCursor(value) {
+  if (value === null) return null;
+  try {
+    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(decoded) || decoded.length !== 2 ||
+        typeof decoded[0] !== 'string' || typeof decoded[1] !== 'string') throw new Error();
+    return { createdAt: decoded[0], id: decoded[1] };
+  } catch {
+    throw new HttpError('cursor is invalid', 400);
+  }
 }
 
 function json(payload, status = 200) {
