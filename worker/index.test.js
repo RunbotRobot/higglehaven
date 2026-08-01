@@ -438,6 +438,57 @@ describe('Worker API', () => {
     });
   });
 
+  it('atomically queues candidate batches and materializes overlapping plots', async () => {
+    const created = await api('/land-candidates/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'batch-inside', name: 'Batch inside', areaM2: 4, center: { x: 0, y: 0 } },
+          { landletId: 'batch-outside', name: 'Batch outside', areaM2: 4, center: { x: 100, y: 0 } },
+        ],
+      }),
+    });
+
+    expect(created.response.status).toBe(201);
+    expect(created.body.candidates.map(({ landletId }) => landletId).sort()).toEqual(['batch-inside', 'batch-outside']);
+    expect(created.body.landlets).toHaveLength(1);
+    expect(created.body.landlets[0]).toMatchObject({ landletId: 'batch-inside', status: 'generating' });
+    expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-inside').materializedAt).not.toBeNull();
+    expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-outside').materializedAt).toBeNull();
+
+    const invalid = await api('/land-candidates/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'batch-duplicate', name: 'First', areaM2: 4 },
+          { landletId: 'batch-duplicate', name: 'Second', areaM2: 4 },
+        ],
+      }),
+    });
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'landletId values must be unique' });
+
+    const absent = await api('/land-candidates/batch', {
+      method: 'POST',
+      body: JSON.stringify({ candidates: [] }),
+    });
+    expect(absent.response.status).toBe(400);
+    expect(absent.body).toEqual({ error: 'candidates must contain at least one item' });
+
+    const conflict = await api('/land-candidates/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'batch-rolled-back', name: 'Should roll back', areaM2: 4 },
+          { landletId: 'batch-inside', name: 'Already exists', areaM2: 4 },
+        ],
+      }),
+    });
+    expect(conflict.response.status).toBe(409);
+    const rolledBack = await api('/land-candidates/batch-rolled-back');
+    expect(rolledBack.response.status).toBe(404);
+  });
+
   it('expands the world by one increment and promotes enclosed landlets', async () => {
     const candidate = await api('/landlets', {
       method: 'POST',

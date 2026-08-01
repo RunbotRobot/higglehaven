@@ -584,27 +584,49 @@ async function handleLandCandidates(request, db, route) {
     return row ? json({ candidate: candidateFromRow(row) }) : json({ error: 'Land candidate not found' }, 404);
   }
 
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
+    const input = await readJson(request);
+    if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
+    if (input.candidates.length === 0) throw new HttpError('candidates must contain at least one item', 400);
+    if (input.candidates.length > 100) throw new HttpError('candidates must contain at most 100 items', 400);
+
+    const landlets = input.candidates.map((candidate) =>
+      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, crypto.randomUUID()));
+    const ids = new Set();
+    for (const landlet of landlets) {
+      if (ids.has(landlet.landletId)) throw new HttpError('landletId values must be unique', 400);
+      ids.add(landlet.landletId);
+    }
+
+    const rows = landlets.map(candidateRowFromLandlet);
+    const settings = await getWorldSettings(db);
+    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
+    await db.batch([
+      ...rows.map((row) => candidateInsertStatement(db, row)),
+      ...candidateMaterializationStatements(db, overlapping),
+    ]);
+
+    const placeholders = landlets.map(() => '?').join(', ');
+    const storedCandidates = await db.prepare(`
+      SELECT * FROM landlet_candidates WHERE landlet_id IN (${placeholders}) ORDER BY created_at
+    `).bind(...ids).all();
+    const materializedLandlets = await db.prepare(`
+      SELECT * FROM landlets WHERE landlet_id IN (${placeholders}) ORDER BY created_at
+    `).bind(...ids).all();
+    return json({
+      candidates: storedCandidates.results.map(candidateFromRow),
+      landlets: materializedLandlets.results.map(landletFromRow),
+    }, 201);
+  }
+
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
-    const row = {
-      landlet_id: landlet.landletId,
-      name: landlet.name,
-      area_m2: landlet.areaM2,
-      center_x_m: landlet.center.x,
-      center_y_m: landlet.center.y,
-      land_class: landlet.landClass,
-      polygon_json: JSON.stringify(landlet.polygon),
-      metadata_json: JSON.stringify(landlet.metadata),
-    };
+    const row = candidateRowFromLandlet(landlet);
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
-      db.prepare(`
-      INSERT INTO landlet_candidates
-        (landlet_id, name, area_m2, center_x_m, center_y_m, land_class, polygon_json, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class, row.polygon_json, row.metadata_json),
+      candidateInsertStatement(db, row),
       ...(started ? candidateMaterializationStatements(db, [row]) : []),
     ]);
 
@@ -614,6 +636,27 @@ async function handleLandCandidates(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+function candidateRowFromLandlet(landlet) {
+  return {
+    landlet_id: landlet.landletId,
+    name: landlet.name,
+    area_m2: landlet.areaM2,
+    center_x_m: landlet.center.x,
+    center_y_m: landlet.center.y,
+    land_class: landlet.landClass,
+    polygon_json: JSON.stringify(landlet.polygon),
+    metadata_json: JSON.stringify(landlet.metadata),
+  };
+}
+
+function candidateInsertStatement(db, row) {
+  return db.prepare(`
+    INSERT INTO landlet_candidates
+      (landlet_id, name, area_m2, center_x_m, center_y_m, land_class, polygon_json, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class, row.polygon_json, row.metadata_json);
 }
 
 async function handleWorld(request, db, route) {
