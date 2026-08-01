@@ -106,6 +106,7 @@ describe('Worker API', () => {
     const catalog = await api('/catalog');
     expect(catalog.response.status).toBe(200);
     expect(catalog.body.templates.length).toBeGreaterThan(0);
+    expect(catalog.body.nextCursor).toBeNull();
 
     const world = await api('/world');
     expect(world.response.status).toBe(200);
@@ -116,6 +117,90 @@ describe('Worker API', () => {
       coordinateRotationDeg: 210,
       dayCycleHours: 4,
     });
+  });
+
+  it('filters and cursor-paginates catalog templates in stable name order', async () => {
+    for (const [templateId, name] of [
+      ['catalog-page-b', 'Catalog same name'],
+      ['catalog-page-a', 'Catalog same name'],
+      ['catalog-page-c', 'Catalog trailing name'],
+    ]) {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId,
+          name,
+          category: 'pagination-test',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+    }
+
+    const templateIds = [];
+    let cursor = null;
+    do {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await api(`/catalog?category=%20pagination-test%20&limit=1${suffix}`);
+      expect(page.response.status).toBe(200);
+      expect(page.body.templates).toHaveLength(1);
+      templateIds.push(page.body.templates[0].templateId);
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(templateIds).toEqual(['catalog-page-a', 'catalog-page-b', 'catalog-page-c']);
+
+    const invalidCategory = await api('/catalog?category=');
+    expect(invalidCategory.response.status).toBe(400);
+    const invalidLimit = await api('/catalog?limit=101');
+    expect(invalidLimit.response.status).toBe(400);
+    const invalidCursor = await api('/catalog?cursor=invalid');
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
+  it('cursor-paginates placed instances within one landlet', async () => {
+    await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4 }),
+    });
+    for (const instanceId of ['instance-page-b', 'instance-page-a']) {
+      const created = await api('/instances', {
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId,
+          landletId: 'instance-page-landlet',
+          templateId: 'placeholder-chair',
+          x: 0,
+          y: 0,
+        }),
+      });
+      expect(created.response.status).toBe(201);
+    }
+    await env.DB.prepare(`
+      UPDATE placed_instances SET created_at = '2026-08-01T00:00:00.000Z'
+      WHERE landlet_id = 'instance-page-landlet'
+    `).run();
+
+    const ids = [];
+    let cursor = null;
+    do {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await api(`/instances?landletId=%20instance-page-landlet%20&limit=1${suffix}`);
+      expect(page.response.status).toBe(200);
+      expect(page.body.instances).toHaveLength(1);
+      ids.push(page.body.instances[0].instanceId);
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(ids).toEqual(['instance-page-a', 'instance-page-b']);
+
+    const invalidLandlet = await api('/instances?landletId=');
+    expect(invalidLandlet.response.status).toBe(400);
+    const invalidLimit = await api('/instances?limit=0');
+    expect(invalidLimit.response.status).toBe(400);
+    const invalidCursor = await api('/instances?cursor=invalid');
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
   it('claims an available greenbelt landlet', async () => {
@@ -288,6 +373,20 @@ describe('Worker API', () => {
 
     const versions = await api('/landlets/draft-landlet/versions');
     expect(versions.body.versions.map((version) => version.versionNumber)).toEqual([2, 1]);
+    expect(versions.body.nextCursor).toBeNull();
+
+    const newest = await api('/landlets/draft-landlet/versions?limit=1');
+    expect(newest.body.versions.map((version) => version.versionNumber)).toEqual([2]);
+    expect(newest.body.nextCursor).not.toBeNull();
+    const oldest = await api(`/landlets/draft-landlet/versions?limit=1&cursor=${encodeURIComponent(newest.body.nextCursor)}`);
+    expect(oldest.body.versions.map((version) => version.versionNumber)).toEqual([1]);
+    expect(oldest.body.nextCursor).toBeNull();
+
+    const invalidLimit = await api('/landlets/draft-landlet/versions?limit=101');
+    expect(invalidLimit.response.status).toBe(400);
+    const invalidCursor = await api('/landlets/draft-landlet/versions?cursor=invalid');
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
   it('saves immutable landlet versions and activates a selected snapshot', async () => {
@@ -418,6 +517,53 @@ describe('Worker API', () => {
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
   });
 
+  it('filters and cursor-paginates landlets in stable order', async () => {
+    for (const landletId of ['landlet-page-b', 'landlet-page-a']) {
+      await api('/landlets', {
+        method: 'POST',
+        body: JSON.stringify({ landletId, name: landletId, areaM2: 4, status: 'generating' }),
+      });
+    }
+
+    const ids = [];
+    let cursor = null;
+    do {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await api(`/landlets?status=generating&limit=1${suffix}`);
+      expect(page.response.status).toBe(200);
+      expect(page.body.landlets).toHaveLength(1);
+      expect(page.body.landlets[0].status).toBe('generating');
+      ids.push(page.body.landlets[0].landletId);
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(ids).toEqual(['landlet-page-b', 'landlet-page-a']);
+
+    await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'owned-page-landlet',
+        name: 'Owned page landlet',
+        areaM2: 4,
+        status: 'claimed',
+        ownerBuilderId: 'page-builder',
+      }),
+    });
+    const owned = await api('/landlets?status=claimed&ownerBuilderId=%20page-builder%20');
+    expect(owned.body.landlets.map(({ landletId }) => landletId)).toEqual(['owned-page-landlet']);
+    expect(owned.body.nextCursor).toBeNull();
+
+    const invalidStatus = await api('/landlets?status=available');
+    expect(invalidStatus.response.status).toBe(400);
+    expect(invalidStatus.body).toEqual({ error: 'status must be greenbelt, claimed, or generating' });
+    const invalidOwner = await api('/landlets?ownerBuilderId=');
+    expect(invalidOwner.response.status).toBe(400);
+    const invalidLimit = await api('/landlets?limit=0');
+    expect(invalidLimit.response.status).toBe(400);
+    const invalidCursor = await api('/landlets?cursor=not-base64');
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
   it('starts generation immediately for candidates already overlapping the world', async () => {
     const created = await api('/land-candidates', {
       method: 'POST',
@@ -436,6 +582,105 @@ describe('Worker API', () => {
       generatedAt: null,
       claimableAt: null,
     });
+    const stored = await env.DB.prepare(`
+      SELECT min_world_radius_m FROM landlet_candidates WHERE landlet_id = 'inside-candidate'
+    `).first();
+    expect(stored.min_world_radius_m).toBe(0);
+  });
+
+  it('deletes only pending land candidates', async () => {
+    await api('/land-candidates', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'cancelled-candidate',
+        name: 'Cancelled candidate',
+        areaM2: 4,
+        center: { x: 200, y: 0 },
+      }),
+    });
+    const deleted = await api('/land-candidates/cancelled-candidate', { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+    const absent = await api('/land-candidates/cancelled-candidate');
+    expect(absent.response.status).toBe(404);
+
+    const materialized = await api('/land-candidates/inside-candidate', { method: 'DELETE' });
+    expect(materialized.response.status).toBe(409);
+    expect(materialized.body).toEqual({ error: 'Materialized land candidates cannot be deleted' });
+    const landlet = await api('/landlets/inside-candidate');
+    expect(landlet.response.status).toBe(200);
+
+    const missing = await api('/land-candidates/missing-candidate', { method: 'DELETE' });
+    expect(missing.response.status).toBe(404);
+    expect(missing.body).toEqual({ error: 'Land candidate not found' });
+  });
+
+  it('updates only pending land candidates', async () => {
+    await api('/land-candidates', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'corrected-candidate',
+        name: 'Before correction',
+        areaM2: 4,
+        center: { x: 210, y: 0 },
+        metadata: { revision: 1 },
+      }),
+    });
+    const updated = await api('/land-candidates/corrected-candidate', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        landletId: 'ignored-id-change',
+        name: 'After correction',
+        center: { x: 220, y: 5 },
+        metadata: { revision: 2 },
+      }),
+    });
+    expect(updated.response.status).toBe(200);
+    expect(updated.body.candidate).toMatchObject({
+      landletId: 'corrected-candidate',
+      name: 'After correction',
+      areaM2: 4,
+      center: { x: 220, y: 5 },
+      metadata: { revision: 2 },
+      materializedAt: null,
+    });
+    expect(updated.body.landlet).toBeNull();
+    const queuedRadius = await env.DB.prepare(`
+      SELECT min_world_radius_m FROM landlet_candidates WHERE landlet_id = 'corrected-candidate'
+    `).first();
+    expect(queuedRadius.min_world_radius_m).toBeGreaterThan(200);
+
+    const started = await api('/land-candidates/corrected-candidate', {
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+    });
+    expect(started.response.status).toBe(200);
+    expect(started.body.candidate.materializedAt).not.toBeNull();
+    expect(started.body.landlet).toMatchObject({
+      landletId: 'corrected-candidate',
+      name: 'After correction',
+      status: 'generating',
+      center: { x: 0, y: 0 },
+    });
+    const startedAgain = await api('/land-candidates/corrected-candidate', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Too late too' }),
+    });
+    expect(startedAgain.response.status).toBe(409);
+
+    const materialized = await api('/land-candidates/inside-candidate', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Too late' }),
+    });
+    expect(materialized.response.status).toBe(409);
+    expect(materialized.body).toEqual({ error: 'Materialized land candidates cannot be updated' });
+
+    const missing = await api('/land-candidates/missing-update', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Missing' }),
+    });
+    expect(missing.response.status).toBe(404);
+    expect(missing.body).toEqual({ error: 'Land candidate not found' });
   });
 
   it('atomically queues candidate batches and materializes overlapping plots', async () => {
@@ -547,6 +792,10 @@ describe('Worker API', () => {
       }),
     });
     expect(candidate.response.status).toBe(201);
+    const storedRadius = await env.DB.prepare(`
+      SELECT max_world_radius_m FROM landlets WHERE landlet_id = 'edge-candidate'
+    `).first();
+    expect(storedRadius.max_world_radius_m).toBeCloseTo(Math.hypot(36, 1));
 
     const incompleteCandidate = await api('/landlets', {
       method: 'POST',
