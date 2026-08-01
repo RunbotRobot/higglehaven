@@ -99,11 +99,17 @@ landlet. They are not production commerce listings yet.
 
 ### `GET /api/catalog`
 
-Lists catalog templates ordered by name.
+Lists catalog templates in stable name order. Results are cursor-paginated to
+keep product discovery reads bounded as the catalog grows.
 
 Optional query parameters:
 
 - `category`: filters templates by exact category.
+- `limit`: page size from 1 to 100; defaults to 100.
+- `cursor`: opaque `nextCursor` value from the preceding page.
+
+The response includes `nextCursor`, which is `null` after the final page. Keep
+the same `category` filter while following a cursor.
 
 Response:
 
@@ -130,7 +136,8 @@ Response:
       "createdAt": "2026-07-29T07:30:06.519Z",
       "updatedAt": "2026-07-29T07:30:06.519Z"
     }
-  ]
+  ],
+  "nextCursor": null
 }
 ```
 
@@ -321,6 +328,34 @@ the same `state` filter while following a cursor.
 
 Fetches one candidate or returns `404`.
 
+### `DELETE /api/land-candidates/:landletId`
+
+Removes a pending candidate that has not started generation. This supports
+correcting or replacing queued procedural-generation output before the world
+circle reaches it. Materialized candidates already have a corresponding
+generating landlet and return `409` instead of deleting either record.
+
+Response:
+
+```json
+{
+  "deleted": true
+}
+```
+
+### `PUT /api/land-candidates/:landletId`
+### `PATCH /api/land-candidates/:landletId`
+
+Corrects a pending candidate's `name`, `areaM2`, `center`, `landClass`,
+`polygon`, or `metadata` before generation begins. The current implementation
+merges request fields with the existing candidate before validation. The route
+ID cannot be changed. Materialized candidates return `409`; their geometry is
+already represented by the corresponding generating landlet.
+
+As with candidate creation, moving or reshaping a pending candidate so it now
+overlaps the current world circle immediately materializes it. The response
+contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
+
 ### `POST /api/land-candidates`
 
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
@@ -389,12 +424,25 @@ state can build on a stable backend shape.
 
 ### `GET /api/landlets`
 
-Lists landlets ordered by creation time.
+Lists landlets in stable creation order. Results are cursor-paginated so the
+growing world does not require an unbounded D1 read.
 
 Optional query parameters:
 
 - `status`: filters by exact status (`greenbelt`, `claimed`, or `generating`).
 - `ownerBuilderId`: filters by placeholder builder owner ID.
+- `limit`: page size from 1 to 100; defaults to 100.
+- `cursor`: opaque `nextCursor` value from the preceding page.
+
+The response includes `nextCursor`, which is `null` after the final page. Keep
+the same `status` and `ownerBuilderId` filters while following a cursor.
+
+```json
+{
+  "landlets": [],
+  "nextCursor": null
+}
+```
 
 ### `GET /api/landlets/:landletId`
 
@@ -600,6 +648,13 @@ landlet's `activeVersionId` points at the snapshot intended for shoppers.
 Lists snapshot metadata newest-first. Each record includes `versionId`,
 `versionNumber`, `name`, `instanceCount`, `metadata`, and `createdAt`.
 
+Optional query parameters:
+
+- `limit`: page size from 1 to 100; defaults to 100.
+- `cursor`: opaque `nextCursor` value from the preceding page.
+
+The response includes `nextCursor`, which is `null` after the oldest version.
+
 ### `POST /api/landlets/:landletId/versions`
 
 Saves the landlet's current placed instances as a new immutable snapshot.
@@ -657,11 +712,17 @@ migration.
 
 ### `GET /api/instances`
 
-Lists placed instances for one landlet.
+Lists placed instances for one landlet in stable creation order. Results are
+cursor-paginated to keep draft reads bounded.
 
 Optional query parameters:
 
 - `landletId`: filters instances by landlet. Defaults to `starter-landlet`.
+- `limit`: page size from 1 to 100; defaults to 100.
+- `cursor`: opaque `nextCursor` value from the preceding page.
+
+The response includes `nextCursor`, which is `null` after the final page. Keep
+the same `landletId` while following a cursor.
 
 Response:
 
@@ -681,7 +742,8 @@ Response:
       "createdAt": "2026-07-29T07:30:06.519Z",
       "updatedAt": "2026-07-29T07:30:06.519Z"
     }
-  ]
+  ],
+  "nextCursor": null
 }
 ```
 
@@ -751,9 +813,20 @@ The migrations currently create seven main backend tables:
 - `version_instances`: instance transforms captured within each snapshot.
 - `landlet_candidates`: lightweight planned plots awaiting first circle overlap.
 
+Land candidates persist their precomputed minimum world-circle overlap radius.
+World expansion uses its indexed value to avoid reading every distant pending
+candidate before applying the exact polygon overlap check. Candidates created
+before that migration retain a conservative zero value until updated, so they
+cannot be skipped incorrectly.
+
+Landlets likewise persist their maximum world-circle radius. Expansion uses it
+to avoid reading completed generating plots that are still too far away to be
+fully enclosed. Pre-migration landlets retain a null value and continue through
+the exact geometry check, so existing plots cannot be skipped.
+
 Indexes currently support category filtering, placed-instance lookups by
-landlet/template, landlet status/owner/position lookups, and the one-claimed-
-landlet-per-builder rule.
+landlet/template, cursor-paginated landlet status/owner lookups, landlet
+position lookups, and the one-claimed-landlet-per-builder rule.
 
 Seed data includes:
 

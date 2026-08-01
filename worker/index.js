@@ -242,12 +242,32 @@ function formatBytes(bytes) {
 
 async function handleCatalog(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const category = url.searchParams.get('category');
-    const statement = category
-      ? db.prepare('SELECT * FROM catalog_templates WHERE category = ? ORDER BY name').bind(category)
-      : db.prepare('SELECT * FROM catalog_templates ORDER BY name');
-    const { results } = await statement.all();
-    return json({ templates: results.map(templateFromRow) });
+    const categoryParam = url.searchParams.get('category');
+    const category = categoryParam === null ? null : stringValue(categoryParam, 'category');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCatalogCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (category) {
+      conditions.push('category = ?');
+      bindings.push(category);
+    }
+    if (cursor) {
+      conditions.push('(name > ? OR (name = ? AND template_id > ?))');
+      bindings.push(cursor.name, cursor.name, cursor.templateId);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM catalog_templates ${where}
+      ORDER BY name, template_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      templates: page.map(templateFromRow),
+      nextCursor: hasMore ? encodeCatalogCursor(last.name, last.template_id) : null,
+    });
   }
 
   if (request.method === 'GET' && route.length === 2) {
@@ -288,20 +308,30 @@ async function handleCatalog(request, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-async function handleLandletVersions(request, db, route) {
+async function handleLandletVersions(request, db, route, url) {
   const landletId = route[1];
 
   if (request.method === 'GET' && route.length === 3) {
     await requireLandlet(db, landletId);
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeVersionCursor(url.searchParams.get('cursor'));
+    const cursorCondition = cursor === null ? '' : 'AND v.version_number < ?';
+    const bindings = cursor === null ? [landletId, limit + 1] : [landletId, cursor, limit + 1];
     const { results } = await db.prepare(`
       SELECT v.*, COUNT(i.source_instance_id) AS instance_count
       FROM landlet_versions v
       LEFT JOIN version_instances i ON i.version_id = v.version_id
-      WHERE v.landlet_id = ?
+      WHERE v.landlet_id = ? ${cursorCondition}
       GROUP BY v.version_id
       ORDER BY v.version_number DESC
-    `).bind(landletId).all();
-    return json({ versions: results.map(versionFromRow) });
+      LIMIT ?
+    `).bind(...bindings).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    return json({
+      versions: page.map(versionFromRow),
+      nextCursor: hasMore ? encodeVersionCursor(page.at(-1).version_number) : null,
+    });
   }
 
   if (request.method === 'POST' && route.length === 3) {
@@ -377,7 +407,7 @@ async function getVersion(db, landletId, versionId) {
 
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
-    return handleLandletVersions(request, db, route);
+    return handleLandletVersions(request, db, route, url);
   }
 
   if (route.length === 3 && route[2] === 'draft') {
@@ -411,21 +441,41 @@ async function handleLandlets(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 1) {
     const status = url.searchParams.get('status');
-    const ownerBuilderId = url.searchParams.get('ownerBuilderId');
-    let statement;
-
-    if (status && ownerBuilderId) {
-      statement = db.prepare('SELECT * FROM landlets WHERE status = ? AND owner_builder_id = ? ORDER BY created_at').bind(status, ownerBuilderId);
-    } else if (status) {
-      statement = db.prepare('SELECT * FROM landlets WHERE status = ? ORDER BY created_at').bind(status);
-    } else if (ownerBuilderId) {
-      statement = db.prepare('SELECT * FROM landlets WHERE owner_builder_id = ? ORDER BY created_at').bind(ownerBuilderId);
-    } else {
-      statement = db.prepare('SELECT * FROM landlets ORDER BY created_at');
+    const ownerBuilderIdParam = url.searchParams.get('ownerBuilderId');
+    if (status !== null && !['greenbelt', 'claimed', 'generating'].includes(status)) {
+      throw new HttpError('status must be greenbelt, claimed, or generating', 400);
     }
-
-    const { results } = await statement.all();
-    return json({ landlets: results.map(landletFromRow) });
+    const ownerBuilderId = ownerBuilderIdParam === null
+      ? null
+      : stringValue(ownerBuilderIdParam, 'ownerBuilderId');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (status) {
+      conditions.push('status = ?');
+      bindings.push(status);
+    }
+    if (ownerBuilderId) {
+      conditions.push('owner_builder_id = ?');
+      bindings.push(ownerBuilderId);
+    }
+    if (cursor) {
+      conditions.push('(created_at > ? OR (created_at = ? AND landlet_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM landlets ${where}
+      ORDER BY created_at, landlet_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      landlets: page.map(landletFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.landlet_id) : null,
+    });
   }
 
   if (request.method === 'GET' && route.length === 2) {
@@ -463,9 +513,10 @@ async function handleLandlets(request, db, route, url) {
     const landlet = validateLandlet(input, crypto.randomUUID());
     await db.prepare(`
       INSERT INTO landlets
-        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class, polygon_json, generated_at, claimable_at, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(...landletParams(landlet)).run();
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
+         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet))).run();
     return json({ landlet }, 201);
   }
 
@@ -478,9 +529,15 @@ async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
+          max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ?
-    `).bind(landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), route[1]).run();
+    `).bind(
+      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
+      landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
+      landlet.claimableAt, JSON.stringify(landlet.metadata),
+      landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
+    ).run();
     return json({ landlet });
   }
 
@@ -607,6 +664,64 @@ async function handleLandCandidates(request, db, route, url) {
     return row ? json({ candidate: candidateFromRow(row) }) : json({ error: 'Land candidate not found' }, 404);
   }
 
+  if (request.method === 'DELETE' && route.length === 2) {
+    const result = await db.prepare(`
+      DELETE FROM landlet_candidates
+      WHERE landlet_id = ? AND materialized_at IS NULL
+    `).bind(route[1]).run();
+    if (result.meta.changes > 0) return json({ deleted: true });
+
+    const existing = await db.prepare(`
+      SELECT materialized_at FROM landlet_candidates WHERE landlet_id = ?
+    `).bind(route[1]).first();
+    if (!existing) throw new HttpError('Land candidate not found', 404);
+    throw new HttpError('Materialized land candidates cannot be deleted', 409);
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    const existing = await db.prepare(`
+      SELECT * FROM landlet_candidates WHERE landlet_id = ?
+    `).bind(route[1]).first();
+    if (!existing) throw new HttpError('Land candidate not found', 404);
+    if (existing.materialized_at) throw new HttpError('Materialized land candidates cannot be updated', 409);
+
+    const input = await readJson(request);
+    const candidate = candidateFromRow(existing);
+    const landlet = validateLandlet({
+      ...candidate,
+      ...input,
+      landletId: route[1],
+      status: 'generating',
+      ownerBuilderId: null,
+    }, route[1]);
+    const row = candidateRowFromLandlet(landlet);
+    const update = db.prepare(`
+      UPDATE landlet_candidates
+      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, land_class = ?,
+          polygon_json = ?, metadata_json = ?, min_world_radius_m = ?
+      WHERE landlet_id = ? AND materialized_at IS NULL
+    `).bind(
+      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass,
+      JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
+      landletMinWorldRadius(row), route[1],
+    );
+    const settings = await getWorldSettings(db);
+    const started = landletMinWorldRadius(row) <= settings.radius_m;
+    const results = await db.batch([
+      update,
+      ...(started ? candidateMaterializationStatements(db, [row]) : []),
+    ]);
+    if (results[0].meta.changes === 0) throw new HttpError('Land candidate started generation during update', 409);
+    const updated = await db.prepare(`
+      SELECT * FROM landlet_candidates WHERE landlet_id = ?
+    `).bind(route[1]).first();
+    const materialized = started ? await requireLandlet(db, route[1]) : null;
+    return json({
+      candidate: candidateFromRow(updated),
+      landlet: materialized ? landletFromRow(materialized) : null,
+    });
+  }
+
   if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
@@ -677,9 +792,13 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, land_class, polygon_json, metadata_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class, row.polygon_json, row.metadata_json);
+      (landlet_id, name, area_m2, center_x_m, center_y_m, land_class, polygon_json, metadata_json,
+       min_world_radius_m)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
+    row.polygon_json, row.metadata_json, landletMinWorldRadius(row),
+  );
 }
 
 async function handleWorld(request, db, route) {
@@ -700,9 +819,16 @@ async function handleWorld(request, db, route) {
 
     const previousRadiusM = settings.radius_m;
     const newRadiusM = previousRadiusM + settings.expansion_increment_m;
-    const { results } = await db.prepare("SELECT * FROM landlets WHERE status = 'generating' AND generated_at IS NOT NULL").all();
+    const { results } = await db.prepare(`
+      SELECT * FROM landlets
+      WHERE status = 'generating' AND generated_at IS NOT NULL
+        AND (max_world_radius_m IS NULL OR max_world_radius_m <= ?)
+    `).bind(newRadiusM).all();
     const enclosed = results.filter((row) => landletMaxWorldRadius(row) <= newRadiusM);
-    const pending = await db.prepare('SELECT * FROM landlet_candidates WHERE materialized_at IS NULL').all();
+    const pending = await db.prepare(`
+      SELECT * FROM landlet_candidates
+      WHERE materialized_at IS NULL AND min_world_radius_m <= ?
+    `).bind(newRadiusM).all();
     const overlapping = pending.results.filter((row) => landletMinWorldRadius(row) <= newRadiusM);
     await db.batch([
       db.prepare(`
@@ -772,9 +898,12 @@ function candidateMaterializationStatements(db, candidates) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
-         polygon_json, generated_at, claimable_at, metadata_json)
-      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, NULL, NULL, ?)
-    `).bind(row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class, row.polygon_json, row.metadata_json),
+         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, NULL, NULL, ?, ?)
+    `).bind(
+      row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
+      row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
+    ),
     db.prepare(`
       UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND materialized_at IS NULL
@@ -797,9 +926,28 @@ async function explainClaimConflict(db, landletId, builderId) {
 
 async function handleInstances(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const landletId = url.searchParams.get('landletId') || 'starter-landlet';
-    const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
-    return json({ instances: results.map(instanceFromRow) });
+    const landletIdParam = url.searchParams.get('landletId');
+    const landletId = landletIdParam === null ? 'starter-landlet' : stringValue(landletIdParam, 'landletId');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const cursorCondition = cursor
+      ? 'AND (created_at > ? OR (created_at = ? AND instance_id > ?))'
+      : '';
+    const bindings = cursor
+      ? [landletId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1]
+      : [landletId, limit + 1];
+    const { results } = await db.prepare(`
+      SELECT * FROM placed_instances
+      WHERE landlet_id = ? ${cursorCondition}
+      ORDER BY created_at, instance_id LIMIT ?
+    `).bind(...bindings).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      instances: page.map(instanceFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.instance_id) : null,
+    });
   }
 
   if (request.method === 'GET' && route.length === 2) {
@@ -1180,6 +1328,42 @@ function decodeCursor(value) {
     if (!Array.isArray(decoded) || decoded.length !== 2 ||
         typeof decoded[0] !== 'string' || typeof decoded[1] !== 'string') throw new Error();
     return { createdAt: decoded[0], id: decoded[1] };
+  } catch {
+    throw new HttpError('cursor is invalid', 400);
+  }
+}
+
+function encodeVersionCursor(versionNumber) {
+  return btoa(String(versionNumber));
+}
+
+function decodeVersionCursor(value) {
+  if (value === null) return null;
+  try {
+    const decoded = atob(value);
+    if (!/^\d+$/.test(decoded)) throw new Error();
+    const versionNumber = Number(decoded);
+    if (!Number.isSafeInteger(versionNumber) || versionNumber <= 0) throw new Error();
+    return versionNumber;
+  } catch {
+    throw new HttpError('cursor is invalid', 400);
+  }
+}
+
+function encodeCatalogCursor(name, templateId) {
+  const bytes = new TextEncoder().encode(JSON.stringify([name, templateId]));
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function decodeCatalogCursor(value) {
+  if (value === null) return null;
+  try {
+    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(decoded) || decoded.length !== 2 ||
+        typeof decoded[0] !== 'string' || decoded[0] === '' ||
+        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
+    return { name: decoded[0], templateId: decoded[1] };
   } catch {
     throw new HttpError('cursor is invalid', 400);
   }
