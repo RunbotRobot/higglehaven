@@ -1513,28 +1513,6 @@ function updateTargetTween(now) {
   if (t >= 1) targetTween.active = false;
 }
 
-// With nothing selected, getSelectionPivot() has nothing to offer, so a
-// rotate gesture used to spin around whatever controls.target already
-// happened to be — often wherever a previous selection or dolly left it,
-// unrelated to whatever's actually on screen now. That read as "glitchy and
-// unpredictable". Raycasting from the gesture's own starting point fixed
-// the "unrelated to what's on screen" half of that, but introduced a new
-// annoyance: the view would nudge itself toward wherever a finger happened
-// to land, which felt like the camera recentering on its own rather than
-// responding to the rotate itself. Raycasting straight out from the middle
-// of the screen instead settles onto whatever the camera is already
-// framing — consistent regardless of where on the screen the gesture
-// happens to start.
-const SCREEN_CENTER_NDC = new THREE.Vector2(0, 0);
-function guessPivotAtScreenCenter() {
-  raycaster.setFromCamera(SCREEN_CENTER_NDC, camera);
-  const productHits = raycaster.intersectObjects(productMeshes, true);
-  if (productHits.length > 0) return productHits[0].point;
-  const groundHits = raycaster.intersectObject(landlet);
-  if (groundHits.length > 0) return groundHits[0].point;
-  return null;
-}
-
 controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
@@ -1556,7 +1534,16 @@ controls.addEventListener('change', () => {
         : 0;
       if (moved > CLICK_DRAG_THRESHOLD_PX) {
         pendingGestureCheck = false;
-        const pivot = getSelectionPivot() ?? guessPivotAtScreenCenter();
+        // With nothing selected there's nothing to recenter onto — two
+        // earlier attempts at guessing a stand-in pivot (raycasting from the
+        // gesture's start point, then from the screen's center) each fixed
+        // one complaint but introduced another: a visible jump right as the
+        // rotate began, since whatever the raycast hit rarely matched
+        // wherever controls.target already was. Orbiting around the
+        // existing target — the same target panning already set, unchanged
+        // by rotating — is what a plain rotate is expected to feel like:
+        // no shift at all.
+        const pivot = getSelectionPivot();
         if (pivot) beginTargetTween(pivot);
       }
     }
