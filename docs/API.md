@@ -297,8 +297,25 @@ pieces are needed.
 
 ### `GET /api/land-candidates`
 
-Lists all candidates. `materializedAt` is null while a candidate is waiting and
-is set once its landlet begins generating.
+Lists candidates in stable creation order. `materializedAt` is null while a
+candidate is waiting and is set once its landlet begins generating.
+
+Optional query parameters:
+
+- `state`: filters to `pending` candidates that have not started generation or
+  `materialized` candidates whose landlets are generating.
+- `limit`: page size from 1 to 100; defaults to 100.
+- `cursor`: opaque `nextCursor` value from the preceding page.
+
+The response includes `nextCursor`, which is `null` after the final page. Keep
+the same `state` filter while following a cursor.
+
+```json
+{
+  "candidates": [],
+  "nextCursor": null
+}
+```
 
 ### `GET /api/land-candidates/:landletId`
 

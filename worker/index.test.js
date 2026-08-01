@@ -489,6 +489,46 @@ describe('Worker API', () => {
     expect(rolledBack.response.status).toBe(404);
   });
 
+  it('filters and cursor-paginates the candidate generation queue', async () => {
+    await api('/land-candidates/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'page-inside', name: 'Page inside', areaM2: 4, center: { x: 0, y: 0 } },
+          { landletId: 'page-outside-a', name: 'Page outside A', areaM2: 4, center: { x: 100, y: 0 } },
+          { landletId: 'page-outside-b', name: 'Page outside B', areaM2: 4, center: { x: 110, y: 0 } },
+        ],
+      }),
+    });
+
+    const materialized = await api('/land-candidates?state=materialized');
+    expect(materialized.body.candidates.map(({ landletId }) => landletId)).toContain('page-inside');
+    expect(materialized.body.candidates.every(({ materializedAt }) => materializedAt !== null)).toBe(true);
+    expect(materialized.body.nextCursor).toBeNull();
+
+    const pendingIds = [];
+    let cursor = null;
+    do {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await api(`/land-candidates?state=pending&limit=1${suffix}`);
+      expect(page.body.candidates).toHaveLength(1);
+      expect(page.body.candidates[0].materializedAt).toBeNull();
+      pendingIds.push(page.body.candidates[0].landletId);
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(new Set(pendingIds).size).toBe(pendingIds.length);
+    expect(pendingIds).toEqual(expect.arrayContaining(['page-outside-a', 'page-outside-b']));
+
+    const badState = await api('/land-candidates?state=waiting');
+    expect(badState.response.status).toBe(400);
+    expect(badState.body).toEqual({ error: 'state must be pending or materialized' });
+    const badLimit = await api('/land-candidates?limit=101');
+    expect(badLimit.response.status).toBe(400);
+    const badCursor = await api('/land-candidates?cursor=not-base64');
+    expect(badCursor.response.status).toBe(400);
+    expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
   it('expands the world by one increment and promotes enclosed landlets', async () => {
     const candidate = await api('/landlets', {
       method: 'POST',
