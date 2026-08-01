@@ -152,6 +152,23 @@
       #gizmo-mode-controls.visible {
         display: flex;
       }
+      /* Below ~480px, the gap between the wordmark and the undo/redo panel
+         (both anchored to the same top row) is narrower than product-info's
+         own centered text — no amount of shrinking the neighbors avoids the
+         overlap, since undo/redo alone is wider than the gap on either side
+         of a centered box that size. product-info (and the gizmo-mode-
+         controls row that follows it) drop to their own row below both
+         corner panels instead. Placed after the rules it overrides, not
+         inside the wordmark-shrink media query above, so the cascade's
+         source-order tiebreak doesn't let the unconditional base rule win. */
+      @media (max-width: 480px) {
+        #product-info {
+          top: 52px;
+        }
+        #gizmo-mode-controls {
+          top: 104px;
+        }
+      }
       #gizmo-mode-controls button {
         padding: 8px 16px;
         border-radius: 999px;
@@ -159,10 +176,19 @@
         background: rgb(var(--pill-rgb) / 0.5);
         color: rgba(255, 255, 255, 0.8);
         font: 14px/1.4 sans-serif;
+        transition: transform 100ms ease, filter 100ms ease;
       }
       #gizmo-mode-controls button.active {
         background: var(--brand-green);
         color: #16240a;
+      }
+      /* Tactile press feedback (Copy button) — a brief scale/brighten flash
+         rather than swapping the label, so it reads as "the tap landed" the
+         same way a physical button's own travel would, instead of looking
+         like the button changed what it does. */
+      #gizmo-mode-controls button.pressed {
+        transform: scale(0.92);
+        filter: brightness(1.4);
       }
       #delete-item {
         background: rgba(140, 20, 20, 0.55);

@@ -1012,6 +1012,7 @@ const selectionOutlines = new Map(); // mesh -> { helper: THREE.BoxHelper, fill:
 // against the item's own surface, which a same-size box would sit flush
 // against.
 const SELECTION_FILL_PADDING = 1.04;
+const SELECTION_FILL_OPACITY = 0.45;
 const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
@@ -1025,7 +1026,7 @@ function addSelectionOutline(mesh) {
   const fillMaterial = new THREE.MeshBasicMaterial({
     color: SELECTION_OUTLINE_COLOR,
     transparent: true,
-    opacity: 0.25,
+    opacity: SELECTION_FILL_OPACITY,
     depthWrite: false,
   });
   const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
@@ -1181,12 +1182,12 @@ function copySelection() {
   const count = meshes.length;
   productInfoEl.textContent = `Copied ${count} item${count === 1 ? '' : 's'}`;
   // The status text above is easy to miss since it's well away from the
-  // button itself — flashing the button's own label (same pattern as the
-  // camera-debug Copy button) gives feedback right where the tap happened.
-  copyBtn.textContent = 'Copied!';
-  setTimeout(() => {
-    copyBtn.textContent = 'Copy';
-  }, 1200);
+  // button itself — a brief press flash (see .pressed in index.html) gives
+  // feedback right where the tap happened, the same way a physical button's
+  // own travel would, rather than swapping the label to "Copied!" (which
+  // reads more like the button now does something different).
+  copyBtn.classList.add('pressed');
+  setTimeout(() => copyBtn.classList.remove('pressed'), 150);
   setTimeout(updateSelectionUI, 1200);
 }
 copyBtn.addEventListener('click', copySelection);
@@ -1199,6 +1200,13 @@ let pendingPlacement = null;
 
 function enterPlacementMode(pending, statusText) {
   clearSelection();
+  // Multi-select repurposes a one-finger drag into a selection swipe (see
+  // the swipe-select handlers below) instead of orbiting the camera —
+  // useful while building a selection, but there's nothing left to select
+  // during placement (the pending items are already captured), so leaving
+  // it on would just strand the builder without the ability to rotate the
+  // view while lining up where to place/paste.
+  exitMultiSelectMode();
   modeControlsEl.classList.remove('visible');
   translateControls.detach();
   rotateControls.detach();
