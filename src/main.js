@@ -1179,6 +1179,11 @@ function copySelection() {
     rotationZ: mesh.rotation.z,
   }));
   pasteBtn.disabled = false;
+  // There's nothing left to multi-select once the copy is captured, and
+  // multi-select repurposes a one-finger drag into a selection swipe —
+  // leaving it on would strand the builder without the ability to rotate
+  // the camera while navigating to a spot to paste.
+  exitMultiSelectMode();
   const count = meshes.length;
   productInfoEl.textContent = `Copied ${count} item${count === 1 ? '' : 's'}`;
   // The status text above is easy to miss since it's well away from the

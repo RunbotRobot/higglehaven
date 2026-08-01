@@ -176,19 +176,21 @@
         background: rgb(var(--pill-rgb) / 0.5);
         color: rgba(255, 255, 255, 0.8);
         font: 14px/1.4 sans-serif;
-        transition: transform 100ms ease, filter 100ms ease;
+        transition: transform 100ms ease, background-color 100ms ease, color 100ms ease;
       }
       #gizmo-mode-controls button.active {
         background: var(--brand-green);
         color: #16240a;
       }
-      /* Tactile press feedback (Copy button) — a brief scale/brighten flash
-         rather than swapping the label, so it reads as "the tap landed" the
-         same way a physical button's own travel would, instead of looking
-         like the button changed what it does. */
+      /* Tactile press feedback (Copy button) — the button's own pill
+         background flashes to the brand color and back, the same surface
+         a physical button's own material would visibly depress into,
+         rather than an opacity/filter overlay sitting on top of it or a
+         label swap that reads like the button now does something else. */
       #gizmo-mode-controls button.pressed {
         transform: scale(0.92);
-        filter: brightness(1.4);
+        background: var(--brand-green);
+        color: #16240a;
       }
       #delete-item {
         background: rgba(140, 20, 20, 0.55);
