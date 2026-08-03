@@ -1152,14 +1152,14 @@ multiSelectBtn.addEventListener('click', () => {
   // is on (see the swipe-select handlers below) instead of orbiting the
   // camera — two-finger pan/pinch-zoom are untouched.
   controls.enableRotate = !multiSelectMode;
-  // Turning multi-select ON still clears first — starting a new selection
-  // shouldn't silently inherit whatever was selected under single-select,
-  // where a tap that looks like "select" could actually be a toggle-off of
-  // a mesh selected from before. Turning it OFF must NOT clear: that's the
-  // hand-off into Move/Rotate, which act on whatever was already selected
-  // (see modeMoveBtn/modeRotateBtn and updateSelectionUI's multiSelectMode
+  // Whatever's already selected carries into (and out of) multi-select
+  // rather than being cleared — toggling multi-select on with an item
+  // already selected (from a single tap) lets the builder immediately
+  // start adding more to it instead of losing that first item and having
+  // to reselect it. Symmetric with Move/Rotate's own hand-off, which acts
+  // on whatever was already selected when leaving multi-select (see
+  // modeMoveBtn/modeRotateBtn and updateSelectionUI's multiSelectMode
   // branch, which is what actually hides the gizmo while this is true).
-  if (multiSelectMode) clearSelection();
   updateSelectionUI();
 });
 
