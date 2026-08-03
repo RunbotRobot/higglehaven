@@ -49,8 +49,18 @@ describe('Worker API', () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
-    expect(body).toMatchObject({ sourceName: 'chair.glb', sizeBytes: 24 });
-    expect(body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f-]+\.glb$/);
+    expect(body).toMatchObject({ sourceName: 'chair.glb', sizeBytes: 24, deduplicated: false });
+    expect(body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f]{64}\.glb$/);
+
+    const duplicateForm = new FormData();
+    duplicateForm.set('file', glbFile());
+    const duplicate = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: duplicateForm });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({
+      modelUrl: body.modelUrl,
+      sizeBytes: 24,
+      deduplicated: true,
+    });
 
     const uploaded = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`);
     expect(uploaded.status).toBe(200);
@@ -71,7 +81,124 @@ describe('Worker API', () => {
 
     const rejected = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`, { method: 'POST' });
     expect(rejected.status).toBe(405);
-    expect(rejected.headers.get('allow')).toBe('GET, HEAD');
+    expect(rejected.headers.get('allow')).toBe('GET, HEAD, DELETE');
+  });
+
+  it('deletes only unreferenced uploaded models', async () => {
+    const missingModel = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'missing-upload-test',
+        name: 'Missing upload test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelUrl: '/uploads/models/missing.glb',
+      }),
+    });
+    expect(missingModel.response.status).toBe(400);
+    expect(missingModel.body).toEqual({ error: 'modelUrl does not reference an existing uploaded model' });
+
+    const form = new FormData();
+    form.set('file', glbFile());
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const uploaded = await upload.json();
+    const listing = await api('/models?limit=100');
+    expect(listing.response.status).toBe(200);
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl: uploaded.modelUrl,
+      sizeBytes: uploaded.sizeBytes,
+      referencedByTemplateIds: [],
+      deletable: true,
+    }));
+    expect(listing.body.nextCursor).toBeNull();
+    expect((await api('/models?limit=101')).response.status).toBe(400);
+    expect((await api('/models?cursor=')).response.status).toBe(400);
+    const storage = await api('/models/storage');
+    expect(storage.response.status).toBe(200);
+    expect(storage.body).toMatchObject({
+      capBytes: 8 * 1024 * 1024 * 1024,
+      availableBytes: 8 * 1024 * 1024 * 1024 - storage.body.usedBytes,
+    });
+    expect(storage.body.objectCount).toBe(listing.body.models.length);
+    expect(storage.body.usedBytes).toBe(listing.body.models.reduce((sum, model) => sum + model.sizeBytes, 0));
+    expect(storage.body.utilizationRatio).toBe(storage.body.usedBytes / storage.body.capBytes);
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'uploaded-delete-test',
+        name: 'Uploaded delete test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelUrl: uploaded.modelUrl,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    const invalidUpdate = await api('/catalog/uploaded-delete-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ modelUrl: '/uploads/models/missing.glb' }),
+    });
+    expect(invalidUpdate.response.status).toBe(400);
+    expect((await api('/catalog/uploaded-delete-test')).body.template.modelUrl).toBe(uploaded.modelUrl);
+
+    const referencedListing = await api('/models');
+    expect(referencedListing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl: uploaded.modelUrl,
+      referencedByTemplateIds: ['uploaded-delete-test'],
+      deletable: false,
+    }));
+
+    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    expect(referenced.status).toBe(409);
+    expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced by a catalog template' });
+
+    expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
+    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ deleted: true });
+    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
+    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
+    const afterRemoval = await api('/models');
+    expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
+    const storageAfterRemoval = await api('/models/storage');
+    expect(storageAfterRemoval.body.usedBytes).toBe(storage.body.usedBytes - uploaded.sizeBytes);
+    expect(storageAfterRemoval.body.objectCount).toBe(storage.body.objectCount - 1);
+
+    const orphanForm = new FormData();
+    orphanForm.set('file', glbFile({ json: '{"orphan":true}' }));
+    const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
+    const orphan = await orphanUpload.json();
+    const preview = await api('/models/cleanup', {
+      method: 'POST',
+      body: JSON.stringify({ maxDeletes: 1, dryRun: true }),
+    });
+    expect(preview.response.status).toBe(200);
+    expect(preview.body).toEqual({
+      targetModelUrls: [orphan.modelUrl],
+      targetCount: 1,
+      reclaimedBytes: orphan.sizeBytes,
+      completeScan: true,
+      dryRun: true,
+    });
+    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
+    const cleanup = await api('/models/cleanup', {
+      method: 'POST',
+      body: JSON.stringify({ maxDeletes: 1 }),
+    });
+    expect(cleanup.response.status).toBe(200);
+    expect(cleanup.body).toEqual({
+      targetModelUrls: [orphan.modelUrl],
+      targetCount: 1,
+      reclaimedBytes: orphan.sizeBytes,
+      completeScan: true,
+      dryRun: false,
+    });
+    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
+    expect((await api('/models/cleanup', {
+      method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
+    })).response.status).toBe(400);
+    expect((await api('/models/cleanup', {
+      method: 'POST', body: JSON.stringify({ dryRun: 'yes' }),
+    })).response.status).toBe(400);
   });
 
   it('rejects invalid uploaded-model paths', async () => {
@@ -120,10 +247,10 @@ describe('Worker API', () => {
   });
 
   it('filters and cursor-paginates catalog templates in stable name order', async () => {
-    for (const [templateId, name] of [
-      ['catalog-page-b', 'Catalog same name'],
-      ['catalog-page-a', 'Catalog same name'],
-      ['catalog-page-c', 'Catalog trailing name'],
+    for (const [templateId, name, subcategory, sellerId, priceCents, color, dimensions] of [
+      ['catalog-page-b', 'Catalog same name', 'seating', 'seller-b', 200, '#123456', { width: 1, depth: 1, height: 1 }],
+      ['catalog-page-a', 'Catalog same name', 'seating', 'seller-a', 100, '#123456', { width: 1, depth: 1, height: 1 }],
+      ['catalog-page-c', 'Catalog trailing name', 'lighting', 'seller-a', 300, '#abcdef', { width: 3, depth: 2, height: 4 }],
     ]) {
       const created = await api('/catalog', {
         method: 'POST',
@@ -131,8 +258,11 @@ describe('Worker API', () => {
           templateId,
           name,
           category: 'pagination-test',
-          color: '#123456',
-          dimensions: { width: 1, depth: 1, height: 1 },
+          subcategory,
+          sellerId,
+          priceCents,
+          color,
+          dimensions,
         }),
       });
       expect(created.response.status).toBe(201);
@@ -150,13 +280,163 @@ describe('Worker API', () => {
     } while (cursor);
     expect(templateIds).toEqual(['catalog-page-a', 'catalog-page-b', 'catalog-page-c']);
 
+    const subcategory = await api('/catalog?category=pagination-test&subcategory=seating');
+    expect(subcategory.response.status).toBe(200);
+    expect(subcategory.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-a', 'catalog-page-b',
+    ]);
+    const seller = await api('/catalog?category=pagination-test&sellerId=seller-a');
+    expect(seller.response.status).toBe(200);
+    expect(seller.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-a', 'catalog-page-c',
+    ]);
+    const colored = await api('/catalog?category=pagination-test&color=%23123456');
+    expect(colored.response.status).toBe(200);
+    expect(colored.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-a', 'catalog-page-b',
+    ]);
+    const priced = await api('/catalog?category=pagination-test&minPriceCents=100&maxPriceCents=200');
+    expect(priced.response.status).toBe(200);
+    expect(priced.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-a', 'catalog-page-b',
+    ]);
+    const fitting = await api('/catalog?category=pagination-test&maxWidthM=2&maxDepthM=1&maxHeightM=2');
+    expect(fitting.response.status).toBe(200);
+    expect(fitting.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-a', 'catalog-page-b',
+    ]);
+    const dimensionRange = await api('/catalog?category=pagination-test&minWidthM=2&maxWidthM=4&minDepthM=1.5&minHeightM=3');
+    expect(dimensionRange.response.status).toBe(200);
+    expect(dimensionRange.body.templates.map((template) => template.templateId)).toEqual(['catalog-page-c']);
+    const ascendingPriceIds = [];
+    let priceCursor = null;
+    do {
+      const suffix = priceCursor ? `&cursor=${encodeURIComponent(priceCursor)}` : '';
+      const page = await api(`/catalog?category=pagination-test&sort=price-asc&limit=1${suffix}`);
+      ascendingPriceIds.push(page.body.templates[0].templateId);
+      priceCursor = page.body.nextCursor;
+    } while (priceCursor);
+    expect(ascendingPriceIds).toEqual(['catalog-page-a', 'catalog-page-b', 'catalog-page-c']);
+    const descending = await api('/catalog?category=pagination-test&sort=price-desc');
+    expect(descending.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-page-c', 'catalog-page-b', 'catalog-page-a',
+    ]);
+    const namePage = await api('/catalog?category=pagination-test&limit=1');
+    const mismatchedCursor = await api(
+      `/catalog?category=pagination-test&sort=price-asc&cursor=${encodeURIComponent(namePage.body.nextCursor)}`,
+    );
+    expect(mismatchedCursor.response.status).toBe(400);
+
+    const searched = await api('/catalog?q=TRAILING');
+    expect(searched.response.status).toBe(200);
+    expect(searched.body.templates.map((template) => template.templateId)).toEqual(['catalog-page-c']);
+    const noWildcardExpansion = await api('/catalog?q=%25');
+    expect(noWildcardExpansion.response.status).toBe(200);
+    expect(noWildcardExpansion.body.templates).toEqual([]);
+
     const invalidCategory = await api('/catalog?category=');
     expect(invalidCategory.response.status).toBe(400);
+    expect((await api('/catalog?subcategory=')).response.status).toBe(400);
+    expect((await api('/catalog?sellerId=')).response.status).toBe(400);
+    expect((await api('/catalog?color=')).response.status).toBe(400);
+    expect((await api('/catalog?minPriceCents=-1')).response.status).toBe(400);
+    expect((await api('/catalog?maxPriceCents=1.5')).response.status).toBe(400);
+    expect((await api('/catalog?minPriceCents=2&maxPriceCents=1')).response.status).toBe(400);
+    expect((await api('/catalog?maxWidthM=0')).response.status).toBe(400);
+    expect((await api('/catalog?maxDepthM=nope')).response.status).toBe(400);
+    expect((await api('/catalog?minWidthM=3&maxWidthM=2')).response.status).toBe(400);
+    expect((await api('/catalog?minHeightM=-1')).response.status).toBe(400);
+    expect((await api('/catalog?sort=popular')).response.status).toBe(400);
     const invalidLimit = await api('/catalog?limit=101');
     expect(invalidLimit.response.status).toBe(400);
     const invalidCursor = await api('/catalog?cursor=invalid');
     expect(invalidCursor.response.status).toBe(400);
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+    expect((await api('/catalog?q=')).response.status).toBe(400);
+    expect((await api(`/catalog?q=${'a'.repeat(101)}`)).response.status).toBe(400);
+  });
+
+  it('atomically creates catalog template batches', async () => {
+    const created = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: ['a', 'b'].map((suffix) => ({
+          templateId: `catalog-batch-${suffix}`,
+          name: `Catalog batch ${suffix}`,
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        })),
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-batch-a', 'catalog-batch-b',
+    ]);
+
+    const conflict = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [
+          { templateId: 'catalog-batch-rolled-back', name: 'Rollback', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+          { templateId: 'placeholder-chair', name: 'Conflict', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+        ],
+      }),
+    });
+    expect(conflict.response.status).toBe(409);
+    expect((await api('/catalog/catalog-batch-rolled-back')).response.status).toBe(404);
+
+    const replaced = await api('/catalog/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        { templateId: 'catalog-batch-a', name: 'Catalog batch A replaced', color: '#abcdef', dimensions: { width: 2, depth: 2, height: 2 } },
+        { templateId: 'catalog-batch-c', name: 'Catalog batch c', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+      ] }),
+    });
+    expect(replaced.response.status).toBe(200);
+    expect(replaced.body.templates.map((template) => template.templateId)).toEqual([
+      'catalog-batch-a', 'catalog-batch-c',
+    ]);
+    expect((await api('/catalog/catalog-batch-a')).body.template).toMatchObject({
+      name: 'Catalog batch A replaced', color: '#abcdef',
+      dimensions: { width: 2, depth: 2, height: 2 },
+    });
+
+    const reference = await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'catalog-batch-delete-reference', landletId: 'starter-landlet',
+        templateId: 'placeholder-chair', x: 0, y: 0,
+      }),
+    });
+    expect(reference.response.status).toBe(201);
+    const deleteConflict = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ templateIds: ['catalog-batch-b', 'placeholder-chair'] }),
+    });
+    expect(deleteConflict.response.status).toBe(409);
+    expect((await api('/catalog/catalog-batch-b')).response.status).toBe(200);
+    expect((await api('/instances/catalog-batch-delete-reference', { method: 'DELETE' })).response.status).toBe(200);
+    const deleted = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ templateIds: ['catalog-batch-b', 'catalog-batch-c'] }),
+    });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.deletedTemplateIds).toEqual(['catalog-batch-b', 'catalog-batch-c']);
+    expect((await api('/catalog/catalog-batch-b')).response.status).toBe(404);
+    expect((await api('/catalog/batch', {
+      method: 'DELETE', body: JSON.stringify({ templateIds: ['missing-template'] }),
+    })).response.status).toBe(404);
+
+    expect((await api('/catalog/batch', {
+      method: 'POST', body: JSON.stringify({ templates: [] }),
+    })).response.status).toBe(400);
+    expect((await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({ templates: [
+        { templateId: 'duplicate', name: 'One', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+        { templateId: 'duplicate', name: 'Two', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+      ] }),
+    })).response.status).toBe(400);
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
@@ -176,6 +456,8 @@ describe('Worker API', () => {
         }),
       });
       expect(created.response.status).toBe(201);
+      expect(created.body.instance.createdAt).toBeTruthy();
+      expect(created.body.instance.updatedAt).toBeTruthy();
     }
     await env.DB.prepare(`
       UPDATE placed_instances SET created_at = '2026-08-01T00:00:00.000Z'
@@ -194,6 +476,13 @@ describe('Worker API', () => {
     } while (cursor);
     expect(ids).toEqual(['instance-page-a', 'instance-page-b']);
 
+    const filtered = await api('/instances?landletId=instance-page-landlet&templateId=placeholder-chair');
+    expect(filtered.response.status).toBe(200);
+    expect(filtered.body.instances.map((instance) => instance.instanceId)).toEqual([
+      'instance-page-a', 'instance-page-b',
+    ]);
+    expect((await api('/instances?templateId=')).response.status).toBe(400);
+
     const invalidLandlet = await api('/instances?landletId=');
     expect(invalidLandlet.response.status).toBe(400);
     const invalidLimit = await api('/instances?limit=0');
@@ -201,6 +490,97 @@ describe('Worker API', () => {
     const invalidCursor = await api('/instances?cursor=invalid');
     expect(invalidCursor.response.status).toBe(400);
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
+  it('atomically creates bounded instance batches', async () => {
+    await createGreenbeltLandlet('instance-batch-landlet');
+    const created = await api('/instances/batch', {
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 1, y: 2 },
+        { instanceId: 'instance-batch-b', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 3, y: 4 },
+      ] }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.instances.map((instance) => instance.instanceId)).toEqual([
+      'instance-batch-a', 'instance-batch-b',
+    ]);
+    expect(created.body.instances.every((instance) => instance.createdAt && instance.updatedAt)).toBe(true);
+
+    const replaced = await api('/instances/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 10, y: 20 },
+        { instanceId: 'instance-batch-c', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 5, y: 6 },
+      ] }),
+    });
+    expect(replaced.response.status).toBe(200);
+    expect(replaced.body.instances.every((instance) => instance.createdAt && instance.updatedAt)).toBe(true);
+    expect((await api('/instances/instance-batch-a')).body.instance).toMatchObject({
+      templateId: 'placeholder-tree', x: 10, y: 20,
+    });
+    expect((await api('/instances/instance-batch-c')).response.status).toBe(200);
+
+    const missingReference = await api('/instances/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 99, y: 99 },
+        { instanceId: 'instance-batch-never-inserted', landletId: 'instance-batch-landlet', templateId: 'missing-template', x: 0, y: 0 },
+      ] }),
+    });
+    expect(missingReference.response.status).toBe(400);
+    expect((await api('/instances/instance-batch-never-inserted')).response.status).toBe(404);
+    expect((await api('/instances/instance-batch-a')).body.instance.x).toBe(10);
+
+    const conflict = await api('/instances/batch', {
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-new', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+      ] }),
+    });
+    expect(conflict.response.status).toBe(409);
+    expect((await api('/instances/instance-batch-new')).response.status).toBe(404);
+    expect((await api('/instances/batch', {
+      method: 'POST', body: JSON.stringify({ instances: [] }),
+    })).response.status).toBe(400);
+    expect((await api('/instances/batch', {
+      method: 'POST',
+      body: JSON.stringify({ instances: Array.from({ length: 101 }, (_, index) => ({
+        instanceId: `too-many-${index}`, templateId: 'placeholder-chair', x: 0, y: 0,
+      })) }),
+    })).response.status).toBe(400);
+    expect((await api('/instances/batch', {
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'duplicate-batch-id', templateId: 'placeholder-chair', x: 0, y: 0 },
+        { instanceId: 'duplicate-batch-id', templateId: 'placeholder-tree', x: 0, y: 0 },
+      ] }),
+    })).response.status).toBe(400);
+
+    const missingDelete = await api('/instances/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['instance-batch-a', 'missing-instance'] }),
+    });
+    expect(missingDelete.response.status).toBe(404);
+    expect((await api('/instances/instance-batch-a')).response.status).toBe(200);
+    const removed = await api('/instances/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['instance-batch-b', 'instance-batch-c'] }),
+    });
+    expect(removed.response.status).toBe(200);
+    expect(removed.body.deletedInstanceIds).toEqual(['instance-batch-b', 'instance-batch-c']);
+    expect((await api('/instances/instance-batch-b')).response.status).toBe(404);
+    expect((await api('/instances/instance-batch-c')).response.status).toBe(404);
+    expect((await api('/instances/batch', {
+      method: 'DELETE', body: JSON.stringify({ instanceIds: ['instance-batch-a', 'instance-batch-a'] }),
+    })).response.status).toBe(400);
+    expect((await api('/instances/batch', {
+      method: 'DELETE', body: JSON.stringify({ instanceIds: [] }),
+    })).response.status).toBe(400);
+    expect((await api('/instances/batch', {
+      method: 'DELETE', body: JSON.stringify({ instanceIds: Array.from({ length: 101 }, (_, index) => `delete-${index}`) }),
+    })).response.status).toBe(400);
   });
 
   it('claims an available greenbelt landlet', async () => {
@@ -615,6 +995,206 @@ describe('Worker API', () => {
     expect(missing.body).toEqual({ error: 'Land candidate not found' });
   });
 
+  it('procedurally queues an exact-area ring outside the world boundary', async () => {
+    const generated = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'generated-ring', count: 6, innerRadiusM: 200 }),
+    });
+    expect(generated.response.status).toBe(201);
+    expect(generated.body.candidates).toHaveLength(6);
+    expect(generated.body.materializedLandletIds).toEqual([]);
+    expect(generated.body.readyForGenerationCompletion).toBe(false);
+    expect(generated.body.outerRadiusM).toBeGreaterThan(200);
+    expect(generated.body.candidates[0]).toMatchObject({
+      landletId: 'generated-ring-001',
+      areaM2: 1000,
+      landClass: 1,
+      ringId: 'generated-ring',
+      materializedAt: null,
+      metadata: { generated: true, generator: 'annular-ring-v1', ringIndex: 0 },
+    });
+
+    const listed = await api('/land-candidates/generated-ring-006');
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.candidate.materializedAt).toBeNull();
+    expect(listed.body.candidate.ringId).toBe('generated-ring');
+
+    const ringCandidates = await api('/land-candidates?ringId=generated-ring&limit=100');
+    expect(ringCandidates.response.status).toBe(200);
+    expect(ringCandidates.body.candidates).toHaveLength(6);
+    expect(ringCandidates.body.candidates.every((candidate) => candidate.ringId === 'generated-ring')).toBe(true);
+    expect((await api('/land-candidates?ringId=')).response.status).toBe(400);
+
+    const deleteMember = await api('/land-candidates/generated-ring-001', { method: 'DELETE' });
+    expect(deleteMember.response.status).toBe(409);
+    expect(deleteMember.body.error).toBe('Generated ring candidates cannot be deleted individually');
+    const updateMember = await api('/land-candidates/generated-ring-001', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Detached member' }),
+    });
+    expect(updateMember.response.status).toBe(409);
+    expect(updateMember.body.error).toBe('Generated ring candidates cannot be updated individually');
+
+    await expect(env.DB.prepare(`
+      UPDATE landlet_candidates SET center_x_m = center_x_m + 1
+      WHERE landlet_id = 'generated-ring-001'
+    `).run()).rejects.toThrow(/generated ring candidates are immutable/);
+    const lifecycleUpdate = await env.DB.prepare(`
+      UPDATE landlet_candidates SET materialized_at = materialized_at
+      WHERE landlet_id = 'generated-ring-001'
+    `).run();
+    expect(lifecycleUpdate.meta.changes).toBe(1);
+
+    const conflict = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'overlapping-ring', count: 6, innerRadiusM: 200 }),
+    });
+    expect(conflict.response.status).toBe(409);
+    expect(conflict.body.error).toBe('Generated ring would overlap existing land candidates');
+
+    const mismatchedAdjacent = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'mismatched-adjacent-ring', count: 5, innerRadiusM: generated.body.outerRadiusM }),
+    });
+    expect(mismatchedAdjacent.response.status).toBe(409);
+    expect(mismatchedAdjacent.body.error).toBe('Adjacent generated rings must use matching boundary seams');
+
+    const adjacent = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'adjacent-ring', count: 6, adjacentToRingId: 'generated-ring' }),
+    });
+    expect(adjacent.response.status).toBe(201);
+    expect(adjacent.body.innerRadiusM).toBe(generated.body.outerRadiusM);
+
+    const conflictingDerivedInput = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({
+        prefix: 'invalid-derived-ring', count: 6, adjacentToRingId: 'adjacent-ring', innerRadiusM: 300,
+      }),
+    });
+    expect(conflictingDerivedInput.response.status).toBe(400);
+    const missingAdjacent = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'missing-adjacent-ring', count: 6, adjacentToRingId: 'missing-ring' }),
+    });
+    expect(missingAdjacent.response.status).toBe(404);
+
+    const rings = await env.DB.prepare(`
+      SELECT ring_id, candidate_count FROM land_candidate_rings ORDER BY inner_radius_m
+    `).all();
+    expect(rings.results).toEqual([
+      { ring_id: 'generated-ring', candidate_count: 6 },
+      { ring_id: 'adjacent-ring', candidate_count: 6 },
+    ]);
+
+    const firstPage = await api('/land-candidate-rings?limit=1');
+    expect(firstPage.response.status).toBe(200);
+    expect(firstPage.body.rings).toHaveLength(1);
+    expect(firstPage.body.rings[0]).toMatchObject({ ringId: 'generated-ring', candidateCount: 6 });
+    expect(firstPage.body.nextCursor).not.toBeNull();
+    const secondPage = await api(`/land-candidate-rings?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`);
+    expect(secondPage.body.rings).toHaveLength(1);
+    expect(secondPage.body.rings[0].ringId).toBe('adjacent-ring');
+    expect(secondPage.body.nextCursor).toBeNull();
+    const childListing = await api('/land-candidate-rings?adjacentToRingId=generated-ring');
+    expect(childListing.response.status).toBe(200);
+    expect(childListing.body.rings.map((ring) => ring.ringId)).toEqual(['adjacent-ring']);
+    expect((await api('/land-candidate-rings?adjacentToRingId=')).response.status).toBe(400);
+
+    const fetchedRing = await api('/land-candidate-rings/adjacent-ring');
+    expect(fetchedRing.response.status).toBe(200);
+    expect(fetchedRing.body.ring.innerRadiusM).toBe(generated.body.outerRadiusM);
+    expect(fetchedRing.body.ring.adjacentToRingId).toBe('generated-ring');
+    expect(fetchedRing.body.ring.adjacentChildRingId).toBeNull();
+    expect(fetchedRing.body.ring.lifecycle).toEqual({
+      storedCandidates: 6,
+      pendingCandidates: 6,
+      materializedCandidates: 0,
+      completedLandlets: 0,
+      greenbeltLandlets: 0,
+    });
+    const fetchedParent = await api('/land-candidate-rings/generated-ring');
+    expect(fetchedParent.body.ring.adjacentChildRingId).toBe('adjacent-ring');
+    const missingRing = await api('/land-candidate-rings/missing-ring');
+    expect(missingRing.response.status).toBe(404);
+    expect((await api('/land-candidate-rings?limit=101')).response.status).toBe(400);
+    expect((await api('/land-candidate-rings?cursor=invalid')).response.status).toBe(400);
+
+    await expect(env.DB.prepare(`
+      INSERT INTO land_candidate_rings
+        (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad)
+      VALUES ('concurrent-overlap', 201, 202, 3, NULL, 0)
+    `).run()).rejects.toThrow(/generated ring radial overlap/);
+
+    await expect(env.DB.prepare(`
+      INSERT INTO land_candidate_rings
+        (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
+         boundary_signature, adjacent_to_ring_id)
+      VALUES ('bad-parent-ring', 300, 301, 3, NULL, 0, 'bad-signature', 'generated-ring')
+    `).run()).rejects.toThrow(/generated ring adjacency parent mismatch/);
+
+    const invalid = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'Bad prefix', count: 2 }),
+    });
+    expect(invalid.response.status).toBe(400);
+  });
+
+  it('generates the authoritative power-law mix on request', async () => {
+    const generated = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({
+        prefix: 'power-law-ring',
+        count: 100,
+        innerRadiusM: 500,
+        distribution: 'power-law',
+      }),
+    });
+    expect(generated.response.status).toBe(201);
+    expect(generated.body.candidates.filter((candidate) => candidate.landClass === 1)).toHaveLength(91);
+    expect(generated.body.candidates.filter((candidate) => candidate.landClass === 2)).toHaveLength(9);
+    expect(generated.body.candidates.find((candidate) => candidate.landClass === 2).areaM2).toBeGreaterThanOrEqual(1001);
+
+  });
+
+  it('completes generation for a fully materialized ring in one request', async () => {
+    const generated = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'completion-ring', count: 3 }),
+    });
+    expect(generated.response.status).toBe(201);
+    expect(generated.body.materializedLandletIds).toHaveLength(3);
+    expect(generated.body.readyForGenerationCompletion).toBe(true);
+
+    const completed = await api('/land-candidate-rings/completion-ring/generation-complete', { method: 'POST' });
+    expect(completed.response.status).toBe(200);
+    expect(completed.body.landlets).toHaveLength(3);
+    expect(completed.body.landlets.every((landlet) => landlet.generatedAt && landlet.status === 'generating')).toBe(true);
+    expect(completed.body.ring.lifecycle).toEqual({
+      storedCandidates: 3,
+      pendingCandidates: 0,
+      materializedCandidates: 3,
+      completedLandlets: 3,
+      greenbeltLandlets: 0,
+    });
+
+    const retry = await api('/land-candidate-rings/completion-ring/generation-complete', { method: 'POST' });
+    expect(retry.response.status).toBe(200);
+    expect(retry.body.landlets.map((landlet) => landlet.generatedAt)).toEqual(
+      completed.body.landlets.map((landlet) => landlet.generatedAt),
+    );
+
+    const pending = await api('/land-candidates/generate-ring', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'pending-completion-ring', count: 3, innerRadiusM: 1000 }),
+    });
+    expect(pending.response.status).toBe(201);
+    const premature = await api('/land-candidate-rings/pending-completion-ring/generation-complete', { method: 'POST' });
+    expect(premature.response.status).toBe(409);
+    const missing = await api('/land-candidate-rings/missing-completion-ring/generation-complete', { method: 'POST' });
+    expect(missing.response.status).toBe(404);
+  });
+
   it('updates only pending land candidates', async () => {
     await api('/land-candidates', {
       method: 'POST',
@@ -772,7 +1352,7 @@ describe('Worker API', () => {
     const badCursor = await api('/land-candidates?cursor=not-base64');
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
-  });
+  }, 15000);
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
     const candidate = await api('/landlets', {
@@ -854,6 +1434,7 @@ describe('Worker API', () => {
       incrementM: 10,
       promotedLandletIds: ['edge-candidate'],
       startedGeneratingLandletIds: ['queued-edge-candidate'],
+      readyRingIds: [],
     });
 
     const promoted = await api('/landlets/edge-candidate');

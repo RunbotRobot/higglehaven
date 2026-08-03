@@ -105,11 +105,26 @@ keep product discovery reads bounded as the catalog grows.
 Optional query parameters:
 
 - `category`: filters templates by exact category.
+- `subcategory`: filters templates by exact subcategory, independently or in
+  combination with `category`.
+- `sellerId`: filters templates by exact seller ID and can be combined with the
+  category, subcategory, and name-search filters.
+- `color`: filters templates by the exact stored color string.
+- `minPriceCents` / `maxPriceCents`: inclusive non-negative integer price bounds.
+  Templates without a price are excluded whenever either bound is present.
+- `minWidthM` / `maxWidthM`, `minDepthM` / `maxDepthM`, and `minHeightM` /
+  `maxHeightM`: inclusive positive dimension bounds in meters, usable together
+  to find products within a required size envelope.
+- `q`: case-insensitive literal substring search on template names, limited to
+  100 characters. SQL wildcard characters in the query are treated literally.
+- `sort`: `name` (default), `price-asc`, or `price-desc`. Price sorting excludes
+  templates without a price and uses template ID as the stable tie-breaker.
 - `limit`: page size from 1 to 100; defaults to 100.
 - `cursor`: opaque `nextCursor` value from the preceding page.
 
 The response includes `nextCursor`, which is `null` after the final page. Keep
-the same `category` filter while following a cursor.
+the same filters and `sort` mode while following a cursor; cursors are specific
+to their sort mode.
 
 Response:
 
@@ -144,6 +159,24 @@ Response:
 ### `GET /api/catalog/:templateId`
 
 Fetches one catalog template.
+
+### `POST /api/catalog/batch`
+### `PUT /api/catalog/batch`
+### `DELETE /api/catalog/batch`
+
+Atomically creates between 1 and 100 catalog templates. The request body wraps
+normal catalog-create objects under `templates`. Every template and uploaded
+model reference is validated before the D1 batch runs; duplicate IDs within the
+request return `400`, while any database conflict returns `409` and rolls back
+the entire batch. Responses return persisted templates in request order. `POST`
+is create-only and returns `201`. `PUT` atomically replaces existing IDs and
+creates missing IDs, returning `200`; it supports idempotently synchronizing a
+bounded catalog batch. Both modes avoid one D1 request per product.
+
+`DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
+before deletion; a missing ID returns `404`, and a foreign-key conflict returns
+`409` with the entire D1 batch rolled back. Success returns `deletedTemplateIds`
+in request order.
 
 ### `POST /api/catalog`
 
@@ -291,16 +324,117 @@ The response contains the updated world plus an expansion summary:
     "newRadiusM": 41.6227766017,
     "incrementM": 10,
     "promotedLandletIds": ["edge-candidate"],
-    "startedGeneratingLandletIds": ["queued-edge-candidate"]
+    "startedGeneratingLandletIds": ["queued-edge-candidate"],
+    "readyRingIds": []
   }
 }
 ```
+
+`readyRingIds` contains rings whose final pending candidate materialized during
+this expansion, so generation workers do not need to poll every ring member.
 
 ## Land candidates
 
 Land candidates are lightweight records for planned puzzle pieces outside the
 current world boundary. They avoid creating full landlet records before those
 pieces are needed.
+
+### `POST /api/land-candidates/generate-ring`
+
+Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
+The generated wedge-shaped polygons use shared sampled edges, are centered on
+their polygon centroids, and are deterministic for the same inputs. This is a
+bounded dev-only generation primitive rather than a background job: `count`
+must be between 3 and 100, and the complete ring is inserted atomically.
+
+```json
+{
+  "prefix": "north-ring",
+  "count": 12,
+  "innerRadiusM": 100,
+  "startAngleRad": 0,
+  "distribution": "power-law"
+}
+```
+
+`prefix` is required and supplies stable IDs such as `north-ring-001`.
+`innerRadiusM` defaults to the current world radius and cannot be smaller than
+it; `startAngleRad` defaults to zero. By default every candidate is a 1,000 m²
+class-1 landlet. Set `distribution` to `power-law` to apply the specification's
+authoritative class ratios: each larger class count is rounded down, leftovers
+are assigned to class 1, and larger plot sizes are drawn uniformly within their
+class. The prefix seeds those draws, making retries reproducible. Variable-area
+wedges retain shared edges and exact requested polygon areas.
+
+Candidates touching the current boundary materialize immediately. The response contains the candidates,
+`materializedLandletIds`, `readyForGenerationCompletion`, and the calculated
+inner and outer radii. The readiness flag is true when every ring candidate has
+materialized and ring-wide completion can begin. Reusing a
+prefix fails atomically with `409` rather than partially duplicating a ring.
+Generation also returns `409` when the requested annular band would overlap an
+existing land candidate. Exactly adjacent rings may share a boundary.
+Because boundaries are polygonal samples rather than mathematical arcs,
+adjacent rings must also use matching angular seams (the same fixed-size count
+and start angle). A mismatched adjacent request returns `409` instead of
+creating small geometric gaps or overlaps. Power-law rings generally require a
+non-adjacent buffer because their seeded variable sizes change those seams.
+To extend any existing ring without a buffer, set `adjacentToRingId` and keep
+`count` equal to that ring's count. The backend derives the new inner radius,
+start angle, distribution, and per-plot areas from the referenced ring, so even
+power-law boundaries match exactly. Do not send `innerRadiusM` or
+`startAngleRad` with this option. A missing adjacent ring returns `404`.
+Each accepted band is also stored as a single ring reservation. A D1 trigger
+enforces the same exclusion rule atomically, so concurrent requests cannot both
+create overlapping rings after passing their application-level preflight.
+
+## Land candidate rings
+
+### `GET /api/land-candidate-rings`
+
+Lists generated ring reservations in stable creation order. `limit` accepts 1
+to 100 and defaults to 100. Follow the opaque `nextCursor` to fetch subsequent
+pages without changing the page size requirements.
+
+Set `adjacentToRingId` to list the derived outward child of one reservation.
+Keep this filter unchanged while following `nextCursor`.
+
+Each listed ring contains `ringId`, `innerRadiusM`, `outerRadiusM`, `candidateCount`,
+`distribution`, `startAngleRad`, `adjacentToRingId`, and `createdAt`.
+`adjacentToRingId` records the parent reservation when the ring was derived via
+the adjacency option. This endpoint exposes the
+reservation rather than repeating its potentially large candidate collection;
+use the land-candidate listing to inspect individual plots.
+
+### `GET /api/land-candidate-rings/:ringId`
+
+Fetches one generated ring reservation or returns `404`. The detail response
+also includes `lifecycle` counts for stored, pending, and materialized
+candidates plus generation-complete and greenbelt landlets. These counts make
+it possible to determine whether ring-wide generation completion is ready
+without loading every candidate. The detail response additionally includes
+`adjacentChildRingId`, allowing a
+ring chain to be traversed in either direction without scanning the listing.
+Reservations are
+read-only because deleting one independently of its candidate geometry would
+make overlap protection incorrect.
+
+Generated ring candidates are likewise immutable through the individual
+candidate `PUT`, `PATCH`, and `DELETE` routes. D1 triggers also protect their
+geometry from direct writes while still allowing lifecycle fields such as
+`materializedAt` to advance normally. Generate a replacement ring under a new
+prefix instead of editing or removing one member of a reserved band.
+
+### `POST /api/land-candidate-rings/:ringId/generation-complete`
+
+Marks every materialized landlet in a generated ring complete with one bounded
+D1 update. All candidates in the ring must already be materialized; otherwise
+the endpoint returns `409` without changing any landlet. The operation is
+idempotent, preserving existing `generatedAt` timestamps on retry. Completed
+landlets remain `generating` until fully enclosed by the current world circle,
+or become greenbelt and claimable immediately when already enclosed.
+
+The response contains the ring reservation with updated lifecycle counts and
+its complete landlet array.
 
 ### `GET /api/land-candidates`
 
@@ -311,11 +445,13 @@ Optional query parameters:
 
 - `state`: filters to `pending` candidates that have not started generation or
   `materialized` candidates whose landlets are generating.
+- `ringId`: filters to candidates belonging to one procedurally generated ring.
+  Manually queued candidates have a null `ringId` in their response.
 - `limit`: page size from 1 to 100; defaults to 100.
 - `cursor`: opaque `nextCursor` value from the preceding page.
 
 The response includes `nextCursor`, which is `null` after the final page. Keep
-the same `state` filter while following a cursor.
+the same `state` and `ringId` filters while following a cursor.
 
 ```json
 {
@@ -718,11 +854,13 @@ cursor-paginated to keep draft reads bounded.
 Optional query parameters:
 
 - `landletId`: filters instances by landlet. Defaults to `starter-landlet`.
+- `templateId`: optionally filters the selected landlet to instances of one
+  exact catalog template.
 - `limit`: page size from 1 to 100; defaults to 100.
 - `cursor`: opaque `nextCursor` value from the preceding page.
 
 The response includes `nextCursor`, which is `null` after the final page. Keep
-the same `landletId` while following a cursor.
+the same `landletId` and `templateId` while following a cursor.
 
 Response:
 
@@ -751,10 +889,30 @@ Response:
 
 Fetches one placed instance.
 
+### `POST /api/instances/batch`
+### `PUT /api/instances/batch`
+### `DELETE /api/instances/batch`
+
+Atomically writes between 1 and 100 placed instances. The request body wraps
+normal instance-create objects under `instances`. Instance IDs must be unique
+within the request, and every referenced catalog template and landlet is
+validated with bounded set queries before insertion. `POST` is create-only and
+returns `201`; a duplicate stored ID returns `409`. `PUT` replaces stored IDs,
+creates missing IDs, and returns `200`, making bounded draft synchronization
+idempotent. An invalid reference returns `400`; any failure leaves the entire
+batch unchanged. Success returns the instances in request order.
+Returned instances are read back from D1, so database-managed `createdAt` and
+`updatedAt` timestamps are included just as they are on normal instance reads.
+
+`DELETE` accepts 1–100 unique IDs under `instanceIds`. Every ID is preflighted
+before deletion; a missing ID returns `404` and leaves the entire batch
+unchanged. Success returns `deletedInstanceIds` in request order.
+
 ### `POST /api/instances`
 
 Creates a placed instance. `instanceId`/`id` is optional; if omitted, the Worker
 generates one. `landletId` defaults to `starter-landlet`.
+The response is read back from D1 and includes database-managed timestamps.
 
 Request body:
 
@@ -799,7 +957,7 @@ Response:
 
 ## D1 schema overview
 
-The migrations currently create seven main backend tables:
+The migrations currently create eight main backend tables:
 
 - `catalog_templates`: placeholder product templates and minimum product
   metadata.
@@ -811,13 +969,22 @@ The migrations currently create seven main backend tables:
   shared world constants.
 - `landlet_versions`: immutable layout snapshot metadata.
 - `version_instances`: instance transforms captured within each snapshot.
-- `landlet_candidates`: lightweight planned plots awaiting first circle overlap.
+- `landlet_candidates`: lightweight planned plots awaiting first circle overlap,
+  with optional generated-ring membership.
+- `land_candidate_rings`: atomic radial reservations for procedurally generated
+  candidate bands, including boundary signatures that keep adjacent polygonal
+  rings seam-compatible and optional parent links for derived ring chains.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending
 candidate before applying the exact polygon overlap check. Candidates created
 before that migration retain a conservative zero value until updated, so they
 cannot be skipped incorrectly.
+
+Candidates also persist their maximum world-circle radius. Ring generation uses
+the indexed radial bounds to reject overlapping annular bands without scanning
+and decoding the complete candidate queue. The migration backfills this bound
+for existing polygon and polygonless candidates.
 
 Landlets likewise persist their maximum world-circle radius. Expansion uses it
 to avoid reading completed generating plots that are still too far away to be
@@ -856,16 +1023,45 @@ the built-in catalog:
   name `file`), validates it (glTF 2.0 header, declared file length, chunk
   boundaries, required JSON metadata chunk, a 20MB hard size cap,
   and a live application-level 8GB total-R2-storage cap), stores it in the
-  `MODELS` R2 bucket under a random `models/<uuid>.glb` key, and returns
-  `{ modelUrl, sourceName, sizeBytes }`. The returned `modelUrl` is then used
+  `MODELS` R2 bucket under a SHA-256 content-addressed key, and returns
+  `{ modelUrl, sourceName, sizeBytes, deduplicated }`. Re-uploading identical
+  validated bytes returns the existing immutable object with `200` and
+  `deduplicated: true`, without consuming storage headroom or repeating the
+  full storage scan. New objects return `201`. The returned `modelUrl` is then used
   as-is in a normal `POST /api/catalog` call to register the product — upload
-  and catalog registration are two independent steps.
+  and catalog registration are two independent steps. Catalog creates and
+  updates validate `/uploads/` model URLs against live R2 metadata and return
+  `400` rather than storing a reference to a missing upload. Built-in `/models/`
+  URLs and external catalog URLs are unaffected by this upload-specific check.
+- `GET /api/models` — lists uploaded R2 models without returning their bodies.
+  Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`, `deletable`,
+  and sorted `referencedByTemplateIds`. Reference metadata is resolved with one
+  bounded D1 query for the R2 page, allowing cleanup tooling to distinguish
+  safe deletions without probing each object. Listings use a
+  `limit` from 1 to 100, and return the R2-backed opaque `nextCursor` for the
+  next page. This is a dev inventory for finding uploads that can be reclaimed.
+- `GET /api/models/storage` — scans the paginated R2 metadata inventory and
+  reports `usedBytes`, `objectCount`, the application-level `capBytes`,
+  `availableBytes`, and `utilizationRatio`. This exposes the same live storage
+  accounting enforced before uploads, without downloading object bodies.
+- `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
+  (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
+  page's catalog references in one D1 query. The response reports
+  `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
+  reached the end of the bucket. Objects are collected before the bulk delete
+  so deleting them cannot invalidate an in-progress R2 cursor. Set boolean
+  `dryRun` to `true` to return the same proposed targets and reclaimed-byte
+  total without deleting anything; the response echoes `dryRun`.
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
   keys are never reused. `HEAD` is also supported for metadata-only checks, and
   matching `If-None-Match` requests receive `304 Not Modified`. Other methods
   receive `405 Method Not Allowed`.
+- `DELETE /uploads/:key` — removes an unreferenced upload from R2 so dev model
+  iterations do not permanently consume the application storage allowance.
+  Uploads still referenced by a catalog template return `409`; delete the
+  catalog template first. Missing uploads return `404`.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
@@ -897,8 +1093,7 @@ D1. Test storage does not modify the local development D1 state.
 
 ## Known gaps / future backend work
 
-- Add procedural puzzle-piece generation to populate land candidates; circle
-  overlap, atomic batch ingestion, and materialization are already handled by
-  the backend lifecycle.
+- Extend procedural generation beyond the current bounded annular-ring
+  primitive with macro-geography-aware shapes.
 - Add auth/trust/payment/account concepts only after the single-player dev
   backend is stable; they are intentionally out of scope now.
