@@ -1063,8 +1063,12 @@ function updateSelectionUI() {
   // Rotate has no group form (rotating several items around a shared pivot
   // while also spinning each one's own orientation is a much harder problem
   // than was asked for) — only Move is offered for a multi-item selection.
-  modeMoveBtn.style.display = '';
-  modeRotateBtn.style.display = count === 1 ? '' : 'none';
+  // Disabling Rotate (rather than hiding it) keeps every other button —
+  // Move, Snap, Copy, Delete — in the same position regardless of selection
+  // count; removing it from the layout entirely let the rest reflow into
+  // different left/right groupings depending on whether Rotate happened to
+  // be there.
+  modeRotateBtn.disabled = count !== 1;
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -1226,10 +1230,32 @@ function cancelPlacementMode() {
   updateSelectionUI();
 }
 
+// Anchors a paste to the current selection's location — the centroid in
+// X/Y (a single item's own position, if only one is selected), resting on
+// top of whichever selected item is tallest so the pasted group never
+// starts out embedded in one it's landing on.
+function selectionPlacementAnchor() {
+  if (selectedMeshes.size === 0) return null;
+  const meshes = [...selectedMeshes];
+  const centroid = getSelectionPivot();
+  const supportZ = Math.max(...meshes.map((mesh) => mesh.position.z + mesh.userData.template.dimensions.height / 2));
+  return { x: centroid.x, y: centroid.y, supportZ };
+}
+
 let clipboard = null;
-pasteBtn.addEventListener('click', () => {
+pasteBtn.addEventListener('click', async () => {
   if (!clipboard) return;
   catalogPickerEl.classList.remove('visible');
+  // Something's already selected — paste right there instead of making the
+  // builder tap a second time to say where, the same way pasting next to
+  // what you just copied would work in any other editor.
+  const anchor = selectionPlacementAnchor();
+  if (anchor) {
+    exitMultiSelectMode();
+    pushUndoSnapshot();
+    await placeClipboardItems(clipboard, anchor.x, anchor.y, anchor.supportZ);
+    return;
+  }
   const count = clipboard.length;
   enterPlacementMode({ type: 'clipboard', items: clipboard }, `Tap a spot to paste ${count} item${count === 1 ? '' : 's'}`);
 });
@@ -1265,6 +1291,32 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   pointerDownPos = { x: event.clientX, y: event.clientY };
 });
 
+// Spawns a copied group anchored at (x, y, supportZ) — shared by both ways
+// a paste can be anchored: tapping a spot in the world (handlePlacementClick)
+// and pasting directly at whatever's already selected (see pasteBtn above).
+// Caller is responsible for pushUndoSnapshot() beforehand, since the
+// tap-a-spot flow shares that snapshot with the template-placement branch
+// alongside it.
+async function placeClipboardItems(items, x, y, supportZ) {
+  const placed = [];
+  for (const item of items) {
+    const template = findTemplate(item.templateId);
+    if (!template) continue;
+    const mesh = await spawnInstanceAt(template, x + item.dx, y + item.dy, supportZ + item.dz, {
+      rotationX: item.rotationX,
+      rotationY: item.rotationY,
+      rotationZ: item.rotationZ,
+    });
+    if (mesh) placed.push(mesh);
+  }
+  clearSelection();
+  for (const mesh of placed) {
+    selectedMeshes.add(mesh);
+    addSelectionOutline(mesh);
+  }
+  updateSelectionUI();
+}
+
 // Places whatever's pending (a fresh catalog template, or a copied group)
 // at wherever was just tapped — the ground, or directly on top of another
 // product if that's what the raycast actually hit, so tapping a tabletop
@@ -1295,23 +1347,7 @@ async function handlePlacementClick() {
     const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
     selectOnly(mesh);
   } else {
-    const placed = [];
-    for (const item of pending.items) {
-      const template = findTemplate(item.templateId);
-      if (!template) continue;
-      const mesh = await spawnInstanceAt(template, point.x + item.dx, point.y + item.dy, supportZ + item.dz, {
-        rotationX: item.rotationX,
-        rotationY: item.rotationY,
-        rotationZ: item.rotationZ,
-      });
-      if (mesh) placed.push(mesh);
-    }
-    clearSelection();
-    for (const mesh of placed) {
-      selectedMeshes.add(mesh);
-      addSelectionOutline(mesh);
-    }
-    updateSelectionUI();
+    await placeClipboardItems(pending.items, point.x, point.y, supportZ);
   }
 }
 

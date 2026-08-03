@@ -10,9 +10,14 @@
          dark, desaturated version of the wordmark's green (rather than
          plain black) so product-info, the gizmo buttons, etc. all read as
          "this app" instead of a generic gray overlay. Space-separated RGB
-         so each usage can pick its own alpha via rgb(var(--pill-rgb) / a). */
+         (no commas) so each usage can pick its own alpha via
+         rgb(var(--pill-rgb) / a) — the modern slash-alpha syntax requires
+         space-separated channels; combining it with the legacy comma-
+         separated form is invalid CSS and silently drops the whole
+         declaration, which is exactly what a comma-separated value here did
+         everywhere it was used (every pill background in the app). */
       :root {
-        --pill-rgb: 36, 56, 20;
+        --pill-rgb: 36 56 20;
         --brand-green: #6ca42e;
       }
       html, body {
@@ -181,6 +186,14 @@
       #gizmo-mode-controls button.active {
         background: var(--brand-green);
         color: #16240a;
+      }
+      /* Rotate has no group form, so it's disabled (not hidden) for a
+         multi-item selection — hiding it entirely used to let Move, Snap,
+         Copy, and Delete reflow into different left/right positions
+         depending on whether Rotate happened to be present. Disabling
+         keeps every button in the same spot every time. */
+      #gizmo-mode-controls button:disabled {
+        opacity: 0.4;
       }
       /* Tactile press feedback (Copy button) — the button's own pill
          background flashes to the brand color and back, the same surface
