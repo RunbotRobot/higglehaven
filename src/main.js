@@ -12,7 +12,10 @@ import {
   deleteInstanceRemote,
   uploadModelFile,
   createCatalogTemplate,
+  fetchLandlets,
+  claimLandlet,
 } from './api.js';
+import { getOrCreateBuilderId } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -21,6 +24,14 @@ import { optimizeModelFile } from './modelOptimizer.js';
 // other reference to the catalog goes through this variable rather than
 // FALLBACK_CATALOG directly.
 let activeCatalog = FALLBACK_CATALOG;
+
+// There's no auth system yet — a builder is just a random ID persisted in
+// localStorage (see builderIdentity.js). currentLandletId is settled once,
+// in bootstrap() below (via the claim flow — see resolveLandletId), before
+// anything reads it; every instance created afterward is tagged with it so
+// builders only ever see and edit their own landlet's placed products.
+const builderId = getOrCreateBuilderId();
+let currentLandletId = 'starter-landlet';
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -598,6 +609,7 @@ function persistLayout() {
 function instanceFromMesh(mesh) {
   return {
     instanceId: mesh.userData.instanceId,
+    landletId: currentLandletId,
     templateId: mesh.userData.template.templateId,
     x: mesh.position.x,
     y: mesh.position.y,
@@ -1715,6 +1727,84 @@ function animate(now) {
 }
 animate(0);
 
+// Which landlet this session builds on: a builder's own claimed landlet if
+// they already have one, otherwise a modal letting them claim a fresh one
+// from whatever's currently available. Landlets start as `greenbelt`
+// (claimable) once procedurally generated and enclosed by the growing world
+// circle — see docs/API.md's world/landlet sections. If the backend is
+// unreachable, this throws and bootstrap()'s own fallback below takes over
+// before the modal is ever shown, same as it always has for catalog/instance
+// fetches — there's nothing to claim in offline/local-fallback mode.
+async function resolveLandletId() {
+  const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
+  if (owned.length > 0) return owned[0].landletId;
+  return runClaimFlow();
+}
+
+const claimModalEl = document.getElementById('claim-modal');
+const claimListEl = document.getElementById('claim-landlet-list');
+const claimStatusEl = document.getElementById('claim-status');
+const claimRefreshBtn = document.getElementById('claim-refresh-btn');
+const claimSkipBtn = document.getElementById('claim-skip-btn');
+
+function runClaimFlow() {
+  return new Promise((resolve) => {
+    claimModalEl.classList.add('visible');
+    loadAvailableLandlets(resolve);
+    claimRefreshBtn.onclick = () => loadAvailableLandlets(resolve);
+    // Dev-only escape hatch: the world may not have grown enough yet to have
+    // any greenbelt landlets at all (a fresh/local backend starts with none
+    // — see docs/API.md), and this app is never publicly deployed, so
+    // falling back to the original single shared landlet keeps the app
+    // usable rather than hard-blocking on a claim.
+    claimSkipBtn.onclick = () => {
+      claimModalEl.classList.remove('visible');
+      resolve('starter-landlet');
+    };
+  });
+}
+
+async function loadAvailableLandlets(resolve) {
+  claimStatusEl.textContent = 'Loading available landlets…';
+  claimStatusEl.classList.remove('error');
+  claimListEl.replaceChildren();
+  let available;
+  try {
+    available = await fetchLandlets({ status: 'greenbelt', limit: 20 });
+  } catch (err) {
+    claimStatusEl.textContent = err.message || 'Could not load landlets.';
+    claimStatusEl.classList.add('error');
+    return;
+  }
+  claimStatusEl.textContent = '';
+  if (available.length === 0) {
+    claimStatusEl.textContent = "No landlets are ready to claim yet — the world hasn't grown enough. Check back soon, or use the shared dev landlet below.";
+    return;
+  }
+  for (const landlet of available) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${landlet.name} (${landlet.areaM2} m²)`;
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      claimStatusEl.textContent = `Claiming ${landlet.name}…`;
+      claimStatusEl.classList.remove('error');
+      try {
+        const claimed = await claimLandlet(landlet.landletId, builderId);
+        claimModalEl.classList.remove('visible');
+        resolve(claimed.landletId);
+      } catch (err) {
+        // Someone else likely claimed it in the meantime (409) — refresh the
+        // list rather than leaving a now-stale button clickable.
+        claimStatusEl.textContent = err.message || 'Claim failed — it may have just been taken.';
+        claimStatusEl.classList.add('error');
+        loadAvailableLandlets(resolve);
+      }
+    });
+    claimListEl.appendChild(button);
+  }
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -1729,12 +1819,14 @@ animate(0);
 async function bootstrap() {
   let instances;
   try {
-    const [catalog, remoteInstances] = await Promise.all([fetchCatalog(), fetchInstances()]);
+    currentLandletId = await resolveLandletId();
+    const [catalog, remoteInstances] = await Promise.all([fetchCatalog(), fetchInstances(currentLandletId)]);
     activeCatalog = catalog;
     instances = remoteInstances;
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
+    currentLandletId = 'starter-landlet';
     // A previously-saved instance list (builder additions/removals/moves)
     // entirely replaces the starter set — not merged with it — since the
     // starter set is just a first-visit default, not content to preserve

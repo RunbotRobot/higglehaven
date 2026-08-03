@@ -346,6 +346,83 @@
       #upload-submit-btn:disabled {
         opacity: 0.5;
       }
+      /* Same modal shell as #upload-modal — shown at startup, before
+         bootstrap() has resolved a landlet to build on, whenever this
+         builder (see builderIdentity.js) doesn't already own one. */
+      #claim-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.6);
+        padding: 16px;
+      }
+      #claim-modal.visible {
+        display: flex;
+      }
+      #claim-modal-content {
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--pill-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #claim-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #claim-hint {
+        font-size: 12px;
+        color: rgb(255 255 255 / 0.65);
+      }
+      #claim-landlet-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 40vh;
+        overflow-y: auto;
+      }
+      #claim-landlet-list button {
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: none;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        text-align: left;
+      }
+      #claim-landlet-list button:disabled {
+        opacity: 0.5;
+      }
+      #claim-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #claim-status.error {
+        color: #ffb4a8;
+      }
+      #claim-modal-actions {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #claim-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+      }
     </style>
   </head>
   <body>
@@ -396,6 +473,18 @@
         <div id="upload-modal-actions">
           <button id="upload-cancel-btn" type="button">Cancel</button>
           <button id="upload-submit-btn" type="button">Add Product</button>
+        </div>
+      </div>
+    </div>
+    <div id="claim-modal">
+      <div id="claim-modal-content">
+        <h2>Claim a landlet</h2>
+        <div id="claim-hint">Pick an available plot to start building on. You can only claim one.</div>
+        <div id="claim-landlet-list"></div>
+        <div id="claim-status"></div>
+        <div id="claim-modal-actions">
+          <button id="claim-refresh-btn" type="button">Refresh</button>
+          <button id="claim-skip-btn" type="button">Use shared dev landlet</button>
         </div>
       </div>
     </div>
