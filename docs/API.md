@@ -1002,6 +1002,43 @@ Seed data includes:
 - `placeholder-chair`
 - `placeholder-tree`
 
+## Private-preview access gate
+
+Every request — pages, every `/api/*` route, `/uploads/*` — can optionally be
+gated behind a single shared passphrase, entirely at the top of the Worker's
+`fetch` handler in `worker/index.js`, before any of the routing described
+above ever runs.
+
+Configure it by setting the `ACCESS_PASSPHRASE` secret:
+
+```
+wrangler secret put ACCESS_PASSPHRASE
+```
+
+When that secret is unset (the default — local `wrangler dev`, the vitest
+suite, and any deployment that never runs the command above), the gate is
+skipped entirely and every route behaves exactly as documented elsewhere in
+this file. Setting it activates the gate on the next deploy.
+
+A visitor without a valid session sees a minimal login page (or, for
+`/api/*`/`/uploads/*` requests, a `401 {"error": "Unauthorized"}` instead of
+HTML) and must submit the passphrase via `POST /__access/login`. A correct
+submission sets an `HttpOnly`, `SameSite=Lax` cookie containing an
+HMAC-SHA256 token keyed by the passphrase itself (recomputed and compared on
+every subsequent request — nothing is stored server-side, so rotating the
+passphrase secret instantly invalidates every existing session).
+
+This is a shared-passphrase gate for "let a few people see the preview," not
+a real authentication system — everyone behind it shares one passphrase and
+one session shape, and it has no concept of the `ownerBuilderId`/builder
+identity used elsewhere in this API. See the note below: this doesn't change
+the fact that the API itself still has no per-user auth or authorization.
+
+This depends on `wrangler.jsonc`'s `assets.run_worker_first: true`. Without
+it, Cloudflare serves static files (`/`, `/assets/*`) directly from the
+`ASSETS` binding and never invokes the Worker's `fetch` handler at all, so
+the gate would never see those requests.
+
 ## Frontend integration notes
 
 - The current API already matches the frontend's Z-up placement convention via
@@ -1011,7 +1048,9 @@ Seed data includes:
 - Frontend code should treat backend persistence as the source of truth once the
   API is available, with any offline/local fallback kept intentionally separate.
 - Future auth should not be inferred from this API. All endpoints are currently
-  open by design for dev-only MVP work.
+  open by design for dev-only MVP work — the optional private-preview gate
+  above controls who can reach the API at all, but doesn't add per-user
+  identity, permissions, or ownership checks within it.
 
 ## Custom model uploads (not covered above)
 

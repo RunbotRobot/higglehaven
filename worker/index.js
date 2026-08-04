@@ -42,9 +42,119 @@ async function getStorageUsage(bucket) {
   return { usedBytes, objectCount };
 }
 
+// Private-preview gate: when ACCESS_PASSPHRASE is configured (a Worker
+// secret, never committed), every request — pages, the API, uploaded
+// assets, all of it — is blocked until a signed cookie proves the visitor
+// submitted the right passphrase. Unset (the default for local dev and the
+// test suite, which never configure it) means the gate is skipped
+// entirely, so nothing here changes behavior until a deployment actually
+// opts in. This is a shared-passphrase gate, not real per-person accounts
+// — good enough for "let a few friends see what I'm building," not a
+// substitute for real auth if this ever needs individual identities.
+const ACCESS_COOKIE_NAME = 'hh_access';
+
+async function computeAccessToken(passphrase) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(passphrase), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('higglehaven-access-granted'));
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// Not a security-critical timing defense here (this gates a handful of
+// friends, not a real adversary) — just cheap enough to use everywhere a
+// secret gets compared instead of reaching for `===` in some spots and not
+// others.
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}
+
+function parseCookies(header) {
+  const cookies = {};
+  if (!header) return cookies;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    cookies[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
+  }
+  return cookies;
+}
+
+function accessLoginPage(errorMessage) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>higglehaven</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; font: 15px/1.5 sans-serif; }
+  form { background: rgb(36 56 20 / 0.97); padding: 28px 26px; border-radius: 14px; width: 100%; max-width: 320px; box-sizing: border-box; color: #fff; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  p { margin: 0 0 18px; font-size: 13px; color: rgb(255 255 255 / 0.7); }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid rgb(255 255 255 / 0.25); background: rgb(255 255 255 / 0.1); color: #fff; font: 15px/1.4 sans-serif; margin-bottom: 12px; }
+  button { width: 100%; padding: 10px; border-radius: 999px; border: none; background: #6ca42e; color: #16240a; font: 15px/1.4 sans-serif; }
+  .error { color: #ffb4a8; font-size: 13px; margin: -6px 0 12px; }
+</style>
+</head>
+<body>
+<form method="POST" action="/__access/login">
+  <h1>higglehaven</h1>
+  <p>This is a private preview. Enter the passphrase to continue.</p>
+  ${errorMessage ? `<div class="error">${errorMessage}</div>` : ''}
+  <input type="password" name="passphrase" placeholder="Passphrase" autofocus />
+  <button type="submit">Enter</button>
+</form>
+</body>
+</html>`;
+}
+
+function htmlResponse(body, status = 200) {
+  return new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+
+// Returns a Response to short-circuit the request (unauthorized, or a
+// freshly-granted redirect), or null to let the real routing below handle
+// it — the passphrase check passed.
+async function checkAccessGate(request, url, env) {
+  if (url.pathname === '/__access/login' && request.method === 'POST') {
+    const form = await request.formData();
+    const submitted = String(form.get('passphrase') || '');
+    if (!timingSafeEqual(submitted, env.ACCESS_PASSPHRASE)) {
+      return htmlResponse(accessLoginPage('Incorrect passphrase.'), 401);
+    }
+    const token = await computeAccessToken(env.ACCESS_PASSPHRASE);
+    const cookieAttrs = [`${ACCESS_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=31536000'];
+    // Secure requires HTTPS — omitted for plain-http local dev (wrangler
+    // dev) so testing this doesn't require standing up TLS locally; real
+    // deployments are always HTTPS, so production visitors still get it.
+    if (url.protocol === 'https:') cookieAttrs.push('Secure');
+    return new Response(null, { status: 302, headers: { location: '/', 'set-cookie': cookieAttrs.join('; ') } });
+  }
+
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const token = cookies[ACCESS_COOKIE_NAME];
+  if (token && timingSafeEqual(token, await computeAccessToken(env.ACCESS_PASSPHRASE))) {
+    return null; // valid session — proceed to normal routing
+  }
+
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/uploads/')) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+  return htmlResponse(accessLoginPage(null), 401);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    if (env.ACCESS_PASSPHRASE) {
+      const gateResponse = await checkAccessGate(request, url, env);
+      if (gateResponse) return gateResponse;
+    }
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: JSON_HEADERS });
