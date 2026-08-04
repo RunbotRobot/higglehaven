@@ -15,6 +15,10 @@ import {
   fetchLandlets,
   claimLandlet,
   fetchWorld,
+  expandWorld,
+  generateLandRing,
+  fetchLandCandidateRing,
+  completeRingGeneration,
 } from './api.js';
 import { getOrCreateBuilderId } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
@@ -1762,97 +1766,205 @@ async function resolveLandletId() {
 }
 
 const claimModalEl = document.getElementById('claim-modal');
-const claimMapEl = document.getElementById('claim-map');
+const claimMapCanvas = document.getElementById('claim-map-canvas');
 const claimStatusEl = document.getElementById('claim-status');
 const claimRefreshBtn = document.getElementById('claim-refresh-btn');
 const claimSkipBtn = document.getElementById('claim-skip-btn');
+const claimGrowBtn = document.getElementById('claim-grow-btn');
 const claimSelectionNameEl = document.getElementById('claim-selection-name');
 const claimConfirmBtn = document.getElementById('claim-confirm-btn');
-const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function runClaimFlow() {
   return new Promise((resolve) => {
     claimModalEl.classList.add('visible');
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
+    claimGrowBtn.onclick = () => growTheWorld(resolve);
     // Dev-only escape hatch: the world may not have grown enough yet to have
     // any greenbelt landlets at all (a fresh/local backend starts with none
     // — see docs/API.md), and this app is never publicly deployed, so
     // falling back to the original single shared landlet keeps the app
     // usable rather than hard-blocking on a claim.
     claimSkipBtn.onclick = () => {
+      disposeClaimFlyover();
       claimModalEl.classList.remove('visible');
       resolve('starter-landlet');
     };
   });
 }
 
-// Renders every landlet as a square on an overhead map (an SVG whose
-// viewBox is set directly in world meters, centered on the origin — the
-// same X/Y ground plane the 3D scene itself uses, so a landlet's map
-// position is just its own center_x_m/center_y_m, no separate projection
-// math needed). World Y is flipped to SVG's y-down coordinate space so
-// increasing Y reads as "up" on the map, the usual map convention.
-// Tapping a plot previews it in the selection panel below regardless of
-// status; only an available (greenbelt) one enables the Claim button.
+// A self-contained Three.js scene/camera/renderer/controls for the claim
+// modal, entirely separate from the main builder scene (which hasn't loaded
+// any content yet at this point anyway) so it can be freely created and
+// torn down each time the modal opens without touching builder state.
+let claimFlyover = null;
+
+function disposeClaimFlyover() {
+  if (!claimFlyover) return;
+  cancelAnimationFrame(claimFlyover.animationHandle);
+  window.removeEventListener('resize', claimFlyover.onResize);
+  claimFlyover.controls.dispose();
+  claimFlyover.renderer.dispose();
+  for (const mesh of claimFlyover.plotMeshes) {
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  claimFlyover = null;
+}
+
+// Builds a flat THREE.Shape for a landlet: its real polygon (plot-local
+// meter offsets from its own center, per docs/API.md) when the backend has
+// generated one, or a plain square sized to its area as a fallback for
+// legacy/placeholder landlets (e.g. starter-landlet) that predate real
+// procedural generation and were never given one.
+function shapeForLandlet(landlet) {
+  const shape = new THREE.Shape();
+  if (landlet.polygon && landlet.polygon.length >= 3) {
+    shape.moveTo(landlet.polygon[0].x, landlet.polygon[0].y);
+    for (const point of landlet.polygon.slice(1)) shape.lineTo(point.x, point.y);
+    shape.closePath();
+    return shape;
+  }
+  const half = Math.sqrt(landlet.areaM2) / 2;
+  shape.moveTo(-half, -half);
+  shape.lineTo(half, -half);
+  shape.lineTo(half, half);
+  shape.lineTo(-half, half);
+  shape.closePath();
+  return shape;
+}
+
+const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
+
+// A navigable overhead flyover: an orbit-controlled camera looking down at
+// a flat rendering of the whole world circle and every landlet in it, each
+// shape/position/color drawn straight from real world data (no separate 2D
+// projection math — a landlet's plot sits at its own center_x_m/center_y_m
+// on the same X/Y ground plane the builder scene itself uses). Tapping a
+// plot previews it below regardless of status; only an available
+// (greenbelt) one enables the Claim button.
 async function loadLandletMap(resolve) {
-  claimStatusEl.textContent = 'Loading the world map…';
+  claimStatusEl.textContent = 'Loading the world…';
   claimStatusEl.classList.remove('error');
-  claimMapEl.replaceChildren();
+  claimGrowBtn.style.display = 'none';
   claimSelectionNameEl.textContent = 'No plot selected';
   claimConfirmBtn.disabled = true;
   claimConfirmBtn.onclick = null;
+  disposeClaimFlyover();
 
   let world;
   let landlets;
   try {
     [world, landlets] = await Promise.all([fetchWorld(), fetchLandlets({ limit: 100 })]);
   } catch (err) {
-    claimStatusEl.textContent = err.message || 'Could not load the world map.';
+    claimStatusEl.textContent = err.message || 'Could not load the world.';
     claimStatusEl.classList.add('error');
     return;
   }
 
   const radiusM = world.radiusM;
-  const half = radiusM * 1.15; // a little padding so edge plots aren't flush against the frame
-  claimMapEl.setAttribute('viewBox', `${-half} ${-half} ${half * 2} ${half * 2}`);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0d1a08);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+  sun.position.set(radiusM, -radiusM, radiusM * 2);
+  scene.add(sun);
 
-  const boundary = document.createElementNS(SVG_NS, 'circle');
-  boundary.setAttribute('cx', '0');
-  boundary.setAttribute('cy', '0');
-  boundary.setAttribute('r', String(radiusM));
-  boundary.setAttribute('class', 'claim-world-circle');
-  boundary.setAttribute('vector-effect', 'non-scaling-stroke');
-  claimMapEl.appendChild(boundary);
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(radiusM * 1.4, 64),
+    new THREE.MeshBasicMaterial({ color: 0x152510 }),
+  );
+  scene.add(ground);
 
+  const boundary = new THREE.Mesh(
+    new THREE.RingGeometry(radiusM * 0.99, radiusM * 1.01, 128),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
+  );
+  boundary.position.z = 0.02;
+  scene.add(boundary);
+
+  const plotMeshes = [];
   let anyAvailable = false;
   for (const landlet of landlets) {
-    const side = Math.sqrt(landlet.areaM2);
-    const statusClass = landlet.status === 'greenbelt' ? 'available' : landlet.status;
     if (landlet.status === 'greenbelt') anyAvailable = true;
-
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(landlet.center.x - side / 2));
-    rect.setAttribute('y', String(-landlet.center.y - side / 2));
-    rect.setAttribute('width', String(side));
-    rect.setAttribute('height', String(side));
-    rect.setAttribute('class', `claim-plot ${statusClass}`);
-    rect.setAttribute('vector-effect', 'non-scaling-stroke');
-    rect.dataset.landletId = landlet.landletId;
-    rect.addEventListener('click', () => {
-      for (const el of claimMapEl.querySelectorAll('.claim-plot.selected')) el.classList.remove('selected');
-      rect.classList.add('selected');
-      const statusLabel = statusClass === 'available' ? 'Available' : statusClass === 'claimed' ? 'Claimed' : 'Generating';
-      claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
-      claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
-      claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
-    });
-    claimMapEl.appendChild(rect);
+    const geometry = new THREE.ShapeGeometry(shapeForLandlet(landlet));
+    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(landlet.center.x, landlet.center.y, 0.05);
+    mesh.userData.landlet = landlet;
+    scene.add(mesh);
+    plotMeshes.push(mesh);
   }
+
+  const selectionOutline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)),
+    new THREE.LineBasicMaterial({ color: 0xffffff }),
+  );
+  selectionOutline.visible = false;
+  selectionOutline.renderOrder = 1;
+  scene.add(selectionOutline);
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, radiusM * 20);
+  camera.up.set(0, 0, 1); // Z-up, matching the builder scene's own convention
+  camera.position.set(0, -radiusM * 1.8, radiusM * 1.6);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: claimMapCanvas, antialias: true });
+  const controls = new OrbitControls(camera, claimMapCanvas);
+  controls.target.set(0, 0, 0);
+  controls.minDistance = radiusM * 0.15;
+  controls.maxDistance = radiusM * 6;
+  controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground
+  controls.update();
+
+  function onResize() {
+    const rect = claimMapCanvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    renderer.setSize(rect.width, rect.height, false);
+    camera.aspect = rect.width / rect.height;
+    camera.updateProjectionMatrix();
+  }
+  onResize();
+  window.addEventListener('resize', onResize);
+
+  const raycaster = new THREE.Raycaster();
+  const pointerNdcClaim = new THREE.Vector2();
+  claimMapCanvas.addEventListener('click', (event) => {
+    const rect = claimMapCanvas.getBoundingClientRect();
+    pointerNdcClaim.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNdcClaim.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNdcClaim, camera);
+    const hits = raycaster.intersectObjects(plotMeshes);
+    if (hits.length === 0) return;
+    const mesh = hits[0].object;
+    const landlet = mesh.userData.landlet;
+
+    const box = new THREE.Box3().setFromObject(mesh);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    selectionOutline.scale.set(Math.max(size.x, 0.01), Math.max(size.y, 0.01), 1);
+    selectionOutline.position.copy(mesh.position);
+    selectionOutline.position.z += 0.01;
+    selectionOutline.visible = true;
+
+    const statusLabel = landlet.status === 'greenbelt' ? 'Available' : landlet.status === 'claimed' ? 'Claimed' : 'Generating';
+    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
+    claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
+  });
+
+  function animate() {
+    claimFlyover.animationHandle = requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  claimFlyover = { scene, camera, renderer, controls, plotMeshes, onResize, animationHandle: 0 };
+  animate();
 
   claimStatusEl.textContent = anyAvailable
     ? ''
-    : "No landlets are ready to claim yet — the world hasn't grown enough. Check back soon, or use the shared dev landlet below.";
+    : "No landlets are ready to claim yet — the world hasn't grown enough.";
+  claimGrowBtn.style.display = anyAvailable ? 'none' : '';
 }
 
 async function claimSelectedLandlet(landlet, resolve) {
@@ -1861,6 +1973,7 @@ async function claimSelectedLandlet(landlet, resolve) {
   claimStatusEl.classList.remove('error');
   try {
     const claimed = await claimLandlet(landlet.landletId, builderId);
+    disposeClaimFlyover();
     claimModalEl.classList.remove('visible');
     resolve(claimed.landletId);
   } catch (err) {
@@ -1870,6 +1983,61 @@ async function claimSelectedLandlet(landlet, resolve) {
     claimStatusEl.classList.add('error');
     loadLandletMap(resolve);
   }
+}
+
+// Dev-only bootstrap for when literally nothing is claimable yet: generate
+// one gap-free ring of wedge-shaped candidates touching the current world
+// boundary (they materialize immediately since their inner edge equals the
+// current radius), mark that ring generation-complete, then expand the
+// world in bounded steps until its outer edge is fully enclosed and its
+// members promote to greenbelt. A real deployment would want this driven by
+// an actual world-building process rather than a builder's own browser
+// session — see the message to Codex about this.
+const GROW_WORLD_RING_PREFIX = 'dev-ring-1';
+const GROW_WORLD_MAX_EXPANSIONS = 20;
+
+async function ensureBoundaryRing() {
+  try {
+    const result = await generateLandRing({ prefix: GROW_WORLD_RING_PREFIX, count: 12 });
+    return { ringId: GROW_WORLD_RING_PREFIX, outerRadiusM: result.outerRadiusM };
+  } catch {
+    // Most likely: this prefix already exists from an earlier click — reuse
+    // that reservation instead of failing outright.
+    const ring = await fetchLandCandidateRing(GROW_WORLD_RING_PREFIX);
+    return { ringId: ring.ringId, outerRadiusM: ring.outerRadiusM };
+  }
+}
+
+async function growTheWorld(resolve) {
+  claimGrowBtn.disabled = true;
+  claimStatusEl.textContent = 'Growing the world…';
+  claimStatusEl.classList.remove('error');
+  try {
+    const ring = await ensureBoundaryRing();
+    try {
+      await completeRingGeneration(ring.ringId);
+    } catch {
+      // Not every member has materialized yet (can happen if the ring was
+      // left over from a previous, interrupted attempt at a smaller world
+      // radius) — expand toward its outer edge and retry once.
+      let world = await fetchWorld();
+      for (let i = 0; i < GROW_WORLD_MAX_EXPANSIONS && world.radiusM < ring.outerRadiusM; i++) {
+        world = await expandWorld();
+      }
+      await completeRingGeneration(ring.ringId);
+    }
+    let world = await fetchWorld();
+    for (let i = 0; i < GROW_WORLD_MAX_EXPANSIONS && world.radiusM < ring.outerRadiusM; i++) {
+      world = await expandWorld();
+    }
+  } catch (err) {
+    claimStatusEl.textContent = err.message || 'Could not grow the world.';
+    claimStatusEl.classList.add('error');
+    claimGrowBtn.disabled = false;
+    return;
+  }
+  claimGrowBtn.disabled = false;
+  loadLandletMap(resolve);
 }
 
 // Loads the real catalog + instance list from the backend API, falling

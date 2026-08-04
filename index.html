@@ -384,9 +384,11 @@
         font-size: 12px;
         color: rgb(255 255 255 / 0.65);
       }
-      /* Square viewport onto the world map (see the SVG's own viewBox,
-         set from the live world radius in main.js) — aspect-ratio keeps it
-         square at any modal width instead of hardcoding a pixel height. */
+      /* Square viewport onto the 3D world flyover (a separate Three.js
+         renderer/scene from the builder view — see loadLandletMap in
+         main.js) — aspect-ratio keeps it square at any modal width instead
+         of hardcoding a pixel height. touch-action:none stops the browser's
+         own scroll/zoom gestures from fighting OrbitControls' drag/pinch. */
       #claim-map-wrap {
         width: 100%;
         aspect-ratio: 1 / 1;
@@ -394,34 +396,11 @@
         overflow: hidden;
         background: rgb(0 0 0 / 0.3);
       }
-      #claim-map {
+      #claim-map-canvas {
         width: 100%;
         height: 100%;
         display: block;
-      }
-      .claim-world-circle {
-        fill: none;
-        stroke: rgb(255 255 255 / 0.3);
-        stroke-width: 1.5;
-        stroke-dasharray: 4 3;
-      }
-      .claim-plot {
-        stroke: rgb(0 0 0 / 0.4);
-        stroke-width: 1;
-        cursor: pointer;
-      }
-      .claim-plot.available {
-        fill: var(--brand-green);
-      }
-      .claim-plot.claimed {
-        fill: rgb(255 255 255 / 0.28);
-      }
-      .claim-plot.generating {
-        fill: #d99a3f;
-      }
-      .claim-plot.selected {
-        stroke: #fff;
-        stroke-width: 2.5;
+        touch-action: none;
       }
       #claim-legend {
         display: flex;
@@ -484,6 +463,7 @@
       }
       #claim-modal-actions {
         display: flex;
+        flex-wrap: wrap;
         justify-content: space-between;
         gap: 8px;
       }
@@ -494,6 +474,16 @@
         font: 14px/1.4 sans-serif;
         background: rgb(255 255 255 / 0.15);
         color: #fff;
+      }
+      /* The primary next step when nothing's claimable yet — stands out
+         from Refresh/skip the same way the Claim button stands out from
+         everything else in the selection panel. */
+      #claim-grow-btn {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #claim-grow-btn:disabled {
+        opacity: 0.5;
       }
     </style>
   </head>
@@ -551,9 +541,9 @@
     <div id="claim-modal">
       <div id="claim-modal-content">
         <h2>Claim a landlet</h2>
-        <div id="claim-hint">Tap a plot on the map to see it, then claim it below. You can only claim one.</div>
+        <div id="claim-hint">Fly around the world, tap a plot to see it, then claim it below. You can only claim one.</div>
         <div id="claim-map-wrap">
-          <svg id="claim-map" viewBox="-50 -50 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+          <canvas id="claim-map-canvas"></canvas>
         </div>
         <div id="claim-legend">
           <span class="claim-legend-item"><span class="claim-swatch available"></span>Available</span>
@@ -566,6 +556,7 @@
         </div>
         <div id="claim-status"></div>
         <div id="claim-modal-actions">
+          <button id="claim-grow-btn" type="button" style="display: none">Grow the world</button>
           <button id="claim-refresh-btn" type="button">Refresh</button>
           <button id="claim-skip-btn" type="button">Use shared dev landlet</button>
         </div>
