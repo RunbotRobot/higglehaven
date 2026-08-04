@@ -1407,7 +1407,25 @@ let swipePointerId = null;
 let swipeStartPos = null;
 let swipeArmed = false; // true once this gesture has moved enough to count as a swipe, not a tap
 
+// A second finger landing mid-swipe means the gesture is becoming a
+// two-finger pan/pinch, not a selection swipe — the first finger's
+// continued movement is now driving the camera, not picking items. Without
+// tracking this, the swipe kept adding whatever the first finger passed
+// over for the rest of the gesture, even while zooming/panning. Counted
+// independently of the other pointer-count tracking further down (for the
+// camera-recenter gesture check) since that one increments on the *same*
+// pointerdown event this listener also reads, and registration order
+// between separate listeners isn't something to depend on.
+let activeSwipeTouchCount = 0;
+
 renderer.domElement.addEventListener('pointerdown', (event) => {
+  activeSwipeTouchCount++;
+  if (activeSwipeTouchCount > 1) {
+    swipePointerId = null;
+    swipeStartPos = null;
+    swipeArmed = false;
+    return;
+  }
   // A single selected item still shows its move/rotate gizmo even in
   // multi-select mode (see updateSelectionUI) — grabbing that gizmo must
   // not also be read as the start of a selection swipe. TransformControls'
@@ -1455,6 +1473,7 @@ window.addEventListener('pointermove', (event) => {
 });
 
 function endSwipe(event) {
+  activeSwipeTouchCount = Math.max(0, activeSwipeTouchCount - 1);
   if (event.pointerId !== swipePointerId) return;
   swipePointerId = null;
   swipeStartPos = null;
