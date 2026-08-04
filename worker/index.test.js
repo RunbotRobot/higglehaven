@@ -42,6 +42,26 @@ function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
 }
 
 describe('Worker API', () => {
+  it('seeds the starter landlet with a real, centered 1,000 m2 polygon', async () => {
+    const result = await api('/landlets/starter-landlet');
+
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.polygon).toHaveLength(9);
+    expect(result.body.landlet.metadata.geometry).toBe('designed-central-v1');
+
+    const polygon = result.body.landlet.polygon;
+    const signedDoubleArea = polygon.reduce((sum, point, index) => {
+      const next = polygon[(index + 1) % polygon.length];
+      return sum + point.x * next.y - next.x * point.y;
+    }, 0);
+    expect(Math.abs(signedDoubleArea) / 2).toBeCloseTo(1000, 4);
+
+    const stored = await env.DB.prepare(`
+      SELECT max_world_radius_m FROM landlets WHERE landlet_id = 'starter-landlet'
+    `).first();
+    expect(stored.max_world_radius_m).toBeCloseTo(21.107463, 6);
+  });
+
   it('validates, stores, and serves complete glTF 2.0 binary models', async () => {
     const form = new FormData();
     form.set('file', glbFile());

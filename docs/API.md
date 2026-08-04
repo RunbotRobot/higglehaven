@@ -997,7 +997,10 @@ position lookups, and the one-claimed-landlet-per-builder rule.
 
 Seed data includes:
 
-- `starter-landlet`
+- `starter-landlet`, the claimed central development plot, with a designed,
+  centroided nine-sided polygon covering 1,000 m². It is a standalone shape;
+  generated annular bands tile within and between rings, but do not claim to
+  share the irregular starter boundary edge-to-edge.
 - `placeholder-table`
 - `placeholder-chair`
 - `placeholder-tree`
