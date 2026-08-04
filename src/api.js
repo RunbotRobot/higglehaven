@@ -24,7 +24,8 @@ export async function fetchInstances(landletId) {
 }
 
 export async function fetchWorld() {
-  return requestJson('/world');
+  const { world } = await requestJson('/world');
+  return world;
 }
 
 // params is a plain object of query string keys (status, ownerBuilderId,

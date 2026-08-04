@@ -364,7 +364,7 @@
       }
       #claim-modal-content {
         width: 100%;
-        max-width: 360px;
+        max-width: 440px;
         max-height: 90vh;
         overflow-y: auto;
         background: rgb(var(--pill-rgb) / 0.97);
@@ -384,24 +384,96 @@
         font-size: 12px;
         color: rgb(255 255 255 / 0.65);
       }
-      #claim-landlet-list {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        max-height: 40vh;
-        overflow-y: auto;
-      }
-      #claim-landlet-list button {
-        padding: 10px 14px;
+      /* Square viewport onto the world map (see the SVG's own viewBox,
+         set from the live world radius in main.js) — aspect-ratio keeps it
+         square at any modal width instead of hardcoding a pixel height. */
+      #claim-map-wrap {
+        width: 100%;
+        aspect-ratio: 1 / 1;
         border-radius: 10px;
-        border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
-        font: 14px/1.4 sans-serif;
-        text-align: left;
+        overflow: hidden;
+        background: rgb(0 0 0 / 0.3);
       }
-      #claim-landlet-list button:disabled {
-        opacity: 0.5;
+      #claim-map {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .claim-world-circle {
+        fill: none;
+        stroke: rgb(255 255 255 / 0.3);
+        stroke-width: 1.5;
+        stroke-dasharray: 4 3;
+      }
+      .claim-plot {
+        stroke: rgb(0 0 0 / 0.4);
+        stroke-width: 1;
+        cursor: pointer;
+      }
+      .claim-plot.available {
+        fill: var(--brand-green);
+      }
+      .claim-plot.claimed {
+        fill: rgb(255 255 255 / 0.28);
+      }
+      .claim-plot.generating {
+        fill: #d99a3f;
+      }
+      .claim-plot.selected {
+        stroke: #fff;
+        stroke-width: 2.5;
+      }
+      #claim-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 12px;
+        color: rgb(255 255 255 / 0.75);
+      }
+      .claim-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .claim-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        display: inline-block;
+      }
+      .claim-swatch.available {
+        background: var(--brand-green);
+      }
+      .claim-swatch.claimed {
+        background: rgb(255 255 255 / 0.28);
+      }
+      .claim-swatch.generating {
+        background: #d99a3f;
+      }
+      #claim-selection-panel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: rgb(255 255 255 / 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      #claim-selection-name {
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.85);
+      }
+      #claim-confirm-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+        white-space: nowrap;
+      }
+      #claim-confirm-btn:disabled {
+        opacity: 0.4;
       }
       #claim-status {
         font-size: 13px;
@@ -479,8 +551,19 @@
     <div id="claim-modal">
       <div id="claim-modal-content">
         <h2>Claim a landlet</h2>
-        <div id="claim-hint">Pick an available plot to start building on. You can only claim one.</div>
-        <div id="claim-landlet-list"></div>
+        <div id="claim-hint">Tap a plot on the map to see it, then claim it below. You can only claim one.</div>
+        <div id="claim-map-wrap">
+          <svg id="claim-map" viewBox="-50 -50 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="claim-legend">
+          <span class="claim-legend-item"><span class="claim-swatch available"></span>Available</span>
+          <span class="claim-legend-item"><span class="claim-swatch claimed"></span>Claimed</span>
+          <span class="claim-legend-item"><span class="claim-swatch generating"></span>Generating</span>
+        </div>
+        <div id="claim-selection-panel">
+          <div id="claim-selection-name">No plot selected</div>
+          <button id="claim-confirm-btn" type="button" disabled>Claim</button>
+        </div>
         <div id="claim-status"></div>
         <div id="claim-modal-actions">
           <button id="claim-refresh-btn" type="button">Refresh</button>

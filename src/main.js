@@ -14,6 +14,7 @@ import {
   createCatalogTemplate,
   fetchLandlets,
   claimLandlet,
+  fetchWorld,
 } from './api.js';
 import { getOrCreateBuilderId } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
@@ -1761,16 +1762,19 @@ async function resolveLandletId() {
 }
 
 const claimModalEl = document.getElementById('claim-modal');
-const claimListEl = document.getElementById('claim-landlet-list');
+const claimMapEl = document.getElementById('claim-map');
 const claimStatusEl = document.getElementById('claim-status');
 const claimRefreshBtn = document.getElementById('claim-refresh-btn');
 const claimSkipBtn = document.getElementById('claim-skip-btn');
+const claimSelectionNameEl = document.getElementById('claim-selection-name');
+const claimConfirmBtn = document.getElementById('claim-confirm-btn');
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function runClaimFlow() {
   return new Promise((resolve) => {
     claimModalEl.classList.add('visible');
-    loadAvailableLandlets(resolve);
-    claimRefreshBtn.onclick = () => loadAvailableLandlets(resolve);
+    loadLandletMap(resolve);
+    claimRefreshBtn.onclick = () => loadLandletMap(resolve);
     // Dev-only escape hatch: the world may not have grown enough yet to have
     // any greenbelt landlets at all (a fresh/local backend starts with none
     // — see docs/API.md), and this app is never publicly deployed, so
@@ -1783,44 +1787,88 @@ function runClaimFlow() {
   });
 }
 
-async function loadAvailableLandlets(resolve) {
-  claimStatusEl.textContent = 'Loading available landlets…';
+// Renders every landlet as a square on an overhead map (an SVG whose
+// viewBox is set directly in world meters, centered on the origin — the
+// same X/Y ground plane the 3D scene itself uses, so a landlet's map
+// position is just its own center_x_m/center_y_m, no separate projection
+// math needed). World Y is flipped to SVG's y-down coordinate space so
+// increasing Y reads as "up" on the map, the usual map convention.
+// Tapping a plot previews it in the selection panel below regardless of
+// status; only an available (greenbelt) one enables the Claim button.
+async function loadLandletMap(resolve) {
+  claimStatusEl.textContent = 'Loading the world map…';
   claimStatusEl.classList.remove('error');
-  claimListEl.replaceChildren();
-  let available;
+  claimMapEl.replaceChildren();
+  claimSelectionNameEl.textContent = 'No plot selected';
+  claimConfirmBtn.disabled = true;
+  claimConfirmBtn.onclick = null;
+
+  let world;
+  let landlets;
   try {
-    available = await fetchLandlets({ status: 'greenbelt', limit: 20 });
+    [world, landlets] = await Promise.all([fetchWorld(), fetchLandlets({ limit: 100 })]);
   } catch (err) {
-    claimStatusEl.textContent = err.message || 'Could not load landlets.';
+    claimStatusEl.textContent = err.message || 'Could not load the world map.';
     claimStatusEl.classList.add('error');
     return;
   }
-  claimStatusEl.textContent = '';
-  if (available.length === 0) {
-    claimStatusEl.textContent = "No landlets are ready to claim yet — the world hasn't grown enough. Check back soon, or use the shared dev landlet below.";
-    return;
-  }
-  for (const landlet of available) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = `${landlet.name} (${landlet.areaM2} m²)`;
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      claimStatusEl.textContent = `Claiming ${landlet.name}…`;
-      claimStatusEl.classList.remove('error');
-      try {
-        const claimed = await claimLandlet(landlet.landletId, builderId);
-        claimModalEl.classList.remove('visible');
-        resolve(claimed.landletId);
-      } catch (err) {
-        // Someone else likely claimed it in the meantime (409) — refresh the
-        // list rather than leaving a now-stale button clickable.
-        claimStatusEl.textContent = err.message || 'Claim failed — it may have just been taken.';
-        claimStatusEl.classList.add('error');
-        loadAvailableLandlets(resolve);
-      }
+
+  const radiusM = world.radiusM;
+  const half = radiusM * 1.15; // a little padding so edge plots aren't flush against the frame
+  claimMapEl.setAttribute('viewBox', `${-half} ${-half} ${half * 2} ${half * 2}`);
+
+  const boundary = document.createElementNS(SVG_NS, 'circle');
+  boundary.setAttribute('cx', '0');
+  boundary.setAttribute('cy', '0');
+  boundary.setAttribute('r', String(radiusM));
+  boundary.setAttribute('class', 'claim-world-circle');
+  boundary.setAttribute('vector-effect', 'non-scaling-stroke');
+  claimMapEl.appendChild(boundary);
+
+  let anyAvailable = false;
+  for (const landlet of landlets) {
+    const side = Math.sqrt(landlet.areaM2);
+    const statusClass = landlet.status === 'greenbelt' ? 'available' : landlet.status;
+    if (landlet.status === 'greenbelt') anyAvailable = true;
+
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(landlet.center.x - side / 2));
+    rect.setAttribute('y', String(-landlet.center.y - side / 2));
+    rect.setAttribute('width', String(side));
+    rect.setAttribute('height', String(side));
+    rect.setAttribute('class', `claim-plot ${statusClass}`);
+    rect.setAttribute('vector-effect', 'non-scaling-stroke');
+    rect.dataset.landletId = landlet.landletId;
+    rect.addEventListener('click', () => {
+      for (const el of claimMapEl.querySelectorAll('.claim-plot.selected')) el.classList.remove('selected');
+      rect.classList.add('selected');
+      const statusLabel = statusClass === 'available' ? 'Available' : statusClass === 'claimed' ? 'Claimed' : 'Generating';
+      claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+      claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
+      claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
     });
-    claimListEl.appendChild(button);
+    claimMapEl.appendChild(rect);
+  }
+
+  claimStatusEl.textContent = anyAvailable
+    ? ''
+    : "No landlets are ready to claim yet — the world hasn't grown enough. Check back soon, or use the shared dev landlet below.";
+}
+
+async function claimSelectedLandlet(landlet, resolve) {
+  claimConfirmBtn.disabled = true;
+  claimStatusEl.textContent = `Claiming ${landlet.name}…`;
+  claimStatusEl.classList.remove('error');
+  try {
+    const claimed = await claimLandlet(landlet.landletId, builderId);
+    claimModalEl.classList.remove('visible');
+    resolve(claimed.landletId);
+  } catch (err) {
+    // Someone else likely claimed it in the meantime (409) — refresh the
+    // map since its status is now stale.
+    claimStatusEl.textContent = err.message || 'Claim failed — it may have just been taken.';
+    claimStatusEl.classList.add('error');
+    loadLandletMap(resolve);
   }
 }
 
