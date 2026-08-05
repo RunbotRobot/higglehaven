@@ -21,5 +21,8 @@
       "binding": "MODELS",
       "bucket_name": "higglehaven-models"
     }
+  ],
+  "routes": [
+    { "pattern": "higglehaven.com", "custom_domain": true }
   ]
 }
