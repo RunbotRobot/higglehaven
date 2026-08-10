@@ -1809,6 +1809,8 @@ function disposeClaimFlyover() {
     mesh.geometry.dispose();
     mesh.material.dispose();
   }
+  for (const outline of claimFlyover.plotOutlines) outline.geometry.dispose();
+  claimFlyover.plotOutlineMaterial.dispose();
   claimFlyover = null;
 }
 
@@ -1883,17 +1885,33 @@ async function loadLandletMap(resolve) {
   boundary.position.z = 0.02;
   scene.add(boundary);
 
+  // Plots of the same status share a fill color, so without a per-plot
+  // border two adjacent greenbelt lands would visually merge into one —
+  // this is a placeholder selection UI (a real flyover will eventually
+  // replace it), so making individual land boundaries readable at a glance
+  // matters more here than it would in a polished final view.
+  const plotOutlineMaterial = new THREE.LineBasicMaterial({ color: 0x0d1a08, transparent: true, opacity: 0.7 });
   const plotMeshes = [];
+  const plotOutlines = [];
   let anyAvailable = false;
   for (const landlet of landlets) {
     if (landlet.status === 'greenbelt') anyAvailable = true;
-    const geometry = new THREE.ShapeGeometry(shapeForLandlet(landlet));
+    const shape = shapeForLandlet(landlet);
+    const geometry = new THREE.ShapeGeometry(shape);
     const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(landlet.center.x, landlet.center.y, 0.05);
     mesh.userData.landlet = landlet;
     scene.add(mesh);
     plotMeshes.push(mesh);
+
+    const outlineGeometry = new THREE.BufferGeometry().setFromPoints(
+      shape.getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0)),
+    );
+    const outline = new THREE.LineLoop(outlineGeometry, plotOutlineMaterial);
+    outline.position.set(landlet.center.x, landlet.center.y, 0.06);
+    scene.add(outline);
+    plotOutlines.push(outline);
   }
 
   const selectionOutline = new THREE.LineSegments(
@@ -1958,7 +1976,9 @@ async function loadLandletMap(resolve) {
     controls.update();
     renderer.render(scene, camera);
   }
-  claimFlyover = { scene, camera, renderer, controls, plotMeshes, onResize, animationHandle: 0 };
+  claimFlyover = {
+    scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, animationHandle: 0,
+  };
   animate();
 
   claimStatusEl.textContent = anyAvailable
