@@ -24,6 +24,7 @@
     }
   ],
   "routes": [
-    { "pattern": "higglehaven.com", "custom_domain": true }
+    { "pattern": "higglehaven.com", "custom_domain": true },
+    { "pattern": "www.higglehaven.com", "custom_domain": true }
   ]
 }

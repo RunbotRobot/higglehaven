@@ -151,6 +151,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    if (url.hostname === 'www.higglehaven.com') {
+      url.hostname = 'higglehaven.com';
+      return Response.redirect(url.toString(), 301);
+    }
+
     if (env.ACCESS_PASSPHRASE) {
       const gateResponse = await checkAccessGate(request, url, env);
       if (gateResponse) return gateResponse;
