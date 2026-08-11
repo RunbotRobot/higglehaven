@@ -100,6 +100,21 @@
         display: flex;
         gap: 8px;
       }
+      /* Sits just under the wordmark panel — that panel is pointer-events:
+         none (it's decorative branding), so this lives as its own fixed
+         element rather than fighting that to become clickable. */
+      #identity-btn {
+        position: fixed;
+        top: 48px;
+        left: 12px;
+        z-index: 10;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: rgb(255 255 255 / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
       #undo-redo-panel button {
         padding: 8px 16px;
         border-radius: 999px;
@@ -346,6 +361,90 @@
       #upload-submit-btn:disabled {
         opacity: 0.5;
       }
+      /* Same modal shell as #upload-modal, opened on demand from
+         #identity-btn rather than automatically. */
+      #identity-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.5);
+        padding: 16px;
+      }
+      #identity-modal.visible {
+        display: flex;
+      }
+      #identity-modal-content {
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--pill-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #identity-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #identity-hint {
+        font-size: 12px;
+        color: rgb(255 255 255 / 0.65);
+      }
+      #identity-current-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: rgb(255 255 255 / 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      #identity-current-id {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.85);
+        overflow-wrap: anywhere;
+      }
+      #identity-current-row button,
+      #identity-switch-row button,
+      #identity-new-btn,
+      #identity-close-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        white-space: nowrap;
+      }
+      #identity-switch-row {
+        display: flex;
+        gap: 8px;
+      }
+      #identity-switch-input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(255 255 255 / 0.1);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
+      #identity-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #identity-status.error {
+        color: #ffb4a8;
+      }
       /* Same modal shell as #upload-modal — shown at startup, before
          bootstrap() has resolved a landlet to build on, whenever this
          builder (see builderIdentity.js) doesn't already own one. */
@@ -492,6 +591,7 @@
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>
+    <button id="identity-btn" type="button">Identity</button>
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
@@ -536,6 +636,26 @@
           <button id="upload-cancel-btn" type="button">Cancel</button>
           <button id="upload-submit-btn" type="button">Add Product</button>
         </div>
+      </div>
+    </div>
+    <div id="identity-modal">
+      <div id="identity-modal-content">
+        <h2>Builder identity</h2>
+        <div id="identity-hint">
+          Dev-only stand-in for login — no password, just an ID kept in this browser. Switch to explore the app as a
+          different builder (e.g. to claim another landlet), or copy this one down to switch back to it later.
+        </div>
+        <div id="identity-current-row">
+          <code id="identity-current-id"></code>
+          <button id="identity-copy-btn" type="button">Copy</button>
+        </div>
+        <button id="identity-new-btn" type="button">New identity</button>
+        <div id="identity-switch-row">
+          <input id="identity-switch-input" type="text" placeholder="Paste an identity to switch to it" />
+          <button id="identity-switch-btn" type="button">Switch</button>
+        </div>
+        <div id="identity-status"></div>
+        <button id="identity-close-btn" type="button">Close</button>
       </div>
     </div>
     <div id="claim-modal">
