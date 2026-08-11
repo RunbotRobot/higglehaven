@@ -1,5 +1,6 @@
 import { landletMaxWorldRadius, landletMinWorldRadius } from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
+import { generateOrganicMosaic } from './organicLandGenerator.js';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -1041,6 +1042,37 @@ async function handleLandletDraft(request, db, landletId) {
 }
 
 async function handleLandCandidates(request, db, route, url) {
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
+    const input = await readJson(request);
+    const prefix = stringValue(input.prefix, 'prefix');
+    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
+      throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
+    }
+    const count = positiveInteger(input.count, 'count');
+    if (count < 9 || count > 50) throw new HttpError('count must be between 9 and 50', 400);
+    const landlets = generateOrganicMosaic({ prefix, count }).map((candidate) =>
+      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
+    const rows = landlets.map(candidateRowFromLandlet);
+    const duplicate = await db.prepare(`
+      SELECT landlet_id FROM landlet_candidates
+      WHERE landlet_id >= ? AND landlet_id <= ? LIMIT 1
+    `).bind(`${prefix}-001`, `${prefix}-999`).first();
+    if (duplicate) throw new HttpError('Land candidate already exists', 409);
+    const settings = await getWorldSettings(db);
+    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
+    await db.batch([
+      ...rows.map((row) => candidateInsertStatement(db, row)),
+      ...candidateMaterializationStatements(db, overlapping),
+    ]);
+    const stored = await db.prepare(`
+      SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
+    `).bind(`${prefix}-001`, `${prefix}-999`).all();
+    return json({
+      candidates: stored.results.map(candidateFromRow),
+      materializedLandletIds: overlapping.map((row) => row.landlet_id),
+    }, 201);
+  }
+
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');

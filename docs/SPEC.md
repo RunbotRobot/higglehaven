@@ -25,11 +25,13 @@
 
 **Coordinates:** floating-point decimal meters (1.0 = 1 meter), not integers.
 
-**Land shape:** irregular, interlocking puzzle-piece tiling, no grid, no visible border geometry — the "border" is purely stylistic contrast between neighbors.
+**Land shape:** irregular, interlocking puzzle-piece tiling with freeform, nature-like curved boundaries; no grid, annular plot bands, or visible border geometry. A boundary is authoritative shared geometry used by both neighbors (never two independently generated approximations), while the visible "border" is purely stylistic contrast between neighbors.
 
 **World boundary — circular expansion model (supersedes earlier "amoeba" adjacency-based growth):**
 - The explorable world is a clean **circle**. Radius grows in fixed **10-meter increments** whenever greenbelt-lánd count falls below **10% of total lánds**.
 - Any lánd fully enclosed by the circle automatically becomes greenbelt-available, regardless of adjacency to claimed land — eliminates a chaining exploit and the resulting maze-like perimeter.
+- The circle is an availability boundary, not a generation or tiling boundary. A lánd may cross it: its complete puzzle-piece shape is decided and stored, but it cannot be selected until the circle fully encloses it. Expansion therefore promotes already-generated crossing lánds rather than clipping them to a new ring.
+- After each 10-meter expansion, generation fills newly exposed blank space with complete neighboring puzzle pieces. Those pieces may extend beyond the current circle so the next expansion can reveal established shapes without gaps or boundary-dependent reshaping.
 - **Generation timing (corrected):** a lánd begins generating the moment the expanding circle **first partially overlaps** it — not only once fully enclosed. This avoids a real gap in the original "on-demand at full inclusion" design: as the circle grows, lánds on the advancing edge would otherwise have zero lead time to generate before players reach them. While generating (partially overlapped but not yet fully enclosed), a lánd displays as **shimmery, walkable/flyable, but not yet claimable** — claimability only activates once the circle fully encloses it. This preserves the "on-demand, not speculative" principle while giving each lánd real generation lead time.
 - World-wall shimmer marks the circle's exterior; this same shimmer treatment applies to any lánd still mid-generation per the above.
 

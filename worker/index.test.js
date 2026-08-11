@@ -1140,6 +1140,32 @@ describe('Worker API', () => {
     expect(invalid.response.status).toBe(400);
   });
 
+  it('queues a deterministic organic mosaic with curved exact-area cells', async () => {
+    const generated = await api('/land-candidates/generate-mosaic', {
+      method: 'POST',
+      body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
+    });
+    expect(generated.response.status).toBe(201);
+    expect(generated.body.candidates).toHaveLength(16);
+    expect(generated.body.candidates.every((candidate) => candidate.areaM2 === 1000)).toBe(true);
+    expect(generated.body.candidates.every((candidate) => candidate.polygon.length >= 12)).toBe(true);
+    expect(generated.body.candidates[0].metadata).toMatchObject({
+      generated: true, generator: 'organic-mosaic-v1', mosaicIndex: 0, seed: 'organic-patch',
+    });
+    expect(generated.body.materializedLandletIds.length).toBeGreaterThan(0);
+
+    const duplicate = await api('/land-candidates/generate-mosaic', {
+      method: 'POST', body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
+    });
+    expect(duplicate.response.status).toBe(409);
+    expect((await api('/land-candidates/generate-mosaic', {
+      method: 'POST', body: JSON.stringify({ prefix: 'bad mosaic', count: 8 }),
+    })).response.status).toBe(400);
+
+    await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id LIKE 'organic-patch-%'").run();
+    await env.DB.prepare("DELETE FROM landlets WHERE landlet_id LIKE 'organic-patch-%'").run();
+  });
+
   it('generates the authoritative power-law mix on request', async () => {
     const generated = await api('/land-candidates/generate-ring', {
       method: 'POST',

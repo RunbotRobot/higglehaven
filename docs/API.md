@@ -339,6 +339,25 @@ Land candidates are lightweight records for planned puzzle pieces outside the
 current world boundary. They avoid creating full landlet records before those
 pieces are needed.
 
+### `POST /api/land-candidates/generate-mosaic`
+
+Creates a deterministic Eroded Mosaic patch of 9–50 class-1 lands centered on
+the world origin. The request contains `prefix` and `count`; `prefix` also seeds
+the blue-noise site placement and stable IDs. Every land is exactly 1,000 m².
+The backend constructs a shared equal-area power diagram, then replaces each
+shared seam with the same sampled S-curve in both neighboring polygons. The
+zero-signed-area bend preserves plot area while preventing gaps and overlaps.
+
+Candidates that intersect the current availability circle materialize as
+generating landlets immediately. Remaining complete shapes stay queued and
+non-selectable until a later expansion reaches them. The response contains
+`candidates` and `materializedLandletIds`. Reusing a prefix returns `409`.
+
+This endpoint is the current organic-generation prototype. New world data
+should use it instead of the legacy annular endpoint below. Larger land classes
+remain a future extension; this first version deliberately emits only exact
+1,000 m² class-1 lands.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
