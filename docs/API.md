@@ -341,12 +341,15 @@ pieces are needed.
 
 ### `POST /api/land-candidates/generate-mosaic`
 
-Creates a deterministic Eroded Mosaic patch of 9–50 class-1 lands centered on
+Creates a deterministic Eroded Mosaic patch of exactly 16 class-1 lands centered on
 the world origin. The request contains `prefix` and `count`; `prefix` also seeds
 the blue-noise site placement and stable IDs. Every land is exactly 1,000 m².
-The backend constructs a shared equal-area power diagram, then replaces each
-shared seam with the same sampled S-curve in both neighboring polygons. The
-zero-signed-area bend preserves plot area while preventing gaps and overlaps.
+The stored template was produced offline from a shared equal-area power diagram,
+with the same sampled S-curve used by both polygons along every seam. Request
+handling only applies a deterministic rigid rotation seeded by `prefix`; it does
+not solve the diagram synchronously. This keeps generation compatible with the
+Cloudflare Workers free-tier CPU budget. The zero-signed-area bends preserve
+plot area while preventing gaps and overlaps.
 
 Candidates that intersect the current availability circle materialize as
 generating landlets immediately. Remaining complete shapes stay queued and

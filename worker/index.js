@@ -1049,7 +1049,7 @@ async function handleLandCandidates(request, db, route, url) {
       throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
     }
     const count = positiveInteger(input.count, 'count');
-    if (count < 9 || count > 50) throw new HttpError('count must be between 9 and 50', 400);
+    if (count !== 16) throw new HttpError('count must be 16', 400);
     const landlets = generateOrganicMosaic({ prefix, count }).map((candidate) =>
       validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
     const rows = landlets.map(candidateRowFromLandlet);

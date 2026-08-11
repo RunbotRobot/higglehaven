@@ -10,14 +10,18 @@ function area(landlet) {
 
 describe('organic land generation', () => {
   it('is deterministic and produces curved, near-target-area puzzle pieces', () => {
-    const first = generateOrganicMosaic({ prefix: 'organic', count: 25 });
-    const second = generateOrganicMosaic({ prefix: 'organic', count: 25 });
+    const first = generateOrganicMosaic({ prefix: 'organic', count: 16 });
+    const second = generateOrganicMosaic({ prefix: 'organic', count: 16 });
     expect(first).toEqual(second);
-    expect(first).toHaveLength(25);
+    expect(first).toHaveLength(16);
     first.forEach((landlet) => {
       expect(landlet.polygon.length).toBeGreaterThanOrEqual(12);
       expect(area(landlet)).toBeCloseTo(1000, 2);
       expect(landlet.metadata.generator).toBe('organic-mosaic-v1');
     });
+  });
+
+  it('rejects shapes that do not have a precomputed free-tier template', () => {
+    expect(() => generateOrganicMosaic({ prefix: 'large', count: 50 })).toThrow(/exactly 16/);
   });
 });

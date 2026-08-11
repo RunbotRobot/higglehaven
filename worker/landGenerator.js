@@ -86,7 +86,7 @@ function ringAreaScale(areas, arcSegments) {
   return high;
 }
 
-function seededRandom(seed) {
+export function seededRandom(seed) {
   let state = 2166136261;
   for (const character of seed) {
     state ^= character.codePointAt(0);
@@ -105,7 +105,7 @@ function polar(radius, angle) {
   return { x: radius * Math.cos(angle), y: radius * Math.sin(angle) };
 }
 
-function polygonCentroid(points) {
+export function polygonCentroid(points) {
   let crossSum = 0;
   let xSum = 0;
   let ySum = 0;
