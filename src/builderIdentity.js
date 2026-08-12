@@ -14,3 +14,11 @@ export function getOrCreateBuilderId() {
   }
   return id;
 }
+
+// Dev-only stand-in for switching accounts: there's no login, so "switching
+// builders" just means overwriting the persisted ID. Callers are expected to
+// reload the page afterward — nothing in the running app re-reads this value
+// once bootstrap() has already captured it into main.js's builderId const.
+export function setBuilderId(id) {
+  localStorage.setItem(BUILDER_ID_KEY, id);
+}

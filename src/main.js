@@ -20,7 +20,7 @@ import {
   fetchLandCandidateRing,
   completeRingGeneration,
 } from './api.js';
-import { getOrCreateBuilderId } from './builderIdentity.js';
+import { getOrCreateBuilderId, setBuilderId } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -1764,6 +1764,60 @@ async function resolveLandletId() {
   if (owned.length > 0) return owned[0].landletId;
   return runClaimFlow();
 }
+
+// Dev-only stand-in for "log in as a different builder": there's no auth
+// system, so switching identity just overwrites the localStorage ID and
+// reloads — bootstrap() re-runs getOrCreateBuilderId() fresh on load, which
+// naturally reopens the claim flow if the new identity owns nothing yet.
+const identityBtn = document.getElementById('identity-btn');
+const identityModalEl = document.getElementById('identity-modal');
+const identityCurrentIdEl = document.getElementById('identity-current-id');
+const identityCopyBtn = document.getElementById('identity-copy-btn');
+const identityNewBtn = document.getElementById('identity-new-btn');
+const identitySwitchInput = document.getElementById('identity-switch-input');
+const identitySwitchBtn = document.getElementById('identity-switch-btn');
+const identityStatusEl = document.getElementById('identity-status');
+const identityCloseBtn = document.getElementById('identity-close-btn');
+
+identityBtn.addEventListener('click', () => {
+  identityCurrentIdEl.textContent = builderId;
+  identitySwitchInput.value = '';
+  identityStatusEl.textContent = '';
+  identityStatusEl.classList.remove('error');
+  identityModalEl.classList.add('visible');
+});
+
+identityCloseBtn.addEventListener('click', () => {
+  identityModalEl.classList.remove('visible');
+});
+
+identityCopyBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(builderId);
+    identityCopyBtn.textContent = 'Copied!';
+  } catch {
+    identityCopyBtn.textContent = "Couldn't copy";
+  }
+  setTimeout(() => {
+    identityCopyBtn.textContent = 'Copy';
+  }, 1200);
+});
+
+identityNewBtn.addEventListener('click', () => {
+  setBuilderId(`builder-${crypto.randomUUID()}`);
+  location.reload();
+});
+
+identitySwitchBtn.addEventListener('click', () => {
+  const id = identitySwitchInput.value.trim();
+  if (!id) {
+    identityStatusEl.textContent = 'Paste an identity first.';
+    identityStatusEl.classList.add('error');
+    return;
+  }
+  setBuilderId(id);
+  location.reload();
+});
 
 const claimModalEl = document.getElementById('claim-modal');
 const claimMapCanvas = document.getElementById('claim-map-canvas');
