@@ -1140,19 +1140,29 @@ describe('Worker API', () => {
     expect(invalid.response.status).toBe(400);
   });
 
-  it('queues a deterministic organic mosaic with curved exact-area cells', async () => {
+  it('queues a deterministic organic mosaic, folding the origin cell into starter-landlet', async () => {
     const generated = await api('/land-candidates/generate-mosaic', {
       method: 'POST',
       body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
     });
     expect(generated.response.status).toBe(201);
-    expect(generated.body.candidates).toHaveLength(16);
+    // One of the 16 template cells always covers the world origin — the same
+    // point starter-landlet sits on — so it's folded into starter-landlet
+    // directly instead of becoming a 16th competing candidate there.
+    expect(generated.body.candidates).toHaveLength(15);
     expect(generated.body.candidates.every((candidate) => candidate.areaM2 === 1000)).toBe(true);
     expect(generated.body.candidates.every((candidate) => candidate.polygon.length >= 12)).toBe(true);
-    expect(generated.body.candidates[0].metadata).toMatchObject({
-      generated: true, generator: 'organic-mosaic-v1', mosaicIndex: 0, seed: 'organic-patch',
-    });
+    expect(generated.body.candidates.every((candidate) => candidate.metadata.generator === 'organic-mosaic-v1')).toBe(true);
     expect(generated.body.materializedLandletIds.length).toBeGreaterThan(0);
+    expect(generated.body.starterLandletId).toBe('starter-landlet');
+
+    const mosaicIndices = generated.body.candidates.map((candidate) => candidate.metadata.mosaicIndex);
+    expect(new Set(mosaicIndices).size).toBe(15);
+
+    const starter = await api('/landlets/starter-landlet');
+    expect(starter.body.landlet.polygon.length).toBeGreaterThanOrEqual(12);
+    expect(starter.body.landlet.metadata.generator).toBe('organic-mosaic-v1');
+    expect(mosaicIndices).not.toContain(starter.body.landlet.metadata.mosaicIndex);
 
     const duplicate = await api('/land-candidates/generate-mosaic', {
       method: 'POST', body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
@@ -1161,6 +1171,15 @@ describe('Worker API', () => {
     expect((await api('/land-candidates/generate-mosaic', {
       method: 'POST', body: JSON.stringify({ prefix: 'bad mosaic', count: 8 }),
     })).response.status).toBe(400);
+
+    // A second, differently-seeded mosaic still covers the same disc around
+    // the origin (only the rotation differs) — must be rejected as spatial
+    // overlap, not silently allowed to double-stamp the same land.
+    const second = await api('/land-candidates/generate-mosaic', {
+      method: 'POST', body: JSON.stringify({ prefix: 'organic-patch-2', count: 16 }),
+    });
+    expect(second.response.status).toBe(409);
+    expect(second.body.error).toMatch(/overlap/i);
 
     await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id LIKE 'organic-patch-%'").run();
     await env.DB.prepare("DELETE FROM landlets WHERE landlet_id LIKE 'organic-patch-%'").run();

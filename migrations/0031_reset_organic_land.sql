@@ -1,5 +1,16 @@
--- Dev-only reset: discard legacy annular geometry and placed-object history,
--- then give the original claimed land a real, exact-area organic polygon.
+-- Dev-only reset: discard legacy annular geometry and placed-object history
+-- for a fresh start on the new organic-mosaic layout.
+--
+-- starter-landlet's own shape is deliberately NOT hardcoded here. The
+-- organic-mosaic-v1 template (worker/organicMosaicTemplate.js) always covers
+-- the world origin as part of its 16-cell disc, so any independently
+-- designed polygon placed here would permanently overlap whichever mosaic
+-- cell lands on the origin. Instead, POST /api/land-candidates/generate-mosaic
+-- detects that cell at request time and writes its polygon onto
+-- 'starter-landlet' directly (see worker/index.js) — one shape at the
+-- center by construction, not two overlapping ones. Until that endpoint is
+-- called, starter-landlet reverts to the plain-square fallback the frontend
+-- already renders for any landlet with an empty polygon.
 
 DELETE FROM version_instances;
 DELETE FROM landlet_versions;
@@ -16,11 +27,11 @@ SET name = 'Starter landlet',
     center_y_m = 0,
     status = 'claimed',
     land_class = 1,
-    polygon_json = '[{"x":17.650549,"y":-0.245902},{"x":18.118362,"y":7.251074},{"x":11.793775,"y":11.528813},{"x":7.141188,"y":16.948434},{"x":0.01906,"y":20.324168},{"x":-5.978521,"y":14.233539},{"x":-13.833546,"y":13.606703},{"x":-16.270311,"y":6.501376},{"x":-18.591956,"y":-0.245902},{"x":-15.365346,"y":-6.618332},{"x":-14.526176,"y":-14.791139},{"x":-5.978521,"y":-14.725344},{"x":0.01906,"y":-19.836446},{"x":6.766339,"y":-16.535274},{"x":11.793775,"y":-12.020617},{"x":17.213397,"y":-7.36803}]',
+    polygon_json = '[]',
     generated_at = NULL,
     claimable_at = NULL,
-    metadata_json = '{"generated":true,"generator":"organic-mosaic-v1","reset":"0031"}',
+    metadata_json = '{}',
     active_version_id = NULL,
-    max_world_radius_m = 20.731318870257553,
+    max_world_radius_m = NULL,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE landlet_id = 'starter-landlet';

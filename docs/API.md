@@ -351,10 +351,26 @@ not solve the diagram synchronously. This keeps generation compatible with the
 Cloudflare Workers free-tier CPU budget. The zero-signed-area bends preserve
 plot area while preventing gaps and overlaps.
 
-Candidates that intersect the current availability circle materialize as
-generating landlets immediately. Remaining complete shapes stay queued and
-non-selectable until a later expansion reaches them. The response contains
-`candidates` and `materializedLandletIds`. Reusing a prefix returns `409`.
+One of the 16 template cells always covers the world origin — the same point
+`starter-landlet` sits on, since the template is only rotated by `prefix`'s
+seed, never translated. Rather than inserting a competing candidate there,
+that cell's polygon is written onto `starter-landlet` directly (its
+`center`, `polygon`, and `metadata` update in place; its `status`/owner are
+left untouched). The response's `candidates` array therefore contains the
+other 15 cells, not 16, and `starterLandletId` names the landlet that
+received the 16th. Candidates among those 15 that intersect the current
+availability circle materialize as generating landlets immediately;
+remaining complete shapes stay queued and non-selectable until a later
+expansion reaches them. The response contains `candidates`,
+`materializedLandletIds`, and `starterLandletId`.
+
+Reusing a prefix returns `409`. So does any generated cell overlapping an
+existing landlet or candidate — checked by real polygon intersection, not
+just a radial band like `generate-ring` uses, since this generator has no
+radial structure for a band check to work with (every call covers the same
+disc around the origin, only rotated). In practice this means the endpoint
+is only callable once per world: a second call, with any prefix, still
+covers that same disc and will conflict with the first call's land.
 
 This endpoint is the current organic-generation prototype. New world data
 should use it instead of the legacy annular endpoint below. Larger land classes
