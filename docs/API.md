@@ -339,6 +339,44 @@ Land candidates are lightweight records for planned puzzle pieces outside the
 current world boundary. They avoid creating full landlet records before those
 pieces are needed.
 
+### `POST /api/land-candidates/generate-mosaic`
+
+Creates a deterministic Eroded Mosaic patch of exactly 16 class-1 lands centered on
+the world origin. The request contains `prefix` and `count`; `prefix` also seeds
+the blue-noise site placement and stable IDs. Every land is exactly 1,000 m².
+The stored template was produced offline from a shared equal-area power diagram,
+with the same sampled S-curve used by both polygons along every seam. Request
+handling only applies a deterministic rigid rotation seeded by `prefix`; it does
+not solve the diagram synchronously. This keeps generation compatible with the
+Cloudflare Workers free-tier CPU budget. The zero-signed-area bends preserve
+plot area while preventing gaps and overlaps.
+
+One of the 16 template cells always covers the world origin — the same point
+`starter-landlet` sits on, since the template is only rotated by `prefix`'s
+seed, never translated. Rather than inserting a competing candidate there,
+that cell's polygon is written onto `starter-landlet` directly (its
+`center`, `polygon`, and `metadata` update in place; its `status`/owner are
+left untouched). The response's `candidates` array therefore contains the
+other 15 cells, not 16, and `starterLandletId` names the landlet that
+received the 16th. Candidates among those 15 that intersect the current
+availability circle materialize as generating landlets immediately;
+remaining complete shapes stay queued and non-selectable until a later
+expansion reaches them. The response contains `candidates`,
+`materializedLandletIds`, and `starterLandletId`.
+
+Reusing a prefix returns `409`. So does any generated cell overlapping an
+existing landlet or candidate — checked by real polygon intersection, not
+just a radial band like `generate-ring` uses, since this generator has no
+radial structure for a band check to work with (every call covers the same
+disc around the origin, only rotated). In practice this means the endpoint
+is only callable once per world: a second call, with any prefix, still
+covers that same disc and will conflict with the first call's land.
+
+This endpoint is the current organic-generation prototype. New world data
+should use it instead of the legacy annular endpoint below. Larger land classes
+remain a future extension; this first version deliberately emits only exact
+1,000 m² class-1 lands.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.

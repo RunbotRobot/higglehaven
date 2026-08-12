@@ -1,5 +1,8 @@
-import { landletMaxWorldRadius, landletMinWorldRadius } from './geometry.js';
+import {
+  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, polygonsOverlap,
+} from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
+import { generateOrganicMosaic } from './organicLandGenerator.js';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -1041,6 +1044,77 @@ async function handleLandletDraft(request, db, landletId) {
 }
 
 async function handleLandCandidates(request, db, route, url) {
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
+    const input = await readJson(request);
+    const prefix = stringValue(input.prefix, 'prefix');
+    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
+      throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
+    }
+    const count = positiveInteger(input.count, 'count');
+    if (count !== 16) throw new HttpError('count must be 16', 400);
+    const generated = generateOrganicMosaic({ prefix, count }).map((candidate) =>
+      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
+
+    // The mosaic template always covers the world origin as part of its
+    // 16-cell disc (organicLandGenerator.js only rotates it, never
+    // translates it) — the same point 'starter-landlet' sits on. Rather than
+    // inserting a competing candidate there, the cell containing the origin
+    // becomes starter-landlet's own shape directly, so there's exactly one
+    // polygon at the center instead of two independently-placed ones.
+    const centralIndex = generated.findIndex((candidate) => pointInPolygon(
+      { x: 0, y: 0 },
+      candidate.polygon.map((point) => ({ x: point.x + candidate.center.x, y: point.y + candidate.center.y })),
+    ));
+    if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500);
+    const central = generated[centralIndex];
+    const landlets = generated.filter((_candidate, index) => index !== centralIndex);
+
+    const rows = landlets.map(candidateRowFromLandlet);
+    const centralRow = candidateRowFromLandlet(central);
+    const duplicate = await db.prepare(`
+      SELECT landlet_id FROM landlet_candidates
+      WHERE landlet_id >= ? AND landlet_id <= ? LIMIT 1
+    `).bind(`${prefix}-001`, `${prefix}-999`).first();
+    if (duplicate) throw new HttpError('Land candidate already exists', 409);
+
+    // Safety net beyond the origin cell handled above: two mosaic calls (or
+    // a mosaic call landing near existing ring-generated land) would
+    // otherwise silently overlap, since this generator has no radial
+    // structure for a band-based check like generate-ring's to work with.
+    const [existingLandlets, existingCandidates] = await Promise.all([
+      db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+      db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
+    ]);
+    const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
+      .map(landletWorldPolygon)
+      .filter((polygon) => polygon.length >= 3);
+    const newPolygons = [...rows, centralRow].map(landletWorldPolygon);
+    const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
+    if (conflict) throw new HttpError('Generated mosaic would overlap existing land', 409);
+
+    const settings = await getWorldSettings(db);
+    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
+    await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
+            generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = 'starter-landlet'
+      `).bind(central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json),
+      ...rows.map((row) => candidateInsertStatement(db, row)),
+      ...candidateMaterializationStatements(db, overlapping),
+    ]);
+    const stored = await db.prepare(`
+      SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
+    `).bind(`${prefix}-001`, `${prefix}-999`).all();
+    return json({
+      candidates: stored.results.map(candidateFromRow),
+      materializedLandletIds: overlapping.map((row) => row.landlet_id),
+      starterLandletId: 'starter-landlet',
+    }, 201);
+  }
+
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
