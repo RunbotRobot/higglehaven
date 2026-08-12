@@ -12,6 +12,16 @@
 -- called, starter-landlet reverts to the plain-square fallback the frontend
 -- already renders for any landlet with an empty polygon.
 
+-- migrations/0018_protect_ring_candidate_geometry.sql made ring-generated
+-- candidate rows immutable (by design — a live ring reservation must not
+-- have members move or disappear underneath it). This one-time reset needs
+-- to clear them anyway, so the guard comes down for the duration of this
+-- migration and goes back up identical to how 0018 left it, since the
+-- legacy ring-generation endpoint remains in the Worker and any future ring
+-- data should stay protected the same way.
+DROP TRIGGER IF EXISTS protect_land_candidate_ring_member_delete;
+DROP TRIGGER IF EXISTS protect_land_candidate_ring_member_geometry;
+
 DELETE FROM version_instances;
 DELETE FROM landlet_versions;
 DELETE FROM placed_instances;
@@ -19,6 +29,21 @@ DELETE FROM landlet_candidates;
 UPDATE land_candidate_rings SET adjacent_to_ring_id = NULL;
 DELETE FROM land_candidate_rings;
 DELETE FROM landlets WHERE landlet_id <> 'starter-landlet';
+
+CREATE TRIGGER protect_land_candidate_ring_member_delete
+BEFORE DELETE ON landlet_candidates
+WHEN OLD.ring_id IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'generated ring candidates are immutable');
+END;
+
+CREATE TRIGGER protect_land_candidate_ring_member_geometry
+BEFORE UPDATE OF area_m2, center_x_m, center_y_m, land_class, polygon_json, ring_id
+ON landlet_candidates
+WHEN OLD.ring_id IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'generated ring candidates are immutable');
+END;
 
 UPDATE landlets
 SET name = 'Starter landlet',
