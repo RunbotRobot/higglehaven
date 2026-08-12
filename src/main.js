@@ -13,6 +13,7 @@ import {
   uploadModelFile,
   createCatalogTemplate,
   fetchLandlets,
+  fetchLandlet,
   claimLandlet,
   fetchWorld,
   expandWorld,
@@ -20,7 +21,9 @@ import {
   fetchLandCandidateRing,
   completeRingGeneration,
 } from './api.js';
-import { getOrCreateBuilderId, setBuilderId } from './builderIdentity.js';
+import {
+  listIdentities, getActiveBuilderId, setActiveBuilderId, createIdentity, renameIdentity,
+} from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -30,12 +33,14 @@ import { optimizeModelFile } from './modelOptimizer.js';
 // FALLBACK_CATALOG directly.
 let activeCatalog = FALLBACK_CATALOG;
 
-// There's no auth system yet — a builder is just a random ID persisted in
-// localStorage (see builderIdentity.js). currentLandletId is settled once,
-// in bootstrap() below (via the claim flow — see resolveLandletId), before
-// anything reads it; every instance created afterward is tagged with it so
-// builders only ever see and edit their own landlet's placed products.
-const builderId = getOrCreateBuilderId();
+// There's no auth system yet — a builder is just one of a list of random
+// IDs persisted in localStorage (see builderIdentity.js), chosen via the
+// builder menu at startup (runBuilderMenu, below). Both builderId and
+// currentLandletId are settled once, in bootstrap(), before anything reads
+// them; every instance created afterward is tagged with the chosen
+// builder's ID so builders only ever see and edit their own landlet's
+// placed products.
+let builderId = null;
 let currentLandletId = 'starter-landlet';
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
@@ -92,6 +97,7 @@ controls.enableDamping = true;
 // "zoom" here is really "fly forward/backward" and can cover any distance
 // over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
+controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground — same convention as the claim flyover
 
 // Every product's *collision* footprint is a simple box (see dimensions on
 // its catalog template), independent of whatever its actual visual model
@@ -457,13 +463,28 @@ sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
 
 // PlaneGeometry already lies flat in the XY plane by default — which is
-// now our ground plane (Z-up), so unlike before, no rotation is needed.
+// now our ground plane (Z-up), so unlike before, no rotation is needed. This
+// square is only a placeholder shown before bootstrap() resolves which
+// landlet is actually being built on — applyLandletShape() below swaps the
+// geometry for the real polygon once that's known. The mesh itself (and its
+// raycasting target at line ~1343ish) has to exist immediately, since
+// ground-click placement can happen before that fetch resolves.
 const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
 // DoubleSide so the plane stays visible from below during dev orbiting;
 // the finished game will never let a shopper get under the ground plane.
 const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 scene.add(landlet);
+
+// Swaps the ground mesh's geometry for the landlet's real polygon (plot-
+// local offsets from its own center, per docs/API.md) once bootstrap() has
+// fetched it — a plain square fallback (shapeForLandlet's own fallback) for
+// legacy/placeholder landlets that predate real procedural generation.
+function applyLandletShape(landletRecord) {
+  const oldGeometry = landlet.geometry;
+  landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
+  oldGeometry.dispose();
+}
 
 function findTemplate(templateId) {
   return activeCatalog.find((template) => template.templateId === templateId);
@@ -1765,58 +1786,105 @@ async function resolveLandletId() {
   return runClaimFlow();
 }
 
-// Dev-only stand-in for "log in as a different builder": there's no auth
-// system, so switching identity just overwrites the localStorage ID and
-// reloads — bootstrap() re-runs getOrCreateBuilderId() fresh on load, which
-// naturally reopens the claim flow if the new identity owns nothing yet.
+// Dev-only stand-in for accounts: no passwords, just a locally-kept list of
+// IDs (see builderIdentity.js) a builder can add to, rename, and switch
+// between — e.g. to claim more than one landlet for testing. The same list
+// UI serves two purposes: runBuilderMenu() blocks bootstrap() at startup
+// until one is chosen (mandatory — no Close button), and #identity-btn
+// reopens it any time afterward to switch or rename (Close button shown,
+// since there's already an active choice to dismiss back to).
 const identityBtn = document.getElementById('identity-btn');
 const identityModalEl = document.getElementById('identity-modal');
-const identityCurrentIdEl = document.getElementById('identity-current-id');
-const identityCopyBtn = document.getElementById('identity-copy-btn');
+const identityModalTitleEl = document.getElementById('identity-modal-title');
+const identityListEl = document.getElementById('identity-list');
 const identityNewBtn = document.getElementById('identity-new-btn');
-const identitySwitchInput = document.getElementById('identity-switch-input');
-const identitySwitchBtn = document.getElementById('identity-switch-btn');
 const identityStatusEl = document.getElementById('identity-status');
 const identityCloseBtn = document.getElementById('identity-close-btn');
 
+// Re-render needs to know which onChoose callback is live (runBuilderMenu's
+// vs #identity-btn's) — set whenever the modal opens, read by both the
+// per-row Choose buttons and #identity-new-btn (a fresh row needs the same
+// callback wired up as everything else currently on screen).
+let identityOnChoose = null;
+
+function renderIdentityList() {
+  const identities = listIdentities();
+  const activeId = getActiveBuilderId();
+  identityListEl.innerHTML = '';
+  for (const identity of identities) {
+    const row = document.createElement('div');
+    row.className = `identity-row${identity.id === activeId ? ' active' : ''}`;
+
+    const info = document.createElement('div');
+    info.className = 'identity-row-info';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'identity-row-label';
+    labelEl.textContent = identity.label;
+    const idEl = document.createElement('div');
+    idEl.className = 'identity-row-id';
+    idEl.textContent = identity.id;
+    info.append(labelEl, idEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'identity-row-actions';
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', () => {
+      const next = prompt('Rename this builder', identity.label);
+      if (next && next.trim()) {
+        renameIdentity(identity.id, next.trim());
+        renderIdentityList();
+      }
+    });
+    const chooseBtn = document.createElement('button');
+    chooseBtn.type = 'button';
+    chooseBtn.className = 'identity-choose-btn';
+    chooseBtn.textContent = 'Play';
+    chooseBtn.addEventListener('click', () => identityOnChoose(identity.id));
+    actions.append(renameBtn, chooseBtn);
+
+    row.append(info, actions);
+    identityListEl.appendChild(row);
+  }
+}
+
+function runBuilderMenu() {
+  return new Promise((resolve) => {
+    identityModalTitleEl.textContent = 'Choose a builder';
+    identityCloseBtn.style.display = 'none';
+    identityStatusEl.textContent = '';
+    identityOnChoose = (id) => {
+      setActiveBuilderId(id);
+      identityModalEl.classList.remove('visible');
+      resolve(id);
+    };
+    identityModalEl.classList.add('visible');
+    renderIdentityList();
+  });
+}
+
 identityBtn.addEventListener('click', () => {
-  identityCurrentIdEl.textContent = builderId;
-  identitySwitchInput.value = '';
+  identityModalTitleEl.textContent = 'Builder identity';
+  identityCloseBtn.style.display = '';
   identityStatusEl.textContent = '';
-  identityStatusEl.classList.remove('error');
+  identityOnChoose = (id) => {
+    identityModalEl.classList.remove('visible');
+    if (id === builderId) return; // already this builder — nothing to reload
+    setActiveBuilderId(id);
+    location.reload();
+  };
   identityModalEl.classList.add('visible');
+  renderIdentityList();
 });
 
 identityCloseBtn.addEventListener('click', () => {
   identityModalEl.classList.remove('visible');
 });
 
-identityCopyBtn.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(builderId);
-    identityCopyBtn.textContent = 'Copied!';
-  } catch {
-    identityCopyBtn.textContent = "Couldn't copy";
-  }
-  setTimeout(() => {
-    identityCopyBtn.textContent = 'Copy';
-  }, 1200);
-});
-
 identityNewBtn.addEventListener('click', () => {
-  setBuilderId(`builder-${crypto.randomUUID()}`);
-  location.reload();
-});
-
-identitySwitchBtn.addEventListener('click', () => {
-  const id = identitySwitchInput.value.trim();
-  if (!id) {
-    identityStatusEl.textContent = 'Paste an identity first.';
-    identityStatusEl.classList.add('error');
-    return;
-  }
-  setBuilderId(id);
-  location.reload();
+  createIdentity();
+  renderIdentityList();
 });
 
 const claimModalEl = document.getElementById('claim-modal');
@@ -1865,6 +1933,8 @@ function disposeClaimFlyover() {
   }
   for (const outline of claimFlyover.plotOutlines) outline.geometry.dispose();
   claimFlyover.plotOutlineMaterial.dispose();
+  claimFlyover.selectionOutline?.geometry.dispose();
+  claimFlyover.selectionOutlineMaterial.dispose();
   claimFlyover = null;
 }
 
@@ -1977,13 +2047,12 @@ async function loadLandletMap(resolve) {
     plotOutlines.push(outline);
   }
 
-  const selectionOutline = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)),
-    new THREE.LineBasicMaterial({ color: 0xffffff }),
-  );
-  selectionOutline.visible = false;
-  selectionOutline.renderOrder = 1;
-  scene.add(selectionOutline);
+  // A dedicated outline per selection, built from the same polygon as the
+  // plot itself (not a bounding box, which reads as a plain rectangle for
+  // every non-square shape) — swapped out on each click the same way
+  // applyLandletShape() swaps the main builder scene's ground geometry.
+  const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+  let selectionOutline = null;
 
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, radiusM * 20);
   camera.up.set(0, 0, 1); // Z-up, matching the builder scene's own convention
@@ -2020,13 +2089,16 @@ async function loadLandletMap(resolve) {
     const mesh = hits[0].object;
     const landlet = mesh.userData.landlet;
 
-    const box = new THREE.Box3().setFromObject(mesh);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    selectionOutline.scale.set(Math.max(size.x, 0.01), Math.max(size.y, 0.01), 1);
-    selectionOutline.position.copy(mesh.position);
-    selectionOutline.position.z += 0.01;
-    selectionOutline.visible = true;
+    if (selectionOutline) {
+      scene.remove(selectionOutline);
+      selectionOutline.geometry.dispose();
+    }
+    const outlinePoints = shapeForLandlet(landlet).getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0));
+    selectionOutline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outlinePoints), selectionOutlineMaterial);
+    selectionOutline.position.set(landlet.center.x, landlet.center.y, 0.07);
+    selectionOutline.renderOrder = 2;
+    scene.add(selectionOutline);
+    claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
     claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
@@ -2041,6 +2113,7 @@ async function loadLandletMap(resolve) {
   }
   claimFlyover = {
     scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, animationHandle: 0,
+    selectionOutline: null, selectionOutlineMaterial,
   };
   animate();
 
@@ -2135,12 +2208,16 @@ async function growTheWorld(resolve) {
 // Runs after animate() has already started so the (empty, for now) scene
 // renders immediately rather than waiting on the network.
 async function bootstrap() {
+  builderId = await runBuilderMenu();
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances] = await Promise.all([fetchCatalog(), fetchInstances(currentLandletId)]);
+    const [catalog, remoteInstances, landletRecord] = await Promise.all([
+      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId),
+    ]);
     activeCatalog = catalog;
     instances = remoteInstances;
+    applyLandletShape(landletRecord);
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;

@@ -361,8 +361,12 @@
       #upload-submit-btn:disabled {
         opacity: 0.5;
       }
-      /* Same modal shell as #upload-modal, opened on demand from
-         #identity-btn rather than automatically. */
+      /* Same modal shell as #upload-modal. Shown automatically at startup
+         (before bootstrap() resolves a landlet, so a builder is chosen
+         first) and reopenable any time afterward from #identity-btn — the
+         only difference is #identity-close-btn's visibility, toggled in
+         main.js, since there's nothing to close back to before a first
+         choice is made. */
       #identity-modal {
         position: fixed;
         inset: 0;
@@ -398,7 +402,14 @@
         font-size: 12px;
         color: rgb(255 255 255 / 0.65);
       }
-      #identity-current-row {
+      #identity-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 45vh;
+        overflow-y: auto;
+      }
+      .identity-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -406,37 +417,49 @@
         background: rgb(255 255 255 / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
+        border: 1px solid transparent;
       }
-      #identity-current-id {
-        font-size: 11px;
-        color: rgb(255 255 255 / 0.85);
+      .identity-row.active {
+        border-color: rgb(108 164 46 / 0.7);
+        background: rgb(108 164 46 / 0.12);
+      }
+      .identity-row-info {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .identity-row-label {
+        font-size: 14px;
+        color: #fff;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .identity-row-id {
+        font-size: 10px;
+        color: rgb(255 255 255 / 0.5);
         overflow-wrap: anywhere;
       }
-      #identity-current-row button,
-      #identity-switch-row button,
+      .identity-row-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .identity-row-actions button,
       #identity-new-btn,
       #identity-close-btn {
-        padding: 8px 16px;
+        padding: 7px 14px;
         border-radius: 999px;
         border: none;
-        font: 14px/1.4 sans-serif;
+        font: 13px/1.4 sans-serif;
         background: rgb(255 255 255 / 0.15);
         color: #fff;
         white-space: nowrap;
       }
-      #identity-switch-row {
-        display: flex;
-        gap: 8px;
-      }
-      #identity-switch-input {
-        flex: 1;
-        min-width: 0;
-        padding: 8px 10px;
-        border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
-        font: 13px/1.4 sans-serif;
+      .identity-row-actions .identity-choose-btn {
+        background: var(--brand-green);
+        color: #16240a;
       }
       #identity-status {
         font-size: 13px;
@@ -637,22 +660,15 @@
     </div>
     <div id="identity-modal">
       <div id="identity-modal-content">
-        <h2>Builder identity</h2>
+        <h2 id="identity-modal-title">Choose a builder</h2>
         <div id="identity-hint">
-          Dev-only stand-in for login — no password, just an ID kept in this browser. Switch to explore the app as a
-          different builder (e.g. to claim another landlet), or copy this one down to switch back to it later.
+          Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to build as, rename any
+          of them, or add a new one.
         </div>
-        <div id="identity-current-row">
-          <code id="identity-current-id"></code>
-          <button id="identity-copy-btn" type="button">Copy</button>
-        </div>
-        <button id="identity-new-btn" type="button">New identity</button>
-        <div id="identity-switch-row">
-          <input id="identity-switch-input" type="text" placeholder="Paste an identity to switch to it" />
-          <button id="identity-switch-btn" type="button">Switch</button>
-        </div>
+        <div id="identity-list"></div>
+        <button id="identity-new-btn" type="button">+ New identity</button>
         <div id="identity-status"></div>
-        <button id="identity-close-btn" type="button">Close</button>
+        <button id="identity-close-btn" type="button" style="display: none">Close</button>
       </div>
     </div>
     <div id="claim-modal">

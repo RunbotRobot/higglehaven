@@ -42,6 +42,11 @@ export async function fetchLandlets(params = {}) {
   return landlets;
 }
 
+export async function fetchLandlet(landletId) {
+  const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}`);
+  return landlet;
+}
+
 export async function claimLandlet(landletId, builderId) {
   const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/claim`, {
     method: 'POST',
