@@ -363,14 +363,17 @@
       }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
-         first) and reopenable any time afterward from #identity-btn — the
-         only difference is #identity-close-btn's visibility, toggled in
-         main.js, since there's nothing to close back to before a first
-         choice is made. */
+         first) and reopenable any time afterward from #identity-btn or the
+         claim modal's Back button — the only difference is
+         #identity-close-btn's visibility, toggled in main.js, since there's
+         nothing to close back to before a first choice is made. z-index is
+         above #claim-modal's (30) so opening it from Back can simply
+         overlay the claim modal (still visible, untouched, underneath)
+         instead of having to hide and later reconstruct it. */
       #identity-modal {
         position: fixed;
         inset: 0;
-        z-index: 25;
+        z-index: 35;
         display: none;
         align-items: center;
         justify-content: center;
@@ -688,9 +691,9 @@
         </div>
         <div id="claim-status"></div>
         <div id="claim-modal-actions">
+          <button id="claim-back-btn" type="button">Back</button>
           <button id="claim-grow-btn" type="button" style="display: none">Grow the world</button>
           <button id="claim-refresh-btn" type="button">Refresh</button>
-          <button id="claim-skip-btn" type="button">Use shared dev landlet</button>
         </div>
       </div>
     </div>

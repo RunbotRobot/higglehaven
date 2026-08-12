@@ -75,3 +75,13 @@ export function renameIdentity(id, label) {
   entry.label = label;
   writeIdentities(identities);
 }
+
+// Only removes the local identity — whatever it already claimed/placed
+// server-side is unaffected and stays under that now-orphaned ID forever
+// (there's no unclaim flow). That's the point for "test from a clean
+// slate": the next listIdentities() call self-heals back to at least one
+// identity if this empties the list.
+export function deleteIdentity(id) {
+  writeIdentities(listIdentities().filter((identity) => identity.id !== id));
+  if (getActiveBuilderId() === id) localStorage.removeItem(ACTIVE_ID_KEY);
+}

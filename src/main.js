@@ -22,7 +22,7 @@ import {
   completeRingGeneration,
 } from './api.js';
 import {
-  listIdentities, getActiveBuilderId, setActiveBuilderId, createIdentity, renameIdentity,
+  listIdentities, getActiveBuilderId, setActiveBuilderId, createIdentity, renameIdentity, deleteIdentity,
 } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
@@ -1837,12 +1837,22 @@ function renderIdentityList() {
         renderIdentityList();
       }
     });
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', () => {
+      // A local-only removal (see deleteIdentity's own comment) — the
+      // confirm exists because there's no undo for losing track of this ID.
+      if (!confirm(`Delete "${identity.label}"? Anything it already claimed or placed stays as-is, just no longer reachable from this list.`)) return;
+      deleteIdentity(identity.id);
+      renderIdentityList();
+    });
     const chooseBtn = document.createElement('button');
     chooseBtn.type = 'button';
     chooseBtn.className = 'identity-choose-btn';
     chooseBtn.textContent = 'Play';
     chooseBtn.addEventListener('click', () => identityOnChoose(identity.id));
-    actions.append(renameBtn, chooseBtn);
+    actions.append(renameBtn, deleteBtn, chooseBtn);
 
     row.append(info, actions);
     identityListEl.appendChild(row);
@@ -1864,7 +1874,13 @@ function runBuilderMenu() {
   });
 }
 
-identityBtn.addEventListener('click', () => {
+// Shared by #identity-btn and the claim modal's Back button — the identity
+// modal sits at a higher z-index than the claim modal (see index.html) so
+// it can overlay it without needing to hide/reopen the claim modal
+// underneath: choosing the same builder just closes back to it unchanged,
+// and choosing a different one reloads (which tears down and rebuilds
+// everything, claim modal included, for the new builder).
+function openBuilderSwitcher() {
   identityModalTitleEl.textContent = 'Builder identity';
   identityCloseBtn.style.display = '';
   identityStatusEl.textContent = '';
@@ -1876,7 +1892,9 @@ identityBtn.addEventListener('click', () => {
   };
   identityModalEl.classList.add('visible');
   renderIdentityList();
-});
+}
+
+identityBtn.addEventListener('click', openBuilderSwitcher);
 
 identityCloseBtn.addEventListener('click', () => {
   identityModalEl.classList.remove('visible');
@@ -1891,7 +1909,7 @@ const claimModalEl = document.getElementById('claim-modal');
 const claimMapCanvas = document.getElementById('claim-map-canvas');
 const claimStatusEl = document.getElementById('claim-status');
 const claimRefreshBtn = document.getElementById('claim-refresh-btn');
-const claimSkipBtn = document.getElementById('claim-skip-btn');
+const claimBackBtn = document.getElementById('claim-back-btn');
 const claimGrowBtn = document.getElementById('claim-grow-btn');
 const claimSelectionNameEl = document.getElementById('claim-selection-name');
 const claimConfirmBtn = document.getElementById('claim-confirm-btn');
@@ -1902,16 +1920,7 @@ function runClaimFlow() {
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
     claimGrowBtn.onclick = () => growTheWorld(resolve);
-    // Dev-only escape hatch: the world may not have grown enough yet to have
-    // any greenbelt landlets at all (a fresh/local backend starts with none
-    // — see docs/API.md), and this app is never publicly deployed, so
-    // falling back to the original single shared landlet keeps the app
-    // usable rather than hard-blocking on a claim.
-    claimSkipBtn.onclick = () => {
-      disposeClaimFlyover();
-      claimModalEl.classList.remove('visible');
-      resolve('starter-landlet');
-    };
+    claimBackBtn.onclick = openBuilderSwitcher;
   });
 }
 
@@ -2053,6 +2062,7 @@ async function loadLandletMap(resolve) {
   // applyLandletShape() swaps the main builder scene's ground geometry.
   const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
   let selectionOutline = null;
+  let selectedMesh = null;
 
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, radiusM * 20);
   camera.up.set(0, 0, 1); // Z-up, matching the builder scene's own convention
@@ -2088,6 +2098,15 @@ async function loadLandletMap(resolve) {
     if (hits.length === 0) return;
     const mesh = hits[0].object;
     const landlet = mesh.userData.landlet;
+
+    if (selectedMesh) {
+      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[selectedMesh.userData.landlet.status] ?? 0xffffff);
+    }
+    selectedMesh = mesh;
+    // Lighten toward white rather than using a fixed highlight color, so
+    // the highlighted plot still visibly carries its own status color
+    // (available vs. claimed) instead of every selection looking the same.
+    mesh.material.color.setHex(CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
 
     if (selectionOutline) {
       scene.remove(selectionOutline);
