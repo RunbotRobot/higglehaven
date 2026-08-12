@@ -1890,7 +1890,7 @@ function shapeForLandlet(landlet) {
   return shape;
 }
 
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
+const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888 };
 
 // A navigable overhead flyover: an orbit-controlled camera looking down at
 // a flat rendering of the whole world circle and every landlet in it, each
@@ -1911,7 +1911,16 @@ async function loadLandletMap(resolve) {
   let world;
   let landlets;
   try {
-    [world, landlets] = await Promise.all([fetchWorld(), fetchLandlets({ limit: 100 })]);
+    // Landlets still generating (not yet enclosed by the world's expansion
+    // radius) are queued backend state, not something to show a builder —
+    // only fetch the two statuses that are meaningful to see/select here.
+    const [fetchedWorld, greenbeltLandlets, claimedLandlets] = await Promise.all([
+      fetchWorld(),
+      fetchLandlets({ status: 'greenbelt', limit: 100 }),
+      fetchLandlets({ status: 'claimed', limit: 100 }),
+    ]);
+    world = fetchedWorld;
+    landlets = [...greenbeltLandlets, ...claimedLandlets];
   } catch (err) {
     claimStatusEl.textContent = err.message || 'Could not load the world.';
     claimStatusEl.classList.add('error');
@@ -2019,7 +2028,7 @@ async function loadLandletMap(resolve) {
     selectionOutline.position.z += 0.01;
     selectionOutline.visible = true;
 
-    const statusLabel = landlet.status === 'greenbelt' ? 'Available' : landlet.status === 'claimed' ? 'Claimed' : 'Generating';
+    const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
     claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
