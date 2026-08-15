@@ -1512,3 +1512,90 @@ describe('Worker API', () => {
     });
   });
 });
+
+describe('Builders', () => {
+  it('creates, lists, renames, and validates builders', async () => {
+    const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Ada' }) });
+    expect(created.response.status).toBe(201);
+    expect(created.body.builder.label).toBe('Ada');
+    expect(created.body.builder.builderId).toMatch(/^builder-/);
+
+    const withId = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ builderId: 'builder-explicit-1', label: 'Grace' }),
+    });
+    expect(withId.response.status).toBe(201);
+    expect(withId.body.builder.builderId).toBe('builder-explicit-1');
+
+    const duplicate = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ builderId: 'builder-explicit-1', label: 'Grace again' }),
+    });
+    expect(duplicate.response.status).toBe(409);
+
+    const list = await api('/builders');
+    expect(list.response.status).toBe(200);
+    expect(list.body.builders.map((b) => b.builderId)).toEqual(
+      expect.arrayContaining([created.body.builder.builderId, 'builder-explicit-1']),
+    );
+
+    const renamed = await api(`/builders/${created.body.builder.builderId}`, {
+      method: 'PATCH', body: JSON.stringify({ label: 'Ada Lovelace' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.builder.label).toBe('Ada Lovelace');
+
+    const renameMissing = await api('/builders/builder-does-not-exist', {
+      method: 'PATCH', body: JSON.stringify({ label: 'x' }),
+    });
+    expect(renameMissing.response.status).toBe(404);
+  });
+
+  it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
+    const builder = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Temp' }) });
+    const builderId = builder.body.builder.builderId;
+
+    await createGreenbeltLandlet('release-test-landlet');
+    const claimed = await api('/landlets/release-test-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId }),
+    });
+    expect(claimed.response.status).toBe(200);
+    const originalPolygon = claimed.body.landlet.polygon;
+
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'release-test-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    });
+    await api('/landlets/release-test-landlet/versions', {
+      method: 'POST', body: JSON.stringify({ name: 'A build worth keeping' }),
+    });
+
+    const deleted = await api(`/builders/${builderId}`, { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['release-test-landlet']);
+
+    const released = await api('/landlets/release-test-landlet');
+    expect(released.body.landlet.status).toBe('greenbelt');
+    expect(released.body.landlet.ownerBuilderId).toBeNull();
+    expect(released.body.landlet.activeVersionId).toBeNull();
+    expect(released.body.landlet.polygon).toEqual(originalPolygon);
+
+    const instances = await api('/instances?landletId=release-test-landlet');
+    expect(instances.body.instances).toEqual([]);
+    const versions = await api('/landlets/release-test-landlet/versions');
+    expect(versions.body.versions).toEqual([]);
+
+    const gone = await api(`/builders/${builderId}`);
+    expect(gone.response.status).toBe(404);
+
+    const reclaimed = await api('/landlets/release-test-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId: 'builder-someone-else' }),
+    });
+    expect(reclaimed.response.status).toBe(200);
+  });
+
+  it('deleting a builder who owns nothing just removes them', async () => {
+    const builder = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owns nothing' }) });
+    const deleted = await api(`/builders/${builder.body.builder.builderId}`, { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual([]);
+  });
+});

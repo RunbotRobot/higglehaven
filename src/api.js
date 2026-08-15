@@ -18,6 +18,37 @@ export async function fetchCatalog() {
   return templates;
 }
 
+export async function fetchBuilders() {
+  const { builders } = await requestJson('/builders');
+  return builders;
+}
+
+export async function createBuilder(label, builderId) {
+  const { builder } = await requestJson('/builders', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(builderId ? { label, builderId } : { label }),
+  });
+  return builder;
+}
+
+export async function renameBuilder(builderId, label) {
+  const { builder } = await requestJson(`/builders/${encodeURIComponent(builderId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  return builder;
+}
+
+// Releases whatever this builder currently owns back to greenbelt
+// server-side (see docs/API.md) — the caller doesn't need to separately
+// reset the landlet.
+export async function deleteBuilder(builderId) {
+  const result = await requestJson(`/builders/${encodeURIComponent(builderId)}`, { method: 'DELETE' });
+  return result.releasedLandletIds;
+}
+
 export async function fetchInstances(landletId) {
   const { instances } = await requestJson(`/instances?landletId=${encodeURIComponent(landletId)}`);
   return instances;
@@ -45,6 +76,23 @@ export async function fetchLandlets(params = {}) {
 export async function fetchLandlet(landletId) {
   const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}`);
   return landlet;
+}
+
+// Pages through every landlet regardless of world size — unlike
+// fetchLandlets above (which returns one page and drops nextCursor), Shop
+// mode needs the whole world's ground shapes up front, not just the first
+// 100.
+export async function fetchAllLandlets() {
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { landlets, nextCursor } = await requestJson(`/landlets?${query.toString()}`);
+    all.push(...landlets);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 export async function claimLandlet(landletId, builderId) {

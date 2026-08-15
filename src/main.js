@@ -20,10 +20,13 @@ import {
   generateLandRing,
   fetchLandCandidateRing,
   completeRingGeneration,
+  fetchBuilders,
+  createBuilder,
+  renameBuilder,
+  deleteBuilder,
+  fetchAllLandlets,
 } from './api.js';
-import {
-  listIdentities, getActiveBuilderId, setActiveBuilderId, createIdentity, renameIdentity, deleteIdentity,
-} from './builderIdentity.js';
+import { getActiveBuilderId, setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -42,6 +45,13 @@ let activeCatalog = FALLBACK_CATALOG;
 // placed products.
 let builderId = null;
 let currentLandletId = 'starter-landlet';
+
+// Declared here (rather than alongside the rest of Shop mode, much further
+// down) because animate() below reads it on every frame starting from its
+// very first, synchronous call at module load — a `let` declared after
+// that point would be in its temporal dead zone the first time animate()
+// runs, throwing before the app ever renders a frame.
+let shopActive = false;
 
 // Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
 // A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
@@ -1747,10 +1757,14 @@ function applyEdgePanWhileDraggingProduct() {
 
 function animate(now) {
   requestAnimationFrame(animate);
-  updateTargetTween(now);
-  applyEdgePanWhileDraggingProduct();
-  controls.update();
-  updateCameraDebug(now);
+  if (shopActive) {
+    updateShopFlight(now);
+  } else {
+    updateTargetTween(now);
+    applyEdgePanWhileDraggingProduct();
+    controls.update();
+    updateCameraDebug(now);
+  }
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -1807,13 +1821,28 @@ const identityCloseBtn = document.getElementById('identity-close-btn');
 // callback wired up as everything else currently on screen).
 let identityOnChoose = null;
 
-function renderIdentityList() {
-  const identities = listIdentities();
-  const activeId = getActiveBuilderId();
+// The roster itself is fetched fresh from the server every time the modal
+// opens (see docs/API.md's "Builders" section) — it's shared across
+// devices now, so a stale local copy could easily be missing a builder
+// someone just created or deleted elsewhere.
+async function renderIdentityList() {
   identityListEl.innerHTML = '';
+  identityStatusEl.textContent = 'Loading builders…';
+  identityStatusEl.classList.remove('error');
+  let identities;
+  try {
+    identities = await fetchBuilders();
+  } catch (err) {
+    identityStatusEl.textContent = err.message || 'Could not load builders.';
+    identityStatusEl.classList.add('error');
+    return;
+  }
+  identityStatusEl.textContent = '';
+
+  const activeId = getActiveBuilderId();
   for (const identity of identities) {
     const row = document.createElement('div');
-    row.className = `identity-row${identity.id === activeId ? ' active' : ''}`;
+    row.className = `identity-row${identity.builderId === activeId ? ' active' : ''}`;
 
     const info = document.createElement('div');
     info.className = 'identity-row-info';
@@ -1822,7 +1851,7 @@ function renderIdentityList() {
     labelEl.textContent = identity.label;
     const idEl = document.createElement('div');
     idEl.className = 'identity-row-id';
-    idEl.textContent = identity.id;
+    idEl.textContent = identity.builderId;
     info.append(labelEl, idEl);
 
     const actions = document.createElement('div');
@@ -1830,28 +1859,38 @@ function renderIdentityList() {
     const renameBtn = document.createElement('button');
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
-    renameBtn.addEventListener('click', () => {
+    renameBtn.addEventListener('click', async () => {
       const next = prompt('Rename this builder', identity.label);
-      if (next && next.trim()) {
-        renameIdentity(identity.id, next.trim());
-        renderIdentityList();
+      if (!next || !next.trim()) return;
+      try {
+        await renameBuilder(identity.builderId, next.trim());
+      } catch (err) {
+        identityStatusEl.textContent = err.message || 'Could not rename.';
+        identityStatusEl.classList.add('error');
       }
+      renderIdentityList();
     });
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', () => {
-      // A local-only removal (see deleteIdentity's own comment) — the
-      // confirm exists because there's no undo for losing track of this ID.
-      if (!confirm(`Delete "${identity.label}"? Anything it already claimed or placed stays as-is, just no longer reachable from this list.`)) return;
-      deleteIdentity(identity.id);
+    deleteBtn.addEventListener('click', async () => {
+      // Shared across devices now, and deleting genuinely releases
+      // whatever land this builder owns (see docs/API.md) — the confirm
+      // matters more than it used to.
+      if (!confirm(`Delete "${identity.label}"? Any land it owns is cleared and goes back to available — not just removed from this list.`)) return;
+      try {
+        await deleteBuilder(identity.builderId);
+      } catch (err) {
+        identityStatusEl.textContent = err.message || 'Could not delete.';
+        identityStatusEl.classList.add('error');
+      }
       renderIdentityList();
     });
     const chooseBtn = document.createElement('button');
     chooseBtn.type = 'button';
     chooseBtn.className = 'identity-choose-btn';
     chooseBtn.textContent = 'Play';
-    chooseBtn.addEventListener('click', () => identityOnChoose(identity.id));
+    chooseBtn.addEventListener('click', () => identityOnChoose(identity.builderId));
     actions.append(renameBtn, deleteBtn, chooseBtn);
 
     row.append(info, actions);
@@ -1863,7 +1902,6 @@ function runBuilderMenu() {
   return new Promise((resolve) => {
     identityModalTitleEl.textContent = 'Choose a builder';
     identityCloseBtn.style.display = 'none';
-    identityStatusEl.textContent = '';
     identityOnChoose = (id) => {
       setActiveBuilderId(id);
       identityModalEl.classList.remove('visible');
@@ -1883,7 +1921,6 @@ function runBuilderMenu() {
 function openBuilderSwitcher() {
   identityModalTitleEl.textContent = 'Builder identity';
   identityCloseBtn.style.display = '';
-  identityStatusEl.textContent = '';
   identityOnChoose = (id) => {
     identityModalEl.classList.remove('visible');
     if (id === builderId) return; // already this builder — nothing to reload
@@ -1900,9 +1937,263 @@ identityCloseBtn.addEventListener('click', () => {
   identityModalEl.classList.remove('visible');
 });
 
-identityNewBtn.addEventListener('click', () => {
-  createIdentity();
+identityNewBtn.addEventListener('click', async () => {
+  const label = prompt('Name this builder', '');
+  if (!label || !label.trim()) return;
+  try {
+    await createBuilder(label.trim());
+  } catch (err) {
+    identityStatusEl.textContent = err.message || 'Could not create builder.';
+    identityStatusEl.classList.add('error');
+  }
   renderIdentityList();
+});
+
+// Shop: a visitor mode reached straight from the builder-choice screen, no
+// identity needed, since visiting doesn't build or claim anything. Unlike
+// the claim flyover (a separate small canvas/renderer showing a top-down
+// map you tap to select a plot), Shop is full-screen continuous flight
+// through the real world using the *same* scene/camera/renderer the
+// builder view uses — reused rather than duplicated, partly to avoid
+// fighting mobile browsers' low limit on simultaneous WebGL contexts, and
+// partly because "the same ground/instance data, seen from a moving
+// camera" is genuinely the same rendering problem the builder scene
+// already solves for one landlet, just for many at once.
+//
+// Every landlet has an absolute world position (center_x_m/center_y_m);
+// every placed instance's x/y is local to its own landlet (see
+// docs/API.md) — so an instance's true position here is
+// landlet.center + instance.(x,y). Each landlet gets a THREE.Group
+// positioned at that center, and its instances are added as children at
+// their ordinary local coordinates, so nothing about createMeshForInstance
+// itself needs to know Shop mode exists.
+const shopExitBtn = document.getElementById('shop-exit-btn');
+const shopStatusEl = document.getElementById('shop-status');
+const shopHintEl = document.getElementById('shop-hint');
+const shopBtn = document.getElementById('shop-btn');
+
+const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
+const SHOP_FLIGHT_SPEED_M_S = 14;
+const SHOP_MIN_HEIGHT_M = 1.5;
+const SHOP_STEER_SENSITIVITY = 0.0032;
+const SHOP_MAX_PITCH = Math.PI * 0.47;
+const SHOP_LOAD_RADIUS_M = 60;
+const SHOP_UNLOAD_RADIUS_M = 90;
+const SHOP_PROXIMITY_INTERVAL_MS = 400;
+
+let shopYaw = 0;
+let shopPitch = -0.12;
+let shopDragging = false;
+let shopLastPointerX = 0;
+let shopLastPointerY = 0;
+let shopLastFrameTime = null;
+let shopLastProximityCheck = 0;
+const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
+const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
+
+// THREE's camera looks down its own local -Z by default, with +Y as local
+// "up" — a convention for a Y-up world, not this app's Z-up one. Composing
+// yaw (world Z) and pitch (local X) directly on top of that default, with
+// no correction, points "yaw=0, pitch=0" straight down at the ground
+// instead of level at the horizon: pitch's rotation axis is fine (X stays
+// X either way), but the *forward* it's pitching away from is wrong.
+// SHOP_BASE_QUAT reorients the default forward from world -Z to world +Y
+// (level, matching camera.up.set(0,0,1)'s Z-up convention already used
+// everywhere else in this app) before yaw/pitch are ever applied, so
+// pitch=0 means level and pitch's sign means what it looks like it means.
+const SHOP_BASE_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+
+function applyShopCameraOrientation() {
+  const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), shopYaw);
+  const pitchQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), shopPitch);
+  camera.quaternion.copy(yawQuat).multiply(pitchQuat).multiply(SHOP_BASE_QUAT);
+}
+
+// Registered once, unconditionally, but a no-op whenever Shop isn't active
+// — capture-phase + stopImmediatePropagation() when it *is* active fully
+// insulates the builder scene's own product-drag/multi-select/gizmo
+// listeners on the same canvas, rather than needing every one of those
+// (there are close to a dozen) individually guarded against firing during
+// flight.
+function shopOnPointerDown(event) {
+  if (!shopActive) return;
+  event.stopImmediatePropagation();
+  shopDragging = true;
+  shopLastPointerX = event.clientX;
+  shopLastPointerY = event.clientY;
+}
+function shopOnPointerMove(event) {
+  if (!shopActive || !shopDragging) return;
+  event.stopImmediatePropagation();
+  const dx = event.clientX - shopLastPointerX;
+  const dy = event.clientY - shopLastPointerY;
+  shopLastPointerX = event.clientX;
+  shopLastPointerY = event.clientY;
+  shopYaw -= dx * SHOP_STEER_SENSITIVITY;
+  shopPitch = Math.max(-SHOP_MAX_PITCH, Math.min(SHOP_MAX_PITCH, shopPitch - dy * SHOP_STEER_SENSITIVITY));
+  applyShopCameraOrientation();
+}
+function shopOnPointerUp(event) {
+  if (!shopActive) return;
+  event.stopImmediatePropagation();
+  shopDragging = false;
+}
+renderer.domElement.addEventListener('pointerdown', shopOnPointerDown, { capture: true });
+window.addEventListener('pointermove', shopOnPointerMove, { capture: true });
+window.addEventListener('pointerup', shopOnPointerUp, { capture: true });
+window.addEventListener('pointercancel', shopOnPointerUp, { capture: true });
+
+const shopForward = new THREE.Vector3();
+
+function updateShopFlight(now) {
+  if (shopLastFrameTime === null) {
+    shopLastFrameTime = now;
+    return;
+  }
+  const dt = Math.min((now - shopLastFrameTime) / 1000, 0.1); // clamp against tab-switch-sized gaps
+  shopLastFrameTime = now;
+
+  camera.getWorldDirection(shopForward);
+  camera.position.addScaledVector(shopForward, SHOP_FLIGHT_SPEED_M_S * dt);
+  camera.position.z = Math.max(camera.position.z, SHOP_MIN_HEIGHT_M);
+
+  if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
+    shopLastProximityCheck = now;
+    updateShopProximity();
+  }
+}
+
+function updateShopProximity() {
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.status !== 'claimed') continue; // nothing built to show for anything else
+    const distance = Math.hypot(entry.record.center.x - camera.position.x, entry.record.center.y - camera.position.y);
+    if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
+      entry.loaded = true; // set before awaiting so a second tick can't double-load
+      loadShopLandletInstances(entry);
+    } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
+      unloadShopLandletInstances(entry);
+    }
+  }
+}
+
+async function loadShopLandletInstances(entry) {
+  let instances;
+  try {
+    instances = await fetchInstances(entry.record.landletId);
+  } catch {
+    entry.loaded = false; // allow a later pass to retry
+    return;
+  }
+  for (const instance of instances) {
+    if (!entry.loaded) return; // unloaded again while this was in flight
+    const object = await createMeshForInstance(instance);
+    if (!object || !entry.loaded) continue;
+    entry.group.add(object);
+    entry.objects.push(object);
+  }
+}
+
+function disposeObject3D(object) {
+  object.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry?.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) material?.dispose();
+  });
+}
+
+function unloadShopLandletInstances(entry) {
+  entry.loaded = false;
+  for (const object of entry.objects) {
+    entry.group.remove(object);
+    disposeObject3D(object);
+  }
+  entry.objects = [];
+}
+
+// The normal builder UI (toolbar, product hint, camera debug, undo/redo,
+// the Identity pill) belongs to the single-landlet editing experience —
+// none of it applies while visiting, and left showing it would just
+// overlap Shop's own overlay. There's nothing to restore on the way out:
+// exitShopMode() reloads the page rather than trying to undo this.
+const SHOP_HIDDEN_BUILDER_UI_IDS = [
+  'identity-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+];
+
+async function enterShopMode() {
+  identityModalEl.classList.remove('visible');
+  for (const el of [shopExitBtn, shopStatusEl, shopHintEl]) el.classList.add('visible');
+  for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+  shopStatusEl.textContent = 'Loading the world…';
+  controls.enabled = false;
+
+  // The builder scene's placeholder square (see applyLandletShape) has
+  // nothing to do with Shop mode's own per-landlet ground meshes.
+  scene.remove(landlet);
+  landlet.geometry.dispose();
+  landlet.material.dispose();
+
+  try {
+    activeCatalog = await fetchCatalog();
+  } catch {
+    activeCatalog = FALLBACK_CATALOG;
+  }
+
+  let world;
+  let allLandlets;
+  try {
+    [world, allLandlets] = await Promise.all([fetchWorld(), fetchAllLandlets()]);
+  } catch (err) {
+    shopStatusEl.textContent = err.message || 'Could not load the world.';
+    return;
+  }
+
+  const wildGround = new THREE.Mesh(
+    new THREE.CircleGeometry(world.radiusM * 1.6, 64),
+    new THREE.MeshStandardMaterial({ color: 0x2f5e1a }),
+  );
+  scene.add(wildGround);
+  shopWorldObjects.push(wildGround);
+
+  for (const record of allLandlets) {
+    const group = new THREE.Group();
+    group.position.set(record.center.x, record.center.y, 0);
+    const groundMesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(shapeForLandlet(record)),
+      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
+    );
+    groundMesh.position.z = 0.02;
+    group.add(groundMesh);
+    scene.add(group);
+    shopLandlets.set(record.landletId, { record, group, loaded: false, objects: [] });
+  }
+
+  camera.position.set(0, 0, 8);
+  shopYaw = 0;
+  shopPitch = -0.12;
+  applyShopCameraOrientation();
+  shopLastFrameTime = null;
+  shopLastProximityCheck = 0;
+  shopStatusEl.textContent = '';
+  shopActive = true;
+}
+
+function exitShopMode() {
+  // Flying through many landlets' worth of dynamically loaded models
+  // leaves a lot of scene state to unwind correctly (loaded/unloaded
+  // instances mid-transition, the wild backdrop, every ground mesh) —
+  // reloading gets back to a known-clean state the same way switching
+  // builder identity already does, rather than risking a subtly incomplete
+  // manual teardown.
+  location.reload();
+}
+shopExitBtn.addEventListener('click', exitShopMode);
+
+shopBtn.addEventListener('click', () => {
+  enterShopMode();
 });
 
 const claimModalEl = document.getElementById('claim-modal');
@@ -2273,7 +2564,28 @@ async function growTheWorld(resolve) {
 //
 // Runs after animate() has already started so the (empty, for now) scene
 // renders immediately rather than waiting on the network.
+// One-time: a device that already had local-only identities from before
+// the shared roster existed gets them POSTed up under their exact existing
+// IDs, so whatever they'd already claimed stays reachable. Best-effort and
+// not retried — takeLegacyIdentities() clears the local copy regardless of
+// whether the POSTs below actually reach the server, since this is a
+// one-shot migration for pre-existing dev/test data, not something worth
+// building real retry durability around.
+async function migrateLegacyIdentities() {
+  const legacy = takeLegacyIdentities();
+  for (const identity of legacy) {
+    try {
+      await createBuilder(identity.label, identity.id);
+    } catch {
+      // Most likely: this ID is already on the roster (e.g. backfilled
+      // server-side from landlet ownership, or a previous run of this
+      // same migration) — nothing to do.
+    }
+  }
+}
+
 async function bootstrap() {
+  await migrateLegacyIdentities();
   builderId = await runBuilderMenu();
   let instances;
   try {

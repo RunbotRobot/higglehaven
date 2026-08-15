@@ -88,6 +88,52 @@
         align-items: flex-end;
         gap: 4px;
       }
+      /* Shop mode's overlay — hidden by default, toggled with the shared
+         .visible class (main.js) exactly like the modals, but these aren't
+         modals: they float over the full-screen flight view rather than
+         gating it, so each is its own small fixed element instead of one
+         dimming backdrop. */
+      .shop-ui {
+        display: none;
+        position: fixed;
+        z-index: 16;
+      }
+      .shop-ui.visible {
+        display: block;
+      }
+      #shop-exit-btn {
+        top: 10px;
+        right: 8px;
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.75);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+      }
+      #shop-status {
+        top: 10px;
+        left: 12px;
+        max-width: 60vw;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 8px 14px;
+        border-radius: 8px;
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+      }
+      #shop-hint {
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.55);
+        padding: 6px 12px;
+        border-radius: 8px;
+        color: rgb(255 255 255 / 0.8);
+        font: 12px/1.4 sans-serif;
+        white-space: nowrap;
+        pointer-events: none;
+      }
       /* Top-right is otherwise empty (wordmark owns top-left, camera debug
          owns bottom-right) — undo/redo are always-relevant, not tied to a
          selection, so they get their own persistent spot rather than
@@ -464,6 +510,12 @@
         background: var(--brand-green);
         color: #16240a;
       }
+      /* A distinct destination from the identity list, not another row
+         action — visiting doesn't need (or set) an active builder. */
+      #shop-btn {
+        background: rgb(255 255 255 / 0.08);
+        border: 1px solid rgb(255 255 255 / 0.25);
+      }
       #identity-status {
         font-size: 13px;
         min-height: 18px;
@@ -611,6 +663,9 @@
   </head>
   <body>
     <canvas id="app"></canvas>
+    <button id="shop-exit-btn" class="shop-ui" type="button">Exit Shop</button>
+    <div id="shop-status" class="shop-ui"></div>
+    <div id="shop-hint" class="shop-ui">Drag to steer — flying forward automatically</div>
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>
@@ -670,6 +725,7 @@
         </div>
         <div id="identity-list"></div>
         <button id="identity-new-btn" type="button">+ New identity</button>
+        <button id="shop-btn" type="button">Shop — fly through the world</button>
         <div id="identity-status"></div>
         <button id="identity-close-btn" type="button" style="display: none">Close</button>
       </div>

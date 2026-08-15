@@ -67,6 +67,81 @@ Response:
 }
 ```
 
+## Builders
+
+A shared, cross-device roster of builder identities. Still not real
+authentication — anyone can list, create, rename, or delete any of these,
+there's no password or ownership check on the roster itself — but it's now
+one server-side list instead of every browser inventing its own in
+`localStorage`, so switching devices sees the same builders.
+
+### Builder object
+
+```json
+{
+  "builderId": "builder-3c9e9c50-2b10-4ba9-b62c-2abfd48b64f7",
+  "label": "Ada",
+  "createdAt": "2026-08-16T00:00:00.000Z",
+  "updatedAt": "2026-08-16T00:00:00.000Z"
+}
+```
+
+### `GET /api/builders`
+
+Lists every builder, oldest first. Not paginated — this is a small,
+dev-scale roster, not a growing content collection.
+
+### `POST /api/builders`
+
+Creates a builder. `builderId` is optional; if omitted, the Worker
+generates one. Passing an explicit `builderId` exists for migrating a
+device's pre-existing local identity list onto this shared roster without
+losing track of whatever it already claimed under that exact ID — new
+callers should omit it and let the Worker generate one.
+
+Request body:
+
+```json
+{
+  "builderId": "builder-3c9e9c50-2b10-4ba9-b62c-2abfd48b64f7",
+  "label": "Ada"
+}
+```
+
+`label` is required. Returns `409` if `builderId` is already taken.
+
+### `PUT /api/builders/:builderId`
+### `PATCH /api/builders/:builderId`
+
+Renames a builder. `label` is required. Returns `404` if the builder
+doesn't exist.
+
+### `DELETE /api/builders/:builderId`
+
+Deletes a builder. Whatever claimed landlet it currently owns is released
+back to `greenbelt` — status, owner, and active version all reset, and its
+placed instances and version history are deleted — rather than left
+claimed by a builder that no longer exists. The landlet's own shape
+(`polygon`/`center`) is untouched, so it's immediately claimable again,
+not regenerated.
+
+This is deliberately more destructive than a hypothetical future
+inactivity-based reclaim should be: that case should clear the *active*
+build but keep the builder's own version history, in case they come back
+and want to recreate it on a new landlet. Deleting the builder removes the
+only place that history could live, so there's nothing left to preserve.
+
+Response:
+
+```json
+{
+  "deleted": true,
+  "releasedLandletIds": ["some-landlet-id"]
+}
+```
+
+Returns `404` if the builder doesn't exist.
+
 ## Catalog templates
 
 Catalog templates describe product-like placeholders that can be placed into a
