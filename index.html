@@ -134,6 +134,39 @@
         white-space: nowrap;
         pointer-events: none;
       }
+      /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
+         right looks (yaw/pitch) — each tracks its own pointer via
+         setPointerCapture so both thumbs work at once. The knob is an
+         absolutely-positioned child re-centered with a translate() offset
+         computed in JS; the base's own .shop-ui position:fixed already
+         gives the knob a containing block, so no extra positioning rule
+         is needed here. */
+      .shop-joystick {
+        width: 108px;
+        height: 108px;
+        bottom: 24px;
+        border-radius: 50%;
+        background: rgb(255 255 255 / 0.12);
+        border: 2px solid rgb(255 255 255 / 0.3);
+        touch-action: none;
+      }
+      .shop-joystick-knob {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 44px;
+        height: 44px;
+        margin: -22px 0 0 -22px;
+        border-radius: 50%;
+        background: rgb(255 255 255 / 0.4);
+        pointer-events: none;
+      }
+      #shop-move-joystick {
+        left: 20px;
+      }
+      #shop-look-joystick {
+        right: 20px;
+      }
       /* Top-right is otherwise empty (wordmark owns top-left, camera debug
          owns bottom-right) — undo/redo are always-relevant, not tied to a
          selection, so they get their own persistent spot rather than
@@ -665,7 +698,9 @@
     <canvas id="app"></canvas>
     <button id="shop-exit-btn" class="shop-ui" type="button">Exit Shop</button>
     <div id="shop-status" class="shop-ui"></div>
-    <div id="shop-hint" class="shop-ui">Drag to steer — flying forward automatically</div>
+    <div id="shop-hint" class="shop-ui">Left stick to walk — right stick to look</div>
+    <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
+    <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>

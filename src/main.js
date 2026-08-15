@@ -1758,7 +1758,7 @@ function applyEdgePanWhileDraggingProduct() {
 function animate(now) {
   requestAnimationFrame(animate);
   if (shopActive) {
-    updateShopFlight(now);
+    updateShopMovement(now);
   } else {
     updateTargetTween(now);
     applyEdgePanWhileDraggingProduct();
@@ -1971,21 +1971,32 @@ const shopExitBtn = document.getElementById('shop-exit-btn');
 const shopStatusEl = document.getElementById('shop-status');
 const shopHintEl = document.getElementById('shop-hint');
 const shopBtn = document.getElementById('shop-btn');
+const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
+const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
+const shopLookJoystickEl = document.getElementById('shop-look-joystick');
+const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
-const SHOP_FLIGHT_SPEED_M_S = 14;
+const SHOP_MOVE_SPEED_M_S = 14;
+const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
-const SHOP_STEER_SENSITIVITY = 0.0032;
 const SHOP_MAX_PITCH = Math.PI * 0.47;
+const SHOP_JOYSTICK_MAX_PX = 46;
+const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
 
 let shopYaw = 0;
 let shopPitch = -0.12;
-let shopDragging = false;
-let shopLastPointerX = 0;
-let shopLastPointerY = 0;
+// -1..1 each, driven continuously by joystick deflection (see
+// bindShopJoystick below) and consumed every animate() frame in
+// updateShopMovement — not per-pointer-move deltas like the old
+// whole-screen drag-to-steer this replaced.
+let shopMoveX = 0;
+let shopMoveY = 0;
+let shopLookX = 0;
+let shopLookY = 0;
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
@@ -2009,43 +2020,77 @@ function applyShopCameraOrientation() {
   camera.quaternion.copy(yawQuat).multiply(pitchQuat).multiply(SHOP_BASE_QUAT);
 }
 
-// Registered once, unconditionally, but a no-op whenever Shop isn't active
-// — capture-phase + stopImmediatePropagation() when it *is* active fully
-// insulates the builder scene's own product-drag/multi-select/gizmo
-// listeners on the same canvas, rather than needing every one of those
-// (there are close to a dozen) individually guarded against firing during
-// flight.
-function shopOnPointerDown(event) {
-  if (!shopActive) return;
-  event.stopImmediatePropagation();
-  shopDragging = true;
-  shopLastPointerX = event.clientX;
-  shopLastPointerY = event.clientY;
+// A standard dual-joystick mobile scheme: the left stick walks (forward/
+// back/strafe, relative to the camera's current facing), the right stick
+// looks (yaw/pitch). Each joystick tracks its own pointer via
+// setPointerCapture so both thumbs work at once regardless of where the
+// finger wanders once it's down — and each calls stopPropagation() so the
+// builder scene's own product-drag/multi-select/gizmo listeners (registered
+// on the canvas and on window) never see these events, without needing
+// every one of those individually guarded against firing during Shop mode.
+function bindShopJoystick(baseEl, knobEl, onChange) {
+  let pointerId = null;
+  let originX = 0;
+  let originY = 0;
+
+  function setKnob(x, y) {
+    knobEl.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  function update(clientX, clientY) {
+    const dx = clientX - originX;
+    const dy = clientY - originY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < SHOP_JOYSTICK_DEADZONE_PX) {
+      setKnob(0, 0);
+      onChange(0, 0);
+      return;
+    }
+    const clamped = Math.min(dist, SHOP_JOYSTICK_MAX_PX);
+    const knobX = (dx / dist) * clamped;
+    const knobY = (dy / dist) * clamped;
+    setKnob(knobX, knobY);
+    onChange(knobX / SHOP_JOYSTICK_MAX_PX, knobY / SHOP_JOYSTICK_MAX_PX);
+  }
+
+  function end(event) {
+    if (event.pointerId !== pointerId) return;
+    event.stopPropagation();
+    pointerId = null;
+    setKnob(0, 0);
+    onChange(0, 0);
+  }
+
+  baseEl.addEventListener('pointerdown', (event) => {
+    if (!shopActive || pointerId !== null) return;
+    event.stopPropagation();
+    event.preventDefault();
+    pointerId = event.pointerId;
+    originX = event.clientX;
+    originY = event.clientY;
+    baseEl.setPointerCapture(pointerId);
+  });
+  baseEl.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== pointerId) return;
+    event.stopPropagation();
+    update(event.clientX, event.clientY);
+  });
+  baseEl.addEventListener('pointerup', end);
+  baseEl.addEventListener('pointercancel', end);
 }
-function shopOnPointerMove(event) {
-  if (!shopActive || !shopDragging) return;
-  event.stopImmediatePropagation();
-  const dx = event.clientX - shopLastPointerX;
-  const dy = event.clientY - shopLastPointerY;
-  shopLastPointerX = event.clientX;
-  shopLastPointerY = event.clientY;
-  shopYaw -= dx * SHOP_STEER_SENSITIVITY;
-  shopPitch = Math.max(-SHOP_MAX_PITCH, Math.min(SHOP_MAX_PITCH, shopPitch - dy * SHOP_STEER_SENSITIVITY));
-  applyShopCameraOrientation();
-}
-function shopOnPointerUp(event) {
-  if (!shopActive) return;
-  event.stopImmediatePropagation();
-  shopDragging = false;
-}
-renderer.domElement.addEventListener('pointerdown', shopOnPointerDown, { capture: true });
-window.addEventListener('pointermove', shopOnPointerMove, { capture: true });
-window.addEventListener('pointerup', shopOnPointerUp, { capture: true });
-window.addEventListener('pointercancel', shopOnPointerUp, { capture: true });
+bindShopJoystick(shopMoveJoystickEl, shopMoveKnobEl, (x, y) => {
+  shopMoveX = x;
+  shopMoveY = y;
+});
+bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
+  shopLookX = x;
+  shopLookY = y;
+});
 
 const shopForward = new THREE.Vector3();
+const shopRight = new THREE.Vector3();
 
-function updateShopFlight(now) {
+function updateShopMovement(now) {
   if (shopLastFrameTime === null) {
     shopLastFrameTime = now;
     return;
@@ -2053,9 +2098,30 @@ function updateShopFlight(now) {
   const dt = Math.min((now - shopLastFrameTime) / 1000, 0.1); // clamp against tab-switch-sized gaps
   shopLastFrameTime = now;
 
-  camera.getWorldDirection(shopForward);
-  camera.position.addScaledVector(shopForward, SHOP_FLIGHT_SPEED_M_S * dt);
-  camera.position.z = Math.max(camera.position.z, SHOP_MIN_HEIGHT_M);
+  if (shopLookX !== 0 || shopLookY !== 0) {
+    shopYaw -= shopLookX * SHOP_LOOK_SPEED_RAD_S * dt;
+    shopPitch = Math.max(
+      -SHOP_MAX_PITCH,
+      Math.min(SHOP_MAX_PITCH, shopPitch - shopLookY * SHOP_LOOK_SPEED_RAD_S * dt),
+    );
+    applyShopCameraOrientation();
+  }
+
+  if (shopMoveX !== 0 || shopMoveY !== 0) {
+    // Movement stays in the horizontal plane (forward/right with their Z
+    // dropped) so looking up or down while walking doesn't fly the camera
+    // into the ground or sky — walking, not free flight.
+    camera.getWorldDirection(shopForward);
+    shopForward.z = 0;
+    if (shopForward.lengthSq() > 1e-6) shopForward.normalize();
+    shopRight.setFromMatrixColumn(camera.matrixWorld, 0);
+    shopRight.z = 0;
+    if (shopRight.lengthSq() > 1e-6) shopRight.normalize();
+
+    camera.position.addScaledVector(shopForward, -shopMoveY * SHOP_MOVE_SPEED_M_S * dt);
+    camera.position.addScaledVector(shopRight, shopMoveX * SHOP_MOVE_SPEED_M_S * dt);
+    camera.position.z = Math.max(camera.position.z, SHOP_MIN_HEIGHT_M);
+  }
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
     shopLastProximityCheck = now;
@@ -2122,7 +2188,9 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 
 async function enterShopMode() {
   identityModalEl.classList.remove('visible');
-  for (const el of [shopExitBtn, shopStatusEl, shopHintEl]) el.classList.add('visible');
+  for (const el of [shopExitBtn, shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
+    el.classList.add('visible');
+  }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
