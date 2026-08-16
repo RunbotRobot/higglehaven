@@ -1180,14 +1180,35 @@ async function handleLandCandidates(request, db, route, url) {
 
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
+    // Every other cell in the mosaic reaches greenbelt/claimable the normal
+    // way: materialize as 'generating' (candidateMaterializationStatements,
+    // above), then a later generation-complete/world-expand call promotes
+    // it once it's enclosed. starter-landlet already exists as a landlet
+    // row rather than a fresh candidate, so it skips that pipeline
+    // entirely — this mirrors the same "enclosed -> greenbelt, claimable
+    // now" transition directly, rather than leaving it stuck at whatever
+    // status it already had (historically 'claimed' with no owner, from
+    // the seed row in 0001_initial.sql — permanently unclaimable and
+    // invisible to the builder-delete release logic, which matches by
+    // owner_builder_id). Guarded on owner_builder_id IS NULL so a
+    // genuinely-claimed center plot is never clobbered.
+    const centralEnclosed = landletMaxWorldRadius(centralRow) <= settings.radius_m;
     await db.batch([
       db.prepare(`
         UPDATE landlets
         SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
-            generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            status = CASE WHEN owner_builder_id IS NULL AND ? THEN 'greenbelt' ELSE status END,
+            claimable_at = CASE
+              WHEN owner_builder_id IS NULL AND ? THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+              ELSE claimable_at
+            END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = 'starter-landlet'
-      `).bind(central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json),
+      `).bind(
+        central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json,
+        centralEnclosed ? 1 : 0, centralEnclosed ? 1 : 0,
+      ),
       ...rows.map((row) => candidateInsertStatement(db, row)),
       ...candidateMaterializationStatements(db, overlapping),
     ]);

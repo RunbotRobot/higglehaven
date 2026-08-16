@@ -892,7 +892,14 @@ describe('Worker API', () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
-    const invalid = await api('/landlets/starter-landlet/generation-complete', { method: 'POST' });
+    await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
+        status: 'claimed', ownerBuilderId: 'some-owner',
+      }),
+    });
+    const invalid = await api('/landlets/not-generating-landlet/generation-complete', { method: 'POST' });
     expect(invalid.response.status).toBe(409);
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
   });
@@ -1163,6 +1170,22 @@ describe('Worker API', () => {
     expect(starter.body.landlet.polygon.length).toBeGreaterThanOrEqual(12);
     expect(starter.body.landlet.metadata.generator).toBe('organic-mosaic-v1');
     expect(mosaicIndices).not.toContain(starter.body.landlet.metadata.mosaicIndex);
+    // starter-landlet already existed as a row before this call (unlike its
+    // 15 siblings, which are freshly inserted) -- it must still come out
+    // the other side greenbelt and claimable just like them, not stuck at
+    // whatever status it happened to have before generation.
+    expect(starter.body.landlet.status).toBe('greenbelt');
+    expect(starter.body.landlet.ownerBuilderId).toBeNull();
+    expect(starter.body.landlet.claimableAt).not.toBeNull();
+
+    const starterClaim = await api('/landlets/starter-landlet/claim', {
+      method: 'POST',
+      body: JSON.stringify({ builderId: 'center-plot-builder' }),
+    });
+    expect(starterClaim.response.status).toBe(200);
+    expect(starterClaim.body.landlet).toMatchObject({
+      landletId: 'starter-landlet', status: 'claimed', ownerBuilderId: 'center-plot-builder',
+    });
 
     const duplicate = await api('/land-candidates/generate-mosaic', {
       method: 'POST', body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),

@@ -430,14 +430,19 @@ One of the 16 template cells always covers the world origin — the same point
 `starter-landlet` sits on, since the template is only rotated by `prefix`'s
 seed, never translated. Rather than inserting a competing candidate there,
 that cell's polygon is written onto `starter-landlet` directly (its
-`center`, `polygon`, and `metadata` update in place; its `status`/owner are
-left untouched). The response's `candidates` array therefore contains the
-other 15 cells, not 16, and `starterLandletId` names the landlet that
-received the 16th. Candidates among those 15 that intersect the current
-availability circle materialize as generating landlets immediately;
-remaining complete shapes stay queued and non-selectable until a later
-expansion reaches them. The response contains `candidates`,
-`materializedLandletIds`, and `starterLandletId`.
+`center`, `polygon`, and `metadata` update in place). Unlike its 15
+siblings, `starter-landlet` already exists as a landlet row rather than a
+fresh candidate, so it skips the normal materialize-then-generation-complete
+pipeline — this call promotes it straight to `greenbelt`/claimable (the same
+end state the other cells eventually reach) whenever it's currently
+unowned, so it claims and releases exactly like any other land. A landlet
+already genuinely claimed by a real builder is left alone. The response's
+`candidates` array therefore contains the other 15 cells, not 16, and
+`starterLandletId` names the landlet that received the 16th. Candidates
+among those 15 that intersect the current availability circle materialize
+as generating landlets immediately; remaining complete shapes stay queued
+and non-selectable until a later expansion reaches them. The response
+contains `candidates`, `materializedLandletIds`, and `starterLandletId`.
 
 Reusing a prefix returns `409`. So does any generated cell overlapping an
 existing landlet or candidate — checked by real polygon intersection, not
