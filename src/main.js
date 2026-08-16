@@ -10,6 +10,9 @@ import {
   createInstanceRemote,
   updateInstanceRemote,
   deleteInstanceRemote,
+  createInstancesRemote,
+  upsertInstancesRemote,
+  deleteInstancesRemote,
   uploadModelFile,
   createCatalogTemplate,
   fetchLandlets,
@@ -319,12 +322,16 @@ function wireDraggingBehavior(transformControls) {
     persistLayout();
     // The group-move pivot (see groupMovePivot below) isn't a real product
     // itself — it's an invisible anchor the gizmo needed something to
-    // attach to. Sync every mesh that actually moved instead of it.
+    // attach to. Sync every mesh that actually moved instead of it, as one
+    // batched request (see syncBatchUpdate) rather than one fire-and-forget
+    // request per mesh — a wall-sized selection dragged at once is exactly
+    // the load pattern that used to risk a few silently never saving.
     if (transformControls.object === groupMovePivot) {
-      for (const mesh of groupMoveMeshes ?? []) syncUpdate(mesh);
+      const meshes = groupMoveMeshes ?? [];
       groupMoveMeshes = null;
       groupMoveSet = null;
       groupMoveStartPositions = null;
+      syncBatchUpdate(meshes);
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
     }
@@ -681,11 +688,56 @@ async function syncDelete(instanceId) {
   }
 }
 
+// Bulk counterparts to the three above, for any action that touches many
+// instances at once (paste, a multi-item group move, multi-delete,
+// undo/redo restoring a snapshot). Two differences from the single-item
+// versions: instances go through the server's own /instances/batch
+// endpoint (chunked to its 100-per-request cap) instead of one request
+// per item, and a failure here surfaces loudly via alert() instead of a
+// console.warn only nobody sees. Both matter for the same reason: hundreds
+// of simultaneous unbatched fire-and-forget requests is exactly the load
+// pattern that let some quietly never reach the server while everything
+// still looked right locally — discovered only much later, when a reload
+// came back with items missing and no record of what or why.
+async function syncBatchCreate(meshes) {
+  if (meshes.length === 0) return;
+  try {
+    await createInstancesRemote(meshes.map(instanceFromMesh));
+  } catch (err) {
+    console.warn('Failed to sync new instances to backend:', err);
+    alert(`Couldn't save ${meshes.length} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+  }
+}
+
+async function syncBatchUpdate(meshes) {
+  if (meshes.length === 0) return;
+  try {
+    await upsertInstancesRemote(meshes.map(instanceFromMesh));
+  } catch (err) {
+    console.warn('Failed to sync instance updates to backend:', err);
+    alert(`Couldn't save ${meshes.length} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+  }
+}
+
+async function syncBatchDelete(instanceIds) {
+  if (instanceIds.length === 0) return;
+  try {
+    await deleteInstancesRemote(instanceIds);
+  } catch (err) {
+    console.warn('Failed to sync instance deletes to backend:', err);
+    alert(`Couldn't save the deletion of ${instanceIds.length} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
+  }
+}
+
 // Places a fresh instance at an exact spot — the world position the
 // builder just tapped (see handlePlacementClick) — rather than a random
 // offset near the center that then has to be dragged into place.
 let instanceCounter = 0;
-async function spawnInstanceAt(template, x, y, z, rotation = {}) {
+// sync: false lets a caller placing many instances at once (see
+// placeClipboardItems) skip the per-item network request here and batch
+// them all into one call itself instead — see syncBatchCreate's doc
+// comment for why that distinction matters.
+async function spawnInstanceAt(template, x, y, z, rotation = {}, { sync = true } = {}) {
   instanceCounter += 1;
   const instance = {
     instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
@@ -703,7 +755,7 @@ async function spawnInstanceAt(template, x, y, z, rotation = {}) {
   mesh.position.set(clamped.x, clamped.y, clamped.z);
   mesh.userData.safePosition = mesh.position.clone();
   persistLayout();
-  syncCreate(mesh);
+  if (sync) syncCreate(mesh);
   return mesh;
 }
 
@@ -720,7 +772,10 @@ function disposeObject(object) {
   });
 }
 
-function deleteInstance(mesh) {
+// sync: false is the multi-item counterpart to spawnInstanceAt's own —
+// used wherever several instances are deleted in one action (multi-delete,
+// undo/redo) so the caller can batch the network side into one request.
+function deleteInstance(mesh, { sync = true } = {}) {
   const index = productMeshes.indexOf(mesh);
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
@@ -728,7 +783,7 @@ function deleteInstance(mesh) {
   scene.remove(mesh);
   disposeObject(mesh);
   persistLayout();
-  syncDelete(instanceId);
+  if (sync) syncDelete(instanceId);
 }
 
 const productInfoEl = document.getElementById('product-info');
@@ -934,30 +989,43 @@ function pushUndoSnapshot() {
 // all: nothing was added or removed, so nothing here needs to change.
 async function restoreSnapshot(snapshot) {
   const targetIds = new Set(snapshot.map((inst) => inst.instanceId));
+  const deletedIds = [];
   for (const mesh of [...productMeshes]) {
     if (!targetIds.has(mesh.userData.instanceId)) {
       if (selectedMeshes.has(mesh)) {
         removeSelectionOutline(mesh);
         selectedMeshes.delete(mesh);
       }
-      deleteInstance(mesh);
+      deletedIds.push(mesh.userData.instanceId);
+      deleteInstance(mesh, { sync: false });
     }
   }
   const currentById = new Map(productMeshes.map((mesh) => [mesh.userData.instanceId, mesh]));
+  const updatedMeshes = [];
+  const createdMeshes = [];
   for (const inst of snapshot) {
     const mesh = currentById.get(inst.instanceId);
     if (mesh) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
       mesh.userData.safePosition = mesh.position.clone();
-      syncUpdate(mesh);
+      updatedMeshes.push(mesh);
     } else {
       const newMesh = await addInstanceToScene(inst);
-      if (newMesh) syncCreate(newMesh);
+      if (newMesh) createdMeshes.push(newMesh);
     }
   }
   updateSelectionUI();
   persistLayout();
+  // A jump that touches many instances at once (e.g. undoing a big paste)
+  // is exactly the case syncBatchCreate/Update/Delete exist for — see their
+  // doc comment. The three don't overlap (disjoint instance IDs), so
+  // there's no ordering to get wrong running them together.
+  await Promise.all([
+    syncBatchDelete(deletedIds),
+    syncBatchUpdate(updatedMeshes),
+    syncBatchCreate(createdMeshes),
+  ]);
 }
 
 async function undo() {
@@ -1211,9 +1279,11 @@ deleteBtn.addEventListener('click', () => {
   if (selectedMeshes.size === 0) return;
   pushUndoSnapshot();
   const meshes = [...selectedMeshes];
+  const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
   clearSelection();
   updateSelectionUI();
-  for (const mesh of meshes) deleteInstance(mesh);
+  for (const mesh of meshes) deleteInstance(mesh, { sync: false });
+  syncBatchDelete(instanceIds);
 });
 
 // Copy captures each selected item's position/rotation *relative* to the
@@ -1362,7 +1432,7 @@ async function placeClipboardItems(items, x, y, supportZ) {
       rotationX: item.rotationX,
       rotationY: item.rotationY,
       rotationZ: item.rotationZ,
-    });
+    }, { sync: false });
     if (mesh) placed.push(mesh);
   }
   clearSelection();
@@ -1371,6 +1441,10 @@ async function placeClipboardItems(items, x, y, supportZ) {
     addSelectionOutline(mesh);
   }
   updateSelectionUI();
+  // One batched request (chunked, see syncBatchCreate) instead of one
+  // fire-and-forget request per pasted item — pasting a wall-sized group
+  // is exactly the size of paste that used to risk losing a few silently.
+  await syncBatchCreate(placed);
 }
 
 // Places whatever's pending (a fresh catalog template, or a copied group)

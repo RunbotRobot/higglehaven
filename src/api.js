@@ -164,6 +164,58 @@ export async function deleteInstanceRemote(instanceId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
 }
 
+const INSTANCE_BATCH_CHUNK_SIZE = 100; // matches the worker's own per-request cap
+
+function chunk(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) chunks.push(array.slice(i, i + size));
+  return chunks;
+}
+
+// Bulk create/update/delete, used anywhere many instances change at once
+// (paste, a multi-item group move, multi-delete, and undo/redo restoring a
+// snapshot that touches several). Chunks sequentially (never all at once)
+// rather than firing one request per item: hundreds of simultaneous
+// fire-and-forget single-instance requests is exactly the load pattern that
+// let some quietly never reach the server while the rest succeeded, with
+// nothing to tell the builder anything had gone wrong until their next
+// reload silently came back short.
+export async function createInstancesRemote(instances) {
+  const created = [];
+  for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
+    const { instances: stored } = await requestJson('/instances/batch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instances: batch }),
+    });
+    created.push(...stored);
+  }
+  return created;
+}
+
+export async function upsertInstancesRemote(instances) {
+  const updated = [];
+  for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
+    const { instances: stored } = await requestJson('/instances/batch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instances: batch }),
+    });
+    updated.push(...stored);
+  }
+  return updated;
+}
+
+export async function deleteInstancesRemote(instanceIds) {
+  for (const batch of chunk(instanceIds, INSTANCE_BATCH_CHUNK_SIZE)) {
+    await requestJson('/instances/batch', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceIds: batch }),
+    });
+  }
+}
+
 // Uploads a .glb file directly. Distinct from requestJson above since this
 // needs a raw multipart body, not a JSON one.
 export async function uploadModelFile(file) {
