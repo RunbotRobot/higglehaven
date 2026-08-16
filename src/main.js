@@ -2092,6 +2092,7 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // which is the correct, intentional look here, not a bug to hide.
 const SHOP_WALL_HEIGHT_M = 60;
 const SHOP_WALL_MARGIN_M = 1.5; // keeps the camera from clipping into the wall itself
+const SHOP_WALL_COLOR = 0xa8d98a; // pale, on-brand green — a soft boundary, not a dead end
 // Skip building a ground mesh for a landlet with no chance of being seen
 // (entirely beyond the wall, comfortably past any land's own footprint) —
 // pure cost-cutting as the world grows, never aggressive enough to risk
@@ -2397,22 +2398,23 @@ async function enterShopMode() {
     return;
   }
 
-  shopWorldRadiusM = world.radiusM;
+  // The wall sits at the largest gap-free radius, not the administrative
+  // world radius itself — see computeGaplessWorldRadius's doc comment.
+  shopWorldRadiusM = computeGaplessWorldRadius(allLandlets, world.radiusM);
 
-  // The visible world stops at the world radius — no glimpse of the
-  // extended-out space held in reserve for land that hasn't been generated
-  // yet. A thin overlap keeps the ground from leaving a seam right at the
-  // wall's own base.
+  // The visible world stops at the wall — no glimpse of "wild ground" that
+  // isn't actually any land's own polygon. A thin overlap keeps the ground
+  // from leaving a seam right at the wall's own base.
   const wildGround = new THREE.Mesh(
-    new THREE.CircleGeometry(world.radiusM + SHOP_WALL_MARGIN_M, 64),
+    new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64),
     new THREE.MeshStandardMaterial({ color: 0x2f5e1a }),
   );
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
 
   const wall = new THREE.Mesh(
-    new THREE.CylinderGeometry(world.radiusM, world.radiusM, SHOP_WALL_HEIGHT_M, 64, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0x1f3d10, side: THREE.BackSide }),
+    new THREE.CylinderGeometry(shopWorldRadiusM, shopWorldRadiusM, SHOP_WALL_HEIGHT_M, 64, 1, true),
+    new THREE.MeshStandardMaterial({ color: SHOP_WALL_COLOR, side: THREE.BackSide }),
   );
   wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
   wall.position.z = SHOP_WALL_HEIGHT_M / 2;
@@ -2479,7 +2481,21 @@ function runClaimFlow() {
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
     claimGrowBtn.onclick = () => growTheWorld(resolve);
-    claimBackBtn.onclick = openBuilderSwitcher;
+    // openBuilderSwitcher() shows the identity modal *over* this one rather
+    // than replacing it (see its own doc comment) — fine when leaving an
+    // already-built scene behind, but here there's nothing built yet to
+    // preserve, and its own Close/Shop paths don't touch this modal at
+    // all, so backing out any way other than actually claiming something
+    // (or picking a genuinely different builder, which reloads on its own)
+    // left this modal sitting there underneath, popping back into view the
+    // moment whatever was covering it closed — including if the builder
+    // this flow is claiming for gets deleted out from under it, since
+    // nothing here is listening for that either. Reloading is the same
+    // clean-slate escape hatch exitShopMode() uses for the same reason:
+    // nothing here to lose, and every path (Close, Shop, a different
+    // builder, this same builder again) starts over correctly from
+    // runBuilderMenu() either way.
+    claimBackBtn.onclick = () => location.reload();
   });
 }
 
@@ -2504,6 +2520,56 @@ function disposeClaimFlyover() {
   claimFlyover.selectionOutline?.geometry.dispose();
   claimFlyover.selectionOutlineMaterial.dispose();
   claimFlyover = null;
+}
+
+function pointInPolygonXY(x, y, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = (a.y > y) !== (b.y > y)
+      && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+// The mosaic tessellation guarantees no gaps *between* adjacent cells (see
+// generate-mosaic's own doc comment in worker/index.js), but its outer
+// edge is scalloped, not a perfect circle: some directions reach past the
+// world radius, others fall short of it, since the world radius has been
+// expanded several times since the mosaic was generated without new
+// geometry necessarily following it out in every direction. A wall drawn
+// as a plain circle at the world radius exposed bare "wild ground" in the
+// short directions — real, but not part of any land, which is exactly the
+// thing the wall exists to hide. This instead finds the largest circle
+// that's fully covered by *some* landlet's polygon in every direction, by
+// marching outward at each of many sampled angles and stopping at the
+// first gap. The wall goes there, not at the administrative radius —
+// landlets with geometry beyond it (the currently-generating ones) still
+// get built normally and show whatever fraction of them the wall doesn't
+// cut off, same as before.
+const SHOP_COVERAGE_ANGLE_SAMPLES = 144;
+const SHOP_COVERAGE_RADIUS_STEP_M = 2;
+function computeGaplessWorldRadius(landlets, worldRadiusM) {
+  const worldPolygons = landlets
+    .filter((record) => record.polygon && record.polygon.length >= 3)
+    .map((record) => record.polygon.map((p) => ({ x: record.center.x + p.x, y: record.center.y + p.y })));
+  if (worldPolygons.length === 0) return worldRadiusM; // nothing to measure coverage against yet
+  let minCovered = worldRadiusM;
+  for (let i = 0; i < SHOP_COVERAGE_ANGLE_SAMPLES; i++) {
+    const angle = (i / SHOP_COVERAGE_ANGLE_SAMPLES) * Math.PI * 2;
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    let covered = 0;
+    for (let r = SHOP_COVERAGE_RADIUS_STEP_M; r <= worldRadiusM; r += SHOP_COVERAGE_RADIUS_STEP_M) {
+      const insideAny = worldPolygons.some((polygon) => pointInPolygonXY(dx * r, dy * r, polygon));
+      if (!insideAny) break;
+      covered = r;
+    }
+    minCovered = Math.min(minCovered, covered);
+  }
+  return minCovered;
 }
 
 // Builds a flat THREE.Shape for a landlet: its real polygon (plot-local
