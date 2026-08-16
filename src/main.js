@@ -926,13 +926,22 @@ function pushUndoSnapshot() {
 
 // Reconciles the live scene to match a target snapshot: removes whatever's
 // no longer in it, repositions/re-syncs whatever's still there, and
-// re-creates whatever's missing (e.g. undoing a delete). Selection is
-// cleared rather than preserved across a jump, since a selected mesh could
-// itself have just been removed.
+// re-creates whatever's missing (e.g. undoing a delete). A mesh surviving
+// the jump is the *same* mesh object (only its position/rotation change),
+// so it stays selected across the jump — only meshes actually removed here
+// (e.g. undoing a Place, or redoing a Delete) drop out of the selection.
+// Undoing a move/rotate is the common case and never touches this loop at
+// all: nothing was added or removed, so nothing here needs to change.
 async function restoreSnapshot(snapshot) {
   const targetIds = new Set(snapshot.map((inst) => inst.instanceId));
   for (const mesh of [...productMeshes]) {
-    if (!targetIds.has(mesh.userData.instanceId)) deleteInstance(mesh);
+    if (!targetIds.has(mesh.userData.instanceId)) {
+      if (selectedMeshes.has(mesh)) {
+        removeSelectionOutline(mesh);
+        selectedMeshes.delete(mesh);
+      }
+      deleteInstance(mesh);
+    }
   }
   const currentById = new Map(productMeshes.map((mesh) => [mesh.userData.instanceId, mesh]));
   for (const inst of snapshot) {
@@ -947,7 +956,6 @@ async function restoreSnapshot(snapshot) {
       if (newMesh) syncCreate(newMesh);
     }
   }
-  clearSelection();
   updateSelectionUI();
   persistLayout();
 }
@@ -1711,6 +1719,14 @@ cameraDebugCopyBtn.addEventListener('click', async () => {
 // pointermove) so holding still right at the edge keeps panning.
 const EDGE_PAN_ZONE_PX = 60;
 const EDGE_PAN_SPEED_PX = 14;
+// Orbiting is already kept above ground by controls.maxPolarAngle, but that
+// only constrains OrbitControls' own rotation math — it has no say over a
+// direct camera.position mutation like this one. Dragging an item down
+// toward the ground routinely puts the pointer near the bottom edge (the
+// ground is lower on screen than the item started), which is exactly when
+// this fires, so without its own floor this was the one path that could
+// carry the camera through the ground.
+const CAMERA_MIN_HEIGHT_M = 0.3;
 let lastPointerClientPos = null;
 window.addEventListener('pointermove', (event) => {
   lastPointerClientPos = { x: event.clientX, y: event.clientY };
@@ -1729,6 +1745,13 @@ function panCameraByScreenPixels(dxPixels, dyPixels) {
   const offset = new THREE.Vector3()
     .addScaledVector(right, dxPixels * scale)
     .addScaledVector(up, dyPixels * scale);
+  // Shorten just the offset's vertical component, not the whole vector, so
+  // a diagonal pan still slides sideways at full speed right up to the
+  // floor instead of stopping dead the instant the floor is reached.
+  if (offset.z < 0) {
+    const headroom = camera.position.z - CAMERA_MIN_HEIGHT_M;
+    offset.z = Math.max(offset.z, -Math.max(headroom, 0));
+  }
   camera.position.add(offset);
   controls.target.add(offset);
 }
