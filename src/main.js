@@ -29,7 +29,7 @@ import {
   deleteBuilder,
   fetchAllLandlets,
 } from './api.js';
-import { getActiveBuilderId, setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
+import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -1936,10 +1936,9 @@ async function renderIdentityList() {
   }
   identityStatusEl.textContent = '';
 
-  const activeId = getActiveBuilderId();
   for (const identity of identities) {
     const row = document.createElement('div');
-    row.className = `identity-row${identity.builderId === activeId ? ' active' : ''}`;
+    row.className = 'identity-row';
 
     const info = document.createElement('div');
     info.className = 'identity-row-info';
@@ -2083,6 +2082,27 @@ const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
+// The world wall: an opaque ring standing at exactly the current world
+// radius, tall enough that nothing generating out beyond it (still
+// unclaimable — see the availability circle in docs/SPEC.md) is visible
+// past the edge, and a matching radial clamp on the camera so it's a real
+// boundary, not just a backdrop — the builder can never fly past it to see
+// around it. A land straddling the boundary still shows whatever fraction
+// of it sits inside — anywhere from a sliver to nearly the whole shape —
+// which is the correct, intentional look here, not a bug to hide.
+const SHOP_WALL_HEIGHT_M = 60;
+const SHOP_WALL_MARGIN_M = 1.5; // keeps the camera from clipping into the wall itself
+// Skip building a ground mesh for a landlet with no chance of being seen
+// (entirely beyond the wall, comfortably past any land's own footprint) —
+// pure cost-cutting as the world grows, never aggressive enough to risk
+// hiding a real sliver.
+const SHOP_LANDLET_CULL_MARGIN_M = 40;
+const SHOP_MIN_FOV_DEG = 25;
+const SHOP_MAX_FOV_DEG = 75;
+const SHOP_WHEEL_ZOOM_SENSITIVITY = 0.05;
+const SHOP_PINCH_ZOOM_SENSITIVITY = 0.05;
+
+let shopWorldRadiusM = null;
 
 let shopYaw = 0;
 let shopPitch = -0.12;
@@ -2184,6 +2204,54 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
   shopLookY = y;
 });
 
+// Zoom: narrows/widens the camera's own field of view rather than moving
+// it — there's no "target" to dolly toward like OrbitControls' zoom has,
+// just a free-flying camera, so a lens-zoom is the natural equivalent.
+// Wheel for desktop, pinch for touch. Both live on the canvas itself
+// rather than the joysticks, so a thumb already on either stick never
+// fights with a zoom gesture — pinching needs both fingers on open canvas,
+// exactly where a joystick drag isn't.
+function setShopFov(fov) {
+  camera.fov = THREE.MathUtils.clamp(fov, SHOP_MIN_FOV_DEG, SHOP_MAX_FOV_DEG);
+  camera.updateProjectionMatrix();
+}
+renderer.domElement.addEventListener('wheel', (event) => {
+  if (!shopActive) return;
+  event.preventDefault();
+  setShopFov(camera.fov + event.deltaY * SHOP_WHEEL_ZOOM_SENSITIVITY);
+}, { passive: false });
+
+const shopPinchPointers = new Map(); // pointerId -> {x, y}
+let shopPinchStartDistance = null;
+let shopPinchStartFov = null;
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (!shopActive) return;
+  shopPinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (shopPinchPointers.size === 2) {
+    const [a, b] = [...shopPinchPointers.values()];
+    shopPinchStartDistance = Math.hypot(a.x - b.x, a.y - b.y);
+    shopPinchStartFov = camera.fov;
+  }
+});
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!shopActive || !shopPinchPointers.has(event.pointerId)) return;
+  shopPinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (shopPinchPointers.size === 2 && shopPinchStartDistance !== null) {
+    const [a, b] = [...shopPinchPointers.values()];
+    const distance = Math.hypot(a.x - b.x, a.y - b.y);
+    setShopFov(shopPinchStartFov - (distance - shopPinchStartDistance) * SHOP_PINCH_ZOOM_SENSITIVITY);
+  }
+});
+function shopPinchEnd(event) {
+  shopPinchPointers.delete(event.pointerId);
+  if (shopPinchPointers.size < 2) {
+    shopPinchStartDistance = null;
+    shopPinchStartFov = null;
+  }
+}
+renderer.domElement.addEventListener('pointerup', shopPinchEnd);
+renderer.domElement.addEventListener('pointercancel', shopPinchEnd);
+
 const shopForward = new THREE.Vector3();
 const shopRight = new THREE.Vector3();
 
@@ -2218,6 +2286,19 @@ function updateShopMovement(now) {
     camera.position.addScaledVector(shopForward, -shopMoveY * SHOP_MOVE_SPEED_M_S * dt);
     camera.position.addScaledVector(shopRight, shopMoveX * SHOP_MOVE_SPEED_M_S * dt);
     camera.position.z = Math.max(camera.position.z, SHOP_MIN_HEIGHT_M);
+
+    // The world wall (see enterShopMode) is a real boundary, not just a
+    // backdrop — keep the camera inside it the same way the floor clamp
+    // above keeps it above ground.
+    if (shopWorldRadiusM !== null) {
+      const maxRadius = shopWorldRadiusM - SHOP_WALL_MARGIN_M;
+      const distance = Math.hypot(camera.position.x, camera.position.y);
+      if (distance > maxRadius) {
+        const scale = maxRadius / distance;
+        camera.position.x *= scale;
+        camera.position.y *= scale;
+      }
+    }
   }
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
@@ -2316,14 +2397,35 @@ async function enterShopMode() {
     return;
   }
 
+  shopWorldRadiusM = world.radiusM;
+
+  // The visible world stops at the world radius — no glimpse of the
+  // extended-out space held in reserve for land that hasn't been generated
+  // yet. A thin overlap keeps the ground from leaving a seam right at the
+  // wall's own base.
   const wildGround = new THREE.Mesh(
-    new THREE.CircleGeometry(world.radiusM * 1.6, 64),
+    new THREE.CircleGeometry(world.radiusM + SHOP_WALL_MARGIN_M, 64),
     new THREE.MeshStandardMaterial({ color: 0x2f5e1a }),
   );
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
 
+  const wall = new THREE.Mesh(
+    new THREE.CylinderGeometry(world.radiusM, world.radiusM, SHOP_WALL_HEIGHT_M, 64, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0x1f3d10, side: THREE.BackSide }),
+  );
+  wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
+  wall.position.z = SHOP_WALL_HEIGHT_M / 2;
+  scene.add(wall);
+  shopWorldObjects.push(wall);
+
   for (const record of allLandlets) {
+    // Nothing this far past the wall could ever show even a sliver — skip
+    // building geometry for it at all rather than paying for meshes no
+    // camera position can ever see.
+    const distanceFromOrigin = Math.hypot(record.center.x, record.center.y);
+    if (distanceFromOrigin - SHOP_LANDLET_CULL_MARGIN_M > world.radiusM) continue;
+
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
     const groundMesh = new THREE.Mesh(
@@ -2340,6 +2442,7 @@ async function enterShopMode() {
   shopYaw = 0;
   shopPitch = -0.12;
   applyShopCameraOrientation();
+  setShopFov(camera.fov); // re-clamp in case a previous Shop session left it zoomed
   shopLastFrameTime = null;
   shopLastProximityCheck = 0;
   shopStatusEl.textContent = '';
