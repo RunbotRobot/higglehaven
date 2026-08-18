@@ -1273,6 +1273,135 @@ const EXTENSIBLE_AXIS_OPTIONS = [
   ['z', 'Extensible: height (z)'],
 ];
 
+// Axis-picker preview: a small self-contained Three.js scene, entirely
+// separate from the main builder scene, the same pattern the claim
+// flyover uses (see disposeClaimFlyover). Lets a seller see the actual
+// product — real scanned model or placeholder box, whichever the
+// builder scene would show — with X/Y/Z arrows overlaid before picking
+// which axis "extensible" means, rather than guessing blind from an
+// abstract x/y/z dropdown.
+const sellerAxisCanvas = document.getElementById('seller-axis-canvas');
+const sellerAxisPreviewHintEl = document.getElementById('seller-axis-preview-hint');
+const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
+let axisPreview = null;
+
+function disposeAxisPreview() {
+  if (!axisPreview) return;
+  axisPreview.controls.dispose();
+  axisPreview.renderer.dispose();
+  disposeObject(axisPreview.previewObject);
+  for (const arrow of axisPreview.arrows) {
+    arrow.line.geometry.dispose();
+    arrow.line.material.dispose();
+    arrow.cone.geometry.dispose();
+    arrow.cone.material.dispose();
+  }
+  for (const sprite of axisPreview.labels) {
+    sprite.material.map.dispose();
+    sprite.material.dispose();
+  }
+  axisPreview = null;
+}
+
+// A small canvas-drawn "X"/"Y"/"Z" billboard at each arrow's tip, so the
+// preview reads as a legend rather than three unlabeled colored lines.
+function makeAxisLabelSprite(text, colorHex) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
+  ctx.beginPath();
+  ctx.arc(32, 32, 26, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#16240a';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 32, 34);
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.renderOrder = 1;
+  return sprite;
+}
+
+async function showAxisPreview(template, highlightAxis) {
+  disposeAxisPreview();
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(2, -3, 4);
+  scene.add(sun);
+
+  // Same instance shape addInstanceToScene builds, at the origin and with
+  // no crop, so this shows the product's real full-size geometry (and, for
+  // a real uploaded model, its real material/texture) exactly as it would
+  // appear freshly placed in Build mode — not a simplified stand-in.
+  const previewObject = await createMeshForInstance({
+    templateId: template.templateId,
+    x: 0, y: 0, z: 0,
+    rotationX: 0, rotationY: 0, rotationZ: 0,
+    crop: {},
+  });
+  if (!previewObject) return;
+  scene.add(previewObject);
+
+  const box = new THREE.Box3().setFromObject(previewObject);
+  const size = box.getSize(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.05);
+
+  const rect = sellerAxisCanvas.getBoundingClientRect();
+  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
+  camera.up.set(0, 0, 1);
+  const dist = radius * 2.6;
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: sellerAxisCanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(rect.width, rect.height, false);
+
+  const controls = new OrbitControls(camera, sellerAxisCanvas);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = false;
+  controls.enablePan = false;
+  controls.minDistance = dist * 0.35;
+  controls.maxDistance = dist * 3;
+  const render = () => renderer.render(scene, camera);
+  controls.addEventListener('change', render);
+
+  // Not selected yet: all three read as a neutral, evenly-weighted legend.
+  // Once an axis is picked, that one arrow turns bright yellow and the
+  // other two mute to gray — the same "this one's the live one" language
+  // the resize gizmo itself uses elsewhere.
+  const arrows = [];
+  const labels = [];
+  const axisDims = { x: size.x, y: size.y, z: size.z };
+  const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+  for (const axis of ['x', 'y', 'z']) {
+    const isHighlighted = highlightAxis === axis;
+    const color = highlightAxis ? (isHighlighted ? 0xffee33 : 0x888888) : AXIS_ARROW_COLORS[axis];
+    const length = axisDims[axis] / 2 + radius * 0.35;
+    const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
+    scene.add(arrow);
+    arrows.push(arrow);
+    const label = makeAxisLabelSprite(axis.toUpperCase(), color);
+    label.position.copy(dirs[axis]).multiplyScalar(length * 1.2);
+    const labelScale = radius * 0.28;
+    label.scale.set(labelScale, labelScale, labelScale);
+    scene.add(label);
+    labels.push(label);
+  }
+
+  render();
+  axisPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, templateId: template.templateId };
+  sellerAxisPreviewHintEl.textContent = highlightAxis
+    ? `Yellow = the axis you've picked (${highlightAxis.toUpperCase()}). Drag to look around.`
+    : 'Arrows show X (red) / Y (green) / Z (blue). Pick an axis below to highlight it. Drag to look around.';
+}
+
 function renderSellerList() {
   sellerListEl.innerHTML = '';
   const templates = myProducts();
@@ -1368,6 +1497,13 @@ function renderSellerList() {
     const controls = document.createElement('div');
     controls.className = 'seller-row-extensible';
 
+    const previewAxesBtn = document.createElement('button');
+    previewAxesBtn.className = 'seller-row-action-btn';
+    previewAxesBtn.type = 'button';
+    previewAxesBtn.textContent = 'Preview axes';
+    previewAxesBtn.addEventListener('click', () => showAxisPreview(template, axisSelect.value));
+    controls.appendChild(previewAxesBtn);
+
     const axisSelect = document.createElement('select');
     axisSelect.className = 'seller-axis-select';
     for (const [value, optionLabel] of EXTENSIBLE_AXIS_OPTIONS) {
@@ -1390,6 +1526,7 @@ function renderSellerList() {
 
     axisSelect.addEventListener('change', () => {
       minInput.disabled = !axisSelect.value;
+      if (axisPreview && axisPreview.templateId === template.templateId) showAxisPreview(template, axisSelect.value);
     });
 
     const saveBtn = document.createElement('button');
@@ -1456,6 +1593,7 @@ function openSellerModal() {
 }
 function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
+  disposeAxisPreview();
   // A save in here can change whether the currently-selected item (if any)
   // is extensible — updateSelectionUI() only normally re-runs on an actual
   // selection *change*, so without this the Resize button/field would keep

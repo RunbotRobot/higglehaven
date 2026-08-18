@@ -519,6 +519,22 @@
         font-size: 12px;
         color: rgb(255 255 255 / 0.65);
       }
+      #seller-axis-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #seller-axis-canvas {
+        width: 100%;
+        height: 180px;
+        border-radius: 10px;
+        background: rgb(0 0 0 / 0.25);
+        touch-action: none;
+      }
+      #seller-axis-preview-hint {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.55);
+      }
       #seller-list {
         display: flex;
         flex-direction: column;
@@ -1029,6 +1045,12 @@
         <div id="seller-hint">
           Products this builder has uploaded (plus any custom upload nobody's claimed yet). Extensible axis and
           minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
+        </div>
+        <div id="seller-axis-preview">
+          <canvas id="seller-axis-canvas"></canvas>
+          <div id="seller-axis-preview-hint">
+            Tap "Preview axes" on a product below to see which way X / Y / Z point — drag to look around.
+          </div>
         </div>
         <div id="seller-list"></div>
         <div id="seller-status"></div>

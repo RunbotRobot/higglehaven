@@ -393,6 +393,19 @@ can try a risky edit (like marking something extensible for the first time)
 on a duplicate without any chance of disturbing the original or any instances
 already placed from it.
 
+A Rename button sends just `{ name }` through the same `PATCH` endpoint (no
+`metadata` involved, so the merge-vs-replace caveat above doesn't apply here).
+
+Each row's "Preview axes" button renders that product — the real model or
+placeholder box, exactly as Build mode would show it — into a small
+self-contained Three.js scene (`showAxisPreview` in `src/main.js`, the same
+create/dispose-per-open pattern the claim flyover uses) with X/Y/Z arrows
+overlaid at the product's own true size, so a seller can see which physical
+direction each axis points before picking one, rather than guessing blind
+from the abstract x/y/z dropdown. Picking an axis (or changing it) turns
+that arrow bright yellow and mutes the other two to gray; an orbit-only
+camera (no pan, no auto-rotate) lets the seller drag to look around.
+
 ## World settings
 
 World settings hold the dev-only singleton state needed to start modeling the
