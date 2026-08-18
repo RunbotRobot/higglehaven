@@ -270,3 +270,7 @@ export async function updateCatalogTemplate(templateId, patch) {
   });
   return updated;
 }
+
+export async function deleteCatalogTemplate(templateId) {
+  await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
+}

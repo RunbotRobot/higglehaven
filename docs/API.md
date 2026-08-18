@@ -391,35 +391,58 @@ template's `sellerId` is just whichever builder uploaded it, set automatically
 by the upload flow. The frontend's "My Products" button (next to "+ Upload
 Model") opens a modal listing every template whose `sellerId` matches the
 active builder, plus any custom-uploaded template with a `null` `sellerId`
-(covers products uploaded before this existed). Each row lets the builder
-pick an extensible axis (or "Not extensible") and a minimum length, saved via
-a plain `PATCH /api/catalog/:templateId` with the *entire* merged `metadata`
-object — the endpoint replaces `metadata` wholesale rather than deep-merging
-it, so the frontend reads the existing value first and only changes the
-`extensible` key before sending it back.
+(covers products uploaded before this existed).
 
-Each row also has a Duplicate button: a plain `POST /api/catalog` carrying
-the same `dimensions`/`color`/`modelUrl`/`metadata` under a fresh
-server-generated `templateId`, with `" (copy)"` appended to the name. The
-model file itself is never re-uploaded — the copy just references the same
-`modelUrl` — and deleting a template only ever removes its `catalog_templates`
-row, never the underlying R2 object, so this is safe to do freely: a builder
-can try a risky edit (like marking something extensible for the first time)
-on a duplicate without any chance of disturbing the original or any instances
-already placed from it.
+Each row leads with the product's name (wraps rather than truncating — this
+is the one piece of information a seller actually came here to read) and its
+dimensions, then four action buttons — Preview, Rename, Duplicate, Delete —
+with extensibility tucked behind a collapsed "Extensibility ▾" toggle rather
+than shown inline. Extensibility is a real feature (see above) but a rare
+one; putting its controls behind a deliberate expand keeps the row itself
+readable as "a product with some buttons" rather than a resize-configuration
+form every seller has to visually parse whether they need it or not.
 
-A Rename button sends just `{ name }` through the same `PATCH` endpoint (no
-`metadata` involved, so the merge-vs-replace caveat above doesn't apply here).
+- **Preview** renders that product — the real model or placeholder box,
+  exactly as Build mode would show it — into a small self-contained Three.js
+  scene (`showAxisPreview` in `src/main.js`, the same create/dispose-per-open
+  pattern the claim flyover uses), reusing a single shared canvas moved
+  between rows rather than one per row (mobile GPUs don't want many WebGL
+  contexts open at once, and only one row's preview is ever meaningful at a
+  time). It's collapsed until tapped — the modal doesn't reserve space for a
+  3D viewport a seller may never open — and defaults to a plain look-it-over
+  view with no axis arrows. Expanding a row's Extensibility panel switches
+  that row's already-open preview (if any) to show X/Y/Z arrows overlaid at
+  the product's own true size instead, so a seller can see which physical
+  direction each axis points before picking one; collapsing it switches back
+  to the plain view. Picking an axis (or changing it) turns that arrow
+  bright yellow and mutes the other two to gray; an orbit-only camera (no
+  pan, no auto-rotate) lets the seller drag to look around.
+- **Rename** sends just `{ name }` through `PATCH /api/catalog/:templateId`
+  (no `metadata` involved, so the merge-vs-replace caveat below doesn't
+  apply here).
+- **Duplicate** is a plain `POST /api/catalog` carrying the same
+  `dimensions`/`color`/`modelUrl`/`metadata` under a fresh server-generated
+  `templateId`, with `" (copy)"` appended to the name. The model file itself
+  is never re-uploaded — the copy just references the same `modelUrl` — so
+  this is safe to do freely: a builder can try a risky edit (like marking
+  something extensible for the first time) on a duplicate without any
+  chance of disturbing the original or any instances already placed from it.
+- **Delete** is a plain `DELETE /api/catalog/:templateId`, gated only by a
+  `confirm()` — deleting a template only ever removes its `catalog_templates`
+  row, never the underlying R2 object, so it's recoverable by re-registering
+  the same `modelUrl` (just not from this UI). `placed_instances.template_id`
+  is a foreign key into `catalog_templates`, so the database itself refuses
+  to delete a template still referenced by an instance somewhere (a generic
+  409 from `databaseHttpError`, reworded on the frontend into "still placed
+  somewhere — remove those instances first, or Duplicate to edit a copy
+  instead") rather than silently orphaning that instance's rendering.
 
-Each row's "Preview axes" button renders that product — the real model or
-placeholder box, exactly as Build mode would show it — into a small
-self-contained Three.js scene (`showAxisPreview` in `src/main.js`, the same
-create/dispose-per-open pattern the claim flyover uses) with X/Y/Z arrows
-overlaid at the product's own true size, so a seller can see which physical
-direction each axis points before picking one, rather than guessing blind
-from the abstract x/y/z dropdown. Picking an axis (or changing it) turns
-that arrow bright yellow and mutes the other two to gray; an orbit-only
-camera (no pan, no auto-rotate) lets the seller drag to look around.
+The Extensibility panel itself lets the builder pick an extensible axis (or
+"Not extensible") and a minimum length, saved via a plain
+`PATCH /api/catalog/:templateId` with the *entire* merged `metadata`
+object — the endpoint replaces `metadata` wholesale rather than
+deep-merging it, so the frontend reads the existing value first and only
+changes the `extensible` key before sending it back.
 
 ## World settings
 

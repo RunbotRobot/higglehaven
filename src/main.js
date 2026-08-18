@@ -17,6 +17,7 @@ import {
   uploadModelFile,
   createCatalogTemplate,
   updateCatalogTemplate,
+  deleteCatalogTemplate,
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
@@ -1337,19 +1338,33 @@ const EXTENSIBLE_AXIS_OPTIONS = [
   ['z', 'Extensible: height (z)'],
 ];
 
-// Axis-picker preview: a small self-contained Three.js scene, entirely
-// separate from the main builder scene, the same pattern the claim
-// flyover uses (see disposeClaimFlyover). Lets a seller see the actual
-// product — real scanned model or placeholder box, whichever the
-// builder scene would show — with X/Y/Z arrows overlaid before picking
-// which axis "extensible" means, rather than guessing blind from an
-// abstract x/y/z dropdown.
-const sellerAxisCanvas = document.getElementById('seller-axis-canvas');
-const sellerAxisPreviewHintEl = document.getElementById('seller-axis-preview-hint');
+// On-demand product preview: a small self-contained Three.js scene,
+// entirely separate from the main builder scene, the same pattern the
+// claim flyover uses (see disposeClaimFlyover). Lets a seller see the
+// actual product — real scanned model or placeholder box, whichever the
+// builder scene would show — rather than a simplified stand-in. Only one
+// row's preview is ever live at a time (mobile GPUs don't want many
+// WebGL contexts anyway), so this is a single shared canvas moved into
+// whichever row's Preview button was last toggled on, rather than one
+// per row. Defaults to a plain look-it-over view — no axis arrows — since
+// most sellers opening this modal just want to rename or delete
+// something; arrows only appear once a row's Extensibility section (a
+// rare need — see docs/API.md) is actually expanded.
+const sellerPreviewCanvas = document.createElement('canvas');
+sellerPreviewCanvas.className = 'seller-preview-canvas';
+const sellerPreviewHintEl = document.createElement('div');
+sellerPreviewHintEl.className = 'seller-preview-hint';
 const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
 let axisPreview = null;
 
+function mountPreviewInto(container) {
+  container.appendChild(sellerPreviewCanvas);
+  container.appendChild(sellerPreviewHintEl);
+}
+
 function disposeAxisPreview() {
+  sellerPreviewCanvas.remove();
+  sellerPreviewHintEl.remove();
   if (!axisPreview) return;
   axisPreview.controls.dispose();
   axisPreview.renderer.dispose();
@@ -1389,8 +1404,13 @@ function makeAxisLabelSprite(text, colorHex) {
   return sprite;
 }
 
-async function showAxisPreview(template, highlightAxis) {
+// highlightAxis: null for a plain general-viewing look (no arrows at all —
+// the default once a row's Preview is toggled on), '' for a neutral,
+// evenly-weighted X/Y/Z legend (once Extensibility is expanded but no
+// axis picked yet), or 'x'/'y'/'z' once one's actually been picked.
+async function showAxisPreview(template, container, highlightAxis) {
   disposeAxisPreview();
+  mountPreviewInto(container);
 
   const scene = new THREE.Scene();
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
@@ -1416,18 +1436,18 @@ async function showAxisPreview(template, highlightAxis) {
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 0.05);
 
-  const rect = sellerAxisCanvas.getBoundingClientRect();
+  const rect = sellerPreviewCanvas.getBoundingClientRect();
   const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
   camera.up.set(0, 0, 1);
   const dist = radius * 2.6;
   camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
   camera.lookAt(0, 0, 0);
 
-  const renderer = new THREE.WebGLRenderer({ canvas: sellerAxisCanvas, antialias: true, alpha: true });
+  const renderer = new THREE.WebGLRenderer({ canvas: sellerPreviewCanvas, antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(rect.width, rect.height, false);
 
-  const controls = new OrbitControls(camera, sellerAxisCanvas);
+  const controls = new OrbitControls(camera, sellerPreviewCanvas);
   controls.target.set(0, 0, 0);
   controls.enableDamping = false;
   controls.enablePan = false;
@@ -1439,34 +1459,44 @@ async function showAxisPreview(template, highlightAxis) {
   // Not selected yet: all three read as a neutral, evenly-weighted legend.
   // Once an axis is picked, that one arrow turns bright yellow and the
   // other two mute to gray — the same "this one's the live one" language
-  // the resize gizmo itself uses elsewhere.
+  // the resize gizmo itself uses elsewhere. highlightAxis === null (the
+  // default, general-viewing look) skips arrows entirely.
   const arrows = [];
   const labels = [];
-  const axisDims = { x: size.x, y: size.y, z: size.z };
-  const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
-  for (const axis of ['x', 'y', 'z']) {
-    const isHighlighted = highlightAxis === axis;
-    const color = highlightAxis ? (isHighlighted ? 0xffee33 : 0x888888) : AXIS_ARROW_COLORS[axis];
-    const length = axisDims[axis] / 2 + radius * 0.35;
-    const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
-    scene.add(arrow);
-    arrows.push(arrow);
-    const label = makeAxisLabelSprite(axis.toUpperCase(), color);
-    label.position.copy(dirs[axis]).multiplyScalar(length * 1.2);
-    const labelScale = radius * 0.28;
-    label.scale.set(labelScale, labelScale, labelScale);
-    scene.add(label);
-    labels.push(label);
+  if (highlightAxis !== null) {
+    const axisDims = { x: size.x, y: size.y, z: size.z };
+    const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+    for (const axis of ['x', 'y', 'z']) {
+      const isHighlighted = highlightAxis === axis;
+      const color = highlightAxis ? (isHighlighted ? 0xffee33 : 0x888888) : AXIS_ARROW_COLORS[axis];
+      const length = axisDims[axis] / 2 + radius * 0.35;
+      const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
+      scene.add(arrow);
+      arrows.push(arrow);
+      const label = makeAxisLabelSprite(axis.toUpperCase(), color);
+      label.position.copy(dirs[axis]).multiplyScalar(length * 1.2);
+      const labelScale = radius * 0.28;
+      label.scale.set(labelScale, labelScale, labelScale);
+      scene.add(label);
+      labels.push(label);
+    }
   }
 
   render();
   axisPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, templateId: template.templateId };
-  sellerAxisPreviewHintEl.textContent = highlightAxis
+  sellerPreviewHintEl.textContent = highlightAxis
     ? `Yellow = the axis you've picked (${highlightAxis.toUpperCase()}). Drag to look around.`
-    : 'Arrows show X (red) / Y (green) / Z (blue). Pick an axis below to highlight it. Drag to look around.';
+    : highlightAxis === ''
+      ? 'Arrows show X (red) / Y (green) / Z (blue). Pick an axis below to highlight it. Drag to look around.'
+      : 'Drag to look around.';
 }
 
 function renderSellerList() {
+  // Row DOM is about to be thrown away — an open preview would be left
+  // pointing at a detached container, and any per-row event handler
+  // (Save, axis select...) that referenced this render's stale `template`
+  // closures goes with it.
+  disposeAxisPreview();
   sellerListEl.innerHTML = '';
   const templates = myProducts();
   if (templates.length === 0) {
@@ -1479,17 +1509,45 @@ function renderSellerList() {
     const row = document.createElement('div');
     row.className = 'seller-row';
 
-    const header = document.createElement('div');
-    header.className = 'seller-row-header';
-
     const label = document.createElement('div');
     label.className = 'seller-row-label';
     label.textContent = template.name;
-    header.appendChild(label);
+    row.appendChild(label);
 
-    const headerActions = document.createElement('div');
-    headerActions.className = 'seller-row-header-actions';
-    header.appendChild(headerActions);
+    const dims = document.createElement('div');
+    dims.className = 'seller-row-dims';
+    const { width, depth, height } = template.dimensions;
+    dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
+    row.appendChild(dims);
+
+    const rowStatus = document.createElement('div');
+    rowStatus.className = 'seller-row-status';
+
+    const actions = document.createElement('div');
+    actions.className = 'seller-row-actions';
+    row.appendChild(actions);
+
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'seller-row-preview';
+    row.appendChild(previewContainer);
+
+    // General-purpose look-it-over view by default (no axis arrows) — see
+    // showAxisPreview's own doc comment. Toggling reuses the single
+    // shared canvas rather than one per row.
+    const previewBtn = document.createElement('button');
+    previewBtn.className = 'seller-row-action-btn';
+    previewBtn.type = 'button';
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', () => {
+      const alreadyOpenHere = axisPreview?.templateId === template.templateId;
+      disposeAxisPreview();
+      previewBtn.classList.remove('active');
+      if (alreadyOpenHere) return; // toggled off
+      previewBtn.classList.add('active');
+      const showingExtensibility = !extensibilityPanel.hidden;
+      showAxisPreview(template, previewContainer, showingExtensibility ? (axisSelect.value || '') : null);
+    });
+    actions.appendChild(previewBtn);
 
     const renameBtn = document.createElement('button');
     renameBtn.className = 'seller-row-action-btn';
@@ -1513,7 +1571,7 @@ function renderSellerList() {
         renameBtn.disabled = false;
       }
     });
-    headerActions.appendChild(renameBtn);
+    actions.appendChild(renameBtn);
 
     // Duplicates the catalog row only — modelUrl is copied by reference,
     // not re-uploaded, so this is cheap and the original file is never
@@ -1549,24 +1607,65 @@ function renderSellerList() {
         duplicateBtn.disabled = false;
       }
     });
-    headerActions.appendChild(duplicateBtn);
-    row.appendChild(header);
+    actions.appendChild(duplicateBtn);
 
-    const dims = document.createElement('div');
-    dims.className = 'seller-row-dims';
-    const { width, depth, height } = template.dimensions;
-    dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
-    row.appendChild(dims);
+    // A hard delete — only the catalog row, never the underlying R2 model
+    // (see the Duplicate comment above) — so it's recoverable by
+    // re-registering the same modelUrl, just not from this UI. The
+    // worker's placed_instances -> catalog_templates foreign key blocks
+    // this outright (a 409) if the product is still placed anywhere,
+    // rather than silently orphaning those instances — caught below and
+    // reworded, since the server's own message is written for any FK
+    // conflict on the API, not specifically "this product is in use."
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'seller-row-action-btn danger';
+    deleteBtn.type = 'button';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`Delete "${template.name}"? This can't be undone.`)) return;
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      deleteBtn.disabled = true;
+      try {
+        await deleteCatalogTemplate(template.templateId);
+        activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
+        buildCatalogPickerButtons();
+        renderSellerList();
+      } catch (err) {
+        rowStatus.textContent = err.message?.includes('still in use')
+          ? 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.'
+          : err.message || 'Could not delete.';
+        rowStatus.classList.add('error');
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
 
-    const controls = document.createElement('div');
-    controls.className = 'seller-row-extensible';
+    // Extensibility (see docs/API.md) is a real but rare need — collapsed
+    // by default so the row reads as "a product with some buttons," not
+    // as a resize-configuration form.
+    const existingAxis = primaryExtensibleAxis(template) || '';
+    const extensibilityToggle = document.createElement('button');
+    extensibilityToggle.className = 'seller-extensibility-toggle';
+    extensibilityToggle.type = 'button';
+    extensibilityToggle.textContent = existingAxis ? 'Extensibility (on) ▾' : 'Extensibility ▾';
+    row.appendChild(extensibilityToggle);
 
-    const previewAxesBtn = document.createElement('button');
-    previewAxesBtn.className = 'seller-row-action-btn';
-    previewAxesBtn.type = 'button';
-    previewAxesBtn.textContent = 'Preview axes';
-    previewAxesBtn.addEventListener('click', () => showAxisPreview(template, axisSelect.value));
-    controls.appendChild(previewAxesBtn);
+    const extensibilityPanel = document.createElement('div');
+    extensibilityPanel.className = 'seller-extensibility-panel';
+    extensibilityPanel.hidden = true;
+    row.appendChild(extensibilityPanel);
+
+    extensibilityToggle.addEventListener('click', () => {
+      extensibilityPanel.hidden = !extensibilityPanel.hidden;
+      extensibilityToggle.textContent = `${existingAxis ? 'Extensibility (on)' : 'Extensibility'} ${extensibilityPanel.hidden ? '▾' : '▴'}`;
+      // If this row's preview is already open, switch it between the
+      // plain general view and the axis-arrow legend to match — no need
+      // to open one that wasn't already showing.
+      if (axisPreview?.templateId === template.templateId) {
+        showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : (axisSelect.value || ''));
+      }
+    });
 
     const axisSelect = document.createElement('select');
     axisSelect.className = 'seller-axis-select';
@@ -1576,7 +1675,6 @@ function renderSellerList() {
       option.textContent = optionLabel;
       axisSelect.appendChild(option);
     }
-    const existingAxis = primaryExtensibleAxis(template) || '';
     axisSelect.value = existingAxis;
 
     const minInput = document.createElement('input');
@@ -1590,16 +1688,13 @@ function renderSellerList() {
 
     axisSelect.addEventListener('change', () => {
       minInput.disabled = !axisSelect.value;
-      if (axisPreview && axisPreview.templateId === template.templateId) showAxisPreview(template, axisSelect.value);
+      if (axisPreview?.templateId === template.templateId) showAxisPreview(template, previewContainer, axisSelect.value);
     });
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'seller-save-btn';
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
-
-    const rowStatus = document.createElement('div');
-    rowStatus.className = 'seller-row-status';
 
     saveBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
@@ -1642,10 +1737,9 @@ function renderSellerList() {
       }
     });
 
-    controls.appendChild(axisSelect);
-    controls.appendChild(minInput);
-    controls.appendChild(saveBtn);
-    row.appendChild(controls);
+    extensibilityPanel.appendChild(axisSelect);
+    extensibilityPanel.appendChild(minInput);
+    extensibilityPanel.appendChild(saveBtn);
     row.appendChild(rowStatus);
     sellerListEl.appendChild(row);
   }

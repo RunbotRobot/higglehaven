@@ -537,22 +537,6 @@
         font-size: 12px;
         color: rgb(255 255 255 / 0.65);
       }
-      #seller-axis-preview {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-      }
-      #seller-axis-canvas {
-        width: 100%;
-        height: 180px;
-        border-radius: 10px;
-        background: rgb(0 0 0 / 0.25);
-        touch-action: none;
-      }
-      #seller-axis-preview-hint {
-        font-size: 11px;
-        color: rgb(255 255 255 / 0.55);
-      }
       #seller-list {
         display: flex;
         flex-direction: column;
@@ -568,24 +552,22 @@
         border-radius: 10px;
         padding: 10px 12px;
       }
-      .seller-row-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
+      /* No truncation — a product's full name matters more here than a
+         tidy single line, and unlike the catalog picker's own compact
+         buttons, each row already has room to grow vertically. */
       .seller-row-label {
-        font-size: 14px;
+        font-size: 15px;
+        font-weight: 600;
         color: #fff;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
-      .seller-row-header-actions {
+      .seller-row-dims {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.5);
+      }
+      .seller-row-actions {
         display: flex;
         gap: 6px;
-        flex-shrink: 0;
+        flex-wrap: wrap;
       }
       .seller-row-action-btn {
         flex-shrink: 0;
@@ -596,18 +578,60 @@
         color: rgb(255 255 255 / 0.85);
         font: 12px/1.4 sans-serif;
       }
+      .seller-row-action-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      .seller-row-action-btn.danger {
+        border-color: rgb(255 120 100 / 0.5);
+        color: #ffb4a8;
+      }
       .seller-row-action-btn:disabled {
         opacity: 0.5;
       }
-      .seller-row-dims {
-        font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+      /* The live 3D preview only exists in the DOM (a single shared canvas,
+         moved between rows in main.js) while a row's Preview button is
+         toggled on — collapsed rows reserve no space for it at all, so the
+         list reads as products first, not as a viewport. */
+      .seller-row-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
-      .seller-row-extensible {
+      .seller-preview-canvas {
+        width: 100%;
+        height: 170px;
+        border-radius: 10px;
+        background: rgb(0 0 0 / 0.25);
+        touch-action: none;
+      }
+      .seller-preview-hint {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.55);
+      }
+      /* Extensibility is a real but rare need (see docs/API.md) — a plain
+         text-styled toggle keeps it available without competing visually
+         with the pill buttons above for a seller who's just here to
+         rename or delete something. */
+      .seller-extensibility-toggle {
+        align-self: flex-start;
+        padding: 2px 0;
+        border: none;
+        background: none;
+        color: rgb(255 255 255 / 0.6);
+        font: 12px/1.4 sans-serif;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .seller-extensibility-panel {
         display: flex;
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
+      }
+      .seller-extensibility-panel[hidden] {
+        display: none;
       }
       .seller-axis-select,
       .seller-min-input {
@@ -1067,12 +1091,6 @@
         <div id="seller-hint">
           Products this builder has uploaded (plus any custom upload nobody's claimed yet). Extensible axis and
           minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
-        </div>
-        <div id="seller-axis-preview">
-          <canvas id="seller-axis-canvas"></canvas>
-          <div id="seller-axis-preview-hint">
-            Tap "Preview axes" on a product below to see which way X / Y / Z point — drag to look around.
-          </div>
         </div>
         <div id="seller-list"></div>
         <div id="seller-status"></div>
