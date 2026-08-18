@@ -82,7 +82,10 @@ function lerpVertex(a, b, t) {
 // portion re-triangulated, 1 or 2 triangles depending on how many vertices
 // survive) and their new cut edge is recorded so a cap can be built from
 // it afterward, tagged with materialIndex `capMaterialIndex`. Real surface
-// triangles keep whatever materialIndex they already had.
+// triangles keep whatever materialIndex they already had. Returns the kept
+// triangles alongside the raw boundary edges themselves (not just the cap
+// built from them) — cropGeometryFromEnd needs those to measure the actual
+// cross-section it's trying to cover (see loopExtent).
 function clipTriangles(triangles, axis, sign, boundary, capMaterialIndex) {
   const kept = [];
   const boundaryEdges = []; // [{a: Vector3, b: Vector3}] — points on the new cut plane
@@ -127,14 +130,14 @@ function clipTriangles(triangles, axis, sign, boundary, capMaterialIndex) {
     }
   }
 
-  if (boundaryEdges.length === 0) return kept;
-
-  const capNormal = new THREE.Vector3();
-  capNormal.setComponent(axis, sign);
-  for (const cap of triangulateCap(boundaryEdges, capNormal)) {
-    kept.push({ verts: cap, materialIndex: capMaterialIndex });
+  if (boundaryEdges.length > 0) {
+    const capNormal = new THREE.Vector3();
+    capNormal.setComponent(axis, sign);
+    for (const cap of triangulateCap(boundaryEdges, capNormal)) {
+      kept.push({ verts: cap, materialIndex: capMaterialIndex });
+    }
   }
-  return kept;
+  return { triangles: kept, boundaryEdges };
 }
 
 // Chains the clip plane's boundary edges into a loop and fans triangles
@@ -250,6 +253,49 @@ function translateTriangles(triangles, axis, delta) {
   }));
 }
 
+// A boundary loop's bounding box in the two axes *other* than the crop
+// axis — the "footprint" a cap needs to cover, seen looking straight down
+// the crop axis. Bounding-box (not true centroid/radius) is deliberately
+// simple, matching triangulateCap's own "roughly convex real product"
+// assumption elsewhere in this file.
+function loopExtent(edges, uIndex, vIndex) {
+  let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  for (const edge of edges) {
+    for (const p of [edge.a, edge.b]) {
+      const u = p.getComponent(uIndex);
+      const v = p.getComponent(vIndex);
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+  }
+  return {
+    centerU: (minU + maxU) / 2,
+    centerV: (minV + maxV) / 2,
+    extentU: Math.max(maxU - minU, 1e-6),
+    extentV: Math.max(maxV - minV, 1e-6),
+  };
+}
+
+// Recenters and scales a triangle list within the plane perpendicular to
+// the crop axis — used to fit a lifted end cap onto a hole it wasn't
+// originally shaped for (see cropGeometryFromEnd). Never touches the crop
+// axis component itself.
+function fitTrianglesInPlane(triangles, uIndex, vIndex, from, to, scaleU, scaleV) {
+  return triangles.map(({ verts, materialIndex }) => ({
+    materialIndex,
+    verts: verts.map((v) => {
+      const position = v.position.clone();
+      const u = (position.getComponent(uIndex) - from.centerU) * scaleU + to.centerU;
+      const val = (position.getComponent(vIndex) - from.centerV) * scaleV + to.centerV;
+      position.setComponent(uIndex, u);
+      position.setComponent(vIndex, val);
+      return { position, normal: v.normal, uv: v.uv };
+    }),
+  }));
+}
+
 // What fraction of the *original, uncropped* length is treated as "the end
 // cap region" to lift and reuse — thin enough to stay a small sliver of
 // the product even when it's cropped down a lot, thick enough to reliably
@@ -284,12 +330,44 @@ export function cropGeometryFromEnd(geometry, axis, cropLength, fullLength) {
   // primitive as everything else, so it comes out already a clean,
   // watertight little slab (including its own back face, which becomes
   // the hidden hidden-behind-a-hidden-surface backing once relocated).
-  const capSlab = clipTriangles(all, axis, -1, capBoundary, 1);
+  const { triangles: capSlab, boundaryEdges: capEdges } = clipTriangles(all, axis, -1, capBoundary, 1);
   // The rest of the product, cut down to the new boundary. Anything
   // between newBoundary and capBoundary is genuinely discarded — that's
   // the material actually being "cut away".
-  const mainBody = clipTriangles(all, axis, 1, newBoundary, 1);
+  const { triangles: mainBody, boundaryEdges: mainEdges } = clipTriangles(all, axis, 1, newBoundary, 1);
 
-  const translatedCap = translateTriangles(capSlab, axis, newBoundary - capBoundary);
-  return buildGroupedGeometry([...mainBody, ...translatedCap]);
+  let fittedCap = translateTriangles(capSlab, axis, newBoundary - capBoundary);
+  // The lifted cap's own cross-section, measured right by the true tip
+  // (capEdges), isn't guaranteed to exactly match the main body's
+  // cross-section at the new cut boundary (mainEdges) — a real scanned
+  // product can taper or vary slightly along its length, and this is the
+  // one place that difference actually matters. Left alone, that mismatch
+  // can leave a sliver of the manufactured backing cap (materialIndex 1,
+  // meant to be a never-seen safety net) peeking out from behind the
+  // relocated real one. Recentering the translated cap onto the main
+  // body's own hole, and scaling it up (never down, so real geometry is
+  // only ever stretched to fit, never shaved away) just enough in the
+  // cross-sectional plane to guarantee full coverage, keeps whatever's
+  // actually visible at the boundary the real surface — the correction is
+  // a small, invisible-in-practice stretch confined to a thin sliver at
+  // the very tip, not a visible seam or gap.
+  if (mainEdges.length > 0 && capEdges.length > 0) {
+    const [uIndex, vIndex] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+    const hole = loopExtent(mainEdges, uIndex, vIndex);
+    const patch = loopExtent(capEdges, uIndex, vIndex);
+    // Only scale up when the patch is actually smaller than the hole it
+    // needs to cover — a patch that already matches or exceeds the hole
+    // (the common case: most real products don't taper noticeably) is
+    // left completely alone, scale exactly 1, rather than applying a
+    // margin unconditionally to every crop regardless of whether it was
+    // ever needed. The small 1.02 only kicks in alongside an actual
+    // correction, as slop for floating-point/mesh-discretization noise
+    // right at the new edge, not as its own independent stretch.
+    const COVERAGE_MARGIN = 1.02;
+    const scaleU = hole.extentU > patch.extentU ? (hole.extentU / patch.extentU) * COVERAGE_MARGIN : 1;
+    const scaleV = hole.extentV > patch.extentV ? (hole.extentV / patch.extentV) * COVERAGE_MARGIN : 1;
+    fittedCap = fitTrianglesInPlane(fittedCap, uIndex, vIndex, patch, hole, scaleU, scaleV);
+  }
+
+  return buildGroupedGeometry([...mainBody, ...fittedCap]);
 }

@@ -58,11 +58,10 @@ let currentLandletId = 'starter-landlet';
 // Shop and Build are two fundamentally different full-screen scene setups
 // (per-world absolute coordinates + flight controls vs. one landlet's local
 // coordinates + build gizmos) that bootstrap() builds fresh each time,
-// exactly like exitShopMode() already did before this existed — so
-// switching between them goes through a reload rather than a live in-place
-// teardown/rebuild, deliberately: this codebase already rejected that path
-// once (see enterShopMode's own comment on why it re-fetches/rebuilds
-// rather than trying to reuse Build's leftover state). sessionStorage
+// so switching between them goes through a reload rather than a live
+// in-place teardown/rebuild, deliberately: this codebase already rejected
+// that path once (see enterShopMode's own comment on why it re-fetches/
+// rebuilds rather than trying to reuse Build's leftover state). sessionStorage
 // (not localStorage) carries the *next* mode across that reload — it's
 // gone once bootstrap() reads it, and a plain fresh tab with nothing set
 // always lands on Shop, the product's chosen default landing view.
@@ -551,6 +550,13 @@ function currentDragCropLength(object) {
 // camera edge-pan fix elsewhere in this file had to work around.
 let resizePreviewMesh = null;
 let resizePreviewTimer = null;
+// The crop length resizePreviewMesh actually represents — lets
+// updateResizePreview skip a pointless rebuild when a drag is pinned at
+// the min/max and further pointer movement can't change the clamped
+// result, and lets a stale, slower-to-resolve request recognize it's been
+// superseded (see resizePreviewRequestId).
+let resizePreviewLength = null;
+let resizePreviewRequestId = 0;
 
 // Rebuilding a real model's cropped geometry isn't free (it's a full
 // reload + clip), so this runs on a short throttle off objectChange
@@ -560,6 +566,8 @@ const RESIZE_PREVIEW_THROTTLE_MS = 120;
 
 async function updateResizePreview(object) {
   const clampedLength = currentDragCropLength(object);
+  if (resizePreviewMesh && resizePreviewLength === clampedLength) return;
+  const requestId = ++resizePreviewRequestId;
   const instanceLike = {
     instanceId: object.userData.instanceId,
     templateId: object.userData.template.templateId,
@@ -572,10 +580,12 @@ async function updateResizePreview(object) {
     crop: { ...object.userData.crop, [resizeAxis]: clampedLength },
   };
   const preview = await createMeshForInstance(instanceLike);
-  // The drag may have already ended (or moved to a different object)
-  // while that reload was in flight — stale results get discarded rather
-  // than popped in after the fact.
-  if (!preview || !resizeControls.dragging || resizeControls.object !== object) {
+  // The drag may have already ended, moved to a different object, or been
+  // superseded by a newer request (dragging-changed's own immediate call
+  // and objectChange's throttled one can both be in flight at once right
+  // after a drag starts) while that reload was in flight — stale results
+  // get discarded rather than popped in after the fact.
+  if (!preview || !resizeControls.dragging || resizeControls.object !== object || requestId !== resizePreviewRequestId) {
     if (preview) disposeObject(preview);
     return;
   }
@@ -584,6 +594,7 @@ async function updateResizePreview(object) {
     disposeObject(resizePreviewMesh);
   }
   resizePreviewMesh = preview;
+  resizePreviewLength = clampedLength;
   scene.add(resizePreviewMesh);
   object.visible = false;
   // The selection outline tracks whatever mesh it was built for via its
@@ -609,6 +620,7 @@ function clearResizePreview(object) {
     disposeObject(resizePreviewMesh);
     resizePreviewMesh = null;
   }
+  resizePreviewLength = null;
   if (object) {
     object.visible = true;
     const outline = selectionOutlines.get(object);
@@ -635,6 +647,24 @@ resizeControls.addEventListener('dragging-changed', async (event) => {
   if (event.value) {
     pushUndoSnapshot();
     resizeStartLength = effectiveLength(object.userData.template, object.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
+    // Hide the real object immediately, before even the first preview has
+    // loaded, rather than waiting for updateResizePreview to do it once
+    // its (throttled, async) result comes back. TransformControls starts
+    // live-stretching object.scale the instant the drag begins — without
+    // this, that raw, unclamped stretch was the only thing on screen for
+    // a beat every drag, most visible right at the extremes: yank the
+    // handle hard past the max and the object visibly overshot before the
+    // correctly-clamped preview finally popped in and snapped it back.
+    // The one-time preview build kicked off here (not through the
+    // throttle) means nothing but the correct cropped result — or, at
+    // worst, briefly nothing at all — is ever visible instead.
+    object.visible = false;
+    const outline = selectionOutlines.get(object);
+    if (outline) {
+      outline.helper.visible = false;
+      outline.fill.visible = false;
+    }
+    updateResizePreview(object);
     return;
   }
   const clampedLength = currentDragCropLength(object);
@@ -874,6 +904,23 @@ async function loadCroppedModelInstance(template, instance) {
   const shift = [0, 0, 0];
   shift[axisIndex] = -recenterOffset;
 
+  // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
+  // meant to stay fully hidden behind the real, relocated end cap, but a
+  // genuinely irregular real scan (a concave dip, a seam) can leave a
+  // sliver of it exposed despite cropGeometryFromEnd's own coverage fit.
+  // Rendering that sliver with the SAME textured material as the real
+  // surface used to mean sampling whatever texel happens to sit at the
+  // flat cap's UV(0,0) — an arbitrary, sometimes bizarrely-colored patch
+  // of the product's own texture atlas showing up out of context. A
+  // plain, untextured material in the product's own swatch color reads as
+  // "an ordinary surface" instead, even on the rare crop where a sliver
+  // does show.
+  // DoubleSide: a genuinely holey real scan (see this block's own comment
+  // above) can let a grazing view ray slip past the backing cap's front
+  // face without a clean hit — rendering its normally-invisible backface
+  // instead of falling through to empty space/background is a cheap,
+  // strictly-better hardening regardless of any one model's own defects.
+  const backingMaterial = new THREE.MeshStandardMaterial({ color: template.color, side: THREE.DoubleSide });
   const inner = new THREE.Group();
   for (const mesh of meshes) {
     const geometry = mesh.geometry.clone();
@@ -881,7 +928,7 @@ async function loadCroppedModelInstance(template, instance) {
     const cropped = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
     cropped.translate(shift[0], shift[1], shift[2]);
     const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    inner.add(new THREE.Mesh(cropped, originalMaterial));
+    inner.add(new THREE.Mesh(cropped, [originalMaterial, backingMaterial]));
   }
   inner.position.setComponent(axisIndex, recenterOffset);
   const result = new THREE.Group();
@@ -2998,7 +3045,6 @@ identityNewBtn.addEventListener('click', async () => {
 // positioned at that center, and its instances are added as children at
 // their ordinary local coordinates, so nothing about createMeshForInstance
 // itself needs to know Shop mode exists.
-const shopExitBtn = document.getElementById('shop-exit-btn');
 const shopStatusEl = document.getElementById('shop-status');
 const shopHintEl = document.getElementById('shop-hint');
 const shopBtn = document.getElementById('shop-btn');
@@ -3295,14 +3341,15 @@ function unloadShopLandletInstances(entry) {
 // the Identity pill) belongs to the single-landlet editing experience —
 // none of it applies while visiting, and left showing it would just
 // overlap Shop's own overlay. There's nothing to restore on the way out:
-// exitShopMode() reloads the page rather than trying to undo this.
+// leaving Shop mode (via #mode-nav's Build/Sell buttons) reloads the page
+// rather than trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'identity-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
 ];
 
 async function enterShopMode() {
   identityModalEl.classList.remove('visible');
-  for (const el of [shopExitBtn, shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
+  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
@@ -3408,21 +3455,6 @@ async function enterShopMode() {
   shopActive = true;
 }
 
-function exitShopMode() {
-  // Flying through many landlets' worth of dynamically loaded models
-  // leaves a lot of scene state to unwind correctly (loaded/unloaded
-  // instances mid-transition, the wild backdrop, every ground mesh) —
-  // reloading gets back to a known-clean state the same way switching
-  // builder identity already does, rather than risking a subtly incomplete
-  // manual teardown. Since Shop is now the default landing view (see
-  // START_MODE_KEY), a reload with nothing set would just relaunch Shop
-  // again — explicitly asking for Build here is what makes "Exit Shop"
-  // still mean "stop flying, go build" rather than a no-op loop.
-  sessionStorage.setItem(START_MODE_KEY, 'build');
-  location.reload();
-}
-shopExitBtn.addEventListener('click', exitShopMode);
-
 shopBtn.addEventListener('click', () => {
   // Reached mid-identity-flow (see runBuilderMenu, still awaited by
   // bootstrap() at this point) — no reload needed since Build mode's own
@@ -3483,9 +3515,9 @@ function runClaimFlow() {
     // clean-slate escape hatch exitShopMode() uses for the same reason:
     // nothing here to lose, and every path (Close, Shop, a different
     // builder, this same builder again) starts over correctly from
-    // runBuilderMenu() either way. Explicitly targeting 'build' (like
-    // exitShopMode()) keeps this landing back in the identity/claim flow
-    // rather than the bare reload's own default of Shop.
+    // runBuilderMenu() either way. Explicitly targeting 'build' keeps this
+    // landing back in the identity/claim flow rather than the bare
+    // reload's own default of Shop.
     claimBackBtn.onclick = () => {
       sessionStorage.setItem(START_MODE_KEY, 'build');
       location.reload();
@@ -3915,7 +3947,7 @@ async function migrateLegacyIdentities() {
 async function bootstrap() {
   await migrateLegacyIdentities();
 
-  // Set by #mode-nav (or exitShopMode) just before its reload; consumed
+  // Set by #mode-nav just before its reload; consumed
   // once here. Nothing set — a plain fresh tab — lands on Shop, the
   // product's chosen default landing view (see START_MODE_KEY above).
   const requestedStartMode = sessionStorage.getItem(START_MODE_KEY);

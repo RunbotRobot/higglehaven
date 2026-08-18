@@ -101,16 +101,6 @@
       .shop-ui.visible {
         display: block;
       }
-      #shop-exit-btn {
-        top: 10px;
-        right: 8px;
-        padding: 8px 16px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.75);
-        color: #fff;
-        font: 14px/1.4 sans-serif;
-      }
       #shop-status {
         top: 10px;
         left: 12px;
@@ -292,16 +282,20 @@
          own centered text — no amount of shrinking the neighbors avoids the
          overlap, since undo/redo alone is wider than the gap on either side
          of a centered box that size. product-info (and the gizmo-mode-
-         controls row that follows it) drop to their own row below both
-         corner panels instead. Placed after the rules it overrides, not
-         inside the wordmark-shrink media query above, so the cascade's
-         source-order tiebreak doesn't let the unconditional base rule win. */
+         controls row that follows it) drop below both corner panels
+         instead — and below the Identity/Settings/#mode-nav row (top: 48px,
+         itself roughly 27px tall) that sits between them and the top edge,
+         so a long centered hint ("Tap a product to inspect it") clears all
+         three rows rather than just the first. Placed after the rules it
+         overrides, not inside the wordmark-shrink media query above, so the
+         cascade's source-order tiebreak doesn't let the unconditional base
+         rule win. */
       @media (max-width: 480px) {
         #product-info {
-          top: 52px;
+          top: 84px;
         }
         #gizmo-mode-controls {
-          top: 104px;
+          top: 136px;
         }
       }
       #gizmo-mode-controls button {
@@ -1002,7 +996,6 @@
   </head>
   <body>
     <canvas id="app"></canvas>
-    <button id="shop-exit-btn" class="shop-ui" type="button">Exit Shop</button>
     <div id="shop-status" class="shop-ui"></div>
     <div id="shop-hint" class="shop-ui">Left stick to walk — right stick to look</div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
