@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { cropGeometrySymmetric } from './meshCrop.js';
+import { cropGeometryFromEnd } from './meshCrop.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -513,6 +513,103 @@ scene.add(resizeControls.getHelper());
 let resizeAxis = null;
 let resizeStartLength = 0;
 
+// Converts the gizmo's live (still-unclamped, still just a raw multiplier
+// of resizeStartLength) scale factor into the actual crop length it
+// represents right now.
+function currentDragCropLength(object) {
+  const template = object.userData.template;
+  const extensible = extensibleAxes(template)[resizeAxis];
+  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
+  const requestedLength = resizeStartLength * object.scale[resizeAxis];
+  return THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+}
+
+// A separate object, swapped in only while the drag is live, that shows
+// the *actual* cropped result at the pointer's current position — see
+// updateResizePreview. The real object being dragged is hidden underneath
+// it for the same span; TransformControls keeps tracking that real
+// object's own .scale the whole time (completely untouched by any of
+// this), so nothing here risks the kind of internal-state desync the
+// camera edge-pan fix elsewhere in this file had to work around.
+let resizePreviewMesh = null;
+let resizePreviewTimer = null;
+
+// Rebuilding a real model's cropped geometry isn't free (it's a full
+// reload + clip), so this runs on a short throttle off objectChange
+// rather than on every single pointermove — frequent enough to read as
+// "live", not frequent enough to visibly lag a dense scanned mesh.
+const RESIZE_PREVIEW_THROTTLE_MS = 120;
+
+async function updateResizePreview(object) {
+  const clampedLength = currentDragCropLength(object);
+  const instanceLike = {
+    instanceId: object.userData.instanceId,
+    templateId: object.userData.template.templateId,
+    x: object.position.x,
+    y: object.position.y,
+    z: object.position.z,
+    rotationX: object.rotation.x,
+    rotationY: object.rotation.y,
+    rotationZ: object.rotation.z,
+    crop: { ...object.userData.crop, [resizeAxis]: clampedLength },
+  };
+  const preview = await createMeshForInstance(instanceLike);
+  // The drag may have already ended (or moved to a different object)
+  // while that reload was in flight — stale results get discarded rather
+  // than popped in after the fact.
+  if (!preview || !resizeControls.dragging || resizeControls.object !== object) {
+    if (preview) disposeObject(preview);
+    return;
+  }
+  if (resizePreviewMesh) {
+    scene.remove(resizePreviewMesh);
+    disposeObject(resizePreviewMesh);
+  }
+  resizePreviewMesh = preview;
+  scene.add(resizePreviewMesh);
+  object.visible = false;
+  // The selection outline tracks whatever mesh it was built for via its
+  // own world matrix every frame regardless of that mesh's own .visible —
+  // left alone, it would keep drawing around the hidden real object's own
+  // live (still-stretching) scale, out of step with the correctly-cropped
+  // preview sitting right where the object used to be.
+  const outline = selectionOutlines.get(object);
+  if (outline) {
+    outline.helper.visible = false;
+    outline.fill.visible = false;
+  }
+  resizeLengthInputEl.value = clampedLength.toFixed(2);
+}
+
+function clearResizePreview(object) {
+  if (resizePreviewTimer) {
+    clearTimeout(resizePreviewTimer);
+    resizePreviewTimer = null;
+  }
+  if (resizePreviewMesh) {
+    scene.remove(resizePreviewMesh);
+    disposeObject(resizePreviewMesh);
+    resizePreviewMesh = null;
+  }
+  if (object) {
+    object.visible = true;
+    const outline = selectionOutlines.get(object);
+    if (outline) {
+      outline.helper.visible = true;
+      outline.fill.visible = true;
+    }
+  }
+}
+
+resizeControls.addEventListener('objectChange', () => {
+  const object = resizeControls.object;
+  if (!object || !resizeAxis || !resizeControls.dragging || resizePreviewTimer) return;
+  resizePreviewTimer = setTimeout(() => {
+    resizePreviewTimer = null;
+    updateResizePreview(object);
+  }, RESIZE_PREVIEW_THROTTLE_MS);
+});
+
 resizeControls.addEventListener('dragging-changed', async (event) => {
   controls.enabled = !event.value;
   const object = resizeControls.object;
@@ -522,11 +619,8 @@ resizeControls.addEventListener('dragging-changed', async (event) => {
     resizeStartLength = effectiveLength(object.userData.template, object.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
     return;
   }
-  const template = object.userData.template;
-  const extensible = extensibleAxes(template)[resizeAxis];
-  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
-  const requestedLength = resizeStartLength * object.scale[resizeAxis];
-  const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+  const clampedLength = currentDragCropLength(object);
+  clearResizePreview(object);
   object.scale.set(1, 1, 1);
   const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [resizeAxis]: clampedLength });
   const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
@@ -727,14 +821,12 @@ async function replaceMeshWithCrop(mesh, crop) {
 // bakes each mesh's accumulated transform into its own geometry (putting
 // it in the same container-local space effectiveLength's width/depth/
 // height already describe) and runs it through meshCrop.js's plane
-// clipper. The real scanned surface and its texture survive completely
-// untouched everywhere except right at the new cut edge, where a flat,
-// untextured cap (colored from the template's own `color` field) closes
-// the opening — see docs/API.md's "Extensible products" section for why
-// this exists instead of just scaling the model down. Returns the
-// container unmodified when there's nothing to crop, so a full-length
-// instance of an extensible template still renders exactly like a normal
-// one, model and all.
+// clipper. Cropping only ever removes material from the +axis end (see
+// meshCrop.js's own doc comment for why, and why the far end's cap is
+// never a fabricated flat disc) — see docs/API.md's "Extensible
+// products" section. Returns the container unmodified when there's
+// nothing to crop, so a full-length instance of an extensible template
+// still renders exactly like a normal one, model and all.
 async function loadCroppedModelInstance(template, instance) {
   const container = await loadModelInstance(template.modelUrl);
   const axis = primaryExtensibleAxis(template);
@@ -750,17 +842,32 @@ async function loadCroppedModelInstance(template, instance) {
     if (child.isMesh) meshes.push(child);
   });
   const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-  const capMaterial = new THREE.MeshStandardMaterial({ color: template.color, roughness: 0.9 });
-  const halfExtent = cropLength / 2;
 
-  const result = new THREE.Group();
+  // Cropping only the +axis end leaves the remaining geometry's true
+  // center drifting toward -axis as cropLength shrinks — but every
+  // consumer of a placed mesh's own position (collision, landlet-bounds
+  // clamping, ...) assumes position IS the center. Recentering the
+  // geometry and pushing the same offset onto this inner group (rather
+  // than the outer group createMeshForInstance still needs to freely
+  // position) keeps that invariant intact without moving anything the
+  // builder actually sees: the untouched -axis end still lands in
+  // exactly the same spot it would have without this compensation.
+  const recenterOffset = (cropLength - fullLength) / 2;
+  const shift = [0, 0, 0];
+  shift[axisIndex] = -recenterOffset;
+
+  const inner = new THREE.Group();
   for (const mesh of meshes) {
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
-    const cropped = cropGeometrySymmetric(geometry, axisIndex, halfExtent);
+    const cropped = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
+    cropped.translate(shift[0], shift[1], shift[2]);
     const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    result.add(new THREE.Mesh(cropped, [originalMaterial, capMaterial]));
+    inner.add(new THREE.Mesh(cropped, originalMaterial));
   }
+  inner.position.setComponent(axisIndex, recenterOffset);
+  const result = new THREE.Group();
+  result.add(inner);
   return result;
 }
 

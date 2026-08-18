@@ -348,15 +348,26 @@ never a squash:
   fails to load) renders as a plain colored box at the cropped size —
   trivially correct, since there's no texture to distort in the first place.
 - A template with a real model (e.g. a photogrammetry scan) is actually
-  clipped: `src/meshCrop.js` cuts the mesh's real geometry at the crop plane,
-  keeping the original surface and its texture completely untouched outside
-  the cut, and caps the newly exposed cross-section with a flat, untextured
-  polygon colored from the template's own `color` field (see
-  `loadCroppedModelInstance` in `src/main.js`). Only single-axis-aligned
-  symmetric crops are supported — fine for the roughly-box-shaped products
-  (bricks, boards, doors) this exists for; an arbitrarily-shaped product
-  cropped this way would still get a geometrically correct cut, just not
-  necessarily an aesthetically ideal one.
+  clipped, and asymmetrically: the crop only ever removes material from the
+  local +axis end (`src/meshCrop.js`'s `cropGeometryFromEnd`). The -axis end
+  — the "anchor" — is never touched at all, real end cap included. The
+  +axis end doesn't get a fabricated flat disc either: the product's own
+  original end-cap geometry (whatever real triangles were already sitting
+  at its true, uncropped +axis extreme) is lifted and rigidly translated
+  inward to the new boundary, so a crop always looks like a shorter version
+  of the same real product — never an artificial-looking patch. A thin flat
+  cap is still built as an invisible backing behind that relocated real cap
+  (in case the two don't nest perfectly), but it's never meant to be seen —
+  see `loadCroppedModelInstance` in `src/main.js`, which also recenters the
+  result so a placed instance's own position keeps meaning "the object's
+  true center" even though the crop itself is one-sided. Only single-axis-
+  aligned crops are supported — fine for the roughly-box-shaped products
+  (bricks, boards, doors) this exists for.
+- Dragging the Resize gizmo shows this real crop live, throttled to about
+  8 updates/second rather than one per pointer-move frame (a full reload +
+  reclip isn't free) — the object being dragged is hidden and a temporary
+  preview mesh takes its place for the span of the drag, so nothing about
+  TransformControls' own internal drag-tracking is ever touched mid-drag.
 
 ### Managing extensibility — the Seller modal
 
