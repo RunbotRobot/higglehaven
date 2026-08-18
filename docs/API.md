@@ -1265,6 +1265,19 @@ the gate would never see those requests.
   above controls who can reach the API at all, but doesn't add per-user
   identity, permissions, or ownership checks within it.
 
+## Frontend-only settings (Units)
+
+`src/settings.js` holds a small `localStorage`-backed preference —
+`higglehaven.units`, `'m'` or `'ft'` — set from the Settings modal's General
+tab (four tabs exist: General/Shop/Build/Sell; only General has a control
+today, the rest are placeholders reserved for future settings). This is
+purely a display/input convenience: every length is still measured,
+persisted, and sent to the API in meters exactly as described above. Ft
+mode only changes how a length is *formatted* for reading (the resize
+field's unit suffix, the Seller modal's dimension/minimum-length text) and
+how a typed number is *parsed* back into meters before it reaches any
+`crop`/`metadata.extensible` value sent to the server.
+
 ## Custom model uploads (not covered above)
 
 Two additional routes exist outside the CRUD endpoints described above, added

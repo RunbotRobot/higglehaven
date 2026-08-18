@@ -33,6 +33,7 @@ import {
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
+import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -578,7 +579,7 @@ async function updateResizePreview(object) {
     outline.helper.visible = false;
     outline.fill.visible = false;
   }
-  resizeLengthInputEl.value = clampedLength.toFixed(2);
+  resizeLengthInputEl.value = toDisplayLength(clampedLength).toFixed(2);
 }
 
 function clearResizePreview(object) {
@@ -1361,7 +1362,7 @@ function renderSellerList() {
     const dims = document.createElement('div');
     dims.className = 'seller-row-dims';
     const { width, depth, height } = template.dimensions;
-    dims.textContent = `${width.toFixed(2)} × ${depth.toFixed(2)} × ${height.toFixed(2)} m`;
+    dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
     row.appendChild(dims);
 
     const controls = document.createElement('div');
@@ -1383,9 +1384,9 @@ function renderSellerList() {
     minInput.type = 'number';
     minInput.step = '0.01';
     minInput.min = '0';
-    minInput.placeholder = 'min m';
+    minInput.placeholder = `min ${unitSuffix()}`;
     minInput.disabled = !existingAxis;
-    if (existingAxis) minInput.value = extensibleAxes(template)[existingAxis].minM;
+    if (existingAxis) minInput.value = toDisplayLength(extensibleAxes(template)[existingAxis].minM).toFixed(2);
 
     axisSelect.addEventListener('change', () => {
       minInput.disabled = !axisSelect.value;
@@ -1403,7 +1404,7 @@ function renderSellerList() {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const axis = axisSelect.value;
-      const minM = Number(minInput.value);
+      const minM = fromDisplayLength(Number(minInput.value));
       const maxLength = axis ? template.dimensions[AXIS_DIMENSION_KEY[axis]] : null;
       if (axis && (!Number.isFinite(minM) || minM <= 0)) {
         rowStatus.textContent = 'Minimum length must be a positive number.';
@@ -1411,7 +1412,7 @@ function renderSellerList() {
         return;
       }
       if (axis && minM >= maxLength) {
-        rowStatus.textContent = `Minimum must be less than this product's own ${maxLength.toFixed(2)}m size.`;
+        rowStatus.textContent = `Minimum must be less than this product's own ${formatLength(maxLength)} size.`;
         rowStatus.classList.add('error');
         return;
       }
@@ -1464,6 +1465,93 @@ function closeSellerModal() {
 }
 sellerBtn.addEventListener('click', openSellerModal);
 sellerCloseBtn.addEventListener('click', closeSellerModal);
+
+// Settings: local, per-device display preferences — nothing here is ever
+// sent to the server (see settings.js). Four sections exist as fixed tabs
+// per the product ask even though only General/Units has a real setting
+// today; Shop/Build/Sell show a placeholder rather than inventing controls
+// nobody asked for yet.
+const settingsModalEl = document.getElementById('settings-modal');
+const settingsTabsEl = document.getElementById('settings-tabs');
+const settingsSectionEl = document.getElementById('settings-section');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsCloseBtn = document.getElementById('settings-close-btn');
+const resizeUnitLabelEl = document.getElementById('resize-unit-label');
+
+let activeSettingsTab = 'general';
+
+// Called whenever the Units preference changes, so every on-screen length
+// reflects it immediately rather than only after the next selection change
+// or modal reopen.
+function refreshUnitDisplays() {
+  resizeUnitLabelEl.textContent = unitSuffix();
+  updateResizeLengthInput();
+  if (sellerModalEl.classList.contains('visible')) renderSellerList();
+}
+
+function renderSettingsSection() {
+  settingsSectionEl.innerHTML = '';
+  for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
+    btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
+  }
+
+  if (activeSettingsTab !== 'general') {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Nothing to configure here yet.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Units';
+  field.appendChild(fieldLabel);
+
+  const radioRow = document.createElement('div');
+  radioRow.className = 'settings-radio-row';
+  const currentUnits = getUnits();
+  for (const [value, optionLabel] of [['m', 'Meters'], ['ft', 'Feet']]) {
+    const optionLabelEl = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'settings-units';
+    radio.value = value;
+    radio.checked = currentUnits === value;
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return;
+      setUnits(value);
+      refreshUnitDisplays();
+    });
+    optionLabelEl.appendChild(radio);
+    optionLabelEl.appendChild(document.createTextNode(optionLabel));
+    radioRow.appendChild(optionLabelEl);
+  }
+  field.appendChild(radioRow);
+  settingsSectionEl.appendChild(field);
+}
+
+for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
+  btn.addEventListener('click', () => {
+    activeSettingsTab = btn.dataset.section;
+    renderSettingsSection();
+  });
+}
+
+function openSettingsModal() {
+  renderSettingsSection();
+  settingsModalEl.classList.add('visible');
+}
+function closeSettingsModal() {
+  settingsModalEl.classList.remove('visible');
+}
+settingsBtn.addEventListener('click', openSettingsModal);
+settingsCloseBtn.addEventListener('click', closeSettingsModal);
+// Only the static unit suffix needs painting at load — updateResizeLengthInput()
+// depends on selectedMeshes, declared further below, and no-ops correctly
+// (there's nothing selected yet) once that's ready.
+resizeUnitLabelEl.textContent = unitSuffix();
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously
 // was tried first and rejected: the rotate ring and the translate handles
@@ -1610,7 +1698,7 @@ function updateResizeLengthInput() {
   if (selectedMeshes.size !== 1 || !resizeAxis) return;
   const [mesh] = selectedMeshes;
   const length = effectiveLength(mesh.userData.template, mesh.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
-  resizeLengthInputEl.value = length.toFixed(2);
+  resizeLengthInputEl.value = toDisplayLength(length).toFixed(2);
 }
 
 let currentGizmoMode = 'translate';
@@ -1681,11 +1769,12 @@ resizeLengthInputEl.addEventListener('change', async () => {
   const template = mesh.userData.template;
   const extensible = extensibleAxes(template)[resizeAxis];
   const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
-  const requestedLength = Number(resizeLengthInputEl.value);
-  if (!Number.isFinite(requestedLength)) {
+  const requestedDisplayLength = Number(resizeLengthInputEl.value);
+  if (!Number.isFinite(requestedDisplayLength)) {
     updateResizeLengthInput(); // revert to the last valid value
     return;
   }
+  const requestedLength = fromDisplayLength(requestedDisplayLength);
   const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
   pushUndoSnapshot();
   const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [resizeAxis]: clampedLength });

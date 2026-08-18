@@ -194,6 +194,18 @@
         color: rgb(255 255 255 / 0.85);
         font: 12px/1.4 sans-serif;
       }
+      #settings-btn {
+        position: fixed;
+        top: 48px;
+        left: 78px;
+        z-index: 10;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: rgb(255 255 255 / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
       #undo-redo-panel button {
         padding: 8px 16px;
         border-radius: 999px;
@@ -609,6 +621,96 @@
         color: #fff;
         font: 14px/1.4 sans-serif;
       }
+      /* Same modal shell as #upload-modal. */
+      #settings-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.5);
+        padding: 16px;
+      }
+      #settings-modal.visible {
+        display: flex;
+      }
+      #settings-modal-content {
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--pill-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #settings-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #settings-tabs {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .settings-tab-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: transparent;
+        color: rgb(255 255 255 / 0.85);
+        font: 13px/1.4 sans-serif;
+      }
+      .settings-tab-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #settings-section {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-height: 80px;
+      }
+      .settings-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.85);
+      }
+      .settings-radio-row {
+        display: flex;
+        gap: 14px;
+      }
+      .settings-radio-row label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 14px/1.4 sans-serif;
+        color: #fff;
+      }
+      .settings-empty-note {
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.6);
+      }
+      #settings-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      #settings-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+      }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
          first) and reopenable any time afterward from #identity-btn or the
@@ -869,6 +971,7 @@
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>
     <button id="identity-btn" type="button">Identity</button>
+    <button id="settings-btn" type="button">Settings</button>
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
@@ -884,7 +987,7 @@
       <button id="mode-rotate" type="button">Rotate</button>
       <button id="mode-resize" type="button">Resize</button>
       <label id="resize-length-control">
-        <input id="resize-length-input" type="number" step="0.01" min="0" />m
+        <input id="resize-length-input" type="number" step="0.01" min="0" /><span id="resize-unit-label">m</span>
       </label>
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
@@ -931,6 +1034,21 @@
         <div id="seller-status"></div>
         <div id="seller-modal-actions">
           <button id="seller-close-btn" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+    <div id="settings-modal">
+      <div id="settings-modal-content">
+        <h2>Settings</h2>
+        <div id="settings-tabs">
+          <button class="settings-tab-btn" type="button" data-section="general">General</button>
+          <button class="settings-tab-btn" type="button" data-section="shop">Shop</button>
+          <button class="settings-tab-btn" type="button" data-section="build">Build</button>
+          <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
+        </div>
+        <div id="settings-section"></div>
+        <div id="settings-modal-actions">
+          <button id="settings-close-btn" type="button">Close</button>
         </div>
       </div>
     </div>
