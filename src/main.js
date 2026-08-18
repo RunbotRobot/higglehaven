@@ -52,6 +52,23 @@ let activeCatalog = FALLBACK_CATALOG;
 let builderId = null;
 let currentLandletId = 'starter-landlet';
 
+// Shop, Build, and Sell are the three peer top-level views (#mode-nav in
+// index.html) — Sell is really just a modal reachable from either of the
+// other two (see ensureBuilderIdentity/the Sell nav handler below), but
+// Shop and Build are two fundamentally different full-screen scene setups
+// (per-world absolute coordinates + flight controls vs. one landlet's local
+// coordinates + build gizmos) that bootstrap() builds fresh each time,
+// exactly like exitShopMode() already did before this existed — so
+// switching between them goes through a reload rather than a live in-place
+// teardown/rebuild, deliberately: this codebase already rejected that path
+// once (see enterShopMode's own comment on why it re-fetches/rebuilds
+// rather than trying to reuse Build's leftover state). sessionStorage
+// (not localStorage) carries the *next* mode across that reload — it's
+// gone once bootstrap() reads it, and a plain fresh tab with nothing set
+// always lands on Shop, the product's chosen default landing view.
+const START_MODE_KEY = 'higglehaven.startMode';
+let currentMode = 'shop';
+
 // Declared here (rather than alongside the rest of Shop mode, much further
 // down) because animate() below reads it on every frame starting from its
 // very first, synchronous call at module load — a `let` declared after
@@ -2899,6 +2916,29 @@ function runBuilderMenu() {
   });
 }
 
+// Sell only ever needs an identity, not a claimed landlet (the Seller
+// modal reads just activeCatalog + builderId — see myProducts()) — so
+// reaching it from Shop mode, which never runs bootstrap()'s own
+// runBuilderMenu() call, still needs *some* way to resolve one. Sharing a
+// single in-flight promise (rather than always calling runBuilderMenu()
+// fresh) matters because bootstrap()'s own Build-mode flow can be
+// awaiting runBuilderMenu() at the very moment the Sell nav button is
+// tapped — two independent runBuilderMenu() calls would each set their
+// own identityOnChoose, and the second silently overwrites the first,
+// leaving bootstrap()'s own await hanging forever with no way to resolve.
+let identityFlowPromise = null;
+function ensureBuilderIdentity() {
+  if (builderId) return Promise.resolve(builderId);
+  if (!identityFlowPromise) {
+    identityFlowPromise = runBuilderMenu().then((id) => {
+      builderId = id;
+      identityFlowPromise = null;
+      return id;
+    });
+  }
+  return identityFlowPromise;
+}
+
 // Shared by #identity-btn and the claim modal's Back button — the identity
 // modal sits at a higher z-index than the claim modal (see index.html) so
 // it can overlay it without needing to hide/reopen the claim modal
@@ -2912,6 +2952,10 @@ function openBuilderSwitcher() {
     identityModalEl.classList.remove('visible');
     if (id === builderId) return; // already this builder — nothing to reload
     setActiveBuilderId(id);
+    // Only reachable from Build mode (see SHOP_HIDDEN_BUILDER_UI_IDS) — the
+    // reload should land back in Build for the new builder, not bounce out
+    // to Shop, the default a bare reload would otherwise pick.
+    sessionStorage.setItem(START_MODE_KEY, 'build');
     location.reload();
   };
   identityModalEl.classList.add('visible');
@@ -3370,14 +3414,46 @@ function exitShopMode() {
   // instances mid-transition, the wild backdrop, every ground mesh) —
   // reloading gets back to a known-clean state the same way switching
   // builder identity already does, rather than risking a subtly incomplete
-  // manual teardown.
+  // manual teardown. Since Shop is now the default landing view (see
+  // START_MODE_KEY), a reload with nothing set would just relaunch Shop
+  // again — explicitly asking for Build here is what makes "Exit Shop"
+  // still mean "stop flying, go build" rather than a no-op loop.
+  sessionStorage.setItem(START_MODE_KEY, 'build');
   location.reload();
 }
 shopExitBtn.addEventListener('click', exitShopMode);
 
 shopBtn.addEventListener('click', () => {
+  // Reached mid-identity-flow (see runBuilderMenu, still awaited by
+  // bootstrap() at this point) — no reload needed since Build mode's own
+  // scene never started loading yet, just a live switch straight into
+  // Shop instead. bootstrap()'s own `await runBuilderMenu()` is left
+  // permanently pending, harmlessly, exactly as it already was before
+  // #mode-nav existed.
+  currentMode = 'shop';
+  updateModeNavUI();
   enterShopMode();
 });
+
+// The persistent Shop/Build/Sell switcher (#mode-nav) — see START_MODE_KEY's
+// own comment for why Shop<->Build goes through a reload while Sell doesn't.
+const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
+function updateModeNavUI() {
+  for (const btn of modeNavButtons) btn.classList.toggle('active', btn.dataset.mode === currentMode);
+}
+for (const btn of modeNavButtons) {
+  btn.addEventListener('click', async () => {
+    const target = btn.dataset.mode;
+    if (target === 'sell') {
+      await ensureBuilderIdentity();
+      openSellerModal();
+      return;
+    }
+    if (target === currentMode) return;
+    sessionStorage.setItem(START_MODE_KEY, target);
+    location.reload();
+  });
+}
 
 const claimModalEl = document.getElementById('claim-modal');
 const claimMapCanvas = document.getElementById('claim-map-canvas');
@@ -3407,8 +3483,13 @@ function runClaimFlow() {
     // clean-slate escape hatch exitShopMode() uses for the same reason:
     // nothing here to lose, and every path (Close, Shop, a different
     // builder, this same builder again) starts over correctly from
-    // runBuilderMenu() either way.
-    claimBackBtn.onclick = () => location.reload();
+    // runBuilderMenu() either way. Explicitly targeting 'build' (like
+    // exitShopMode()) keeps this landing back in the identity/claim flow
+    // rather than the bare reload's own default of Shop.
+    claimBackBtn.onclick = () => {
+      sessionStorage.setItem(START_MODE_KEY, 'build');
+      location.reload();
+    };
   });
 }
 
@@ -3833,7 +3914,24 @@ async function migrateLegacyIdentities() {
 
 async function bootstrap() {
   await migrateLegacyIdentities();
-  builderId = await runBuilderMenu();
+
+  // Set by #mode-nav (or exitShopMode) just before its reload; consumed
+  // once here. Nothing set — a plain fresh tab — lands on Shop, the
+  // product's chosen default landing view (see START_MODE_KEY above).
+  const requestedStartMode = sessionStorage.getItem(START_MODE_KEY);
+  sessionStorage.removeItem(START_MODE_KEY);
+  const startMode = requestedStartMode === 'build' || requestedStartMode === 'sell' ? requestedStartMode : 'shop';
+
+  if (startMode === 'shop') {
+    currentMode = 'shop';
+    updateModeNavUI();
+    await enterShopMode();
+    return;
+  }
+
+  currentMode = 'build';
+  updateModeNavUI();
+  builderId = await ensureBuilderIdentity();
   let instances;
   try {
     currentLandletId = await resolveLandletId();
@@ -3859,5 +3957,12 @@ async function bootstrap() {
   // most placed instances share just a handful of cached model URLs), so
   // there's no reason to load them one at a time.
   await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
+
+  // "Sell" from Shop mode routes through the ordinary Build-mode load (the
+  // Seller modal only actually needs builderId + activeCatalog, but there's
+  // no lighter-weight bootstrap path than this one) and opens straight into
+  // My Products once it's ready, rather than landing the builder on an
+  // empty Build scene they didn't ask to see.
+  if (startMode === 'sell') openSellerModal();
 }
 bootstrap();

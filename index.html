@@ -206,6 +206,30 @@
         color: rgb(255 255 255 / 0.85);
         font: 12px/1.4 sans-serif;
       }
+      /* The three peer top-level views — always reachable regardless of
+         which one is currently active (including during Shop mode, unlike
+         most of the builder UI — see SHOP_HIDDEN_BUILDER_UI_IDS in main.js),
+         so switching feels like tabs rather than one-way doors. */
+      #mode-nav {
+        position: fixed;
+        top: 48px;
+        right: 8px;
+        z-index: 10;
+        display: flex;
+        gap: 6px;
+      }
+      .mode-nav-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: rgb(255 255 255 / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .mode-nav-btn.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
       #undo-redo-panel button {
         padding: 8px 16px;
         border-radius: 999px;
@@ -988,6 +1012,11 @@
     </div>
     <button id="identity-btn" type="button">Identity</button>
     <button id="settings-btn" type="button">Settings</button>
+    <div id="mode-nav">
+      <button class="mode-nav-btn" data-mode="shop" type="button">Shop</button>
+      <button class="mode-nav-btn" data-mode="build" type="button">Build</button>
+      <button class="mode-nav-btn" data-mode="sell" type="button">Sell</button>
+    </div>
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>

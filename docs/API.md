@@ -1278,6 +1278,29 @@ the gate would never see those requests.
   above controls who can reach the API at all, but doesn't add per-user
   identity, permissions, or ownership checks within it.
 
+## Frontend-only navigation (Shop / Build / Sell)
+
+Shop, Build, and Sell are the three peer top-level views, switched via the
+always-visible `#mode-nav` (main.js, not a backend concept). Shop is the
+default landing view — a fresh load or a plain browser refresh goes straight
+into it, no identity gate first, matching how it's always worked (`enterShopMode`
+needs no `builderId`). Build still needs an identity and a claimed landlet, so
+switching into it runs the same `runBuilderMenu`/claim flow bootstrap() always
+ran, just deferred until the nav is actually clicked instead of unconditionally
+at startup. Sell only needs an identity (see "Managing extensibility" above —
+the Seller modal reads just `activeCatalog` + `builderId`), so it opens as a
+plain overlay on top of whichever of the other two is currently active, no
+mode switch or claimed landlet required.
+
+Shop and Build are different enough scene setups (per-world absolute
+coordinates + flight controls vs. one landlet's local coordinates + build
+gizmos) that switching between them goes through a full page reload rather
+than a live in-place teardown/rebuild — the same choice `exitShopMode()`
+already made before this nav existed, now reused rather than replaced.
+`sessionStorage`'s `higglehaven.startMode` carries the *next* mode across
+that one reload; it's consumed once bootstrap() reads it, so an unrelated
+refresh with nothing set always falls back to Shop.
+
 ## Frontend-only settings (Units)
 
 `src/settings.js` holds a small `localStorage`-backed preference —
