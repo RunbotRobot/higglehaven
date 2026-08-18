@@ -372,6 +372,16 @@ object — the endpoint replaces `metadata` wholesale rather than deep-merging
 it, so the frontend reads the existing value first and only changes the
 `extensible` key before sending it back.
 
+Each row also has a Duplicate button: a plain `POST /api/catalog` carrying
+the same `dimensions`/`color`/`modelUrl`/`metadata` under a fresh
+server-generated `templateId`, with `" (copy)"` appended to the name. The
+model file itself is never re-uploaded — the copy just references the same
+`modelUrl` — and deleting a template only ever removes its `catalog_templates`
+row, never the underlying R2 object, so this is safe to do freely: a builder
+can try a risky edit (like marking something extensible for the first time)
+on a duplicate without any chance of disturbing the original or any instances
+already placed from it.
+
 ## World settings
 
 World settings hold the dev-only singleton state needed to start modeling the

@@ -1178,10 +1178,50 @@ function renderSellerList() {
     const row = document.createElement('div');
     row.className = 'seller-row';
 
+    const header = document.createElement('div');
+    header.className = 'seller-row-header';
+
     const label = document.createElement('div');
     label.className = 'seller-row-label';
     label.textContent = template.name;
-    row.appendChild(label);
+    header.appendChild(label);
+
+    // Duplicates the catalog row only — modelUrl is copied by reference,
+    // not re-uploaded, so this is cheap and the original file is never
+    // touched (deleting a template only ever removes its D1 row, never
+    // the underlying R2 object — see docs/API.md). Lets a seller try
+    // extensibility (or any other edit) on a copy without any risk to a
+    // product they already have placed instances of, like a real scan
+    // they don't want to accidentally break.
+    const duplicateBtn = document.createElement('button');
+    duplicateBtn.className = 'seller-duplicate-btn';
+    duplicateBtn.type = 'button';
+    duplicateBtn.textContent = 'Duplicate';
+    duplicateBtn.addEventListener('click', async () => {
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      duplicateBtn.disabled = true;
+      try {
+        const copy = await createCatalogTemplate({
+          name: `${template.name} (copy)`,
+          dimensions: template.dimensions,
+          color: template.color,
+          modelUrl: template.modelUrl,
+          priceCents: template.priceCents,
+          metadata: template.metadata,
+          sellerId: builderId,
+        });
+        activeCatalog.push(copy);
+        buildCatalogPickerButtons();
+        renderSellerList();
+      } catch (err) {
+        rowStatus.textContent = err.message || 'Could not duplicate.';
+        rowStatus.classList.add('error');
+        duplicateBtn.disabled = false;
+      }
+    });
+    header.appendChild(duplicateBtn);
+    row.appendChild(header);
 
     const dims = document.createElement('div');
     dims.className = 'seller-row-dims';
