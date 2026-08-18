@@ -296,7 +296,12 @@ must be a non-negative integer.
 ### `PATCH /api/catalog/:templateId`
 
 Updates a catalog template. The current implementation merges request fields
-with the existing template before validation.
+with the existing template before validation — but only at the top level:
+`metadata` is a single field, so sending it replaces the whole object rather
+than deep-merging into it. A caller that wants to change one key inside
+`metadata` (the Seller modal's extensibility edit, say) needs to read the
+existing `metadata` first and send the whole merged object back — see
+"Extensible products (crop)" above.
 
 ### `DELETE /api/catalog/:templateId`
 
@@ -336,11 +341,36 @@ a handle for the first one declared.
 A builder's per-instance override lives on the placed instance itself, not the
 template — see `crop` under Placed instances below. The frontend never
 stretches an extensible product's geometry to realize a crop (that would
-distort a textured product's UVs); it rebuilds a clean box at the cropped
-size instead, so a crop is always a true "cut it shorter," never a squash.
-Today's catalog templates (including model-backed ones like `brick`) happen
-to render as flat-colored, untextured boxes either way, so this distinction
-isn't visible yet — it matters once a real textured product is uploaded.
+distort a textured product's UVs); a crop is always a true "cut it shorter,"
+never a squash:
+
+- A template with no `modelUrl` (or one whose `metadata.extensible` axis
+  fails to load) renders as a plain colored box at the cropped size —
+  trivially correct, since there's no texture to distort in the first place.
+- A template with a real model (e.g. a photogrammetry scan) is actually
+  clipped: `src/meshCrop.js` cuts the mesh's real geometry at the crop plane,
+  keeping the original surface and its texture completely untouched outside
+  the cut, and caps the newly exposed cross-section with a flat, untextured
+  polygon colored from the template's own `color` field (see
+  `loadCroppedModelInstance` in `src/main.js`). Only single-axis-aligned
+  symmetric crops are supported — fine for the roughly-box-shaped products
+  (bricks, boards, doors) this exists for; an arbitrarily-shaped product
+  cropped this way would still get a geometrically correct cut, just not
+  necessarily an aesthetically ideal one.
+
+### Managing extensibility — the Seller modal
+
+There's no real seller-account system (same dev-mode caveat as builders) — a
+template's `sellerId` is just whichever builder uploaded it, set automatically
+by the upload flow. The frontend's "My Products" button (next to "+ Upload
+Model") opens a modal listing every template whose `sellerId` matches the
+active builder, plus any custom-uploaded template with a `null` `sellerId`
+(covers products uploaded before this existed). Each row lets the builder
+pick an extensible axis (or "Not extensible") and a minimum length, saved via
+a plain `PATCH /api/catalog/:templateId` with the *entire* merged `metadata`
+object — the endpoint replaces `metadata` wholesale rather than deep-merging
+it, so the frontend reads the existing value first and only changes the
+`extensible` key before sending it back.
 
 ## World settings
 

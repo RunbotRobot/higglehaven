@@ -261,3 +261,12 @@ export async function createCatalogTemplate(template) {
   });
   return created;
 }
+
+export async function updateCatalogTemplate(templateId, patch) {
+  const { template: updated } = await requestJson(`/catalog/${encodeURIComponent(templateId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  return updated;
+}

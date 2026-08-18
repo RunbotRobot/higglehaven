@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { cropGeometrySymmetric } from './meshCrop.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -15,6 +16,7 @@ import {
   deleteInstancesRemote,
   uploadModelFile,
   createCatalogTemplate,
+  updateCatalogTemplate,
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
@@ -511,7 +513,7 @@ scene.add(resizeControls.getHelper());
 let resizeAxis = null;
 let resizeStartLength = 0;
 
-resizeControls.addEventListener('dragging-changed', (event) => {
+resizeControls.addEventListener('dragging-changed', async (event) => {
   controls.enabled = !event.value;
   const object = resizeControls.object;
   if (!object || !resizeAxis) return;
@@ -526,12 +528,13 @@ resizeControls.addEventListener('dragging-changed', (event) => {
   const requestedLength = resizeStartLength * object.scale[resizeAxis];
   const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
   object.scale.set(1, 1, 1);
-  applyCropToMesh(object, { ...object.userData.crop, [resizeAxis]: clampedLength });
-  const clamped = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
-  object.position.set(clamped.x, clamped.y, clamped.z);
-  object.userData.safePosition = object.position.clone();
+  const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [resizeAxis]: clampedLength });
+  const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+  updated.position.set(clamped.x, clamped.y, clamped.z);
+  updated.userData.safePosition = updated.position.clone();
+  resizeControls.attach(updated);
   persistLayout();
-  syncUpdate(object);
+  syncUpdate(updated);
   updateResizeLengthInput();
 });
 
@@ -669,29 +672,104 @@ function meshDimensions(mesh) {
 
 const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
 
-// Rebuilds an extensible mesh's box geometry for a new crop — used by the
-// resize UI itself, and by restoreSnapshot when an undo/redo jump lands an
-// *existing* mesh (reused rather than recreated, see its doc comment) on a
-// snapshot with a different crop than the mesh currently has. A fresh box
-// at the new size, never a scale — see createMeshForInstance for why.
-// No-op for a non-extensible template, which never has a crop to apply.
-function applyCropToMesh(mesh, crop) {
+// Swaps `mesh` for a freshly built Object3D reflecting `crop` — used by
+// the resize UI itself, and by restoreSnapshot when an undo/redo jump
+// lands an *existing* mesh (reused rather than recreated, see its doc
+// comment) on a snapshot with a different crop than the mesh currently
+// has. Always goes through createMeshForInstance rather than mutating the
+// existing mesh in place: a model-backed extensible item needs a real
+// reload + re-clip (see loadCroppedModelInstance), which the box-fallback
+// case could get away without, but sharing one path keeps crop-application
+// logic in exactly one place. A no-op (returns `mesh` unchanged) for a
+// non-extensible template, or when `crop` already matches what's
+// currently applied — both common: most instances aren't extensible, and
+// restoreSnapshot calls this for every instance an undo/redo jump
+// touches, most of which didn't actually change crop.
+async function replaceMeshWithCrop(mesh, crop) {
   const template = mesh.userData.template;
-  if (!extensibleAxes(template)) return;
-  mesh.userData.crop = { ...(crop || {}) };
-  const width = effectiveLength(template, mesh.userData, 'x', 'width');
-  const depth = effectiveLength(template, mesh.userData, 'y', 'depth');
-  const height = effectiveLength(template, mesh.userData, 'z', 'height');
-  const oldGeometry = mesh.geometry;
-  mesh.geometry = new THREE.BoxGeometry(width, depth, height);
-  oldGeometry.dispose();
+  if (!extensibleAxes(template)) return mesh;
+  const nextCrop = { ...(crop || {}) };
+  if (JSON.stringify(nextCrop) === JSON.stringify(mesh.userData.crop || {})) return mesh;
+
+  const instanceLike = {
+    instanceId: mesh.userData.instanceId,
+    templateId: template.templateId,
+    x: mesh.position.x,
+    y: mesh.position.y,
+    z: mesh.position.z,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
+    rotationZ: mesh.rotation.z,
+    crop: nextCrop,
+  };
+  const newMesh = await createMeshForInstance(instanceLike);
+  if (!newMesh) return mesh;
+
+  const index = productMeshes.indexOf(mesh);
+  if (index !== -1) productMeshes[index] = newMesh;
+  scene.remove(mesh);
+  disposeObject(mesh);
+  scene.add(newMesh);
+  newMesh.userData.safePosition = newMesh.position.clone();
+
+  if (selectedMeshes.has(mesh)) {
+    removeSelectionOutline(mesh);
+    selectedMeshes.delete(mesh);
+    selectedMeshes.add(newMesh);
+    addSelectionOutline(newMesh);
+  }
+  return newMesh;
+}
+
+// For an extensible template that has a real model: loads it via
+// loadModelInstance (its usual Y-up-correction/recenter pipeline), then —
+// only if actually cropped shorter than the template's declared maximum —
+// bakes each mesh's accumulated transform into its own geometry (putting
+// it in the same container-local space effectiveLength's width/depth/
+// height already describe) and runs it through meshCrop.js's plane
+// clipper. The real scanned surface and its texture survive completely
+// untouched everywhere except right at the new cut edge, where a flat,
+// untextured cap (colored from the template's own `color` field) closes
+// the opening — see docs/API.md's "Extensible products" section for why
+// this exists instead of just scaling the model down. Returns the
+// container unmodified when there's nothing to crop, so a full-length
+// instance of an extensible template still renders exactly like a normal
+// one, model and all.
+async function loadCroppedModelInstance(template, instance) {
+  const container = await loadModelInstance(template.modelUrl);
+  const axis = primaryExtensibleAxis(template);
+  if (!axis) return container;
+  const dimensionKey = AXIS_DIMENSION_KEY[axis];
+  const fullLength = template.dimensions[dimensionKey];
+  const cropLength = effectiveLength(template, instance, axis, dimensionKey);
+  if (cropLength >= fullLength - 1e-6) return container;
+
+  container.updateMatrixWorld(true);
+  const meshes = [];
+  container.traverse((child) => {
+    if (child.isMesh) meshes.push(child);
+  });
+  const axisIndex = { x: 0, y: 1, z: 2 }[axis];
+  const capMaterial = new THREE.MeshStandardMaterial({ color: template.color, roughness: 0.9 });
+  const halfExtent = cropLength / 2;
+
+  const result = new THREE.Group();
+  for (const mesh of meshes) {
+    const geometry = mesh.geometry.clone();
+    geometry.applyMatrix4(mesh.matrixWorld);
+    const cropped = cropGeometrySymmetric(geometry, axisIndex, halfExtent);
+    const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    result.add(new THREE.Mesh(cropped, [originalMaterial, capMaterial]));
+  }
+  return result;
 }
 
 // Builds the Object3D for a placed instance: its catalog template's real
-// model if it has one, falling back to a colored box (still used by any
-// template without a model yet, and if a model fails to load). Resting on
-// the ground (z = height / 2) by default since a fresh instance has no
-// saved z yet.
+// model if it has one (cropped via loadCroppedModelInstance when the
+// template is extensible and this instance actually is cropped), falling
+// back to a colored box (still used by any template without a model yet,
+// and if a model fails to load or crop). Resting on the ground (z = height
+// / 2) by default since a fresh instance has no saved z yet.
 //
 // BoxGeometry's arguments are always (X-size, Y-size, Z-size) regardless of
 // which axis a scene treats as "up" — it has no idea about camera.up. Since
@@ -712,19 +790,11 @@ async function createMeshForInstance(instance) {
   const depth = effectiveLength(template, instance, 'y', 'depth');
   const height = effectiveLength(template, instance, 'z', 'height');
   let object;
-  // Non-uniformly scaling a real model's geometry would stretch whatever
-  // texture it has (see docs/API.md's "Extensible products" section) —
-  // fine for today's flat-colored placeholder models, not fine once a real
-  // seller uploads something textured. Rebuilding a fresh box at the
-  // cropped size sidesteps that entirely: it's exactly what "cut a chunk
-  // off a rectangular product" looks like, with correctly shaped, untouched
-  // faces, and no stretching is possible since nothing gets scaled. So an
-  // extensible template always renders this way, never via its modelUrl,
-  // even at full (uncropped) length — keeping whole and cut pieces of the
-  // same product visually consistent with each other.
-  if (!extensibleAxes(template) && template.modelUrl) {
+  if (template.modelUrl) {
     try {
-      object = await loadModelInstance(template.modelUrl);
+      object = extensibleAxes(template)
+        ? await loadCroppedModelInstance(template, instance)
+        : await loadModelInstance(template.modelUrl);
     } catch (err) {
       console.warn(`Failed to load model for "${template.templateId}" (${template.modelUrl}), falling back to a colored box:`, err);
     }
@@ -1047,6 +1117,11 @@ uploadSubmitBtn.addEventListener('click', async () => {
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl,
+      // No real seller accounts (see docs/API.md) — the builder identity
+      // already active for this session doubles as the uploader's seller
+      // ID, so the Seller modal can find "my own" products without a
+      // second, redundant identity system.
+      sellerId: builderId,
     });
 
     activeCatalog.push(template);
@@ -1061,6 +1136,159 @@ uploadSubmitBtn.addEventListener('click', async () => {
     uploadSubmitBtn.disabled = false;
   }
 });
+
+// Seller product management: lets a builder mark their own uploaded
+// products extensible (see extensibleAxes) after the fact — the upload
+// flow itself doesn't ask, since cutting something down to fit is a need
+// that only shows up once a builder is actually trying to place it. No
+// real seller accounts (see docs/API.md) — "mine" means sellerId matches
+// this session's builderId, uploads/sellerId is set going forward,
+// falling back to any unclaimed (sellerId-less) custom upload so products
+// created before that existed — like a real scanned model uploaded before
+// this feature — are still reachable here instead of stuck unmanageable.
+const sellerModalEl = document.getElementById('seller-modal');
+const sellerListEl = document.getElementById('seller-list');
+const sellerStatusEl = document.getElementById('seller-status');
+const sellerBtn = document.getElementById('seller-btn');
+const sellerCloseBtn = document.getElementById('seller-close-btn');
+
+function myProducts() {
+  return activeCatalog.filter((template) =>
+    template.sellerId === builderId ||
+    (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+const EXTENSIBLE_AXIS_OPTIONS = [
+  ['', 'Not extensible'],
+  ['x', 'Extensible: width (x)'],
+  ['y', 'Extensible: depth (y)'],
+  ['z', 'Extensible: height (z)'],
+];
+
+function renderSellerList() {
+  sellerListEl.innerHTML = '';
+  const templates = myProducts();
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerStatusEl.textContent = '';
+
+  for (const template of templates) {
+    const row = document.createElement('div');
+    row.className = 'seller-row';
+
+    const label = document.createElement('div');
+    label.className = 'seller-row-label';
+    label.textContent = template.name;
+    row.appendChild(label);
+
+    const dims = document.createElement('div');
+    dims.className = 'seller-row-dims';
+    const { width, depth, height } = template.dimensions;
+    dims.textContent = `${width.toFixed(2)} × ${depth.toFixed(2)} × ${height.toFixed(2)} m`;
+    row.appendChild(dims);
+
+    const controls = document.createElement('div');
+    controls.className = 'seller-row-extensible';
+
+    const axisSelect = document.createElement('select');
+    axisSelect.className = 'seller-axis-select';
+    for (const [value, optionLabel] of EXTENSIBLE_AXIS_OPTIONS) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = optionLabel;
+      axisSelect.appendChild(option);
+    }
+    const existingAxis = primaryExtensibleAxis(template) || '';
+    axisSelect.value = existingAxis;
+
+    const minInput = document.createElement('input');
+    minInput.className = 'seller-min-input';
+    minInput.type = 'number';
+    minInput.step = '0.01';
+    minInput.min = '0';
+    minInput.placeholder = 'min m';
+    minInput.disabled = !existingAxis;
+    if (existingAxis) minInput.value = extensibleAxes(template)[existingAxis].minM;
+
+    axisSelect.addEventListener('change', () => {
+      minInput.disabled = !axisSelect.value;
+    });
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'seller-save-btn';
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+
+    const rowStatus = document.createElement('div');
+    rowStatus.className = 'seller-row-status';
+
+    saveBtn.addEventListener('click', async () => {
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      const axis = axisSelect.value;
+      const minM = Number(minInput.value);
+      const maxLength = axis ? template.dimensions[AXIS_DIMENSION_KEY[axis]] : null;
+      if (axis && (!Number.isFinite(minM) || minM <= 0)) {
+        rowStatus.textContent = 'Minimum length must be a positive number.';
+        rowStatus.classList.add('error');
+        return;
+      }
+      if (axis && minM >= maxLength) {
+        rowStatus.textContent = `Minimum must be less than this product's own ${maxLength.toFixed(2)}m size.`;
+        rowStatus.classList.add('error');
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        // A full replace, not a merge — validateTemplate on the worker
+        // side takes whatever `metadata` is sent as the template's entire
+        // new metadata, so any OTHER keys already there (like
+        // placeholder: true) have to be carried through here rather than
+        // just sending the one key this form actually edits.
+        const nextMetadata = { ...template.metadata };
+        if (axis) {
+          nextMetadata.extensible = { [axis]: { minM } };
+        } else {
+          delete nextMetadata.extensible;
+        }
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        rowStatus.textContent = 'Saved.';
+        minInput.disabled = !axis;
+      } catch (err) {
+        rowStatus.textContent = err.message || 'Could not save.';
+        rowStatus.classList.add('error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    controls.appendChild(axisSelect);
+    controls.appendChild(minInput);
+    controls.appendChild(saveBtn);
+    row.appendChild(controls);
+    row.appendChild(rowStatus);
+    sellerListEl.appendChild(row);
+  }
+}
+
+function openSellerModal() {
+  renderSellerList();
+  sellerModalEl.classList.add('visible');
+}
+function closeSellerModal() {
+  sellerModalEl.classList.remove('visible');
+  // A save in here can change whether the currently-selected item (if any)
+  // is extensible — updateSelectionUI() only normally re-runs on an actual
+  // selection *change*, so without this the Resize button/field would keep
+  // showing whatever was true when the modal opened, stale until the
+  // builder reselected something.
+  updateSelectionUI();
+}
+sellerBtn.addEventListener('click', openSellerModal);
+sellerCloseBtn.addEventListener('click', closeSellerModal);
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously
 // was tried first and rejected: the rotate ring and the translate handles
@@ -1137,11 +1365,11 @@ async function restoreSnapshot(snapshot) {
   const updatedMeshes = [];
   const createdMeshes = [];
   for (const inst of snapshot) {
-    const mesh = currentById.get(inst.instanceId);
+    let mesh = currentById.get(inst.instanceId);
     if (mesh) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
-      applyCropToMesh(mesh, inst.crop);
+      mesh = await replaceMeshWithCrop(mesh, inst.crop);
       mesh.userData.safePosition = mesh.position.clone();
       updatedMeshes.push(mesh);
     } else {
@@ -1272,7 +1500,7 @@ modeResizeBtn.addEventListener('click', () => {
 // Exact-value alternative to the drag handle above — typing a length
 // commits the same way releasing the handle does: an undo snapshot, a
 // clamped, non-stretched geometry rebuild, and a sync to the backend.
-resizeLengthInputEl.addEventListener('change', () => {
+resizeLengthInputEl.addEventListener('change', async () => {
   if (selectedMeshes.size !== 1 || !resizeAxis) return;
   const [mesh] = selectedMeshes;
   const template = mesh.userData.template;
@@ -1285,12 +1513,13 @@ resizeLengthInputEl.addEventListener('change', () => {
   }
   const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
   pushUndoSnapshot();
-  applyCropToMesh(mesh, { ...mesh.userData.crop, [resizeAxis]: clampedLength });
-  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
-  mesh.position.set(clamped.x, clamped.y, clamped.z);
-  mesh.userData.safePosition = mesh.position.clone();
+  const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [resizeAxis]: clampedLength });
+  const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+  updated.position.set(clamped.x, clamped.y, clamped.z);
+  updated.userData.safePosition = updated.position.clone();
+  resizeControls.attach(updated);
   persistLayout();
-  syncUpdate(mesh);
+  syncUpdate(updated);
   updateResizeLengthInput();
 });
 
