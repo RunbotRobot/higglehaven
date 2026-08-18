@@ -536,7 +536,12 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .seller-duplicate-btn {
+      .seller-row-header-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .seller-row-action-btn {
         flex-shrink: 0;
         padding: 5px 12px;
         border-radius: 999px;
@@ -545,7 +550,7 @@
         color: rgb(255 255 255 / 0.85);
         font: 12px/1.4 sans-serif;
       }
-      .seller-duplicate-btn:disabled {
+      .seller-row-action-btn:disabled {
         opacity: 0.5;
       }
       .seller-row-dims {

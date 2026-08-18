@@ -1293,6 +1293,34 @@ function renderSellerList() {
     label.textContent = template.name;
     header.appendChild(label);
 
+    const headerActions = document.createElement('div');
+    headerActions.className = 'seller-row-header-actions';
+    header.appendChild(headerActions);
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'seller-row-action-btn';
+    renameBtn.type = 'button';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', async () => {
+      const next = prompt('Rename this product', template.name);
+      if (!next || !next.trim() || next.trim() === template.name) return;
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      renameBtn.disabled = true;
+      try {
+        const updated = await updateCatalogTemplate(template.templateId, { name: next.trim() });
+        Object.assign(template, updated);
+        label.textContent = template.name;
+        buildCatalogPickerButtons();
+      } catch (err) {
+        rowStatus.textContent = err.message || 'Could not rename.';
+        rowStatus.classList.add('error');
+      } finally {
+        renameBtn.disabled = false;
+      }
+    });
+    headerActions.appendChild(renameBtn);
+
     // Duplicates the catalog row only — modelUrl is copied by reference,
     // not re-uploaded, so this is cheap and the original file is never
     // touched (deleting a template only ever removes its D1 row, never
@@ -1301,7 +1329,7 @@ function renderSellerList() {
     // product they already have placed instances of, like a real scan
     // they don't want to accidentally break.
     const duplicateBtn = document.createElement('button');
-    duplicateBtn.className = 'seller-duplicate-btn';
+    duplicateBtn.className = 'seller-row-action-btn';
     duplicateBtn.type = 'button';
     duplicateBtn.textContent = 'Duplicate';
     duplicateBtn.addEventListener('click', async () => {
@@ -1327,7 +1355,7 @@ function renderSellerList() {
         duplicateBtn.disabled = false;
       }
     });
-    header.appendChild(duplicateBtn);
+    headerActions.appendChild(duplicateBtn);
     row.appendChild(header);
 
     const dims = document.createElement('div');
