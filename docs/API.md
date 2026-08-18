@@ -311,6 +311,37 @@ Response:
 }
 ```
 
+### Extensible products (crop)
+
+A template's `metadata` can declare that it may be shortened along one or more
+local axes — e.g. a door trimmed narrower to fit a gap, or a length of lumber
+cut down like real dimensional lumber. The template is uploaded at its
+*maximum* size (its ordinary `dimensions`); the declaration adds a minimum:
+
+```json
+{
+  "metadata": {
+    "extensible": {
+      "x": { "minM": 0.4 }
+    }
+  }
+}
+```
+
+Axis keys are `x`, `y`, `z`, matching how `dimensions.width` / `.depth` /
+`.height` map onto the scene's local axes. A template can declare more than
+one extensible axis, though the frontend's Resize gizmo currently only offers
+a handle for the first one declared.
+
+A builder's per-instance override lives on the placed instance itself, not the
+template — see `crop` under Placed instances below. The frontend never
+stretches an extensible product's geometry to realize a crop (that would
+distort a textured product's UVs); it rebuilds a clean box at the cropped
+size instead, so a crop is always a true "cut it shorter," never a squash.
+Today's catalog templates (including model-backed ones like `brick`) happen
+to render as flat-colored, untextured boxes either way, so this distinction
+isn't visible yet — it matters once a real textured product is uploaded.
+
 ## World settings
 
 World settings hold the dev-only singleton state needed to start modeling the
@@ -959,10 +990,19 @@ migration.
   "z": 0.0,
   "rotationZ": 0.5,
   "label": null,
+  "crop": {},
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
 ```
+
+`crop` holds per-axis length overrides (e.g. `{ "x": 0.6 }`) for a template
+that declares itself extensible — see "Extensible products (crop)" under
+Catalog templates. An axis missing from `crop` renders at the template's full
+declared size. Every write endpoint below (single and batch create/update, and
+the draft-replace `PUT`) validates `crop` against the referenced template's
+declared extensible axes and `minM`/max-dimension bounds, rejecting anything
+outside them or naming an axis the template didn't declare extensible.
 
 ### `GET /api/instances`
 
@@ -1082,7 +1122,8 @@ The migrations currently create eight main backend tables:
 - `landlets`: dev landlet records, including greenbelt/claimed/generating
   status, class, polygon metadata, generation timestamps, and placeholder
   owner IDs.
-- `placed_instances`: objects placed into a landlet from catalog templates.
+- `placed_instances`: objects placed into a landlet from catalog templates,
+  including any per-instance crop override (see "Extensible products (crop)").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
 - `landlet_versions`: immutable layout snapshot metadata.
@@ -1119,6 +1160,9 @@ Seed data includes:
 - `placeholder-table`
 - `placeholder-chair`
 - `placeholder-tree`
+- `brick`
+- `door` (extensible along `x`, minimum 0.4m)
+- `lumber-board` (extensible along `x`, minimum 0.1m)
 
 ## Private-preview access gate
 

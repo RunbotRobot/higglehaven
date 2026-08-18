@@ -771,8 +771,8 @@ async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -1087,6 +1087,7 @@ async function handleLandletDraft(request, db, landletId) {
       if (ids.has(instance.instanceId)) throw new HttpError('instanceId values must be unique', 400);
       ids.add(instance.instanceId);
     }
+    await assertCropWithinTemplateBounds(db, instances);
 
     const versionId = crypto.randomUUID();
     const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
@@ -1096,12 +1097,12 @@ async function handleLandletDraft(request, db, landletId) {
     await db.batch([
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
       db.prepare(`
-        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
+        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
-          json_extract(value, '$.label')
+          json_extract(value, '$.label'), json_extract(value, '$.crop')
         FROM json_each(?)
       `).bind(landletId, JSON.stringify(instances)),
       db.prepare(`
@@ -1115,8 +1116,8 @@ async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -1758,18 +1759,19 @@ async function handleInstances(request, db, route, url) {
     }
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
+    await assertCropWithinTemplateBounds(db, instances);
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(instance_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, template_id = excluded.template_id,
         x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
         rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
-        rotation_z_rad = excluded.rotation_z_rad, label = excluded.label,
+        rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...instanceParams(instance))));
     const stored = await getInstancesById(db, instanceIds);
@@ -1818,10 +1820,11 @@ async function handleInstances(request, db, route, url) {
     const instance = validateInstance(input, crypto.randomUUID());
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
+    await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop)).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -1833,11 +1836,12 @@ async function handleInstances(request, db, route, url) {
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
+    await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), route[1]).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
@@ -1886,6 +1890,41 @@ async function assertReferencesExist(db, table, column, values, field) {
   const found = new Set(results.map((row) => row.value));
   const missing = uniqueValues.find((value) => !found.has(value));
   if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
+}
+
+// Confirms every instance's crop overrides actually reference an axis the
+// instance's template declared extensible (via metadata.extensible, see
+// validateTemplate) and fall within that axis's [minM, template's own max
+// dimension for that axis] range. Runs after the FK checks that already
+// guarantee templateId exists, so a missing template here would only
+// happen for an instance with no crop at all (skipped) or a genuine race.
+async function assertCropWithinTemplateBounds(db, instances) {
+  const withCrop = instances.filter((instance) => Object.keys(instance.crop).length > 0);
+  if (withCrop.length === 0) return;
+  const templateIds = [...new Set(withCrop.map((instance) => instance.templateId))];
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
+  ).bind(...templateIds).all();
+  const templatesById = new Map(results.map((row) => [row.template_id, templateFromRow(row)]));
+  const dimensionKeyByAxis = { x: 'width', y: 'depth', z: 'height' };
+  for (const instance of withCrop) {
+    const template = templatesById.get(instance.templateId);
+    if (!template) continue;
+    for (const [axis, length] of Object.entries(instance.crop)) {
+      const extensible = template.metadata?.extensible?.[axis];
+      if (!extensible) {
+        throw new HttpError(`Template "${instance.templateId}" is not extensible along "${axis}"`, 400);
+      }
+      const maxLength = template.dimensions[dimensionKeyByAxis[axis]];
+      if (length < extensible.minM || length > maxLength) {
+        throw new HttpError(
+          `crop.${axis} for template "${instance.templateId}" must be between ${extensible.minM} and ${maxLength}`,
+          400,
+        );
+      }
+    }
+  }
 }
 
 async function getInstancesById(db, instanceIds) {
@@ -2015,7 +2054,28 @@ function validateInstance(input, fallbackId) {
     rotationY: finiteNumber(input.rotationY ?? 0, 'rotationY'),
     rotationZ: finiteNumber(input.rotationZ ?? 0, 'rotationZ'),
     label: input.label || null,
+    crop: validateCropShape(input.crop),
   };
+}
+
+// { x?: number, y?: number, z?: number } — how far a builder has cropped
+// this instance down from its template's max size along each axis (see
+// assertCropWithinTemplateBounds, which checks the values themselves
+// against the template's declared extensible range once the referenced
+// template is known).
+function validateCropShape(input) {
+  if (input === undefined || input === null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new HttpError('crop must be an object', 400);
+  }
+  const crop = {};
+  for (const [axis, value] of Object.entries(input)) {
+    if (!['x', 'y', 'z'].includes(axis)) {
+      throw new HttpError(`crop key "${axis}" must be one of x, y, z`, 400);
+    }
+    crop[axis] = positiveNumber(value, `crop.${axis}`);
+  }
+  return crop;
 }
 
 function templateParams(template) {
@@ -2024,7 +2084,8 @@ function templateParams(template) {
 
 function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
-    instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label];
+    instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
+    JSON.stringify(instance.crop)];
 }
 
 function landletParams(landlet) {
@@ -2061,6 +2122,7 @@ function instanceFromRow(row) {
     rotationY: row.rotation_y_rad,
     rotationZ: row.rotation_z_rad,
     label: row.label,
+    crop: JSON.parse(row.crop_json || '{}'),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2148,6 +2210,7 @@ function versionInstanceFromRow(row) {
     rotationY: row.rotation_y_rad,
     rotationZ: row.rotation_z_rad,
     label: row.label,
+    crop: JSON.parse(row.crop_json || '{}'),
   };
 }
 

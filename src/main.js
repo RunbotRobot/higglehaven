@@ -145,7 +145,7 @@ controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground
 // reason to tilt a product is correcting an off-level scan back toward
 // upright, not building on a deliberately tilted footprint.
 function footprintCorners(mesh, x, y) {
-  const { width, depth } = mesh.userData.template.dimensions;
+  const { width, depth } = meshDimensions(mesh);
   const halfWidth = width / 2;
   const halfDepth = depth / 2;
   const cos = Math.cos(mesh.rotation.z);
@@ -190,8 +190,8 @@ function boxesOverlap3D(mesh, x, y, z, other) {
   if (!footprintsOverlap(footprintCorners(mesh, x, y), footprintCorners(other, other.position.x, other.position.y))) {
     return false;
   }
-  const height = mesh.userData.template.dimensions.height;
-  const otherHeight = other.userData.template.dimensions.height;
+  const height = meshDimensions(mesh).height;
+  const otherHeight = meshDimensions(other).height;
   const zMinA = z - height / 2;
   const zMaxA = z + height / 2;
   const zMinB = other.position.z - otherHeight / 2;
@@ -297,7 +297,7 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // see LANDLET_HEIGHT_M. Collision with other products (resolveByAxis,
 // above) is applied separately, after this.
 function clampToLandlet(mesh, x, y, z) {
-  const { width, depth, height } = mesh.userData.template.dimensions;
+  const { width, depth, height } = meshDimensions(mesh);
   const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
   const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
   return {
@@ -434,7 +434,7 @@ translateControls.addEventListener('objectChange', () => {
     let minOffsetZ = -Infinity, maxOffsetZ = Infinity;
     for (const mesh of meshes) {
       const start = groupMoveStartPositions.get(mesh);
-      const { width, depth, height } = mesh.userData.template.dimensions;
+      const { width, depth, height } = meshDimensions(mesh);
       const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
       const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
       minOffsetX = Math.max(minOffsetX, -halfSpanX - start.x);
@@ -486,6 +486,53 @@ translateControls.addEventListener('objectChange', () => {
   }
   object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
   object.position.set(resolved.x, resolved.y, resolved.z);
+});
+
+// Resize: shortens an extensible product (see extensibleAxes) along its
+// seller-declared axis — cutting a door or a length of lumber down to fit,
+// rather than the builder being stuck with whatever size the seller
+// uploaded. TransformControls' own scale-mode gizmo drives the live drag —
+// object.scale is left to update normally frame to frame, purely as an
+// interactive preview, since fighting that mid-drag (writing to the same
+// state TransformControls is tracking) is exactly what caused the camera
+// edge-pan drift bug elsewhere in this file. Only on release is the
+// resulting scale read back out, turned into a clamped crop length, and
+// rebuilt as a clean box (applyCropToMesh) with scale reset to identity —
+// so nothing about the mesh actually ends up stretched; scale is never
+// part of what's persisted or rendered at rest, only how the drag feels
+// while it's happening.
+const resizeControls = new TransformControls(camera, renderer.domElement);
+resizeControls.setMode('scale');
+scene.add(resizeControls.getHelper());
+
+// Which local axis this drag is cropping, and the crop length in effect
+// when it started — both fixed for the duration of one drag, set by
+// setGizmoMode when the Resize gizmo attaches (see attachResizeControls).
+let resizeAxis = null;
+let resizeStartLength = 0;
+
+resizeControls.addEventListener('dragging-changed', (event) => {
+  controls.enabled = !event.value;
+  const object = resizeControls.object;
+  if (!object || !resizeAxis) return;
+  if (event.value) {
+    pushUndoSnapshot();
+    resizeStartLength = effectiveLength(object.userData.template, object.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
+    return;
+  }
+  const template = object.userData.template;
+  const extensible = extensibleAxes(template)[resizeAxis];
+  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
+  const requestedLength = resizeStartLength * object.scale[resizeAxis];
+  const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+  object.scale.set(1, 1, 1);
+  applyCropToMesh(object, { ...object.userData.crop, [resizeAxis]: clampedLength });
+  const clamped = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
+  object.position.set(clamped.x, clamped.y, clamped.z);
+  object.userData.safePosition = object.position.clone();
+  persistLayout();
+  syncUpdate(object);
+  updateResizeLengthInput();
 });
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -589,6 +636,57 @@ async function loadModelInstance(url) {
   return container;
 }
 
+// axis ('x'/'y'/'z', matching how BoxGeometry's three arguments map onto
+// this scene below) -> { minM } declared by the seller on a template that
+// can be shortened, e.g. a brick or lumber board cut down to fit a gap
+// (see docs/API.md). Lives in the template's existing metadata_json rather
+// than needing its own column — same place `placeholder: true` already
+// lives.
+function extensibleAxes(template) {
+  return template.metadata?.extensible || null;
+}
+
+// The length actually in effect for one axis of an instance: the builder's
+// crop override if it has cropped that axis, else the template's full
+// (seller-uploaded maximum) size.
+function effectiveLength(template, instance, axis, dimensionKey) {
+  return instance.crop?.[axis] ?? template.dimensions[dimensionKey];
+}
+
+// A placed mesh's real, current footprint — its template's dimensions with
+// any crop (mesh.userData.crop, set in createMeshForInstance) applied.
+// Collision, landlet-bounds clamping, and stacking all need this rather
+// than the template's raw dimensions, or a cropped item would still claim
+// its full uncropped footprint for those purposes.
+function meshDimensions(mesh) {
+  const { template, crop } = mesh.userData;
+  return {
+    width: crop?.x ?? template.dimensions.width,
+    depth: crop?.y ?? template.dimensions.depth,
+    height: crop?.z ?? template.dimensions.height,
+  };
+}
+
+const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
+
+// Rebuilds an extensible mesh's box geometry for a new crop — used by the
+// resize UI itself, and by restoreSnapshot when an undo/redo jump lands an
+// *existing* mesh (reused rather than recreated, see its doc comment) on a
+// snapshot with a different crop than the mesh currently has. A fresh box
+// at the new size, never a scale — see createMeshForInstance for why.
+// No-op for a non-extensible template, which never has a crop to apply.
+function applyCropToMesh(mesh, crop) {
+  const template = mesh.userData.template;
+  if (!extensibleAxes(template)) return;
+  mesh.userData.crop = { ...(crop || {}) };
+  const width = effectiveLength(template, mesh.userData, 'x', 'width');
+  const depth = effectiveLength(template, mesh.userData, 'y', 'depth');
+  const height = effectiveLength(template, mesh.userData, 'z', 'height');
+  const oldGeometry = mesh.geometry;
+  mesh.geometry = new THREE.BoxGeometry(width, depth, height);
+  oldGeometry.dispose();
+}
+
 // Builds the Object3D for a placed instance: its catalog template's real
 // model if it has one, falling back to a colored box (still used by any
 // template without a model yet, and if a model fails to load). Resting on
@@ -610,9 +708,21 @@ async function createMeshForInstance(instance) {
     console.warn(`No catalog template "${instance.templateId}" — skipping instance ${instance.instanceId ?? instance.id}`);
     return null;
   }
-  const { width, height, depth } = template.dimensions;
+  const width = effectiveLength(template, instance, 'x', 'width');
+  const depth = effectiveLength(template, instance, 'y', 'depth');
+  const height = effectiveLength(template, instance, 'z', 'height');
   let object;
-  if (template.modelUrl) {
+  // Non-uniformly scaling a real model's geometry would stretch whatever
+  // texture it has (see docs/API.md's "Extensible products" section) —
+  // fine for today's flat-colored placeholder models, not fine once a real
+  // seller uploads something textured. Rebuilding a fresh box at the
+  // cropped size sidesteps that entirely: it's exactly what "cut a chunk
+  // off a rectangular product" looks like, with correctly shaped, untouched
+  // faces, and no stretching is possible since nothing gets scaled. So an
+  // extensible template always renders this way, never via its modelUrl,
+  // even at full (uncropped) length — keeping whole and cut pieces of the
+  // same product visually consistent with each other.
+  if (!extensibleAxes(template) && template.modelUrl) {
     try {
       object = await loadModelInstance(template.modelUrl);
     } catch (err) {
@@ -628,6 +738,7 @@ async function createMeshForInstance(instance) {
   object.rotation.set(instance.rotationX ?? 0, instance.rotationY ?? 0, instance.rotationZ ?? 0);
   object.userData.instanceId = instance.instanceId ?? instance.id;
   object.userData.template = template;
+  object.userData.crop = { ...(instance.crop || {}) };
   return object;
 }
 
@@ -656,6 +767,7 @@ function persistLayout() {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    crop: mesh.userData.crop,
   }));
   saveInstances(instances);
 }
@@ -676,6 +788,7 @@ function instanceFromMesh(mesh) {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    crop: mesh.userData.crop,
   };
 }
 
@@ -753,7 +866,7 @@ let instanceCounter = 0;
 // placeClipboardItems) skip the per-item network request here and batch
 // them all into one call itself instead — see syncBatchCreate's doc
 // comment for why that distinction matters.
-async function spawnInstanceAt(template, x, y, z, rotation = {}, { sync = true } = {}) {
+async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true } = {}) {
   instanceCounter += 1;
   const instance = {
     instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
@@ -761,9 +874,10 @@ async function spawnInstanceAt(template, x, y, z, rotation = {}, { sync = true }
     x,
     y,
     z,
-    rotationX: rotation.rotationX ?? 0,
-    rotationY: rotation.rotationY ?? 0,
-    rotationZ: rotation.rotationZ ?? 0,
+    rotationX: overrides.rotationX ?? 0,
+    rotationY: overrides.rotationY ?? 0,
+    rotationZ: overrides.rotationZ ?? 0,
+    crop: overrides.crop,
   };
   const mesh = await addInstanceToScene(instance);
   if (!mesh) return null;
@@ -957,6 +1071,9 @@ uploadSubmitBtn.addEventListener('click', async () => {
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
+const modeResizeBtn = document.getElementById('mode-resize');
+const resizeLengthControlEl = document.getElementById('resize-length-control');
+const resizeLengthInputEl = document.getElementById('resize-length-input');
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
@@ -1024,6 +1141,7 @@ async function restoreSnapshot(snapshot) {
     if (mesh) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
+      applyCropToMesh(mesh, inst.crop);
       mesh.userData.safePosition = mesh.position.clone();
       updatedMeshes.push(mesh);
     } else {
@@ -1063,15 +1181,55 @@ async function redo() {
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
 
+// Only the first axis a template declares extensible gets a Resize handle
+// — every extensible template in the catalog today (door, lumber-board)
+// only ever declares one, and offering a single handle at a time keeps the
+// gizmo simple. A template wanting more than one resizable axis at once is
+// a real future extension, not something to build ahead of an actual need.
+function primaryExtensibleAxis(template) {
+  const axes = extensibleAxes(template);
+  return axes ? Object.keys(axes)[0] : null;
+}
+
+function attachResizeControls(mesh) {
+  resizeAxis = primaryExtensibleAxis(mesh.userData.template);
+  resizeControls.showX = resizeAxis === 'x';
+  resizeControls.showY = resizeAxis === 'y';
+  resizeControls.showZ = resizeAxis === 'z';
+  resizeControls.attach(mesh);
+  updateResizeLengthInput();
+}
+
+// Reflects the selected item's current cropped length into the numeric
+// field — called on selection change and right after a drag-driven resize
+// commits, so the field never shows a stale value.
+function updateResizeLengthInput() {
+  if (selectedMeshes.size !== 1 || !resizeAxis) return;
+  const [mesh] = selectedMeshes;
+  const length = effectiveLength(mesh.userData.template, mesh.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
+  resizeLengthInputEl.value = length.toFixed(2);
+}
+
 let currentGizmoMode = 'translate';
 function setGizmoMode(mode) {
   currentGizmoMode = mode;
   modeMoveBtn.classList.toggle('active', mode === 'translate');
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
+  modeResizeBtn.classList.toggle('active', mode === 'resize');
   translateControls.detach();
   rotateControls.detach();
+  resizeControls.detach();
+  resizeLengthControlEl.classList.remove('visible');
   if (selectedMeshes.size === 1) {
     const [mesh] = selectedMeshes;
+    if (mode === 'resize') {
+      // Not every selection can be resized — fall back to Move rather than
+      // leaving every gizmo detached and nothing visibly attached at all.
+      if (!extensibleAxes(mesh.userData.template)) return setGizmoMode('translate');
+      attachResizeControls(mesh);
+      resizeLengthControlEl.classList.add('visible');
+      return;
+    }
     // 'local' is what makes moving a single item along its own rotated
     // orientation feel natural (see translateControls' own setup comment);
     // a group has no single orientation to align to, so the pivot below
@@ -1105,6 +1263,35 @@ modeMoveBtn.addEventListener('click', () => {
 modeRotateBtn.addEventListener('click', () => {
   exitMultiSelectMode();
   setGizmoMode('rotate');
+});
+modeResizeBtn.addEventListener('click', () => {
+  exitMultiSelectMode();
+  setGizmoMode('resize');
+});
+
+// Exact-value alternative to the drag handle above — typing a length
+// commits the same way releasing the handle does: an undo snapshot, a
+// clamped, non-stretched geometry rebuild, and a sync to the backend.
+resizeLengthInputEl.addEventListener('change', () => {
+  if (selectedMeshes.size !== 1 || !resizeAxis) return;
+  const [mesh] = selectedMeshes;
+  const template = mesh.userData.template;
+  const extensible = extensibleAxes(template)[resizeAxis];
+  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
+  const requestedLength = Number(resizeLengthInputEl.value);
+  if (!Number.isFinite(requestedLength)) {
+    updateResizeLengthInput(); // revert to the last valid value
+    return;
+  }
+  const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+  pushUndoSnapshot();
+  applyCropToMesh(mesh, { ...mesh.userData.crop, [resizeAxis]: clampedLength });
+  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
+  mesh.position.set(clamped.x, clamped.y, clamped.z);
+  mesh.userData.safePosition = mesh.position.clone();
+  persistLayout();
+  syncUpdate(mesh);
+  updateResizeLengthInput();
 });
 
 // Colliding with other products (see resolveByAxis above) is a helpful
@@ -1194,8 +1381,10 @@ function updateSelectionUI() {
   if (count === 0) {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
+    resizeLengthControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
+    resizeControls.detach();
     return;
   }
   productInfoEl.textContent = count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`;
@@ -1207,8 +1396,11 @@ function updateSelectionUI() {
   // Move, Snap, Copy, Delete — in the same position regardless of selection
   // count; removing it from the layout entirely let the rest reflow into
   // different left/right groupings depending on whether Rotate happened to
-  // be there.
+  // be there. Resize follows the same reasoning, disabled (not hidden) for
+  // both a multi-item selection and a single non-extensible one.
   modeRotateBtn.disabled = count !== 1;
+  const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
+  modeResizeBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -1220,8 +1412,11 @@ function updateSelectionUI() {
     // reattaches the gizmo to whatever's already selected here.
     modeMoveBtn.classList.remove('active');
     modeRotateBtn.classList.remove('active');
+    modeResizeBtn.classList.remove('active');
+    resizeLengthControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
+    resizeControls.detach();
     return;
   }
   if (count === 1) {
@@ -1314,7 +1509,7 @@ function copySelection() {
   const meshes = [...selectedMeshes];
   const centroidX = meshes.reduce((sum, mesh) => sum + mesh.position.x, 0) / meshes.length;
   const centroidY = meshes.reduce((sum, mesh) => sum + mesh.position.y, 0) / meshes.length;
-  const baseZ = Math.min(...meshes.map((mesh) => mesh.position.z - mesh.userData.template.dimensions.height / 2));
+  const baseZ = Math.min(...meshes.map((mesh) => mesh.position.z - meshDimensions(mesh).height / 2));
   clipboard = meshes.map((mesh) => ({
     templateId: mesh.userData.template.templateId,
     dx: mesh.position.x - centroidX,
@@ -1323,6 +1518,7 @@ function copySelection() {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    crop: mesh.userData.crop,
   }));
   pasteBtn.disabled = false;
   // There's nothing left to multi-select once the copy is captured, and
@@ -1380,7 +1576,7 @@ function selectionPlacementAnchor() {
   if (selectedMeshes.size === 0) return null;
   const meshes = [...selectedMeshes];
   const centroid = getSelectionPivot();
-  const supportZ = Math.max(...meshes.map((mesh) => mesh.position.z + mesh.userData.template.dimensions.height / 2));
+  const supportZ = Math.max(...meshes.map((mesh) => mesh.position.z + meshDimensions(mesh).height / 2));
   return { x: centroid.x, y: centroid.y, supportZ };
 }
 
@@ -1448,6 +1644,7 @@ async function placeClipboardItems(items, x, y, supportZ) {
       rotationX: item.rotationX,
       rotationY: item.rotationY,
       rotationZ: item.rotationZ,
+      crop: item.crop,
     }, { sync: false });
     if (mesh) placed.push(mesh);
   }
@@ -1482,7 +1679,7 @@ async function handlePlacementClick() {
     return; // tapped empty sky — nothing to place onto, leave placement pending
   }
 
-  const supportZ = supportingMesh ? supportingMesh.position.z + supportingMesh.userData.template.dimensions.height / 2 : 0;
+  const supportZ = supportingMesh ? supportingMesh.position.z + meshDimensions(supportingMesh).height / 2 : 0;
 
   const pending = pendingPlacement;
   pendingPlacement = null;

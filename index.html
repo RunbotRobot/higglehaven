@@ -294,6 +294,35 @@
          a physical button's own material would visibly depress into,
          rather than an opacity/filter overlay sitting on top of it or a
          label swap that reads like the button now does something else. */
+      /* Resize's numeric field — same pill shape as the buttons around it,
+         but only ever shown for a single extensible selection (see
+         updateSelectionUI), unlike Resize itself which stays present but
+         disabled the rest of the time for the same layout-stability reason
+         documented on button:disabled above. Hidden by display, not
+         disabled, since there's no meaningful "disabled" number to show for
+         a non-extensible item. */
+      #resize-length-control {
+        display: none;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgb(var(--pill-rgb) / 0.5);
+        color: rgba(255, 255, 255, 0.8);
+        font: 14px/1.4 sans-serif;
+      }
+      #resize-length-control.visible {
+        display: inline-flex;
+      }
+      #resize-length-input {
+        width: 4.5em;
+        border: none;
+        border-radius: 4px;
+        padding: 2px 4px;
+        font: inherit;
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+      }
       #gizmo-mode-controls button.pressed {
         transform: scale(0.92);
         background: var(--brand-green);
@@ -713,6 +742,10 @@
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
+      <button id="mode-resize" type="button">Resize</button>
+      <label id="resize-length-control">
+        <input id="resize-length-input" type="number" step="0.01" min="0" />m
+      </label>
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
       <button id="delete-item" type="button">Delete</button>
