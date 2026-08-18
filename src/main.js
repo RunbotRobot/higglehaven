@@ -312,13 +312,29 @@ function clampToLandlet(mesh, x, y, z) {
 // offset from the object itself specifically so a touch-drag doesn't put
 // your finger over the thing you're trying to look at, unlike dragging the
 // object's own body directly.
+// Set true only for the duration of resyncTransformControlsDrag's own
+// synthetic pointerUp/pointerDown pair (see its doc comment below) — every
+// dragging-changed listener checks it first so that resync cycle never
+// triggers a *real* drag-start/end reaction (undo snapshot, persisted
+// layout, network sync) of its own.
+let suppressDragCycleSideEffects = false;
+
+// Where the camera stood when the current drag began — edge-pan is capped
+// against displacement from *this*, not distance to the dragged object,
+// since a normal drag already starts with the camera tens of meters from
+// the object (see EDGE_PAN_MAX_PAN_FROM_DRAG_START_M).
+let edgePanDragStartCameraPos = null;
+
 function wireDraggingBehavior(transformControls) {
   transformControls.addEventListener('dragging-changed', (event) => {
+    if (suppressDragCycleSideEffects) return;
     controls.enabled = !event.value;
     if (event.value) {
+      edgePanDragStartCameraPos = camera.position.clone();
       pushUndoSnapshot();
       return;
     }
+    edgePanDragStartCameraPos = null;
     persistLayout();
     // The group-move pivot (see groupMovePivot below) isn't a real product
     // itself — it's an invisible anchor the gizmo needed something to
@@ -1793,6 +1809,7 @@ cameraDebugCopyBtn.addEventListener('click', async () => {
 // pointermove) so holding still right at the edge keeps panning.
 const EDGE_PAN_ZONE_PX = 60;
 const EDGE_PAN_SPEED_PX = 14;
+const EDGE_PAN_MAX_PAN_FROM_DRAG_START_M = 15;
 // Orbiting is already kept above ground by controls.maxPolarAngle, but that
 // only constrains OrbitControls' own rotation math — it has no say over a
 // direct camera.position mutation like this one. Dragging an item down
@@ -1835,6 +1852,39 @@ function edgeStrength(distanceFromEdge) {
   return 1 - Math.max(distanceFromEdge, 0) / EDGE_PAN_ZONE_PX;
 }
 
+// TransformControls remembers where the pointer's screen position hit an
+// invisible drag plane at drag-start, using the camera at that instant —
+// then, on every later pointer event, re-intersects that *same* plane
+// using whichever camera exists *now*. Panning the camera mid-drag (see
+// applyEdgePanWhileDraggingProduct) is exactly this: the finger hasn't
+// moved, but the camera has, so the identical screen position now maps to
+// a different 3D point, and the dragged item silently jumps by roughly
+// however far the camera just moved — nothing in the UI shows this
+// happened, only the final position looks wrong. Simulating a pointer-up
+// immediately followed by a pointer-down at that same screen position
+// re-anchors the drag to the post-pan camera before any further pointer
+// movement can compound with the error. The axis is saved and restored
+// directly (rather than re-detected via a fresh hover raycast) so a pan
+// large enough to nudge the handle's screen position by a pixel can't
+// cause the resync itself to lose the drag. suppressDragCycleSideEffects
+// keeps this synthetic up/down pair from being read as a real drag
+// ending and restarting (see wireDraggingBehavior).
+function resyncTransformControlsDrag(transformControls, clientX, clientY) {
+  if (!transformControls.dragging) return;
+  const axis = transformControls.axis;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const pointer = {
+    x: ((clientX - rect.left) / rect.width) * 2 - 1,
+    y: -((clientY - rect.top) / rect.height) * 2 + 1,
+    button: 0,
+  };
+  suppressDragCycleSideEffects = true;
+  transformControls.pointerUp(null);
+  transformControls.axis = axis;
+  transformControls.pointerDown(pointer);
+  suppressDragCycleSideEffects = false;
+}
+
 function applyEdgePanWhileDraggingProduct() {
   if (!translateControls.dragging || !lastPointerClientPos) return;
   const rect = renderer.domElement.getBoundingClientRect();
@@ -1848,7 +1898,20 @@ function applyEdgePanWhileDraggingProduct() {
   const dx = (rightStrength - leftStrength) * EDGE_PAN_SPEED_PX;
   const dy = (topStrength - bottomStrength) * EDGE_PAN_SPEED_PX;
   if (dx !== 0 || dy !== 0) {
+    // The resync above re-anchors the drag plane every frame, but after the
+    // camera has panned far enough from where the drag started, the plane
+    // raycast itself becomes numerically unstable (the plane is nearly
+    // edge-on to the view ray), which can snap the dragged object on the
+    // next real pointer move. Capping cumulative edge-pan displacement
+    // (relative to the camera's position when the drag began, not distance
+    // to the object — a normal drag already starts with the camera tens of
+    // meters from the object) keeps the camera clear of that zone.
+    if (edgePanDragStartCameraPos) {
+      const panned = camera.position.distanceTo(edgePanDragStartCameraPos);
+      if (panned >= EDGE_PAN_MAX_PAN_FROM_DRAG_START_M) return;
+    }
     panCameraByScreenPixels(dx, dy);
+    resyncTransformControlsDrag(translateControls, x, y);
   }
 }
 
