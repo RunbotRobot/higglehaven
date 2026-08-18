@@ -13,9 +13,20 @@ async function requestJson(path, options) {
   return response.json();
 }
 
+// Paginated server-side (100 per request, same as instances/landlets) —
+// pages through everything rather than silently keeping only the first
+// 100 templates once the catalog grows past that.
 export async function fetchCatalog() {
-  const { templates } = await requestJson('/catalog');
-  return templates;
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { templates, nextCursor } = await requestJson(`/catalog?${query.toString()}`);
+    all.push(...templates);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 export async function fetchBuilders() {
@@ -49,9 +60,22 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
+// Pages through every instance on a landlet rather than returning just the
+// first 100 (the server's per-request cap) — a landlet with a large build
+// (a brick wall hundreds of pieces deep, say) silently lost everything
+// past the first page otherwise, without so much as a sign anything was
+// missing. Same pattern as fetchAllLandlets() below.
 export async function fetchInstances(landletId) {
-  const { instances } = await requestJson(`/instances?landletId=${encodeURIComponent(landletId)}`);
-  return instances;
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ landletId, limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { instances, nextCursor } = await requestJson(`/instances?${query.toString()}`);
+    all.push(...instances);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 export async function fetchWorld() {
