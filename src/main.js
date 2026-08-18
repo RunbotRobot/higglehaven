@@ -2383,6 +2383,28 @@ async function enterShopMode() {
   landlet.geometry.dispose();
   landlet.material.dispose();
 
+  // Shop can be entered without a reload — Identity -> Shop, not just
+  // fresh from the builder-choice screen — so whatever was actually built
+  // this session is very likely still sitting in productMeshes. Those
+  // meshes are positioned in the single active landlet's *local*
+  // coordinates (the builder scene only ever shows one landlet, so its
+  // local origin doubles as the scene origin) rather than that landlet's
+  // real world position, which is what Shop mode's own per-landlet groups
+  // use. Left in place, they'd clutter the scene somewhere near the world
+  // origin — disconnected from, and easily mistaken for missing/wrong
+  // versions of, that same landlet's content once Shop loads it fresh (in
+  // the right place) as the camera gets close. This only tears down the
+  // in-memory scene, not anything on the server — nothing here is deleted,
+  // just no longer shown twice in two different places.
+  clearSelection();
+  translateControls.detach();
+  rotateControls.detach();
+  for (const mesh of productMeshes) {
+    scene.remove(mesh);
+    disposeObject(mesh);
+  }
+  productMeshes.length = 0;
+
   try {
     activeCatalog = await fetchCatalog();
   } catch {
