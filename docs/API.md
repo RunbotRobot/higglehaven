@@ -1333,11 +1333,41 @@ mode switch or claimed landlet required.
 Shop and Build are different enough scene setups (per-world absolute
 coordinates + flight controls vs. one landlet's local coordinates + build
 gizmos) that switching between them goes through a full page reload rather
-than a live in-place teardown/rebuild — the same choice `exitShopMode()`
-already made before this nav existed, now reused rather than replaced.
-`sessionStorage`'s `higglehaven.startMode` carries the *next* mode across
-that one reload; it's consumed once bootstrap() reads it, so an unrelated
-refresh with nothing set always falls back to Shop.
+than a live in-place teardown/rebuild — a deliberate choice, not an
+oversight: a live teardown/rebuild between two scene setups this different
+was judged riskier than the reload's brief flash. `sessionStorage`'s
+`higglehaven.startMode` carries the *next* mode across that one reload;
+it's consumed once bootstrap() reads it, so an unrelated refresh with
+nothing set always falls back to Shop.
+
+## Frontend-only Shop-mode world boundary
+
+Shop mode's world is bounded by a wall (a cylinder at the gap-free coverage
+radius — see `computeGaplessWorldRadius`'s own comment for why that can be
+smaller than the world's administrative `radiusM`, especially in sparsely-
+generated dev data) capped by a dome, so the world reads as fully enclosed
+rather than open-topped. Both share one continuous vertical color gradient
+— pale ground-green at the wall's base, through a hazy horizon blend right
+at the wall/dome seam, up to a deeper sky blue at the dome's own apex —
+painted as vertex colors (`paintVerticalGradient` in main.js) rather than a
+texture, so the seam between the two meshes is exactly continuous rather
+than approximately matched. The intent is a horizon that recedes into
+atmospheric haze and open sky, not a wall the world visibly stops at.
+
+The dome's rise above the wall is independent of the wall's own radius (a
+non-uniform mesh scale, not a geometry rebuild) and grows on its own if
+anything loaded anywhere in the world is ever discovered taller than it
+currently clears (`growShopDomeIfNeeded`, called as each Shop-mode landlet's
+instances load in) — reactive to what's actually been loaded so far, not a
+global precomputed guarantee, since Shop only loads a landlet's instances
+once the camera gets near it.
+
+Shop's "zoom" (mouse wheel / pinch) is a pure camera-lens FOV change, not a
+dolly — the free-flying camera never actually moves closer or farther, so
+there's no clipping-through-geometry risk that would otherwise argue for a
+narrow range. The FOV spans 6&deg; (roughly 10x magnification versus the
+60&deg; default) to 100&deg; (past human peripheral vision into genuine
+ultra-wide territory).
 
 ## Frontend-only settings (Units)
 

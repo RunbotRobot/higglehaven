@@ -3167,18 +3167,78 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // which is the correct, intentional look here, not a bug to hide.
 const SHOP_WALL_HEIGHT_M = 60;
 const SHOP_WALL_MARGIN_M = 1.5; // keeps the camera from clipping into the wall itself
-const SHOP_WALL_COLOR = 0xa8d98a; // pale, on-brand green — a soft boundary, not a dead end
+// A dome caps the wall's open top, and both share one continuous vertical
+// gradient (pale ground-green at the base, through a hazy horizon blend
+// right at the wall/dome seam, up to a deeper sky blue at the dome's own
+// apex) painted directly as vertex colors rather than a texture — see
+// paintVerticalGradient. The illusion this is going for is a horizon that
+// recedes into atmospheric haze and open sky, not a wall the world
+// visibly stops at.
+const SHOP_GROUND_HORIZON_COLOR = new THREE.Color(0xa8d98a); // the wall's own former flat color, now just its base
+const SHOP_HAZY_HORIZON_COLOR = new THREE.Color(0xcfe8dc); // where wall meets dome — both gradients hit this exact color, so the seam is invisible
+const SHOP_SKY_DOME_COLOR = new THREE.Color(0x5a9fd4); // deeper than the flat backdrop sky (0x87ceeb) for a sense of real overhead depth
+// The dome's rise above the wall's own top — independent of the wall's
+// rim radius (set via non-uniform scale, see enterShopMode) so a bigger
+// world doesn't need a proportionately taller dome. Grows on its own if
+// something built anywhere in the world is ever discovered taller than
+// this provides clearance for — see growShopDomeIfNeeded.
+const SHOP_DOME_INITIAL_RISE_M = SHOP_WALL_HEIGHT_M;
+const SHOP_DOME_CLEARANCE_MARGIN_M = 5;
 // Skip building a ground mesh for a landlet with no chance of being seen
 // (entirely beyond the wall, comfortably past any land's own footprint) —
 // pure cost-cutting as the world grows, never aggressive enough to risk
 // hiding a real sliver.
 const SHOP_LANDLET_CULL_MARGIN_M = 40;
-const SHOP_MIN_FOV_DEG = 25;
-const SHOP_MAX_FOV_DEG = 75;
+// A wide range on purpose — Shop's "zoom" is a pure lens effect (the
+// free-flying camera never actually moves closer/farther, see setShopFov's
+// own comment), so there's no dolly-clipping-through-geometry risk that
+// would otherwise argue for a narrower range. 6deg is a strong telephoto
+// (roughly 10x magnification versus the 60deg default), 100deg is past
+// human peripheral vision into genuine ultra-wide territory.
+const SHOP_MIN_FOV_DEG = 6;
+const SHOP_MAX_FOV_DEG = 100;
 const SHOP_WHEEL_ZOOM_SENSITIVITY = 0.05;
 const SHOP_PINCH_ZOOM_SENSITIVITY = 0.05;
 
 let shopWorldRadiusM = null;
+let shopDomeMesh = null;
+let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
+
+// Colors a geometry per-vertex along its own local "up" axis (the axis
+// CylinderGeometry/SphereGeometry both author height/pole along before any
+// Z-up rotation is applied), calling colorAt(localUp, out) for every
+// vertex — a plain vertical gradient needs nothing fancier than that, and
+// staying in each geometry's own local space means the result is
+// independent of any later position/rotation/scale, so growShopDomeIfNeeded
+// scaling the dome taller never has to repaint it.
+function paintVerticalGradient(geometry, colorAt) {
+  const position = geometry.attributes.position;
+  const colors = new Float32Array(position.count * 3);
+  const out = new THREE.Color();
+  for (let i = 0; i < position.count; i++) {
+    colorAt(position.getY(i), out);
+    colors[i * 3] = out.r;
+    colors[i * 3 + 1] = out.g;
+    colors[i * 3 + 2] = out.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+// Called as each Shop-mode landlet's instances load in (see
+// loadShopLandletInstances) — if anything anywhere in the world turns out
+// to be tall enough to threaten poking through the dome, grow the dome to
+// keep clearing it rather than ever letting a real build clip through a
+// backdrop. Purely reactive to what's actually been loaded so far (Shop
+// only loads a landlet's instances once the camera gets near it — see
+// updateShopProximity), not a global precomputed guarantee.
+function growShopDomeIfNeeded(object) {
+  if (!shopDomeMesh) return;
+  const box = new THREE.Box3().setFromObject(object);
+  const neededRise = box.max.z - SHOP_WALL_HEIGHT_M + SHOP_DOME_CLEARANCE_MARGIN_M;
+  if (neededRise <= shopDomeRiseM) return;
+  shopDomeRiseM = neededRise;
+  shopDomeMesh.scale.y = shopDomeRiseM;
+}
 
 let shopYaw = 0;
 let shopPitch = -0.12;
@@ -3410,6 +3470,7 @@ async function loadShopLandletInstances(entry) {
     if (!object || !entry.loaded) continue;
     entry.group.add(object);
     entry.objects.push(object);
+    growShopDomeIfNeeded(object);
   }
 }
 
@@ -3510,14 +3571,39 @@ async function enterShopMode() {
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
 
-  const wall = new THREE.Mesh(
-    new THREE.CylinderGeometry(shopWorldRadiusM, shopWorldRadiusM, SHOP_WALL_HEIGHT_M, 64, 1, true),
-    new THREE.MeshStandardMaterial({ color: SHOP_WALL_COLOR, side: THREE.BackSide }),
-  );
+  const wallGeometry = new THREE.CylinderGeometry(shopWorldRadiusM, shopWorldRadiusM, SHOP_WALL_HEIGHT_M, 64, 1, true);
+  paintVerticalGradient(wallGeometry, (localY, out) => {
+    const t = THREE.MathUtils.clamp((localY + SHOP_WALL_HEIGHT_M / 2) / SHOP_WALL_HEIGHT_M, 0, 1);
+    out.copy(SHOP_GROUND_HORIZON_COLOR).lerp(SHOP_HAZY_HORIZON_COLOR, t);
+  });
+  // MeshBasicMaterial (unlit) rather than Standard — a horizon/sky backdrop
+  // isn't a real lit surface, so it shouldn't visibly darken on the side
+  // facing away from the sun the way an actual object would.
+  const wall = new THREE.Mesh(wallGeometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide }));
   wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
   wall.position.z = SHOP_WALL_HEIGHT_M / 2;
   scene.add(wall);
   shopWorldObjects.push(wall);
+
+  // Caps the wall's open top so the world reads as fully enclosed — an
+  // upper hemisphere (unit sphere, theta 0..PI/2) whose equator matches
+  // the wall's own rim exactly (same radius, continuous gradient color at
+  // the seam — see SHOP_HAZY_HORIZON_COLOR), non-uniformly scaled (X/Z to
+  // the wall's radius, Y — the pole axis before Z-up rotation — to how far
+  // it currently rises) so growShopDomeIfNeeded can grow it later with a
+  // single scale change, no geometry rebuild.
+  const domeGeometry = new THREE.SphereGeometry(1, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2);
+  paintVerticalGradient(domeGeometry, (localY, out) => {
+    const t = THREE.MathUtils.clamp(localY, 0, 1);
+    out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
+  });
+  shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
+  shopDomeMesh = new THREE.Mesh(domeGeometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide }));
+  shopDomeMesh.rotation.x = Math.PI / 2;
+  shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M;
+  shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
+  scene.add(shopDomeMesh);
+  shopWorldObjects.push(shopDomeMesh);
 
   for (const record of allLandlets) {
     // Nothing this far past the wall could ever show even a sliver — skip
@@ -3606,8 +3692,9 @@ function runClaimFlow() {
     // moment whatever was covering it closed — including if the builder
     // this flow is claiming for gets deleted out from under it, since
     // nothing here is listening for that either. Reloading is the same
-    // clean-slate escape hatch exitShopMode() uses for the same reason:
-    // nothing here to lose, and every path (Close, Shop, a different
+    // clean-slate escape hatch #mode-nav's own Shop/Build switching uses
+    // for the same reason: nothing here to lose, and every path (Close,
+    // Shop, a different
     // builder, this same builder again) starts over correctly from
     // runBuilderMenu() either way. Explicitly targeting 'build' keeps this
     // landing back in the identity/claim flow rather than the bare
