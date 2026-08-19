@@ -3146,10 +3146,14 @@ const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
+const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
+const shopUpBtn = document.getElementById('shop-up-btn');
+const shopDownBtn = document.getElementById('shop-down-btn');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
+const SHOP_VERTICAL_SPEED_M_S = 10;
 const SHOP_MIN_HEIGHT_M = 1.5;
 const SHOP_MAX_PITCH = Math.PI * 0.47;
 const SHOP_JOYSTICK_MAX_PX = 46;
@@ -3340,6 +3344,37 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
   shopLookY = y;
 });
 
+// Altitude, as a separate concern from walking (which deliberately stays
+// horizontal — see updateShopMovement's own comment) and from zoom (a pure
+// lens effect, never actual movement — see SHOP_MIN_FOV_DEG's own
+// comment): press-and-hold buttons, not a third joystick, since two thumbs
+// already cover walk+look and a vertical-only third stick would be an
+// awkward, cramped addition to a phone screen already busy with both
+// hands. +1 while Up is held, -1 while Down, 0 otherwise, consumed every
+// animate() frame in updateShopMovement exactly like shopMoveX/Y already are.
+let shopVerticalInput = 0;
+function bindShopVerticalButton(el, direction) {
+  let pointerId = null;
+  el.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    pointerId = event.pointerId;
+    el.setPointerCapture(pointerId);
+    el.classList.add('active');
+    shopVerticalInput = direction;
+  });
+  const end = (event) => {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    el.classList.remove('active');
+    if (shopVerticalInput === direction) shopVerticalInput = 0;
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('pointerleave', end);
+}
+bindShopVerticalButton(shopUpBtn, 1);
+bindShopVerticalButton(shopDownBtn, -1);
+
 // Zoom: narrows/widens the camera's own field of view rather than moving
 // it — there's no "target" to dolly toward like OrbitControls' zoom has,
 // just a free-flying camera, so a lens-zoom is the natural equivalent.
@@ -3391,6 +3426,18 @@ renderer.domElement.addEventListener('pointercancel', shopPinchEnd);
 const shopForward = new THREE.Vector3();
 const shopRight = new THREE.Vector3();
 
+// Shared by walking's own floor clamp and the vertical Up/Down buttons —
+// keeps the camera between the ground and comfortably below the dome's
+// current apex (see SHOP_DOME_CLEARANCE_MARGIN_M), the same "a real
+// boundary, not just a backdrop" treatment the radial wall clamp already
+// gets just below this. The dome's own apex can grow over the course of a
+// session (see growShopDomeIfNeeded), so this is recomputed fresh each
+// call rather than cached.
+function clampShopCameraHeight() {
+  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+  camera.position.z = THREE.MathUtils.clamp(camera.position.z, SHOP_MIN_HEIGHT_M, maxHeight);
+}
+
 function updateShopMovement(now) {
   if (shopLastFrameTime === null) {
     shopLastFrameTime = now;
@@ -3421,7 +3468,7 @@ function updateShopMovement(now) {
 
     camera.position.addScaledVector(shopForward, -shopMoveY * SHOP_MOVE_SPEED_M_S * dt);
     camera.position.addScaledVector(shopRight, shopMoveX * SHOP_MOVE_SPEED_M_S * dt);
-    camera.position.z = Math.max(camera.position.z, SHOP_MIN_HEIGHT_M);
+    clampShopCameraHeight();
 
     // The world wall (see enterShopMode) is a real boundary, not just a
     // backdrop — keep the camera inside it the same way the floor clamp
@@ -3435,6 +3482,14 @@ function updateShopMovement(now) {
         camera.position.y *= scale;
       }
     }
+  }
+
+  // A separate concern from walking (see the comment above): press-and-hold
+  // Up/Down buttons that move the camera straight along world Z, regardless
+  // of look direction or whether the walk joystick is also active.
+  if (shopVerticalInput !== 0) {
+    camera.position.z += shopVerticalInput * SHOP_VERTICAL_SPEED_M_S * dt;
+    clampShopCameraHeight();
   }
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
@@ -3504,7 +3559,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 
 async function enterShopMode() {
   identityModalEl.classList.remove('visible');
-  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
+  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopVerticalControlsEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {

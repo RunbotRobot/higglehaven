@@ -1363,11 +1363,23 @@ global precomputed guarantee, since Shop only loads a landlet's instances
 once the camera gets near it.
 
 Shop's "zoom" (mouse wheel / pinch) is a pure camera-lens FOV change, not a
-dolly — the free-flying camera never actually moves closer or farther, so
-there's no clipping-through-geometry risk that would otherwise argue for a
-narrow range. The FOV spans 6&deg; (roughly 10x magnification versus the
-60&deg; default) to 100&deg; (past human peripheral vision into genuine
-ultra-wide territory).
+dolly — the camera never actually moves closer or farther, so there's no
+clipping-through-geometry risk that would otherwise argue for a narrow
+range. The FOV spans 6&deg; (roughly 10x magnification versus the 60&deg;
+default) to 100&deg; (past human peripheral vision into genuine ultra-wide
+territory).
+
+Shop's horizontal movement is walking, not free flight — the move joystick
+only ever changes `camera.position.x/y`. Height (`camera.position.z`) is a
+separate, deliberately decoupled control: press-and-hold Up/Down buttons
+(`#shop-up-btn`/`#shop-down-btn`, mirroring the joystick's pointer-capture
+pattern but simpler — no drag vector, just a held direction) move the
+camera straight along world Z at `SHOP_VERTICAL_SPEED_M_S`, independent of
+look direction, walk input, or FOV/zoom. Both the walking floor clamp and
+the vertical control share one `clampShopCameraHeight()` helper, so the
+ceiling — `SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M`
+— stays consistent regardless of which input changed height last, and
+tracks the dome's own growth as it rises to clear tall builds.
 
 ## Frontend-only settings (Units)
 
