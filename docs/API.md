@@ -351,30 +351,52 @@ never a squash:
   clipped, and asymmetrically: the crop only ever removes material from the
   local +axis end (`src/meshCrop.js`'s `cropGeometryFromEnd`). The -axis end
   — the "anchor" — is never touched at all, real end cap included. The
-  +axis end doesn't get a fabricated flat disc either: the product's own
-  original end-cap geometry (whatever real triangles were already sitting
-  at its true, uncropped +axis extreme) is lifted and rigidly translated
-  inward to the new boundary, so a crop always looks like a shorter version
-  of the same real product — never an artificial-looking patch. Because a
-  real scanned product can taper or vary slightly along its length, the
-  lifted cap's own cross-section (measured right by the true tip) isn't
-  guaranteed to exactly match the cut boundary's own hole — `cropGeometryFromEnd`
-  recenters and (only if actually necessary) scales the lifted cap up just
-  enough to fully cover that hole, so real geometry only ever stretches to
-  fit, never leaves a gap. A thin flat cap is still built as an invisible
-  backing behind that relocated real cap (in case the two don't nest
-  perfectly), rendered with a separate plain material in the product's own
-  swatch color rather than the real photo texture — sharing the real
-  texture would mean any sliver of backing that does show samples an
-  arbitrary, out-of-context texel instead of a plausible plain surface.
-  See `loadCroppedModelInstance` in `src/main.js`, which also recenters the
+  +axis end doesn't get a fabricated flat disc either: a slab of the
+  product's own real geometry is lifted, mirrored, and placed at the new
+  boundary, so a crop always looks like a shorter version of the same real
+  product — never an artificial-looking patch. That slab is lifted from the
+  **anchor end**, not the +axis tip being cut away — a deliberate choice
+  after a real scanned brick showed the opposite approach's failure mode: a
+  photogrammetry scan's geometry is least reliable right at its own true
+  silhouette edge (the shallowest, most occluded camera angles), so a thin
+  slab lifted from *right at the +axis tip* could be a meaningfully worse
+  cross-section than the product's healthy mid-body, not just a slightly
+  tapered one — on that real model, the tip slab covered barely 60% of the
+  cut boundary's own extent on one axis, no bounding-box scale-to-fit could
+  turn that into "the same shape," and the manufactured backing (below)
+  ended up dominating the cut face. The anchor end is guaranteed to never
+  have been touched by any crop, so mirroring a slab from *there* means the
+  cut face is always built from a real, never-degraded piece of the same
+  product. Because a real scanned product can still taper or vary slightly
+  along its length even between two healthy cross-sections, the mirrored
+  slab's own cross-section (measured at its inner, freshly-cut edge) isn't
+  guaranteed to exactly match the main body's cross-section at the new cut
+  boundary — `cropGeometryFromEnd` recenters and (only if actually
+  necessary) scales the slab up just enough to fully cover that hole, so
+  real geometry only ever stretches to fit, never leaves a gap. This is a
+  bounding-box fit, not a true outline match, so an irregular (non-
+  rectangular) real cross-section can still leave a sliver of the
+  manufactured backing cap exposed even after it. That backing — built as
+  an invisible safety net behind the relocated real cap, in case the two
+  don't nest perfectly — is rendered with a plain material colored from the
+  real texture's own average color (downsampled to a single pixel via an
+  offscreen canvas — see `averageTextureColor` in `src/main.js`) rather
+  than `template.color`: for a real uploaded model, `template.color` is
+  almost always just the upload flow's generic gray placeholder, not a
+  color anyone actually chose, so any exposed sliver still read as an
+  obviously-wrong flat gray patch even after the geometry fix narrowed it.
+  Sampling the real texture's own tone instead means a sliver blends into
+  the surrounding real surface rather than standing out. See
+  `loadCroppedModelInstance` in `src/main.js`, which also recenters the
   result so a placed instance's own position keeps meaning "the object's
   true center" even though the crop itself is one-sided. Only single-axis-
   aligned crops are supported — fine for the roughly-box-shaped products
   (bricks, boards, doors) this exists for. A genuinely holey source scan
-  (an actual gap in the mesh near the reused end, not something the crop
-  introduces) can still show background through that gap regardless — a
-  property of the uploaded model itself, not fixable by the crop math.
+  (an actual gap in the mesh, not something the crop introduces or touches)
+  can still show background through that gap regardless — a property of
+  the uploaded model itself, not fixable by the crop math, and distinct
+  from the backing-sliver case above (that's about a manufactured surface
+  peeking through; this is a real hole in the source mesh).
 - Dragging the Resize gizmo shows this real crop live, throttled to about
   8 updates/second rather than one per pointer-move frame (a full reload +
   reclip isn't free) — the object being dragged is hidden immediately when

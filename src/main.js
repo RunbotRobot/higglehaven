@@ -864,6 +864,27 @@ async function replaceMeshWithCrop(mesh, crop) {
   return newMesh;
 }
 
+// Downsamples a texture to a single pixel via an offscreen canvas to get
+// its overall average color — a cheap, dependency-free way to get "this
+// product's actual color" for a real uploaded model, whose catalog
+// template.color is usually just the upload flow's generic gray
+// placeholder rather than a color anyone actually picked (see
+// loadCroppedModelInstance's own use of this). Returns null for a
+// materialless mesh or a texture whose image hasn't finished decoding yet
+// (shouldn't happen in practice — GLTFLoader resolves textures before a
+// model's load promise does — but a null-safe fallback costs nothing).
+function averageTextureColor(texture) {
+  const image = texture?.image;
+  if (!image || !image.width || !image.height) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return new THREE.Color(r / 255, g / 255, b / 255);
+}
+
 // For an extensible template that has a real model: loads it via
 // loadModelInstance (its usual Y-up-correction/recenter pipeline), then —
 // only if actually cropped shorter than the template's declared maximum —
@@ -907,21 +928,27 @@ async function loadCroppedModelInstance(template, instance) {
 
   // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
   // meant to stay fully hidden behind the real, relocated end cap, but a
-  // genuinely irregular real scan (a concave dip, a seam) can leave a
-  // sliver of it exposed despite cropGeometryFromEnd's own coverage fit.
-  // Rendering that sliver with the SAME textured material as the real
-  // surface used to mean sampling whatever texel happens to sit at the
-  // flat cap's UV(0,0) — an arbitrary, sometimes bizarrely-colored patch
-  // of the product's own texture atlas showing up out of context. A
-  // plain, untextured material in the product's own swatch color reads as
-  // "an ordinary surface" instead, even on the rare crop where a sliver
-  // does show.
+  // real scanned cross-section — especially one that isn't a simple
+  // rectangular prism — can still leave some of it exposed even after
+  // cropGeometryFromEnd's own bounding-box coverage fit, which can only
+  // correct a size mismatch, not reshape a patch to a hole's actual
+  // (possibly irregular) outline. Rendering that sliver with the SAME
+  // textured material as the real surface used to mean sampling whatever
+  // texel happens to sit at the flat cap's UV(0,0) — an arbitrary,
+  // sometimes bizarrely-colored patch of the product's own texture atlas
+  // showing up out of context. template.color is scarcely better for a
+  // real uploaded model: it's near-universally the upload flow's generic
+  // placeholder swatch (`#999999`), not this product's actual color, so a
+  // visible sliver still read as a flat industrial-gray patch rather than
+  // "an ordinary surface" of the same product. Sampling the real
+  // material's own texture down to its average color instead means any
+  // exposed sliver blends into the surrounding real surface's actual tone
+  // — still not textured detail, but no longer an obviously wrong color.
   // DoubleSide: a genuinely holey real scan (see this block's own comment
   // above) can let a grazing view ray slip past the backing cap's front
   // face without a clean hit — rendering its normally-invisible backface
   // instead of falling through to empty space/background is a cheap,
   // strictly-better hardening regardless of any one model's own defects.
-  const backingMaterial = new THREE.MeshStandardMaterial({ color: template.color, side: THREE.DoubleSide });
   const inner = new THREE.Group();
   for (const mesh of meshes) {
     const geometry = mesh.geometry.clone();
@@ -929,6 +956,8 @@ async function loadCroppedModelInstance(template, instance) {
     const cropped = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
     cropped.translate(shift[0], shift[1], shift[2]);
     const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    const backingColor = averageTextureColor(originalMaterial?.map) || new THREE.Color(template.color);
+    const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
     inner.add(new THREE.Mesh(cropped, [originalMaterial, backingMaterial]));
   }
   inner.position.setComponent(axisIndex, recenterOffset);
