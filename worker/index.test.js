@@ -247,6 +247,9 @@ describe('Worker API', () => {
   });
 
   it('filters and cursor-paginates catalog templates in stable name order', async () => {
+    for (const sellerId of ['seller-a', 'seller-b']) {
+      await api('/sellers', { method: 'POST', body: JSON.stringify({ label: sellerId, sellerId }) });
+    }
     for (const [templateId, name, subcategory, sellerId, priceCents, color, dimensions] of [
       ['catalog-page-b', 'Catalog same name', 'seating', 'seller-b', 200, '#123456', { width: 1, depth: 1, height: 1 }],
       ['catalog-page-a', 'Catalog same name', 'seating', 'seller-a', 100, '#123456', { width: 1, depth: 1, height: 1 }],

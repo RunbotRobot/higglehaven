@@ -142,6 +142,71 @@ Response:
 
 Returns `404` if the builder doesn't exist.
 
+## Sellers
+
+A genuinely separate roster from builders — `catalog_templates.seller_id`
+references these, not a builder's ID. Same dev-mode shape as Builders above
+(shared, cross-device, still no real authentication), but a builder and a
+seller are independent identities: uploading a product needs a seller
+identity chosen, quite apart from whichever builder identity (if any) is
+active, and the two aren't linked to each other in any way.
+
+### Seller object
+
+```json
+{
+  "sellerId": "seller-7f3a1c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "label": "Ada's Shop",
+  "createdAt": "2026-08-16T00:00:00.000Z",
+  "updatedAt": "2026-08-16T00:00:00.000Z"
+}
+```
+
+### `GET /api/sellers`
+
+Lists every seller, oldest first. Not paginated, same reasoning as
+`GET /api/builders`.
+
+### `POST /api/sellers`
+
+Creates a seller. `sellerId` is optional; if omitted, the Worker generates
+one.
+
+Request body:
+
+```json
+{
+  "label": "Ada's Shop"
+}
+```
+
+`label` is required. Returns `409` if a caller-supplied `sellerId` is
+already taken.
+
+### `PUT /api/sellers/:sellerId`
+### `PATCH /api/sellers/:sellerId`
+
+Renames a seller. `label` is required. Returns `404` if the seller
+doesn't exist.
+
+### `DELETE /api/sellers/:sellerId`
+
+Deletes a seller. Unlike deleting a builder, there's no owned-land release
+to do — a seller owns no land — so any of its existing catalog templates
+just keep their `seller_id` pointing at an ID no longer in the roster, the
+same as a template that already has a `null` `seller_id` for an unclaimed
+custom upload.
+
+Response:
+
+```json
+{
+  "deleted": true
+}
+```
+
+Returns `404` if the seller doesn't exist.
+
 ## Catalog templates
 
 Catalog templates describe product-like placeholders that can be placed into a
@@ -413,12 +478,19 @@ never a squash:
 
 ### Managing extensibility — the Seller modal
 
-There's no real seller-account system (same dev-mode caveat as builders) — a
-template's `sellerId` is just whichever builder uploaded it, set automatically
-by the upload flow. The frontend's "My Products" button (next to "+ Upload
-Model") opens a modal listing every template whose `sellerId` matches the
-active builder, plus any custom-uploaded template with a `null` `sellerId`
-(covers products uploaded before this existed).
+Still no real accounts (same dev-mode caveat as Builders/Sellers above), but
+a template's `sellerId` is a genuinely separate identity from whichever
+builder uploaded it — see "Sellers" above. Reaching Sell mode (the `#mode-nav`
+Sell tab, or Build mode's own "My Products" button) ensures a seller identity
+is chosen first if one isn't already (`ensureSellerIdentity` in `src/main.js`)
+— no builder identity or claimed landlet needed, only a seller one. The
+frontend's "My Products" button opens a modal listing every template whose
+`sellerId` matches the active seller, plus any custom-uploaded template with
+a `null` `sellerId` (covers products uploaded before sellers existed as their
+own concept). A "Seller identity" button inside the modal reopens the same
+identity picker to switch or rename — unlike switching builders, this
+doesn't reload the page, since nothing about the Build/Shop scene depends on
+which seller is active.
 
 Each row leads with the product's name (wraps rather than truncating — this
 is the one piece of information a seller actually came here to read) and its
@@ -1252,8 +1324,11 @@ Response:
 
 ## D1 schema overview
 
-The migrations currently create eight main backend tables:
+The migrations currently create ten main backend tables:
 
+- `builders`: the shared dev-mode builder identity roster (see "Builders").
+- `sellers`: a genuinely separate dev-mode identity roster for sellers (see
+  "Sellers") — `catalog_templates.seller_id` references this, not `builders`.
 - `catalog_templates`: placeholder product templates and minimum product
   metadata.
 - `landlets`: dev landlet records, including greenbelt/claimed/generating
@@ -1358,13 +1433,14 @@ Shop, Build, and Sell are the three peer top-level views, switched via the
 always-visible `#mode-nav` (main.js, not a backend concept). Shop is the
 default landing view — a fresh load or a plain browser refresh goes straight
 into it, no identity gate first, matching how it's always worked (`enterShopMode`
-needs no `builderId`). Build still needs an identity and a claimed landlet, so
-switching into it runs the same `runBuilderMenu`/claim flow bootstrap() always
+needs no `builderId`). Build still needs a builder identity and a claimed landlet, so
+switching into it runs the same builder-menu/claim flow bootstrap() always
 ran, just deferred until the nav is actually clicked instead of unconditionally
-at startup. Sell only needs an identity (see "Managing extensibility" above —
-the Seller modal reads just `activeCatalog` + `builderId`), so it opens as a
-plain overlay on top of whichever of the other two is currently active, no
-mode switch or claimed landlet required.
+at startup. Sell only needs its own seller identity — a genuinely separate
+one from a builder's, not reused (see "Sellers" and "Managing extensibility"
+above) — so it opens as a plain overlay on top of whichever of the other two
+is currently active, no builder identity, mode switch, or claimed landlet
+required.
 
 Shop and Build are different enough scene setups (per-world absolute
 coordinates + flight controls vs. one landlet's local coordinates + build

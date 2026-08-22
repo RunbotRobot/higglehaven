@@ -30,9 +30,14 @@ import {
   createBuilder,
   renameBuilder,
   deleteBuilder,
+  fetchSellers,
+  createSeller,
+  renameSeller,
+  deleteSeller,
   fetchAllLandlets,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
+import { setActiveSellerId } from './sellerIdentity.js';
 import { optimizeModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 
@@ -52,6 +57,15 @@ let activeCatalog = FALLBACK_CATALOG;
 // placed products.
 let builderId = null;
 let currentLandletId = 'starter-landlet';
+
+// A seller identity is a genuinely separate roster from builders (see
+// worker/index.js's /api/sellers and docs/API.md's "Sellers" section) —
+// catalog_templates.seller_id is tagged with this, not builderId, so
+// "my products" means "products this seller identity uploaded," not
+// "products this builder identity uploaded." Settled lazily, only once
+// Sell mode is actually reached (see ensureSellerIdentity below), unlike
+// builderId which bootstrap() always resolves up front.
+let sellerId = null;
 
 // Shop, Build, and Sell are the three peer top-level views (#mode-nav in
 // index.html) — Sell is really just a modal reachable from either of the
@@ -1389,16 +1403,17 @@ uploadSubmitBtn.addEventListener('click', async () => {
     const dimensions = await measureModelDimensions(modelUrl);
 
     setUploadStatus('Creating product…');
+    // Uploading from Build mode doesn't otherwise require a seller
+    // identity to already be chosen (only Sell mode's own entry points
+    // do) — ensure one now rather than tagging the new template with
+    // whatever builder identity happens to be active.
+    const uploaderSellerId = await ensureSellerIdentity();
     const template = await createCatalogTemplate({
       name,
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl,
-      // No real seller accounts (see docs/API.md) — the builder identity
-      // already active for this session doubles as the uploader's seller
-      // ID, so the Seller modal can find "my own" products without a
-      // second, redundant identity system.
-      sellerId: builderId,
+      sellerId: uploaderSellerId,
     });
 
     activeCatalog.push(template);
@@ -1414,15 +1429,17 @@ uploadSubmitBtn.addEventListener('click', async () => {
   }
 });
 
-// Seller product management: lets a builder mark their own uploaded
+// Seller product management: lets a seller mark their own uploaded
 // products extensible (see extensibleAxes) after the fact — the upload
 // flow itself doesn't ask, since cutting something down to fit is a need
-// that only shows up once a builder is actually trying to place it. No
-// real seller accounts (see docs/API.md) — "mine" means sellerId matches
-// this session's builderId, uploads/sellerId is set going forward,
-// falling back to any unclaimed (sellerId-less) custom upload so products
-// created before that existed — like a real scanned model uploaded before
-// this feature — are still reachable here instead of stuck unmanageable.
+// that only shows up once a builder is actually trying to place it. Still
+// no real accounts (see docs/API.md's "Sellers" section) — "mine" means
+// sellerId matches this session's active seller identity (a genuinely
+// separate roster from builders, not reused from one), falling back to
+// any unclaimed (sellerId-less) custom upload so products created before
+// sellers existed as their own concept — like a real scanned model
+// uploaded before this feature — are still reachable here instead of
+// stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerListEl = document.getElementById('seller-list');
 const sellerStatusEl = document.getElementById('seller-status');
@@ -1431,7 +1448,7 @@ const sellerCloseBtn = document.getElementById('seller-close-btn');
 
 function myProducts() {
   return activeCatalog.filter((template) =>
-    template.sellerId === builderId ||
+    template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
 }
 
@@ -1700,7 +1717,10 @@ function renderSellerList() {
           modelUrl: template.modelUrl,
           priceCents: template.priceCents,
           metadata: template.metadata,
-          sellerId: builderId,
+          // Safe to read directly (not ensureSellerIdentity()) — this only
+          // ever runs while the Seller modal is open, which already
+          // guaranteed one via openSellerModal().
+          sellerId,
         });
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
@@ -1849,7 +1869,13 @@ function renderSellerList() {
   }
 }
 
-function openSellerModal() {
+// Ensures a seller identity is active before showing the modal — reachable
+// two ways that don't already guarantee one: #seller-btn ("My Products")
+// directly from inside Build mode, and the #mode-nav Sell tab from
+// anywhere. Both just call this rather than each separately remembering
+// to await ensureSellerIdentity() first.
+async function openSellerModal() {
+  await ensureSellerIdentity();
   renderSellerList();
   sellerModalEl.classList.add('visible');
 }
@@ -3113,44 +3139,87 @@ async function resolveLandletId() {
 
 // Dev-only stand-in for accounts: no passwords, just a locally-kept list of
 // IDs (see builderIdentity.js) a builder can add to, rename, and switch
-// between — e.g. to claim more than one landlet for testing. The same list
-// UI serves two purposes: runBuilderMenu() blocks bootstrap() at startup
-// until one is chosen (mandatory — no Close button), and #identity-btn
-// reopens it any time afterward to switch or rename (Close button shown,
-// since there's already an active choice to dismiss back to).
+// between — e.g. to claim more than one landlet for testing. The same
+// modal DOM also serves the entirely separate seller roster (see
+// sellerIdentity.js/docs/API.md's "Sellers" section) — one shared UI
+// parameterized by an IDENTITY_KINDS config below, rather than two
+// near-identical modals, since only one identity flow is ever in
+// progress at a time. Each kind's own menu (runIdentityMenu) blocks
+// bootstrap() (builder) or the Sell nav/seller-identity button (seller)
+// until one is chosen (mandatory — no Close button); the switcher buttons
+// (#identity-btn / #seller-identity-btn) reopen it any time afterward to
+// switch or rename (Close button shown, since there's already an active
+// choice to dismiss back to).
 const identityBtn = document.getElementById('identity-btn');
+const sellerIdentityBtn = document.getElementById('seller-identity-btn');
 const identityModalEl = document.getElementById('identity-modal');
 const identityModalTitleEl = document.getElementById('identity-modal-title');
+const identityHintEl = document.getElementById('identity-hint');
 const identityListEl = document.getElementById('identity-list');
 const identityNewBtn = document.getElementById('identity-new-btn');
 const identityStatusEl = document.getElementById('identity-status');
 const identityCloseBtn = document.getElementById('identity-close-btn');
 
-// Re-render needs to know which onChoose callback is live (runBuilderMenu's
-// vs #identity-btn's) — set whenever the modal opens, read by both the
-// per-row Choose buttons and #identity-new-btn (a fresh row needs the same
-// callback wired up as everything else currently on screen).
+const IDENTITY_KINDS = {
+  builder: {
+    noun: 'builder',
+    idField: 'builderId',
+    fetch: fetchBuilders,
+    create: createBuilder,
+    rename: renameBuilder,
+    delete: deleteBuilder,
+    deleteConfirm: (label) => `Delete "${label}"? Any land it owns is cleared and goes back to available — not just removed from this list.`,
+    hint: 'Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to build as, rename any of them, or add a new one.',
+    // Only the builder flow can be reached mid-startup, before any scene
+    // has committed to Build — a seller identity is only ever needed once
+    // already inside Shop/Build/wherever the Sell tap happened, so
+    // "go to Shop instead" isn't a meaningful escape hatch there.
+    showShopEscape: true,
+  },
+  seller: {
+    noun: 'seller',
+    idField: 'sellerId',
+    fetch: fetchSellers,
+    create: createSeller,
+    rename: renameSeller,
+    delete: deleteSeller,
+    deleteConfirm: (label) => `Delete "${label}"? Its existing products stay in the catalog but lose their seller link.`,
+    hint: 'Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to sell as, rename any of them, or add a new one.',
+    showShopEscape: false,
+  },
+};
+
+// Which kind the modal is currently showing, and its live onChoose
+// callback (runIdentityMenu's vs a switcher's) — both set whenever the
+// modal opens, read by the per-row Choose buttons and #identity-new-btn
+// (a fresh row needs the same kind/callback wired up as everything else
+// currently on screen).
+let identityKind = IDENTITY_KINDS.builder;
 let identityOnChoose = null;
 
 // The roster itself is fetched fresh from the server every time the modal
-// opens (see docs/API.md's "Builders" section) — it's shared across
-// devices now, so a stale local copy could easily be missing a builder
-// someone just created or deleted elsewhere.
+// opens (see docs/API.md's "Builders"/"Sellers" sections) — it's shared
+// across devices now, so a stale local copy could easily be missing an
+// identity someone just created or deleted elsewhere.
 async function renderIdentityList() {
+  const kind = identityKind;
+  identityHintEl.textContent = kind.hint;
+  shopBtn.style.display = kind.showShopEscape ? '' : 'none';
   identityListEl.innerHTML = '';
-  identityStatusEl.textContent = 'Loading builders…';
+  identityStatusEl.textContent = `Loading ${kind.noun}s…`;
   identityStatusEl.classList.remove('error');
   let identities;
   try {
-    identities = await fetchBuilders();
+    identities = await kind.fetch();
   } catch (err) {
-    identityStatusEl.textContent = err.message || 'Could not load builders.';
+    identityStatusEl.textContent = err.message || `Could not load ${kind.noun}s.`;
     identityStatusEl.classList.add('error');
     return;
   }
   identityStatusEl.textContent = '';
 
   for (const identity of identities) {
+    const id = identity[kind.idField];
     const row = document.createElement('div');
     row.className = 'identity-row';
 
@@ -3161,7 +3230,7 @@ async function renderIdentityList() {
     labelEl.textContent = identity.label;
     const idEl = document.createElement('div');
     idEl.className = 'identity-row-id';
-    idEl.textContent = identity.builderId;
+    idEl.textContent = id;
     info.append(labelEl, idEl);
 
     const actions = document.createElement('div');
@@ -3170,10 +3239,10 @@ async function renderIdentityList() {
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
     renameBtn.addEventListener('click', async () => {
-      const next = prompt('Rename this builder', identity.label);
+      const next = prompt(`Rename this ${kind.noun}`, identity.label);
       if (!next || !next.trim()) return;
       try {
-        await renameBuilder(identity.builderId, next.trim());
+        await kind.rename(id, next.trim());
       } catch (err) {
         identityStatusEl.textContent = err.message || 'Could not rename.';
         identityStatusEl.classList.add('error');
@@ -3184,12 +3253,11 @@ async function renderIdentityList() {
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Delete';
     deleteBtn.addEventListener('click', async () => {
-      // Shared across devices now, and deleting genuinely releases
-      // whatever land this builder owns (see docs/API.md) — the confirm
-      // matters more than it used to.
-      if (!confirm(`Delete "${identity.label}"? Any land it owns is cleared and goes back to available — not just removed from this list.`)) return;
+      // Shared across devices now, so the confirm matters more than it
+      // used to — see each kind's own deleteConfirm for what's at stake.
+      if (!confirm(kind.deleteConfirm(identity.label))) return;
       try {
-        await deleteBuilder(identity.builderId);
+        await kind.delete(id);
       } catch (err) {
         identityStatusEl.textContent = err.message || 'Could not delete.';
         identityStatusEl.classList.add('error');
@@ -3200,7 +3268,7 @@ async function renderIdentityList() {
     chooseBtn.type = 'button';
     chooseBtn.className = 'identity-choose-btn';
     chooseBtn.textContent = 'Play';
-    chooseBtn.addEventListener('click', () => identityOnChoose(identity.builderId));
+    chooseBtn.addEventListener('click', () => identityOnChoose(id));
     actions.append(renameBtn, deleteBtn, chooseBtn);
 
     row.append(info, actions);
@@ -3208,12 +3276,13 @@ async function renderIdentityList() {
   }
 }
 
-function runBuilderMenu() {
+function runIdentityMenu(kind, setActiveId) {
   return new Promise((resolve) => {
-    identityModalTitleEl.textContent = 'Choose a builder';
+    identityKind = kind;
+    identityModalTitleEl.textContent = `Choose a ${kind.noun}`;
     identityCloseBtn.style.display = 'none';
     identityOnChoose = (id) => {
-      setActiveBuilderId(id);
+      setActiveId(id);
       identityModalEl.classList.remove('visible');
       resolve(id);
     };
@@ -3223,26 +3292,41 @@ function runBuilderMenu() {
 }
 
 // Sell only ever needs an identity, not a claimed landlet (the Seller
-// modal reads just activeCatalog + builderId — see myProducts()) — so
-// reaching it from Shop mode, which never runs bootstrap()'s own
-// runBuilderMenu() call, still needs *some* way to resolve one. Sharing a
-// single in-flight promise (rather than always calling runBuilderMenu()
-// fresh) matters because bootstrap()'s own Build-mode flow can be
-// awaiting runBuilderMenu() at the very moment the Sell nav button is
-// tapped — two independent runBuilderMenu() calls would each set their
-// own identityOnChoose, and the second silently overwrites the first,
-// leaving bootstrap()'s own await hanging forever with no way to resolve.
-let identityFlowPromise = null;
+// modal reads just activeCatalog + sellerId — see myProducts()) — so
+// reaching it from Shop mode, which never runs bootstrap()'s own builder
+// menu, still needs *some* way to resolve one. Sharing a single in-flight
+// promise (rather than always calling runIdentityMenu() fresh) matters
+// because bootstrap()'s own Build-mode flow can be awaiting the builder
+// menu at the very moment the Sell nav button is tapped — two independent
+// runIdentityMenu() calls would each set their own identityOnChoose, and
+// the second silently overwrites the first, leaving the other's own await
+// hanging forever with no way to resolve. Builder and seller each need
+// their own promise here, not one shared — both flows can genuinely be
+// in flight together (Build mode's own startup menu and a Sell tap).
+let builderIdentityFlowPromise = null;
 function ensureBuilderIdentity() {
   if (builderId) return Promise.resolve(builderId);
-  if (!identityFlowPromise) {
-    identityFlowPromise = runBuilderMenu().then((id) => {
+  if (!builderIdentityFlowPromise) {
+    builderIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.builder, setActiveBuilderId).then((id) => {
       builderId = id;
-      identityFlowPromise = null;
+      builderIdentityFlowPromise = null;
       return id;
     });
   }
-  return identityFlowPromise;
+  return builderIdentityFlowPromise;
+}
+
+let sellerIdentityFlowPromise = null;
+function ensureSellerIdentity() {
+  if (sellerId) return Promise.resolve(sellerId);
+  if (!sellerIdentityFlowPromise) {
+    sellerIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.seller, setActiveSellerId).then((id) => {
+      sellerId = id;
+      sellerIdentityFlowPromise = null;
+      return id;
+    });
+  }
+  return sellerIdentityFlowPromise;
 }
 
 // Shared by #identity-btn and the claim modal's Back button — the identity
@@ -3252,6 +3336,7 @@ function ensureBuilderIdentity() {
 // and choosing a different one reloads (which tears down and rebuilds
 // everything, claim modal included, for the new builder).
 function openBuilderSwitcher() {
+  identityKind = IDENTITY_KINDS.builder;
   identityModalTitleEl.textContent = 'Builder identity';
   identityCloseBtn.style.display = '';
   identityOnChoose = (id) => {
@@ -3268,19 +3353,41 @@ function openBuilderSwitcher() {
   renderIdentityList();
 }
 
+// Reachable only from inside the (already-open) Seller modal — unlike the
+// builder switcher, switching seller identity doesn't need a reload:
+// nothing about the Build/Shop scene depends on which seller is active,
+// only which catalog templates myProducts() considers "mine," so a
+// straight re-render of the seller list is enough.
+function openSellerSwitcher() {
+  identityKind = IDENTITY_KINDS.seller;
+  identityModalTitleEl.textContent = 'Seller identity';
+  identityCloseBtn.style.display = '';
+  identityOnChoose = (id) => {
+    identityModalEl.classList.remove('visible');
+    if (id === sellerId) return; // already this seller — nothing to refresh
+    setActiveSellerId(id);
+    sellerId = id;
+    renderSellerList();
+  };
+  identityModalEl.classList.add('visible');
+  renderIdentityList();
+}
+
 identityBtn.addEventListener('click', openBuilderSwitcher);
+sellerIdentityBtn.addEventListener('click', openSellerSwitcher);
 
 identityCloseBtn.addEventListener('click', () => {
   identityModalEl.classList.remove('visible');
 });
 
 identityNewBtn.addEventListener('click', async () => {
-  const label = prompt('Name this builder', '');
+  const kind = identityKind;
+  const label = prompt(`Name this ${kind.noun}`, '');
   if (!label || !label.trim()) return;
   try {
-    await createBuilder(label.trim());
+    await kind.create(label.trim());
   } catch (err) {
-    identityStatusEl.textContent = err.message || 'Could not create builder.';
+    identityStatusEl.textContent = err.message || `Could not create ${kind.noun}.`;
     identityStatusEl.classList.add('error');
   }
   renderIdentityList();
@@ -3896,7 +4003,8 @@ for (const btn of modeNavButtons) {
   btn.addEventListener('click', async () => {
     const target = btn.dataset.mode;
     if (target === 'sell') {
-      await ensureBuilderIdentity();
+      // openSellerModal() itself ensures a seller identity — no builder
+      // identity or claimed landlet needed to sell, only to build.
       openSellerModal();
       return;
     }

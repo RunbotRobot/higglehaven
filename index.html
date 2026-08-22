@@ -702,6 +702,7 @@
       #seller-modal-actions {
         display: flex;
         justify-content: flex-end;
+        gap: 8px;
       }
       #seller-modal-actions button {
         padding: 8px 16px;
@@ -1129,12 +1130,13 @@
       <div id="seller-modal-content">
         <h2>My products</h2>
         <div id="seller-hint">
-          Products this builder has uploaded (plus any custom upload nobody's claimed yet). Extensible axis and
-          minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
+          Products this seller identity has uploaded (plus any custom upload nobody's claimed yet). Extensible axis
+          and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
         <div id="seller-list"></div>
         <div id="seller-status"></div>
         <div id="seller-modal-actions">
+          <button id="seller-identity-btn" type="button">Seller identity</button>
           <button id="seller-close-btn" type="button">Close</button>
         </div>
       </div>

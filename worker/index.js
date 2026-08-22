@@ -260,6 +260,10 @@ async function handleApi(request, env, url) {
     return handleBuilders(request, env.DB, route);
   }
 
+  if (route[0] === 'sellers') {
+    return handleSellers(request, env.DB, route);
+  }
+
   if (route[0] === 'catalog') {
     return handleCatalog(request, env.DB, route, url, env.MODELS);
   }
@@ -523,6 +527,8 @@ async function handleCatalog(request, db, route, url, models) {
       if (ids.has(template.templateId)) throw new HttpError('templateId values must be unique', 400);
       ids.add(template.templateId);
     }
+    const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
+    if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
@@ -679,6 +685,7 @@ async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const template = validateTemplate(input, crypto.randomUUID());
+    if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
@@ -693,6 +700,7 @@ async function handleCatalog(request, db, route, url, models) {
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
     const input = await readJson(request);
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1] }, route[1]);
+    if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       UPDATE catalog_templates
@@ -901,6 +909,65 @@ function builderFromRow(row) {
 async function requireBuilder(db, builderId) {
   const row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!row) throw new HttpError('Builder not found', 404);
+  return row;
+}
+
+// A genuinely separate roster from builders (see 0037_sellers.sql) —
+// catalog_templates.seller_id references this table's IDs now, not a
+// builder's. Simpler than handleBuilders: a seller owns no land, so
+// deleting one has no ownership-release cleanup to do — it just leaves
+// any of their existing templates' seller_id pointing at an ID no longer
+// in the roster, the same way a template can already have a null
+// seller_id for an unclaimed custom upload.
+async function handleSellers(request, db, route) {
+  if (request.method === 'GET' && route.length === 1) {
+    const { results } = await db.prepare('SELECT * FROM sellers ORDER BY created_at, seller_id').all();
+    return json({ sellers: results.map(sellerFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 1) {
+    const input = await readJson(request);
+    const label = stringValue(input.label, 'label');
+    const sellerId = input.sellerId !== undefined
+      ? stringValue(input.sellerId, 'sellerId')
+      : `seller-${crypto.randomUUID()}`;
+    await db.prepare('INSERT INTO sellers (seller_id, label) VALUES (?, ?)').bind(sellerId, label).run();
+    const row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+    return json({ seller: sellerFromRow(row) }, 201);
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    await requireSeller(db, route[1]);
+    const input = await readJson(request);
+    const label = stringValue(input.label, 'label');
+    await db.prepare(`
+      UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE seller_id = ?
+    `).bind(label, route[1]).run();
+    const updated = await requireSeller(db, route[1]);
+    return json({ seller: sellerFromRow(updated) });
+  }
+
+  if (request.method === 'DELETE' && route.length === 2) {
+    await requireSeller(db, route[1]);
+    await db.prepare('DELETE FROM sellers WHERE seller_id = ?').bind(route[1]).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function sellerFromRow(row) {
+  return {
+    sellerId: row.seller_id,
+    label: row.label,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function requireSeller(db, sellerId) {
+  const row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  if (!row) throw new HttpError('Seller not found', 404);
   return row;
 }
 

@@ -60,6 +60,40 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
+// A separate roster from builders (see docs/API.md's "Sellers" section) —
+// catalog_templates.seller_id references these, not a builder's ID. Same
+// shared, cross-device, no-real-auth shape as builders above.
+export async function fetchSellers() {
+  const { sellers } = await requestJson('/sellers');
+  return sellers;
+}
+
+export async function createSeller(label) {
+  const { seller } = await requestJson('/sellers', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  return seller;
+}
+
+export async function renameSeller(sellerId, label) {
+  const { seller } = await requestJson(`/sellers/${encodeURIComponent(sellerId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  return seller;
+}
+
+// A seller owns no land, so unlike deleteBuilder there's no owned-land
+// release to report back — existing templates just keep whatever
+// seller_id they already had, the same as one that was never in the
+// roster at all.
+export async function deleteSeller(sellerId) {
+  await requestJson(`/sellers/${encodeURIComponent(sellerId)}`, { method: 'DELETE' });
+}
+
 // Pages through every instance on a landlet rather than returning just the
 // first 100 (the server's per-request cap) — a landlet with a large build
 // (a brick wall hundreds of pieces deep, say) silently lost everything
