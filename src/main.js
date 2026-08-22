@@ -1362,25 +1362,135 @@ const HINT_TEXT = 'Tap a product to inspect it';
 productInfoEl.textContent = HINT_TEXT;
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
-// template. Tapping one doesn't place anything yet — it arms placement
-// mode (see enterPlacementMode) so the next tap in the world, wherever
-// that is, is where the item actually goes. Buttons are (re)built in
-// bootstrap() once activeCatalog is settled, since the API's catalog
-// isn't known until that fetch resolves.
+// template as a grid of thumbnails with the name below each, rather than a
+// plain list of name-only buttons — much faster to recognize a product by
+// its actual shape/color than by reading through a list of names. Tapping
+// one doesn't place anything yet — it arms placement mode (see
+// enterPlacementMode) so the next tap in the world, wherever that is, is
+// where the item actually goes. Tiles are (re)built in bootstrap() once
+// activeCatalog is settled, since the API's catalog isn't known until that
+// fetch resolves.
 const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
+
+// A template's appearance never changes after creation (there's no edit
+// flow for its color or model), so a thumbnail rendered once this session
+// is good for the rest of it — keyed by templateId rather than re-rendered
+// every time the picker reopens or a new upload rebuilds the whole grid.
+const catalogThumbnailCache = new Map();
+const CATALOG_THUMBNAIL_SIZE = 128;
+let catalogThumbnailCanvas = null;
+let catalogThumbnailRenderer = null;
+// Real thumbnail rendering awaits an actual model load (loadModelInstance),
+// so overlapping calls could otherwise interleave through the one shared
+// canvas/renderer below (mobile GPUs don't want a WebGL context per tile —
+// same reasoning as the Seller modal's single shared preview canvas) and
+// read back whichever render happened to finish last. Chaining every call
+// onto this one queue serializes the actual render+readback work while
+// still letting each caller await its own result independently.
+let catalogThumbnailQueue = Promise.resolve();
+
+// A flat swatch of the template's own color, shown immediately while the
+// real render (which needs an async model load for anything with a
+// modelUrl) is still in flight — closer to the real product than a blank
+// or generic placeholder icon would be.
+function solidColorDataUrl(color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  canvas.getContext('2d').fillStyle = color || '#999999';
+  canvas.getContext('2d').fillRect(0, 0, 1, 1);
+  return canvas.toDataURL();
+}
+
+async function renderCatalogThumbnailNow(template) {
+  if (!catalogThumbnailCanvas) {
+    catalogThumbnailCanvas = document.createElement('canvas');
+    catalogThumbnailRenderer = new THREE.WebGLRenderer({
+      canvas: catalogThumbnailCanvas,
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
+    catalogThumbnailRenderer.setSize(CATALOG_THUMBNAIL_SIZE, CATALOG_THUMBNAIL_SIZE, false);
+  }
+  // Same instance shape showAxisPreview uses — origin, no crop, no
+  // rotation — so this shows the product's real full-size appearance
+  // (actual model/texture when it has one) the same way Build mode would.
+  const previewObject = await createMeshForInstance({
+    templateId: template.templateId,
+    x: 0, y: 0, z: 0,
+    rotationX: 0, rotationY: 0, rotationZ: 0,
+    crop: {},
+  });
+  if (!previewObject) return null;
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(2, -3, 4);
+  scene.add(sun);
+  scene.add(previewObject);
+
+  const box = new THREE.Box3().setFromObject(previewObject);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.05);
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+  camera.up.set(0, 0, 1);
+  const dist = radius * 2.6;
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+
+  catalogThumbnailRenderer.render(scene, camera);
+  const dataUrl = catalogThumbnailCanvas.toDataURL('image/png');
+  disposeObject(previewObject);
+  return dataUrl;
+}
+
+function renderCatalogThumbnail(template) {
+  if (catalogThumbnailCache.has(template.templateId)) {
+    return Promise.resolve(catalogThumbnailCache.get(template.templateId));
+  }
+  const result = catalogThumbnailQueue.then(() => renderCatalogThumbnailNow(template));
+  catalogThumbnailQueue = result.then(
+    () => {},
+    () => {}, // keep the queue alive even if one template's render fails
+  );
+  result.then((dataUrl) => {
+    if (dataUrl) catalogThumbnailCache.set(template.templateId, dataUrl);
+  });
+  return result;
+}
 
 function buildCatalogPickerButtons() {
   catalogPickerEl.replaceChildren();
   for (const template of activeCatalog) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = template.name;
-    button.addEventListener('click', () => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'catalog-tile';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'catalog-thumb';
+    thumb.alt = '';
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? solidColorDataUrl(template.color);
+    tile.appendChild(thumb);
+
+    const name = document.createElement('span');
+    name.className = 'catalog-tile-name';
+    name.textContent = template.name;
+    tile.appendChild(name);
+
+    tile.addEventListener('click', () => {
       catalogPickerEl.classList.remove('visible');
       enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
     });
-    catalogPickerEl.appendChild(button);
+    catalogPickerEl.appendChild(tile);
+
+    if (!catalogThumbnailCache.has(template.templateId)) {
+      renderCatalogThumbnail(template).then((dataUrl) => {
+        if (dataUrl) thumb.src = dataUrl;
+      });
+    }
   }
 }
 addItemBtn.addEventListener('click', () => {
