@@ -385,6 +385,22 @@
         background: rgba(255, 255, 255, 0.15);
         color: #fff;
       }
+      /* Trim can apply to more than one axis at once (see docs/API.md) —
+         each axis gets its own labeled field inside #trim-length-control,
+         hidden until updateSelectionUI/setGizmoMode knows that particular
+         axis is actually extensible for the selected item. */
+      .trim-axis-field {
+        display: none;
+        align-items: center;
+        gap: 4px;
+      }
+      .trim-axis-field.active {
+        display: inline-flex;
+      }
+      .trim-axis-tag {
+        font-weight: 600;
+        opacity: 0.75;
+      }
       #gizmo-mode-controls button.pressed {
         transform: scale(0.92);
         background: var(--brand-green);
@@ -658,14 +674,24 @@
       }
       .seller-extensibility-panel {
         display: flex;
-        align-items: center;
+        flex-direction: column;
+        align-items: flex-start;
         gap: 6px;
-        flex-wrap: wrap;
       }
       .seller-extensibility-panel[hidden] {
         display: none;
       }
-      .seller-axis-select,
+      /* One row per axis (see AXIS_LIST/AXIS_ROW_LABELS in main.js) — a
+         template can be extensible on any subset of x/y/z at once, so
+         each gets its own checkbox + min-length field rather than a
+         single either/or picker. */
+      .seller-axis-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 13px/1.4 sans-serif;
+        color: #fff;
+      }
       .seller-min-input {
         padding: 6px 8px;
         border-radius: 8px;
@@ -673,8 +699,6 @@
         background: rgb(255 255 255 / 0.1);
         color: #fff;
         font: 13px/1.4 sans-serif;
-      }
-      .seller-min-input {
         width: 5.5em;
       }
       .seller-save-btn {
@@ -1085,9 +1109,20 @@
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
       <button id="mode-trim" type="button">Trim</button>
-      <label id="trim-length-control" class="gizmo-numeric-control">
-        <input id="trim-length-input" type="number" step="0.01" min="0" /><span id="trim-unit-label">m</span>
-      </label>
+      <div id="trim-length-control" class="gizmo-numeric-control">
+        <label class="trim-axis-field" data-trim-axis="x">
+          <span class="trim-axis-tag">W</span>
+          <input class="trim-length-input" data-trim-axis="x" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+        </label>
+        <label class="trim-axis-field" data-trim-axis="y">
+          <span class="trim-axis-tag">D</span>
+          <input class="trim-length-input" data-trim-axis="y" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+        </label>
+        <label class="trim-axis-field" data-trim-axis="z">
+          <span class="trim-axis-tag">H</span>
+          <input class="trim-length-input" data-trim-axis="z" type="number" step="0.01" min="0" /><span class="trim-unit-label">m</span>
+        </label>
+      </div>
       <button id="mode-resize" type="button">Resize</button>
       <label id="resize-scale-control" class="gizmo-numeric-control">
         <input id="resize-scale-input" type="number" step="1" min="1" /><span>%</span>

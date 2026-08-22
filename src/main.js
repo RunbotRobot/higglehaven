@@ -538,10 +538,37 @@ translateControls.addEventListener('objectChange', () => {
 const trimControls = new TransformControls(camera, renderer.domElement);
 trimControls.setMode('scale');
 scene.add(trimControls.getHelper());
+// A template can be extensible on more than one axis at once (see
+// extensibleAxes/attachTrimControls) — each active axis gets its own
+// single-axis handle shown simultaneously, but never a combined
+// two-axis or three-axis handle: cropping is only ever meaningful one
+// axis at a time (currentDragCropLength assumes exactly one), and a
+// diagonal drag across two axes at once has no sensible crop-length
+// interpretation. Plane handles (XY/YZ/XZ) are unconditionally off
+// regardless of which single axes are enabled. The one case that
+// slips past show-flag filtering — TransformControls' uniform "scale
+// everything" corner cube, which appears whenever all three of
+// showX/showY/showZ happen to be true (a template extensible on all
+// three axes, e.g. a wall resizable to any thickness/length/height) —
+// has no dedicated show flag to disable, so its handle geometry is
+// swapped for an empty one instead: harmless dead space rather than a
+// way to accidentally scale all three axes together through Trim,
+// which is what the separate Resize tool is for.
+trimControls.showXY = false;
+trimControls.showYZ = false;
+trimControls.showXZ = false;
+for (const group of [trimControls._gizmo.picker.scale, trimControls._gizmo.gizmo.scale]) {
+  for (const child of group.children) {
+    if (child.name === 'XYZ') child.geometry = new THREE.BufferGeometry();
+  }
+}
 
-// Which local axis this drag is cropping, and the crop length in effect
-// when it started — both fixed for the duration of one drag, set by
-// setGizmoMode when the Trim gizmo attaches (see attachTrimControls).
+// Which local axis the drag in progress is cropping — determined fresh
+// each time a drag starts (see the dragging-changed listener below) from
+// whichever single-axis handle TransformControls itself reports was
+// grabbed, since attachTrimControls can now show more than one handle at
+// once. Stays set to whatever it was last after a drag ends; only ever
+// read again once another drag (which always resets it first) is active.
 let trimAxis = null;
 let trimStartLength = 0;
 
@@ -622,7 +649,7 @@ async function updateTrimPreview(object) {
     outline.helper.visible = false;
     outline.fill.visible = false;
   }
-  trimLengthInputEl.value = toDisplayLength(clampedLength).toFixed(2);
+  trimInputEl(trimAxis).value = toDisplayLength(clampedLength).toFixed(2);
 }
 
 function clearTrimPreview(object) {
@@ -658,8 +685,19 @@ trimControls.addEventListener('objectChange', () => {
 trimControls.addEventListener('dragging-changed', async (event) => {
   controls.enabled = !event.value;
   const object = trimControls.object;
-  if (!object || !trimAxis) return;
+  if (!object) return;
   if (event.value) {
+    // Which single-axis handle was actually grabbed, freshly determined
+    // per drag rather than fixed at attach time — attachTrimControls may
+    // now be showing more than one axis's handle at once. Anything other
+    // than a clean single-letter 'X'/'Y'/'Z' (the plane and uniform-corner
+    // handles are already meant to be unreachable — see trimControls'
+    // own setup above — but this is a cheap second guard) leaves trimAxis
+    // null, so the matching branch below no-ops the drag entirely rather
+    // than trying to crop along an axis this template never declared.
+    const axis = trimControls.axis && trimControls.axis.length === 1 ? trimControls.axis.toLowerCase() : null;
+    trimAxis = axis && extensibleAxes(object.userData.template)?.[axis] ? axis : null;
+    if (!trimAxis) return;
     pushUndoSnapshot();
     trimStartLength = effectiveLength(object.userData.template, object.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
     // Hide the real object immediately, before even the first preview has
@@ -682,6 +720,7 @@ trimControls.addEventListener('dragging-changed', async (event) => {
     updateTrimPreview(object);
     return;
   }
+  if (!trimAxis) return; // an invalid grab (see above) never hid the object or started a preview to undo
   const clampedLength = currentDragCropLength(object);
   clearTrimPreview(object);
   object.scale.set(1, 1, 1);
@@ -750,7 +789,7 @@ scaleControls.addEventListener('objectChange', () => {
 // Reflects the selected item's current scale into the numeric field, as a
 // percentage — called on selection change and right after a drag-driven
 // resize, so the field never shows a stale value. (Its own .addEventListener
-// registration lives further down, alongside trimLengthInputEl's — both
+// registration lives further down, alongside each trim axis field's — all
 // need their DOM refs, declared later in the file, to already exist.)
 function updateResizeScaleInput() {
   if (selectedMeshes.size !== 1) return;
@@ -966,31 +1005,39 @@ function averageTextureColor(texture) {
 
 // For an extensible template that has a real model: loads it via
 // loadModelInstance (its usual Y-up-correction/recenter pipeline), then —
-// only if actually cropped shorter than the template's declared maximum —
-// bakes each mesh's accumulated transform into its own geometry (putting
-// it in the same container-local space effectiveLength's width/depth/
-// height already describe) and runs it through meshCrop.js's plane
-// clipper. Cropping only ever removes material from the +axis end (see
-// meshCrop.js's own doc comment for why, and why the far end's cap is
-// never a fabricated flat disc) — see docs/API.md's "Extensible
+// for each axis this particular instance is actually cropped shorter than
+// the template's declared maximum on (a template can declare more than
+// one extensible axis, see extensibleAxes, though most instances of it
+// won't be cropped on all of them at once) — bakes each mesh's
+// accumulated transform into its own geometry (putting it in the same
+// container-local space effectiveLength's width/depth/height already
+// describe) and runs it through meshCrop.js's plane clipper, once per
+// cropped axis. Cropping only ever removes material from the +axis end
+// (see meshCrop.js's own doc comment for why, and why the far end's cap
+// is never a fabricated flat disc) — see docs/API.md's "Extensible
 // products" section. Returns the container unmodified when there's
-// nothing to crop, so a full-length instance of an extensible template
-// still renders exactly like a normal one, model and all.
+// nothing to crop on any axis, so a full-length instance of an
+// extensible template still renders exactly like a normal one, model
+// and all.
 async function loadCroppedModelInstance(template, instance) {
   const container = await loadModelInstance(template.modelUrl);
-  const axis = primaryExtensibleAxis(template);
-  if (!axis) return container;
-  const dimensionKey = AXIS_DIMENSION_KEY[axis];
-  const fullLength = template.dimensions[dimensionKey];
-  const cropLength = effectiveLength(template, instance, axis, dimensionKey);
-  if (cropLength >= fullLength - 1e-6) return container;
+  const extensible = extensibleAxes(template);
+  if (!extensible) return container;
+
+  const croppedAxes = ['x', 'y', 'z'].filter((axis) => {
+    if (!extensible[axis]) return false;
+    const dimensionKey = AXIS_DIMENSION_KEY[axis];
+    const fullLength = template.dimensions[dimensionKey];
+    const cropLength = effectiveLength(template, instance, axis, dimensionKey);
+    return cropLength < fullLength - 1e-6;
+  });
+  if (croppedAxes.length === 0) return container;
 
   container.updateMatrixWorld(true);
   const meshes = [];
   container.traverse((child) => {
     if (child.isMesh) meshes.push(child);
   });
-  const axisIndex = { x: 0, y: 1, z: 2 }[axis];
 
   // Cropping only the +axis end leaves the remaining geometry's true
   // center drifting toward -axis as cropLength shrinks — but every
@@ -1000,10 +1047,23 @@ async function loadCroppedModelInstance(template, instance) {
   // than the outer group createMeshForInstance still needs to freely
   // position) keeps that invariant intact without moving anything the
   // builder actually sees: the untouched -axis end still lands in
-  // exactly the same spot it would have without this compensation.
-  const recenterOffset = (cropLength - fullLength) / 2;
+  // exactly the same spot it would have without this compensation. Each
+  // cropped axis's own offset is independent of the others (they're
+  // different vector components), so accumulating them into one shift
+  // and applying it once, after every axis has been cropped, is
+  // equivalent to applying each axis's own shift right after its own
+  // crop — simpler to just do once at the end.
   const shift = [0, 0, 0];
-  shift[axisIndex] = -recenterOffset;
+  const groupOffset = [0, 0, 0];
+  for (const axis of croppedAxes) {
+    const axisIndex = { x: 0, y: 1, z: 2 }[axis];
+    const dimensionKey = AXIS_DIMENSION_KEY[axis];
+    const fullLength = template.dimensions[dimensionKey];
+    const cropLength = effectiveLength(template, instance, axis, dimensionKey);
+    const recenterOffset = (cropLength - fullLength) / 2;
+    shift[axisIndex] = -recenterOffset;
+    groupOffset[axisIndex] = recenterOffset;
+  }
 
   // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
   // meant to stay fully hidden behind the real, relocated end cap, but a
@@ -1030,16 +1090,36 @@ async function loadCroppedModelInstance(template, instance) {
   // strictly-better hardening regardless of any one model's own defects.
   const inner = new THREE.Group();
   for (const mesh of meshes) {
-    const geometry = mesh.geometry.clone();
+    let geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
-    const cropped = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
-    cropped.translate(shift[0], shift[1], shift[2]);
+    // Cropping two or three axes on the same instance runs this same
+    // geometry through cropGeometryFromEnd once per axis in turn — each
+    // pass only ever touches its own axis's coordinate, so an
+    // already-cropped x range is untouched by a following z crop and
+    // vice versa (see cropGeometryFromEnd's own doc comment: it assumes
+    // its axis is currently centered at 0, which chaining preserves
+    // since a crop on one axis never moves another axis's coordinates).
+    // The one real cost of chaining rather than cropping fresh geometry
+    // per axis: a later pass's toTriangleList normalizes every triangle
+    // it sees back to "real surface," including an earlier pass's own
+    // fabricated backing-cap sliver near a shared corner — a small,
+    // already-meant-to-be-hidden patch occasionally rendering with the
+    // real texture instead of its flat backing color, not the always-
+    // preserved surface a builder actually sees.
+    for (const axis of croppedAxes) {
+      const axisIndex = { x: 0, y: 1, z: 2 }[axis];
+      const dimensionKey = AXIS_DIMENSION_KEY[axis];
+      const fullLength = template.dimensions[dimensionKey];
+      const cropLength = effectiveLength(template, instance, axis, dimensionKey);
+      geometry = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
+    }
+    geometry.translate(shift[0], shift[1], shift[2]);
     const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     const backingColor = averageTextureColor(originalMaterial?.map) || new THREE.Color(template.color);
     const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
-    inner.add(new THREE.Mesh(cropped, [originalMaterial, backingMaterial]));
+    inner.add(new THREE.Mesh(geometry, [originalMaterial, backingMaterial]));
   }
-  inner.position.setComponent(axisIndex, recenterOffset);
+  inner.position.set(groupOffset[0], groupOffset[1], groupOffset[2]);
   const result = new THREE.Group();
   result.add(inner);
   return result;
@@ -1451,12 +1531,8 @@ function myProducts() {
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
 }
 
-const EXTENSIBLE_AXIS_OPTIONS = [
-  ['', 'Not extensible'],
-  ['x', 'Extensible: width (x)'],
-  ['y', 'Extensible: depth (y)'],
-  ['z', 'Extensible: height (z)'],
-];
+const AXIS_LIST = ['x', 'y', 'z'];
+const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
 
 // On-demand product preview: a small self-contained Three.js scene,
 // entirely separate from the main builder scene, the same pattern the
@@ -1524,11 +1600,14 @@ function makeAxisLabelSprite(text, colorHex) {
   return sprite;
 }
 
-// highlightAxis: null for a plain general-viewing look (no arrows at all —
-// the default once a row's Preview is toggled on), '' for a neutral,
-// evenly-weighted X/Y/Z legend (once Extensibility is expanded but no
-// axis picked yet), or 'x'/'y'/'z' once one's actually been picked.
-async function showAxisPreview(template, container, highlightAxis) {
+// highlightAxes: null for a plain general-viewing look (no arrows at all —
+// the default once a row's Preview is toggled on), or an array of the
+// axes ('x'/'y'/'z', zero or more, any subset since a template can be
+// extensible on more than one at once) currently checked in the
+// Extensibility panel. An empty array reads as a neutral, evenly-weighted
+// X/Y/Z legend (nothing checked yet); a non-empty one turns those axes
+// bright yellow and mutes the rest to gray.
+async function showAxisPreview(template, container, highlightAxes) {
   disposeAxisPreview();
   mountPreviewInto(container);
 
@@ -1576,19 +1655,19 @@ async function showAxisPreview(template, container, highlightAxis) {
   const render = () => renderer.render(scene, camera);
   controls.addEventListener('change', render);
 
-  // Not selected yet: all three read as a neutral, evenly-weighted legend.
-  // Once an axis is picked, that one arrow turns bright yellow and the
-  // other two mute to gray — the same "this one's the live one" language
-  // the Trim gizmo itself uses elsewhere. highlightAxis === null (the
+  // Not checked yet: all three read as a neutral, evenly-weighted legend.
+  // Once one or more axes are checked, those arrows turn bright yellow and
+  // the rest mute to gray — the same "this one's the live one" language
+  // the Trim gizmo itself uses elsewhere. highlightAxes === null (the
   // default, general-viewing look) skips arrows entirely.
   const arrows = [];
   const labels = [];
-  if (highlightAxis !== null) {
+  if (highlightAxes !== null) {
     const axisDims = { x: size.x, y: size.y, z: size.z };
     const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
-    for (const axis of ['x', 'y', 'z']) {
-      const isHighlighted = highlightAxis === axis;
-      const color = highlightAxis ? (isHighlighted ? 0xffee33 : 0x888888) : AXIS_ARROW_COLORS[axis];
+    for (const axis of AXIS_LIST) {
+      const isHighlighted = highlightAxes.includes(axis);
+      const color = highlightAxes.length > 0 ? (isHighlighted ? 0xffee33 : 0x888888) : AXIS_ARROW_COLORS[axis];
       const length = axisDims[axis] / 2 + radius * 0.35;
       const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
       scene.add(arrow);
@@ -1604,11 +1683,11 @@ async function showAxisPreview(template, container, highlightAxis) {
 
   render();
   axisPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, templateId: template.templateId };
-  sellerPreviewHintEl.textContent = highlightAxis
-    ? `Yellow = the axis you've picked (${highlightAxis.toUpperCase()}). Drag to look around.`
-    : highlightAxis === ''
-      ? 'Arrows show X (red) / Y (green) / Z (blue). Pick an axis below to highlight it. Drag to look around.'
-      : 'Drag to look around.';
+  sellerPreviewHintEl.textContent = highlightAxes === null
+    ? 'Drag to look around.'
+    : highlightAxes.length > 0
+      ? `Yellow = extensible (${highlightAxes.map((axis) => axis.toUpperCase()).join(', ')}). Drag to look around.`
+      : 'Arrows show X (red) / Y (green) / Z (blue). Check axes below to make them extensible. Drag to look around.';
 }
 
 function renderSellerList() {
@@ -1665,7 +1744,7 @@ function renderSellerList() {
       if (alreadyOpenHere) return; // toggled off
       previewBtn.classList.add('active');
       const showingExtensibility = !extensibilityPanel.hidden;
-      showAxisPreview(template, previewContainer, showingExtensibility ? (axisSelect.value || '') : null);
+      showAxisPreview(template, previewContainer, showingExtensibility ? checkedAxes() : null);
     });
     actions.appendChild(previewBtn);
 
@@ -1766,12 +1845,17 @@ function renderSellerList() {
 
     // Extensibility (see docs/API.md) is a real but rare need — collapsed
     // by default so the row reads as "a product with some buttons," not
-    // as a trim-configuration form.
-    const existingAxis = primaryExtensibleAxis(template) || '';
+    // as a trim-configuration form. A template can be extensible on any
+    // subset of its three axes at once (e.g. a wall resizable in
+    // thickness, length, AND height) — each axis gets its own row here,
+    // an independent checkbox plus min-length field rather than a single
+    // either/or picker, and Save writes all three at once.
+    const existingExtensible = extensibleAxes(template) || {};
     const extensibilityToggle = document.createElement('button');
     extensibilityToggle.className = 'seller-extensibility-toggle';
     extensibilityToggle.type = 'button';
-    extensibilityToggle.textContent = existingAxis ? 'Extensibility (on) ▾' : 'Extensibility ▾';
+    const anyAxisOn = () => Object.keys(existingExtensible).length > 0;
+    extensibilityToggle.textContent = anyAxisOn() ? 'Extensibility (on) ▾' : 'Extensibility ▾';
     row.appendChild(extensibilityToggle);
 
     const extensibilityPanel = document.createElement('div');
@@ -1779,40 +1863,53 @@ function renderSellerList() {
     extensibilityPanel.hidden = true;
     row.appendChild(extensibilityPanel);
 
+    const axisRows = {};
+    function checkedAxes() {
+      return AXIS_LIST.filter((axis) => axisRows[axis].checkbox.checked);
+    }
+
     extensibilityToggle.addEventListener('click', () => {
       extensibilityPanel.hidden = !extensibilityPanel.hidden;
-      extensibilityToggle.textContent = `${existingAxis ? 'Extensibility (on)' : 'Extensibility'} ${extensibilityPanel.hidden ? '▾' : '▴'}`;
+      extensibilityToggle.textContent = `${anyAxisOn() ? 'Extensibility (on)' : 'Extensibility'} ${extensibilityPanel.hidden ? '▾' : '▴'}`;
       // If this row's preview is already open, switch it between the
       // plain general view and the axis-arrow legend to match — no need
       // to open one that wasn't already showing.
       if (axisPreview?.templateId === template.templateId) {
-        showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : (axisSelect.value || ''));
+        showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
       }
     });
 
-    const axisSelect = document.createElement('select');
-    axisSelect.className = 'seller-axis-select';
-    for (const [value, optionLabel] of EXTENSIBLE_AXIS_OPTIONS) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = optionLabel;
-      axisSelect.appendChild(option);
+    for (const axis of AXIS_LIST) {
+      const axisRow = document.createElement('label');
+      axisRow.className = 'seller-axis-row';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!existingExtensible[axis];
+
+      const text = document.createElement('span');
+      text.textContent = AXIS_ROW_LABELS[axis];
+
+      const minInput = document.createElement('input');
+      minInput.className = 'seller-min-input';
+      minInput.type = 'number';
+      minInput.step = '0.01';
+      minInput.min = '0';
+      minInput.placeholder = `min ${unitSuffix()}`;
+      minInput.disabled = !checkbox.checked;
+      if (existingExtensible[axis]) minInput.value = toDisplayLength(existingExtensible[axis].minM).toFixed(2);
+
+      checkbox.addEventListener('change', () => {
+        minInput.disabled = !checkbox.checked;
+        if (axisPreview?.templateId === template.templateId) showAxisPreview(template, previewContainer, checkedAxes());
+      });
+
+      axisRow.appendChild(checkbox);
+      axisRow.appendChild(text);
+      axisRow.appendChild(minInput);
+      extensibilityPanel.appendChild(axisRow);
+      axisRows[axis] = { checkbox, minInput };
     }
-    axisSelect.value = existingAxis;
-
-    const minInput = document.createElement('input');
-    minInput.className = 'seller-min-input';
-    minInput.type = 'number';
-    minInput.step = '0.01';
-    minInput.min = '0';
-    minInput.placeholder = `min ${unitSuffix()}`;
-    minInput.disabled = !existingAxis;
-    if (existingAxis) minInput.value = toDisplayLength(extensibleAxes(template)[existingAxis].minM).toFixed(2);
-
-    axisSelect.addEventListener('change', () => {
-      minInput.disabled = !axisSelect.value;
-      if (axisPreview?.templateId === template.templateId) showAxisPreview(template, previewContainer, axisSelect.value);
-    });
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'seller-save-btn';
@@ -1822,18 +1919,23 @@ function renderSellerList() {
     saveBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      const axis = axisSelect.value;
-      const minM = fromDisplayLength(Number(minInput.value));
-      const maxLength = axis ? template.dimensions[AXIS_DIMENSION_KEY[axis]] : null;
-      if (axis && (!Number.isFinite(minM) || minM <= 0)) {
-        rowStatus.textContent = 'Minimum length must be a positive number.';
-        rowStatus.classList.add('error');
-        return;
-      }
-      if (axis && minM >= maxLength) {
-        rowStatus.textContent = `Minimum must be less than this product's own ${formatLength(maxLength)} size.`;
-        rowStatus.classList.add('error');
-        return;
+      const nextExtensible = {};
+      for (const axis of AXIS_LIST) {
+        const { checkbox, minInput } = axisRows[axis];
+        if (!checkbox.checked) continue;
+        const minM = fromDisplayLength(Number(minInput.value));
+        const maxLength = template.dimensions[AXIS_DIMENSION_KEY[axis]];
+        if (!Number.isFinite(minM) || minM <= 0) {
+          rowStatus.textContent = `${AXIS_ROW_LABELS[axis]} minimum length must be a positive number.`;
+          rowStatus.classList.add('error');
+          return;
+        }
+        if (minM >= maxLength) {
+          rowStatus.textContent = `${AXIS_ROW_LABELS[axis]} minimum must be less than this product's own ${formatLength(maxLength)} size.`;
+          rowStatus.classList.add('error');
+          return;
+        }
+        nextExtensible[axis] = { minM };
       }
       saveBtn.disabled = true;
       try {
@@ -1843,15 +1945,17 @@ function renderSellerList() {
         // placeholder: true) have to be carried through here rather than
         // just sending the one key this form actually edits.
         const nextMetadata = { ...template.metadata };
-        if (axis) {
-          nextMetadata.extensible = { [axis]: { minM } };
+        if (Object.keys(nextExtensible).length > 0) {
+          nextMetadata.extensible = nextExtensible;
         } else {
           delete nextMetadata.extensible;
         }
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
+        Object.assign(existingExtensible, nextExtensible);
+        for (const axis of AXIS_LIST) if (!nextExtensible[axis]) delete existingExtensible[axis];
         rowStatus.textContent = 'Saved.';
-        minInput.disabled = !axis;
+        extensibilityToggle.textContent = `${anyAxisOn() ? 'Extensibility (on)' : 'Extensibility'} ${extensibilityPanel.hidden ? '▾' : '▴'}`;
       } catch (err) {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
@@ -1860,8 +1964,6 @@ function renderSellerList() {
       }
     });
 
-    extensibilityPanel.appendChild(axisSelect);
-    extensibilityPanel.appendChild(minInput);
     extensibilityPanel.appendChild(saveBtn);
     row.appendChild(rowStatus);
     sellerListEl.appendChild(row);
@@ -1899,7 +2001,7 @@ const settingsTabsEl = document.getElementById('settings-tabs');
 const settingsSectionEl = document.getElementById('settings-section');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
-const trimUnitLabelEl = document.getElementById('trim-unit-label');
+const trimUnitLabelEls = [...document.querySelectorAll('.trim-unit-label')];
 
 let activeSettingsTab = 'general';
 
@@ -1907,7 +2009,7 @@ let activeSettingsTab = 'general';
 // reflects it immediately rather than only after the next selection change
 // or modal reopen.
 function refreshUnitDisplays() {
-  trimUnitLabelEl.textContent = unitSuffix();
+  for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
   if (sellerModalEl.classList.contains('visible')) renderSellerList();
 }
@@ -1974,7 +2076,7 @@ settingsCloseBtn.addEventListener('click', closeSettingsModal);
 // Only the static unit suffix needs painting at load — updateTrimLengthInput()
 // depends on selectedMeshes, declared further below, and no-ops correctly
 // (there's nothing selected yet) once that's ready.
-trimUnitLabelEl.textContent = unitSuffix();
+for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously
 // was tried first and rejected: the rotate ring and the translate handles
@@ -1987,7 +2089,13 @@ const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
 const modeTrimBtn = document.getElementById('mode-trim');
 const trimLengthControlEl = document.getElementById('trim-length-control');
-const trimLengthInputEl = document.getElementById('trim-length-input');
+const trimAxisFieldEls = [...document.querySelectorAll('.trim-axis-field')];
+// The active axis field's own input, or null when none is active — used
+// wherever code needs to read/write "the field for whichever axis is
+// currently being cropped" without re-querying the DOM each time.
+function trimInputEl(axis) {
+  return trimAxisFieldEls.find((field) => field.dataset.trimAxis === axis)?.querySelector('.trim-length-input') ?? null;
+}
 const modeResizeBtn = document.getElementById('mode-resize');
 const resizeScaleControlEl = document.getElementById('resize-scale-control');
 const resizeScaleInputEl = document.getElementById('resize-scale-input');
@@ -2108,33 +2216,41 @@ async function redo() {
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
 
-// Only the first axis a template declares extensible gets a Trim handle
-// — every extensible template in the catalog today (door, lumber-board)
-// only ever declares one, and offering a single handle at a time keeps the
-// gizmo simple. A template wanting more than one resizable axis at once is
-// a real future extension, not something to build ahead of an actual need.
-function primaryExtensibleAxis(template) {
-  const axes = extensibleAxes(template);
-  return axes ? Object.keys(axes)[0] : null;
-}
-
+// Every axis a template declares extensible (see extensibleAxes) gets its
+// own Trim handle shown at once — a template like a wall resizable in
+// thickness, length, and height all at once declares all three, while
+// most (a door, a lumber board) only ever declare one. trimControls'
+// own setup above permanently disables the plane/uniform-corner handles
+// that would otherwise let two or three axes get dragged together, so
+// showing every declared axis's individual handle simultaneously is safe
+// — each still crops exactly one axis at a time (see the
+// dragging-changed listener, which determines trimAxis fresh per drag).
 function attachTrimControls(mesh) {
-  trimAxis = primaryExtensibleAxis(mesh.userData.template);
-  trimControls.showX = trimAxis === 'x';
-  trimControls.showY = trimAxis === 'y';
-  trimControls.showZ = trimAxis === 'z';
+  const axes = extensibleAxes(mesh.userData.template) || {};
+  trimControls.showX = !!axes.x;
+  trimControls.showY = !!axes.y;
+  trimControls.showZ = !!axes.z;
   trimControls.attach(mesh);
   updateTrimLengthInput();
 }
 
-// Reflects the selected item's current cropped length into the numeric
-// field — called on selection change and right after a drag-driven trim
-// commits, so the field never shows a stale value.
+// Reflects the selected item's current cropped length into each active
+// axis's numeric field, and shows/hides those fields to match which axes
+// this template actually declares extensible — called on selection change
+// and right after a drag-driven trim commits, so nothing ever shows a
+// stale value or a field for an axis this item can't be trimmed on.
 function updateTrimLengthInput() {
-  if (selectedMeshes.size !== 1 || !trimAxis) return;
+  if (selectedMeshes.size !== 1) return;
   const [mesh] = selectedMeshes;
-  const length = effectiveLength(mesh.userData.template, mesh.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
-  trimLengthInputEl.value = toDisplayLength(length).toFixed(2);
+  const axes = extensibleAxes(mesh.userData.template) || {};
+  for (const field of trimAxisFieldEls) {
+    const axis = field.dataset.trimAxis;
+    const active = !!axes[axis];
+    field.classList.toggle('active', active);
+    if (!active) continue;
+    const length = effectiveLength(mesh.userData.template, mesh.userData, axis, AXIS_DIMENSION_KEY[axis]);
+    field.querySelector('.trim-length-input').value = toDisplayLength(length).toFixed(2);
+  }
 }
 
 let currentGizmoMode = 'translate';
@@ -2209,32 +2325,41 @@ modeResizeBtn.addEventListener('click', () => {
   setGizmoMode('resize');
 });
 
-// Exact-value alternative to the drag handle above — typing a length
-// commits the same way releasing the handle does: an undo snapshot, a
-// clamped, non-stretched geometry rebuild, and a sync to the backend.
-trimLengthInputEl.addEventListener('change', async () => {
-  if (selectedMeshes.size !== 1 || !trimAxis) return;
-  const [mesh] = selectedMeshes;
-  const template = mesh.userData.template;
-  const extensible = extensibleAxes(template)[trimAxis];
-  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[trimAxis]];
-  const requestedDisplayLength = Number(trimLengthInputEl.value);
-  if (!Number.isFinite(requestedDisplayLength)) {
-    updateTrimLengthInput(); // revert to the last valid value
-    return;
-  }
-  const requestedLength = fromDisplayLength(requestedDisplayLength);
-  const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
-  pushUndoSnapshot();
-  const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [trimAxis]: clampedLength });
-  const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-  updated.position.set(clamped.x, clamped.y, clamped.z);
-  updated.userData.safePosition = updated.position.clone();
-  trimControls.attach(updated);
-  persistLayout();
-  syncUpdate(updated);
-  updateTrimLengthInput();
-});
+// Exact-value alternative to the drag handles above — typing a length
+// commits the same way releasing a handle does: an undo snapshot, a
+// clamped, non-stretched geometry rebuild, and a sync to the backend. One
+// listener per axis field, each bound to its own axis (not the shared
+// `trimAxis` variable, which only ever reflects whichever axis a drag is
+// currently live on) — so editing, say, the Height field always crops z
+// regardless of which handle (if any) was last dragged.
+for (const field of trimAxisFieldEls) {
+  const axis = field.dataset.trimAxis;
+  const input = field.querySelector('.trim-length-input');
+  input.addEventListener('change', async () => {
+    if (selectedMeshes.size !== 1) return;
+    const [mesh] = selectedMeshes;
+    const template = mesh.userData.template;
+    const extensible = extensibleAxes(template)?.[axis];
+    if (!extensible) return;
+    const maxLength = template.dimensions[AXIS_DIMENSION_KEY[axis]];
+    const requestedDisplayLength = Number(input.value);
+    if (!Number.isFinite(requestedDisplayLength)) {
+      updateTrimLengthInput(); // revert to the last valid value
+      return;
+    }
+    const requestedLength = fromDisplayLength(requestedDisplayLength);
+    const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+    pushUndoSnapshot();
+    const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [axis]: clampedLength });
+    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+    updated.position.set(clamped.x, clamped.y, clamped.z);
+    updated.userData.safePosition = updated.position.clone();
+    trimControls.attach(updated);
+    persistLayout();
+    syncUpdate(updated);
+    updateTrimLengthInput();
+  });
+}
 
 // Exact-value alternative to the Resize drag handle above — typing a
 // percentage commits the same way releasing the handle does: an undo

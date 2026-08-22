@@ -399,12 +399,16 @@ cut down like real dimensional lumber. The template is uploaded at its
 ```
 
 Axis keys are `x`, `y`, `z`, matching how `dimensions.width` / `.depth` /
-`.height` map onto the scene's local axes. A template can declare more than
-one extensible axis, though the frontend's Trim gizmo currently only offers
-a handle for the first one declared. (Trim is the per-axis shortening tool
-described here — not to be confused with the frontend's separate Resize
-tool, a real uniform scale unrelated to extensibility; see "Frontend-only
-Resize" below.)
+`.height` map onto the scene's local axes. A template can declare any subset
+of the three at once — e.g. a wall resizable in thickness, length, and
+height all independently — and the frontend's Trim gizmo shows a separate
+handle (and a separate numeric field) for every axis a selected item's
+template declares, all active simultaneously; each still crops exactly one
+axis per drag (see "Dragging the Trim gizmo" below for the multi-handle
+gizmo itself, and "Managing extensibility" for how a seller turns axes on).
+(Trim is the per-axis shortening tool described here — not to be confused
+with the frontend's separate Resize tool, a real uniform scale unrelated to
+extensibility; see "Frontend-only Resize" below.)
 
 A builder's per-instance override lives on the placed instance itself, not the
 template — see `crop` under Placed instances below. The frontend never
@@ -459,14 +463,26 @@ never a squash:
   flat gray patch rather than blending into the surrounding real surface.
   See `loadCroppedModelInstance` in `src/main.js`, which also recenters the
   result so a placed instance's own position keeps meaning "the object's
-  true center" even though the crop itself is one-sided. Only single-axis-
-  aligned crops are supported — fine for the roughly-box-shaped products
-  (bricks, boards, doors) this exists for. A genuinely holey source scan
-  (an actual gap in the mesh, not something the crop introduces or touches)
-  can still show background through that gap regardless — a property of
-  the uploaded model itself, not fixable by the crop math, and distinct
-  from the backing-sliver case above (that's about a manufactured surface
-  peeking through; this is a real hole in the source mesh).
+  true center" even though the crop itself is one-sided. Each individual
+  crop is single-axis-aligned — fine for the roughly-box-shaped products
+  (bricks, boards, doors, walls) this exists for. An instance cropped on
+  more than one axis at once (only possible when its template declares more
+  than one extensible axis) runs `cropGeometryFromEnd` once per cropped
+  axis in turn on the same evolving geometry — safe since each pass only
+  ever touches its own axis's coordinates, so an already-cropped x range is
+  untouched by a following z crop and vice versa. The one real cost of
+  chaining rather than cropping fresh geometry per axis: a later pass's
+  triangle-normalizing step treats an earlier pass's own fabricated
+  backing-cap sliver (see above) as ordinary "real surface," so a small,
+  already-meant-to-be-hidden patch near a shared corner can occasionally
+  render with the real texture instead of its flat backing color — a minor
+  cosmetic wrinkle at a rarely-visible seam, not the always-preserved
+  surface a builder actually sees. A genuinely holey source scan (an actual
+  gap in the mesh, not something the crop introduces or touches) can still
+  show background through that gap regardless — a property of the uploaded
+  model itself, not fixable by the crop math, and distinct from the
+  backing-sliver case above (that's about a manufactured surface peeking
+  through; this is a real hole in the source mesh).
 - Dragging the Trim gizmo shows this real crop live, throttled to about
   8 updates/second rather than one per pointer-move frame (a full reload +
   reclip isn't free) — the object being dragged is hidden immediately when
@@ -474,7 +490,16 @@ never a squash:
   a temporary preview mesh takes its place for the span of the drag, so
   nothing about TransformControls' own internal drag-tracking is ever
   touched mid-drag, and a fast drag past the min/max never shows the raw,
-  unclamped stretch TransformControls itself would otherwise apply.
+  unclamped stretch TransformControls itself would otherwise apply. When a
+  template declares more than one extensible axis, every declared axis's
+  own single-axis handle is shown on the gizmo at once — which axis a given
+  drag actually crops is read fresh from TransformControls' own report of
+  which handle was grabbed (`trimControls.axis`), not decided ahead of
+  time. The plane and uniform-corner handles TransformControls' scale mode
+  would otherwise add once two or three single-axis handles are all
+  visible together are deliberately never reachable (see the `trimControls`
+  setup in `src/main.js`) — Trim only ever crops one axis per drag; a real
+  uniform scale is what the separate Resize tool is for.
 
 ### Managing extensibility — the Seller modal
 
@@ -537,12 +562,16 @@ form every seller has to visually parse whether they need it or not.
   somewhere — remove those instances first, or Duplicate to edit a copy
   instead") rather than silently orphaning that instance's rendering.
 
-The Extensibility panel itself lets the builder pick an extensible axis (or
-"Not extensible") and a minimum length, saved via a plain
+The Extensibility panel itself shows one row per axis (Width/x, Depth/y,
+Height/z) — a checkbox plus a minimum-length field each, independent of the
+other two, since a template can be extensible on any subset of its three
+axes at once (see "Extensible products (crop)" above). Save writes every
+checked axis's `{ minM }` in one request, via a plain
 `PATCH /api/catalog/:templateId` with the *entire* merged `metadata`
 object — the endpoint replaces `metadata` wholesale rather than
 deep-merging it, so the frontend reads the existing value first and only
-changes the `extensible` key before sending it back.
+replaces the `extensible` key (built fresh from all three rows' current
+state) before sending it back.
 
 ## World settings
 
