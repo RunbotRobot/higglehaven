@@ -1391,6 +1391,17 @@ range. The FOV spans 6&deg; (roughly 10x magnification versus the 60&deg;
 default) to 100&deg; (past human peripheral vision into genuine ultra-wide
 territory).
 
+The camera is also kept a real clearance distance back from the wall's own
+radius (`SHOP_WALL_CLEARANCE_M`, scaled down for a small gapless world but
+never below `SHOP_WALL_CLEARANCE_MIN_M`) — separate from, and much larger
+than, the small `SHOP_WALL_MARGIN_M` overlap that only exists to hide the
+ground/wall seam. Standing right up against the wall and swinging the
+camera from straight down back up past horizontal could let a viewer
+glimpse past it: at a grazing, near-tangent angle the wall's own
+paper-thin, single-sided geometry doesn't reliably cover the view the way
+a real solid wall would. Real clearance keeps that grazing angle out of
+reach of normal look input.
+
 Shop's horizontal movement is walking, not free flight — the move joystick
 only ever changes `camera.position.x/y`. Height (`camera.position.z`) is a
 separate, deliberately decoupled control: press-and-hold Up/Down buttons

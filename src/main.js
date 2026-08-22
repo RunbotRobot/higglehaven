@@ -3199,7 +3199,22 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // of it sits inside — anywhere from a sliver to nearly the whole shape —
 // which is the correct, intentional look here, not a bug to hide.
 const SHOP_WALL_HEIGHT_M = 60;
-const SHOP_WALL_MARGIN_M = 1.5; // keeps the camera from clipping into the wall itself
+const SHOP_WALL_MARGIN_M = 1.5; // small ground/wall seam overlap only — see wildGround below
+// How far the camera must stay from the wall's own radius. Separate from
+// (and much larger than) SHOP_WALL_MARGIN_M above: that one only needs to
+// hide a cosmetic seam between the ground and the wall's base, but standing
+// right up against the wall and swinging the camera from looking straight
+// down back up past horizontal let a viewer glimpse past the wall — right
+// at a grazing, near-tangent angle the wall's own paper-thin (zero
+// thickness, single-sided) geometry doesn't reliably cover the view the
+// way a real solid wall would. Keeping the camera meaningfully back from
+// the wall means that grazing angle is never actually reachable by normal
+// look input. Scales down for a small gapless world (see
+// computeGaplessWorldRadius) so it can't eat most of a tiny world's
+// playable area, but never drops below a floor that's still enough to
+// avoid the grazing-angle case on any world.
+const SHOP_WALL_CLEARANCE_M = 6;
+const SHOP_WALL_CLEARANCE_MIN_M = 2;
 // A dome caps the wall's open top, and both share one continuous vertical
 // gradient (pale ground-green at the base, through a hazy horizon blend
 // right at the wall/dome seam, up to a deeper sky blue at the dome's own
@@ -3503,7 +3518,11 @@ function updateShopMovement(now) {
     // backdrop — keep the camera inside it the same way the floor clamp
     // above keeps it above ground.
     if (shopWorldRadiusM !== null) {
-      const maxRadius = shopWorldRadiusM - SHOP_WALL_MARGIN_M;
+      const clearance = Math.max(
+        SHOP_WALL_CLEARANCE_MIN_M,
+        Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15),
+      );
+      const maxRadius = shopWorldRadiusM - clearance;
       const distance = Math.hypot(camera.position.x, camera.position.y);
       if (distance > maxRadius) {
         const scale = maxRadius / distance;
