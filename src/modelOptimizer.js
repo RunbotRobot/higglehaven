@@ -130,3 +130,33 @@ export async function optimizeModelFile(file, onProgress) {
     bytesAfter: resultBuffer.byteLength,
   };
 }
+
+// Bakes a uniform scale into a model file's own geometry, permanently
+// changing its real-world size rather than just how it's labeled.
+//
+// Every consumer of a catalog template's dimensions — createMeshForInstance
+// (footprint/collision math) and especially loadCroppedModelInstance
+// (which cuts an extensible axis at an *absolute* meter offset taken
+// straight from template.dimensions, in the model's own local coordinate
+// space) — assumes a template's declared width/depth/height are exactly
+// the loaded model's own rendered size. If a seller's confirmed dimensions
+// (see main.js's upload dimensions step) differ from the model's raw
+// measured size, that assumption breaks: the declared size would be right
+// but the visible model — and any crop math — would silently stay at the
+// old size. Rescaling the actual file here, once, at upload time keeps
+// that "declared == rendered" invariant true everywhere else without
+// touching any of that other code.
+//
+// Scaling each top-level child's own .scale (rather than the root
+// THREE.Scene's) is deliberate: a bare Scene has no transform in the glTF
+// spec, so GLTFExporter has nothing to write a scale onto for one — every
+// *node* under it does, which is what each of scene.children actually is.
+export async function rescaleModelFile(file, scaleFactor) {
+  const arrayBuffer = await file.arrayBuffer();
+  const gltf = await gltfLoader.parseAsync(arrayBuffer, '');
+  for (const child of gltf.scene.children) {
+    child.scale.multiplyScalar(scaleFactor);
+  }
+  const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true });
+  return new Blob([resultBuffer], { type: 'model/gltf-binary' });
+}

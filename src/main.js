@@ -38,7 +38,7 @@ import {
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
-import { optimizeModelFile } from './modelOptimizer.js';
+import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
@@ -743,69 +743,6 @@ trimControls.addEventListener('dragging-changed', async (event) => {
   updateTrimLengthInput();
 });
 
-// Resize: a real uniform scale, independent of Trim above — for a placed
-// item whose own source model came in at the wrong physical size entirely
-// (e.g. an uploaded scan authored many times too large or too small),
-// rather than any per-axis shortening. Unlike Trim, this needs no special
-// per-drag preview handling: TransformControls' own scale-mode gizmo can
-// just be allowed to update object.scale directly and persist normally,
-// since a uniform scale never distorts the model the way an unclamped
-// per-axis stretch would. Only its uniform (center) handle is meant to be
-// used — per-axis handles are hidden (see below) so a drag can't
-// accidentally stretch one axis independently of the others.
-const scaleControls = new TransformControls(camera, renderer.domElement);
-scaleControls.setMode('scale');
-scaleControls.showX = false;
-scaleControls.showY = false;
-scaleControls.showZ = false;
-scene.add(scaleControls.getHelper());
-wireDraggingBehavior(scaleControls);
-
-const MIN_SCALE = 0.001;
-const MAX_SCALE = 1000;
-
-// TransformControls' scale gizmo scales an object about its own local
-// origin, which sits at the object's vertical *center* once placed (see
-// createMeshForInstance's own "z = height / 2 rests it on ground"
-// convention) — left alone, growing the scale would sink the object into
-// whatever it's resting on and shrinking it would lift it into the air,
-// since only the geometry grows/shrinks while position.z stays fixed.
-// Recomputing position.z to keep the object's *bottom* edge exactly where
-// it was before this scale change — not assuming that's bare ground,
-// since Snap can rest an item on top of another one — keeps it resting on
-// whatever surface it was already on, growing/shrinking only upward from
-// there, the way a real object being resized in place actually would.
-function keepRestingOnScaleChange(object, oldScale, newScale) {
-  const unscaledHeight = effectiveLength(object.userData.template, object.userData, 'z', 'height');
-  const bottom = object.position.z - (unscaledHeight * oldScale) / 2;
-  object.position.z = bottom + (unscaledHeight * newScale) / 2;
-}
-
-scaleControls.addEventListener('objectChange', () => {
-  const object = scaleControls.object;
-  if (!object) return;
-  // The uniform handle already applies the same factor to all three axes,
-  // but clamp and re-sync explicitly rather than trusting that — cheap
-  // insurance against an extreme drag producing a degenerate (near-zero
-  // or absurdly large) scale.
-  const uniform = THREE.MathUtils.clamp(object.scale.x, MIN_SCALE, MAX_SCALE);
-  object.scale.setScalar(uniform);
-  keepRestingOnScaleChange(object, object.userData.scale ?? 1, uniform);
-  object.userData.scale = uniform;
-  updateResizeScaleInput();
-});
-
-// Reflects the selected item's current scale into the numeric field, as a
-// percentage — called on selection change and right after a drag-driven
-// resize, so the field never shows a stale value. (Its own .addEventListener
-// registration lives further down, alongside each trim axis field's — all
-// need their DOM refs, declared later in the file, to already exist.)
-function updateResizeScaleInput() {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  resizeScaleInputEl.value = Math.round((mesh.userData.scale ?? 1) * 100);
-}
-
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
@@ -1180,11 +1117,14 @@ async function createMeshForInstance(instance) {
   object.userData.instanceId = instance.instanceId ?? instance.id;
   object.userData.template = template;
   object.userData.crop = { ...(instance.crop || {}) };
-  // A real uniform Resize (see scaleControls), entirely separate from
-  // Trim's per-axis crop above — for a placed item whose own source model
-  // came in at the wrong physical size. Applied to the whole returned
-  // object (box fallback or real model container alike) so it scales
-  // everything uniformly, position included via Object3D's own transform.
+  // A uniform scale factor, separate from Trim's per-axis crop above.
+  // Builders can no longer set this (Resize was removed from Build mode —
+  // the world should be populated at each product's real, seller-declared
+  // size), but existing instances saved before that change still carry a
+  // non-1 value here and must keep rendering at it. Applied to the whole
+  // returned object (box fallback or real model container alike) so it
+  // scales everything uniformly, position included via Object3D's own
+  // transform.
   object.userData.scale = instance.scale ?? 1;
   object.scale.setScalar(object.userData.scale);
   return object;
@@ -1829,6 +1769,16 @@ async function handleUploadFileStep() {
   }
 }
 
+// A seller-edited dimension only counts as a real change worth re-encoding
+// the model over — not just float noise from round-tripping through
+// display units and a fixed 2-decimal display precision.
+function dimensionsChanged(a, b) {
+  return AXIS_LIST.some((axis) => {
+    const key = AXIS_DIMENSION_KEY[axis];
+    return Math.abs(a[key] - b[key]) > Math.max(0.001, a[key] * 0.005);
+  });
+}
+
 async function handleUploadDimensionsStep() {
   const name = uploadNameInput.value.trim();
   const dimensions = currentUploadDimensionsMeters();
@@ -1839,6 +1789,22 @@ async function handleUploadDimensionsStep() {
 
   uploadSubmitBtn.disabled = true;
   try {
+    let finalModelUrl = uploadModelUrl;
+    // createMeshForInstance and (especially) loadCroppedModelInstance's
+    // crop math both assume a template's declared dimensions exactly equal
+    // the loaded model's own rendered size — see rescaleModelFile's own
+    // doc comment. If the seller changed the size away from what was
+    // actually measured, the uploaded file itself has to be rescaled to
+    // match, not just the number stored alongside it.
+    if (dimensionsChanged(dimensions, uploadOriginalDimensions)) {
+      setUploadStatus('Applying your size change…');
+      const scaleFactor = dimensions.width / uploadOriginalDimensions.width;
+      const originalBlob = await fetch(uploadModelUrl).then((res) => res.blob());
+      const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
+      setUploadStatus('Uploading resized model…');
+      finalModelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+    }
+
     setUploadStatus('Creating product…');
     // Upload Model only lives inside the (already-open) Seller modal now,
     // which already guaranteed a seller identity to open at all — this is
@@ -1848,7 +1814,7 @@ async function handleUploadDimensionsStep() {
       name,
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
-      modelUrl: uploadModelUrl,
+      modelUrl: finalModelUrl,
       sellerId: uploaderSellerId,
     });
 
@@ -2472,9 +2438,6 @@ const trimAxisFieldEls = [...document.querySelectorAll('.trim-axis-field')];
 function trimInputEl(axis) {
   return trimAxisFieldEls.find((field) => field.dataset.trimAxis === axis)?.querySelector('.trim-length-input') ?? null;
 }
-const modeResizeBtn = document.getElementById('mode-resize');
-const resizeScaleControlEl = document.getElementById('resize-scale-control');
-const resizeScaleInputEl = document.getElementById('resize-scale-input');
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
@@ -2636,13 +2599,10 @@ function setGizmoMode(mode) {
   modeMoveBtn.classList.toggle('active', mode === 'translate');
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
   modeTrimBtn.classList.toggle('active', mode === 'trim');
-  modeResizeBtn.classList.toggle('active', mode === 'resize');
   translateControls.detach();
   rotateControls.detach();
   trimControls.detach();
-  scaleControls.detach();
   trimLengthControlEl.classList.remove('visible');
-  resizeScaleControlEl.classList.remove('visible');
   if (selectedMeshes.size === 1) {
     const [mesh] = selectedMeshes;
     if (mode === 'trim') {
@@ -2651,12 +2611,6 @@ function setGizmoMode(mode) {
       if (!extensibleAxes(mesh.userData.template)) return setGizmoMode('translate');
       attachTrimControls(mesh);
       trimLengthControlEl.classList.add('visible');
-      return;
-    }
-    if (mode === 'resize') {
-      scaleControls.attach(mesh);
-      updateResizeScaleInput();
-      resizeScaleControlEl.classList.add('visible');
       return;
     }
     // 'local' is what makes moving a single item along its own rotated
@@ -2796,12 +2750,6 @@ modeTrimBtn.addEventListener('click', () => {
   exitMeasureMode();
   setGizmoMode('trim');
 });
-modeResizeBtn.addEventListener('click', () => {
-  exitMultiSelectMode();
-  exitMeasureMode();
-  setGizmoMode('resize');
-});
-
 // Exact-value alternative to the drag handles above — typing a length
 // commits the same way releasing a handle does: an undo snapshot, a
 // clamped, non-stretched geometry rebuild, and a sync to the backend. One
@@ -2837,30 +2785,6 @@ for (const field of trimAxisFieldEls) {
     updateTrimLengthInput();
   });
 }
-
-// Exact-value alternative to the Resize drag handle above — typing a
-// percentage commits the same way releasing the handle does: an undo
-// snapshot and a sync to the backend.
-resizeScaleInputEl.addEventListener('change', async () => {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  const requestedPercent = Number(resizeScaleInputEl.value);
-  if (!Number.isFinite(requestedPercent) || requestedPercent <= 0) {
-    updateResizeScaleInput(); // revert to the last valid value
-    return;
-  }
-  const uniform = THREE.MathUtils.clamp(requestedPercent / 100, MIN_SCALE, MAX_SCALE);
-  pushUndoSnapshot();
-  mesh.scale.setScalar(uniform);
-  keepRestingOnScaleChange(mesh, mesh.userData.scale ?? 1, uniform);
-  mesh.userData.scale = uniform;
-  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
-  mesh.position.set(clamped.x, clamped.y, clamped.z);
-  mesh.userData.safePosition = mesh.position.clone();
-  persistLayout();
-  syncUpdate(mesh);
-  updateResizeScaleInput();
-});
 
 // Colliding with other products (see resolveByAxis above) is a helpful
 // default, not a hard rule — a builder might genuinely want a sign embedded
@@ -2956,11 +2880,9 @@ function updateSelectionUI() {
     // turned on is still selected once it's turned back off.
     modeControlsEl.classList.remove('visible');
     trimLengthControlEl.classList.remove('visible');
-    resizeScaleControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
     trimControls.detach();
-    scaleControls.detach();
     return;
   }
   const count = selectedMeshes.size;
@@ -2968,11 +2890,9 @@ function updateSelectionUI() {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
     trimLengthControlEl.classList.remove('visible');
-    resizeScaleControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
     trimControls.detach();
-    scaleControls.detach();
     return;
   }
   productInfoEl.textContent = count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`;
@@ -2985,14 +2905,10 @@ function updateSelectionUI() {
   // count; removing it from the layout entirely let the rest reflow into
   // different left/right groupings depending on whether Rotate happened to
   // be there. Trim follows the same reasoning, disabled (not hidden) for
-  // both a multi-item selection and a single non-extensible one. Resize
-  // has no group form either (dragging several items' independent uniform
-  // scales as one gesture isn't a well-defined operation) but applies to
-  // any single item regardless of extensibility, unlike Trim.
+  // both a multi-item selection and a single non-extensible one.
   modeRotateBtn.disabled = count !== 1;
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
-  modeResizeBtn.disabled = !singleMesh;
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -3005,13 +2921,10 @@ function updateSelectionUI() {
     modeMoveBtn.classList.remove('active');
     modeRotateBtn.classList.remove('active');
     modeTrimBtn.classList.remove('active');
-    modeResizeBtn.classList.remove('active');
     trimLengthControlEl.classList.remove('visible');
-    resizeScaleControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
     trimControls.detach();
-    scaleControls.detach();
     return;
   }
   if (count === 1) {
