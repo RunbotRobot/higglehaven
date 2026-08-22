@@ -145,6 +145,15 @@ controls.enableDamping = true;
 // over repeated gestures.
 controls.maxDistance = LANDLET_SIDE_M * 5;
 controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground — same convention as the claim flyover
+// How far the free-fly target (see the dolly-to-truck conversion below) is
+// allowed to wander from the landlet, across any number of dolly gestures.
+// Comfortably inside the camera's own far plane (set above, at
+// construction) so the ground/sky stay visible and the landlet stays
+// reachable no matter how much scrolling happened — well past enough for
+// a builder to back away from even a badly oversized placed item, without
+// ever risking the astronomical, effectively-unrecoverable coordinates
+// unbounded free-flying could otherwise reach.
+const MAX_FLY_TARGET_DISTANCE_M = 500;
 
 // Every product's *collision* footprint is a simple box (see dimensions on
 // its catalog template), independent of whatever its actual visual model
@@ -3331,6 +3340,21 @@ controls.addEventListener('change', () => {
     if (Math.abs(dollyDelta) > 1e-6) {
       camera.getWorldDirection(cameraDirection);
       controls.target.addScaledVector(cameraDirection, dollyDelta);
+      // Free-flying like this has no built-in floor the way orbiting a
+      // fixed target does — controls.maxDistance only bounds a single
+      // dolly tick (see this block's own doc comment above), not the total
+      // distance flown across many of them. A builder repeatedly zooming
+      // to try to reach a product that turned out to be pathologically
+      // oversized (an unconverted import defaulting to the wrong real-world
+      // scale, say) could otherwise fly the target thousands of kilometers
+      // from the landlet with no way back — camera.position ends up out
+      // past camera.far, the whole scene renders as nothing but the flat
+      // background sky color, and neither scrolling nor rotating gives any
+      // visual cue which direction leads home. Clamping keeps every dolly
+      // tick within a radius still comfortably inside camera.far, so the
+      // landlet and sky stay visible and reachable no matter how much
+      // scrolling happened trying to get away from (or into) something huge.
+      controls.target.clampLength(0, MAX_FLY_TARGET_DISTANCE_M);
     }
   }
   lastKnownDistance = camera.position.distanceTo(controls.target);
