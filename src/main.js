@@ -2103,6 +2103,7 @@ const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
+const measureBtn = document.getElementById('toggle-measure');
 const pasteBtn = document.getElementById('paste-btn');
 const undoBtn = document.getElementById('undo-btn');
 const redoBtn = document.getElementById('redo-btn');
@@ -2297,6 +2298,91 @@ function setGizmoMode(mode) {
     translateControls.attach(groupMovePivot);
   }
 }
+
+// Measure: a lightweight ruler for questions none of the placement tools
+// answer on their own — "are these two courses of Wall - White stacked
+// exactly 10 feet high?" is easy to eyeball wrong and tedious to work out
+// from individual item heights by hand. Tap two points (either a placed
+// item's own surface or bare ground — see resolveMeasurePoint, which
+// reuses handlePlacementClick's own product-vs-ground raycast) and read
+// the straight-line distance, plus its X/Y/Z breakdown so a nearly-but-
+// not-quite-vertical pair of taps still reads its intended height
+// correctly. A third tap starts a fresh measurement rather than adding a
+// third point — this is a quick one-shot ruler, not a running total.
+let measureMode = false;
+let measurePointA = null;
+
+const MEASURE_COLOR = 0xffee33;
+const measureMarkerGeometry = new THREE.SphereGeometry(0.06, 12, 12);
+const measureMarkerMaterial = new THREE.MeshBasicMaterial({ color: MEASURE_COLOR, depthTest: false });
+const measureMarkerA = new THREE.Mesh(measureMarkerGeometry, measureMarkerMaterial);
+const measureMarkerB = new THREE.Mesh(measureMarkerGeometry, measureMarkerMaterial);
+measureMarkerA.visible = false;
+measureMarkerB.visible = false;
+measureMarkerA.renderOrder = 999;
+measureMarkerB.renderOrder = 999;
+scene.add(measureMarkerA, measureMarkerB);
+
+const measureLineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const measureLineMaterial = new THREE.LineDashedMaterial({ color: MEASURE_COLOR, dashSize: 0.15, gapSize: 0.08, depthTest: false });
+const measureLine = new THREE.Line(measureLineGeometry, measureLineMaterial);
+measureLine.visible = false;
+measureLine.renderOrder = 999;
+scene.add(measureLine);
+
+function clearMeasurement() {
+  measurePointA = null;
+  measureMarkerA.visible = false;
+  measureMarkerB.visible = false;
+  measureLine.visible = false;
+}
+
+function updateMeasureInfo() {
+  productInfoEl.textContent = measurePointA
+    ? 'Measure: tap a second point.'
+    : 'Measure: tap a point to start.';
+}
+
+// The same "a placed item's own surface wins over bare ground beneath it"
+// raycast handlePlacementClick uses for tap-to-place, so a measurement can
+// land precisely on, say, the top face of a stacked course rather than
+// only ever reaching the ground plane underneath everything.
+function resolveMeasurePoint() {
+  const productHits = raycaster.intersectObjects(productMeshes, true);
+  const groundHits = raycaster.intersectObject(landlet);
+  if (productHits.length > 0 && (groundHits.length === 0 || productHits[0].distance < groundHits[0].distance)) {
+    return productHits[0].point;
+  }
+  if (groundHits.length > 0) return groundHits[0].point;
+  return null;
+}
+
+function handleMeasureClick() {
+  const point = resolveMeasurePoint();
+  if (!point) return;
+  if (!measurePointA) {
+    measurePointA = point.clone();
+    measureMarkerA.position.copy(measurePointA);
+    measureMarkerA.visible = true;
+    measureMarkerB.visible = false;
+    measureLine.visible = false;
+    updateMeasureInfo();
+    return;
+  }
+  measureMarkerB.position.copy(point);
+  measureMarkerB.visible = true;
+  measureLineGeometry.setFromPoints([measurePointA, point]);
+  measureLine.computeLineDistances();
+  measureLine.visible = true;
+  const dx = Math.abs(point.x - measurePointA.x);
+  const dy = Math.abs(point.y - measurePointA.y);
+  const dz = Math.abs(point.z - measurePointA.z);
+  const distance = measurePointA.distanceTo(point);
+  productInfoEl.textContent =
+    `${formatLength(distance)} — Δx ${formatLength(dx)}, Δy ${formatLength(dy)}, Δz ${formatLength(dz)} (tap to start a new measurement)`;
+  measurePointA = null; // next tap begins a fresh measurement, per the message above
+}
+
 // Multi-Select and Move/Rotate are sibling tools that can't both be active
 // (see updateSelectionUI's multiSelectMode branch) — pressing either gizmo
 // button while multi-select is on exits multi-select first, without
@@ -2308,20 +2394,35 @@ function exitMultiSelectMode() {
   multiSelectBtn.classList.remove('active');
   controls.enableRotate = true;
 }
+// Measure is its own sibling tool too — taps while it's on place ruler
+// points rather than selecting or swiping, so switching to any selection-
+// based tool exits it first (and clears whatever half-finished measurement
+// was on screen), the same hand-off exitMultiSelectMode gives Move/Rotate.
+function exitMeasureMode() {
+  if (!measureMode) return;
+  measureMode = false;
+  measureBtn.classList.remove('active');
+  clearMeasurement();
+  updateSelectionUI();
+}
 modeMoveBtn.addEventListener('click', () => {
   exitMultiSelectMode();
+  exitMeasureMode();
   setGizmoMode('translate');
 });
 modeRotateBtn.addEventListener('click', () => {
   exitMultiSelectMode();
+  exitMeasureMode();
   setGizmoMode('rotate');
 });
 modeTrimBtn.addEventListener('click', () => {
   exitMultiSelectMode();
+  exitMeasureMode();
   setGizmoMode('trim');
 });
 modeResizeBtn.addEventListener('click', () => {
   exitMultiSelectMode();
+  exitMeasureMode();
   setGizmoMode('resize');
 });
 
@@ -2468,6 +2569,24 @@ function removeSelectionOutline(mesh) {
 // applied by the caller — this only handles text/panels/gizmo) with the
 // current selectedMeshes set. Called after any change to that set.
 function updateSelectionUI() {
+  if (measureMode) {
+    // Measure is its own exclusive mode (see exitMeasureMode) — the gizmo
+    // stays fully detached and hidden the whole time it's on, the same
+    // hand-off multiSelectMode gets below, but productInfoEl is left alone
+    // here since Measure manages its own status text (see updateMeasureInfo
+    // and handleMeasureClick) rather than a plain selection summary. The
+    // selection itself (and its highlight) is untouched, exactly like
+    // multiSelectMode below, so whatever was selected before Measure was
+    // turned on is still selected once it's turned back off.
+    modeControlsEl.classList.remove('visible');
+    trimLengthControlEl.classList.remove('visible');
+    resizeScaleControlEl.classList.remove('visible');
+    translateControls.detach();
+    rotateControls.detach();
+    trimControls.detach();
+    scaleControls.detach();
+    return;
+  }
   const count = selectedMeshes.size;
   if (count === 0) {
     productInfoEl.textContent = HINT_TEXT;
@@ -2569,6 +2688,7 @@ function getSelectionPivot() {
 }
 
 multiSelectBtn.addEventListener('click', () => {
+  exitMeasureMode();
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
   // One-finger drag is repurposed as a selection swipe while multi-select
@@ -2584,6 +2704,19 @@ multiSelectBtn.addEventListener('click', () => {
   // modeMoveBtn/modeRotateBtn and updateSelectionUI's multiSelectMode
   // branch, which is what actually hides the gizmo while this is true).
   updateSelectionUI();
+});
+
+measureBtn.addEventListener('click', () => {
+  exitMultiSelectMode();
+  measureMode = !measureMode;
+  measureBtn.classList.toggle('active', measureMode);
+  if (measureMode) {
+    updateSelectionUI(); // hides the gizmo panel; see its own measureMode branch
+    updateMeasureInfo();
+  } else {
+    clearMeasurement();
+    updateSelectionUI();
+  }
 });
 
 deleteBtn.addEventListener('click', () => {
@@ -2807,6 +2940,11 @@ renderer.domElement.addEventListener('click', (event) => {
   // so the catalog picker (if left open) should collapse either way.
   catalogPickerEl.classList.remove('visible');
   raycaster.setFromCamera(ndcFromEvent(event), camera);
+
+  if (measureMode) {
+    handleMeasureClick();
+    return;
+  }
 
   if (pendingPlacement) {
     handlePlacementClick();

@@ -1568,6 +1568,43 @@ than visibly sinking or floating.
 landlet-bounds clamping, and stacking all see a resized item's real
 (scaled) footprint rather than its template-declared one.
 
+## Frontend-only Measure
+
+A one-shot ruler for a question none of the placement tools answer on their
+own — "is this stack of `Wall - White` courses exactly 10 feet high?" is
+easy to eyeball wrong and tedious to work out from individual item heights
+by hand. `#toggle-measure` (in the same panel as Multi-Select) is its own
+exclusive mode, entirely separate from the Move/Rotate/Trim/Resize gizmo
+row and from Multi-Select — turning it on exits whichever of those is
+active (see `exitMultiSelectMode`/`exitMeasureMode` in `src/main.js`), and
+switching to any of them exits Measure in turn. It touches no persisted
+state at all — purely a frontend visual aid, nothing it does is ever sent
+to the server.
+
+While it's on, a tap sets a ruler point instead of selecting anything: the
+first tap places point A, the second places point B and shows the result,
+and a third starts an entirely new measurement rather than adding a third
+point. Each tap resolves to a 3D point via the same "a placed item's own
+surface wins over the bare ground beneath it" raycast `handlePlacementClick`
+already uses for tap-to-place (see `resolveMeasurePoint`) — so a point can
+land precisely on, say, the top face of a stacked course, not only ever on
+the ground plane underneath everything. Two small spheres mark the picked
+points and a dashed line joins them (`measureMarkerA`/`measureMarkerB`/
+`measureLine`) for a few seconds of visual confirmation of what was
+actually measured, not just its number.
+
+The result — straight-line distance, plus its X/Y/Z breakdown — is shown in
+`#product-info` (which Measure repurposes for its own status text the whole
+time it's on; `updateSelectionUI`'s own `measureMode` branch leaves that
+element alone while hiding the gizmo row, the same "selection persists,
+UI just steps out of the way" hand-off Multi-Select already gets), each
+length formatted through the existing `formatLength`/Units machinery so it
+reads in whichever of meters or feet Settings has picked. The X/Y/Z
+breakdown matters because two taps meant to land exactly one above the
+other rarely do in practice — reading Δz directly means a slightly
+off-center second tap still measures the intended height correctly instead
+of forcing a re-measurement.
+
 ## Frontend-only settings (Units)
 
 `src/settings.js` holds a small `localStorage`-backed preference —

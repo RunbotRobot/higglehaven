@@ -452,6 +452,7 @@
       }
       #upload-model-btn,
       #toggle-multiselect,
+      #toggle-measure,
       #paste-btn {
         padding: 8px 16px;
         border-radius: 999px;
@@ -461,7 +462,8 @@
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
       }
-      #toggle-multiselect.active {
+      #toggle-multiselect.active,
+      #toggle-measure.active {
         background: var(--brand-green);
         color: #16240a;
       }
@@ -1135,6 +1137,7 @@
       <button id="add-item-btn" type="button">+ Add Item</button>
       <button id="upload-model-btn" type="button">+ Upload Model</button>
       <button id="toggle-multiselect" type="button">Multi-Select</button>
+      <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled>Paste</button>
       <div id="catalog-picker"></div>
     </div>
