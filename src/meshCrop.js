@@ -253,27 +253,6 @@ function translateTriangles(triangles, axis, delta) {
   }));
 }
 
-// Reflects a triangle list along `axis` about the point `about` (a plain
-// number, not a Vector3 — only the one axis component moves). A mirror
-// reverses handedness, so besides flipping the position and normal's axis
-// component, the triangle's vertex order is swapped (verts[1]/verts[2]) to
-// keep it front-facing the same way an unmirrored triangle would — without
-// that, every mirrored face would render backwards (invisible from the
-// expected viewing side under the default FrontSide material used for a
-// crop's real-surface material group).
-function mirrorTriangles(triangles, axis, about) {
-  return triangles.map(({ verts, materialIndex }) => {
-    const mirrored = verts.map((v) => {
-      const position = v.position.clone();
-      position.setComponent(axis, 2 * about - position.getComponent(axis));
-      const normal = v.normal.clone();
-      normal.setComponent(axis, -normal.getComponent(axis));
-      return { position, normal, uv: v.uv.clone() };
-    });
-    return { materialIndex, verts: [mirrored[0], mirrored[2], mirrored[1]] };
-  });
-}
-
 // A boundary loop's bounding box in the two axes *other* than the crop
 // axis — the "footprint" a cap needs to cover, seen looking straight down
 // the crop axis. Bounding-box (not true centroid/radius) is deliberately
@@ -320,101 +299,109 @@ function fitTrianglesInPlane(triangles, uIndex, vIndex, from, to, scaleU, scaleV
 // What fraction of the *original, uncropped* length is treated as "the end
 // cap region" to lift and reuse — thin enough to stay a small sliver of
 // the product even when it's cropped down a lot, thick enough to reliably
-// catch a few real rows of geometry even on a coarse mesh. Also capped
-// against the kept length itself, so a very short crop can't have this
-// slab eat the entire remaining piece.
-const CAP_SLAB_FRACTION = 0.025;
+// catch a few real rows of geometry even on a coarse mesh. This is only
+// the *starting point* for pickCapThickness's search below, not a fixed
+// value — see there for why a fixed thickness isn't reliable on its own.
+const MIN_CAP_SLAB_FRACTION = 0.025;
+// How far the search below is allowed to grow the slab before giving up
+// and using whatever it last measured — capped against the kept length
+// itself (as a fraction of it) so a very short crop can't have the slab
+// balloon to consume most of the remaining piece.
+const MAX_CAP_SLAB_FRACTION_OF_CROP = 0.6;
+// A patch within this factor of the hole it needs to cover is accepted
+// without growing the slab further — some scale correction is fine (see
+// fitTrianglesInPlane below), it's only a *large* one that means the slab
+// was lifted from a not-yet-representative part of the surface.
+const ACCEPTABLE_COVERAGE_RATIO = 1.15;
+
+// Real scanned geometry is least reliable right at its own true silhouette
+// edge (the surface a camera rig sees at the shallowest, most occluded
+// angles), so a thin slab lifted from *right at the tip* can measure a
+// meaningfully worse cross-section than the product's healthy body just a
+// little further in — not a smooth taper, but a sharp transition: on one
+// real scanned brick, a slab thickness of 0.89cm measured a cross-section
+// barely 60% of the cut boundary's own extent on one axis, while just
+// 2cm in, it measured within 2% — a step change, not a gradual one. A
+// single fixed thickness can't safely split the difference between "thin
+// enough to stay a sliver" and "thick enough to clear the unreliable
+// edge zone" for every product, since where that edge zone ends varies by
+// scan. Instead, start thin and double the slab until its own
+// freshly-cut cross-section (measured right where it will need to meet
+// the main body's hole) is actually within reach of that hole without a
+// large stretch, or until the crop-length-relative ceiling is hit —
+// whichever comes first. A product whose edge is fine at the starting
+// thickness (the common case) pays nothing extra; one like the brick
+// above grows only as much as it actually needs to.
+function pickCapThickness(all, axis, fullHalf, newBoundary, cropLength, uIndex, vIndex, hole) {
+  const minThickness = fullHalf * 2 * MIN_CAP_SLAB_FRACTION;
+  const maxThickness = cropLength * MAX_CAP_SLAB_FRACTION_OF_CROP;
+  let best = null;
+  for (let thickness = minThickness; ; thickness *= 2) {
+    const capped = Math.min(thickness, maxThickness);
+    const capBoundary = fullHalf - capped;
+    const result = clipTriangles(all, axis, -1, capBoundary, 1);
+    if (result.boundaryEdges.length > 0) {
+      const patch = loopExtent(result.boundaryEdges, uIndex, vIndex);
+      const ratioU = hole.extentU > patch.extentU ? hole.extentU / patch.extentU : 1;
+      const ratioV = hole.extentV > patch.extentV ? hole.extentV / patch.extentV : 1;
+      best = { ...result, patch, capThickness: capped };
+      if (ratioU <= ACCEPTABLE_COVERAGE_RATIO && ratioV <= ACCEPTABLE_COVERAGE_RATIO) break;
+    }
+    if (capped >= maxThickness) break; // hit the ceiling — use the best measured so far
+  }
+  return best;
+}
 
 // Crops `geometry` (already centered at local-space 0, matching how
 // loadModelInstance recenters every loaded model) down to `cropLength`
 // along `axis` (0=x, 1=y, 2=z), out of an original full length of
 // `fullLength`. The local -axis half is the anchor and is returned
 // completely untouched, real end cap included. The local +axis half is
-// cut down to the new boundary, but capped by lifting a slab of the
-// product's own real geometry from *its untouched anchor end* — not the
-// +axis tip being cut away — mirroring it, and placing it at the new
-// boundary, rather than a fabricated flat disc — see this file's top doc
-// comment. Returns a geometry with two material groups: 0 for every real
-// surface (both the untouched anchor half and the reused, relocated cap),
-// 1 for the thin backing cap hidden just behind it.
-//
-// Using the anchor end's own geometry (rather than the +axis tip's, as an
-// earlier version of this function did) is deliberate: a real photo-scanned
-// product's geometry is least reliable right at its own true silhouette
-// edge — the surface a camera rig sees at the shallowest, most occluded
-// angles — so a thin slab lifted from *right at the true tip* can be a
-// materially worse cross-section than the product's healthy mid-body, not
-// just a slightly-tapered one. That showed up in practice: for one real
-// scanned model, the tip slab's cross-section covered only ~60% of the cut
-// boundary's own extent on one axis, no amount of coverage-margin
-// scale-to-fit could turn that into "the same shape", and the exposed
-// backing cap (materialIndex 1, meant to never be seen) ended up dominating
-// the cut face. The anchor end is guaranteed never to have been touched by
-// any crop, so mirroring a slab from *there* means the cut face is always
-// built from a real, never-degraded piece of the same product — directly
-// answering "the cut end should look like a normal end of this product",
-// since it now literally is one.
+// cut down to the new boundary, but capped by lifting the product's own
+// original +axis end-cap geometry (whatever real triangles were already
+// sitting at its true, uncropped extreme) and translating it inward,
+// rather than a fabricated flat disc — see this file's top doc comment.
+// Returns a geometry with two material groups: 0 for every real surface
+// (both the untouched anchor half and the reused, relocated cap), 1 for
+// the thin backing cap hidden just behind it.
 export function cropGeometryFromEnd(geometry, axis, cropLength, fullLength) {
   const fullHalf = fullLength / 2;
   const newBoundary = -fullHalf + cropLength;
   if (newBoundary >= fullHalf - 1e-9) return geometry; // nothing to crop
 
-  const capThickness = Math.min(fullLength * CAP_SLAB_FRACTION, cropLength * 0.3);
-  const anchorCapBoundary = -fullHalf + capThickness;
-
   const all = toTriangleList(geometry);
-  // A slab of the product's own real, always-untouched anchor end: from
-  // the true -axis extreme in by capThickness — extracted via the same
-  // clip primitive as everything else, so it comes out already a clean,
-  // watertight little slab (including its own back face, which becomes
-  // the hidden backing once relocated).
-  const { triangles: anchorSlab, boundaryEdges: anchorEdges } = clipTriangles(all, axis, 1, anchorCapBoundary, 1);
-  // The rest of the product, cut down to the new boundary. Anything past
-  // newBoundary is genuinely discarded — that's the material actually
-  // being "cut away".
+  // The rest of the product, cut down to the new boundary. Anything
+  // between newBoundary and the reused cap (below) is genuinely
+  // discarded — that's the material actually being "cut away".
   const { triangles: mainBody, boundaryEdges: mainEdges } = clipTriangles(all, axis, 1, newBoundary, 1);
 
-  // Mirror the anchor slab end-for-end and place it so its own freshly-cut
-  // inner face (anchorEdges, the cross-section right at anchorCapBoundary)
-  // lands exactly on the main body's own hole at newBoundary — the same
-  // "two freshly-cut cross-sections meet" alignment the old tip-based
-  // version used, just sourced from the healthy end instead. The slab's
-  // real, true anchor-tip surface (the actual visible end of the product)
-  // ends up capThickness beyond newBoundary, same offset the tip-based
-  // version placed its own true-tip surface at.
-  const mirrorAbout = (newBoundary + anchorCapBoundary) / 2;
-  let fittedCap = mirrorTriangles(anchorSlab, axis, mirrorAbout);
-  // The lifted cap's own cross-section (anchorEdges) isn't guaranteed to
-  // exactly match the main body's cross-section at the new cut boundary
-  // (mainEdges) — a real scanned product can taper or vary slightly along
-  // its length, and this is the one place that difference actually
-  // matters. Left alone, that mismatch can leave a sliver of the
-  // manufactured backing cap (materialIndex 1, meant to be a never-seen
-  // safety net) peeking out from behind the relocated real one.
-  // Recentering the mirrored cap onto the main body's own hole, and
+  const [uIndex, vIndex] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+  const hole = mainEdges.length > 0 ? loopExtent(mainEdges, uIndex, vIndex) : null;
+  // The product's real end cap: everything from the true, uncropped
+  // +axis extreme in by however thick pickCapThickness decides it needs
+  // to be — extracted via the same clip primitive as everything else, so
+  // it comes out already a clean, watertight little slab (including its
+  // own back face, which becomes the hidden backing once relocated).
+  const picked = hole ? pickCapThickness(all, axis, fullHalf, newBoundary, cropLength, uIndex, vIndex, hole) : null;
+
+  if (!picked) return buildGroupedGeometry(mainBody);
+  const { triangles: capSlab, patch, capThickness } = picked;
+  const capBoundary = fullHalf - capThickness;
+
+  let fittedCap = translateTriangles(capSlab, axis, newBoundary - capBoundary);
+  // The lifted cap's own cross-section (patch) still isn't guaranteed to
+  // *exactly* match the main body's cross-section at the new cut boundary
+  // (hole) even after pickCapThickness's search — real scanned products
+  // can genuinely taper a little even away from the unreliable edge zone.
+  // Recentering the translated cap onto the main body's own hole, and
   // scaling it up (never down, so real geometry is only ever stretched to
   // fit, never shaved away) just enough in the cross-sectional plane to
   // guarantee full coverage, keeps whatever's actually visible at the
-  // boundary the real surface — normally a small, invisible-in-practice
-  // correction now that both cross-sections being matched come from
-  // healthy mid-body geometry rather than a possibly-degraded true edge.
-  if (mainEdges.length > 0 && anchorEdges.length > 0) {
-    const [uIndex, vIndex] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
-    const hole = loopExtent(mainEdges, uIndex, vIndex);
-    const patch = loopExtent(anchorEdges, uIndex, vIndex);
-    // Only scale up when the patch is actually smaller than the hole it
-    // needs to cover — a patch that already matches or exceeds the hole
-    // (the common case: most real products don't taper noticeably) is
-    // left completely alone, scale exactly 1, rather than applying a
-    // margin unconditionally to every crop regardless of whether it was
-    // ever needed. The small 1.02 only kicks in alongside an actual
-    // correction, as slop for floating-point/mesh-discretization noise
-    // right at the new edge, not as its own independent stretch.
-    const COVERAGE_MARGIN = 1.02;
-    const scaleU = hole.extentU > patch.extentU ? (hole.extentU / patch.extentU) * COVERAGE_MARGIN : 1;
-    const scaleV = hole.extentV > patch.extentV ? (hole.extentV / patch.extentV) * COVERAGE_MARGIN : 1;
-    fittedCap = fitTrianglesInPlane(fittedCap, uIndex, vIndex, patch, hole, scaleU, scaleV);
-  }
+  // boundary the real surface.
+  const COVERAGE_MARGIN = 1.02;
+  const scaleU = hole.extentU > patch.extentU ? (hole.extentU / patch.extentU) * COVERAGE_MARGIN : 1;
+  const scaleV = hole.extentV > patch.extentV ? (hole.extentV / patch.extentV) * COVERAGE_MARGIN : 1;
+  fittedCap = fitTrianglesInPlane(fittedCap, uIndex, vIndex, patch, hole, scaleU, scaleV);
 
   return buildGroupedGeometry([...mainBody, ...fittedCap]);
 }
