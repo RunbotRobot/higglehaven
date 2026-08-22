@@ -335,8 +335,11 @@ cut down like real dimensional lumber. The template is uploaded at its
 
 Axis keys are `x`, `y`, `z`, matching how `dimensions.width` / `.depth` /
 `.height` map onto the scene's local axes. A template can declare more than
-one extensible axis, though the frontend's Resize gizmo currently only offers
-a handle for the first one declared.
+one extensible axis, though the frontend's Trim gizmo currently only offers
+a handle for the first one declared. (Trim is the per-axis shortening tool
+described here — not to be confused with the frontend's separate Resize
+tool, a real uniform scale unrelated to extensibility; see "Frontend-only
+Resize" below.)
 
 A builder's per-instance override lives on the placed instance itself, not the
 template — see `crop` under Placed instances below. The frontend never
@@ -399,7 +402,7 @@ never a squash:
   the uploaded model itself, not fixable by the crop math, and distinct
   from the backing-sliver case above (that's about a manufactured surface
   peeking through; this is a real hole in the source mesh).
-- Dragging the Resize gizmo shows this real crop live, throttled to about
+- Dragging the Trim gizmo shows this real crop live, throttled to about
   8 updates/second rather than one per pointer-move frame (a full reload +
   reclip isn't free) — the object being dragged is hidden immediately when
   the drag starts (not only once the first preview finishes loading), and
@@ -1117,6 +1120,7 @@ migration.
   "rotationZ": 0.5,
   "label": null,
   "crop": {},
+  "scale": 1,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1129,6 +1133,13 @@ declared size. Every write endpoint below (single and batch create/update, and
 the draft-replace `PUT`) validates `crop` against the referenced template's
 declared extensible axes and `minM`/max-dimension bounds, rejecting anything
 outside them or naming an axis the template didn't declare extensible.
+
+`scale` is a real uniform scale factor, unrelated to `crop` and available on
+any instance regardless of whether its template is extensible — see
+"Frontend-only Resize" for why this exists and where it's applied. `1` (the
+default) means "rendered at the template's own declared size." Validated only
+loosely server-side (must be a positive finite number) — the frontend's own
+Resize control applies the real UX-facing `[0.001, 1000]` bound.
 
 ### `GET /api/instances`
 
@@ -1249,7 +1260,8 @@ The migrations currently create eight main backend tables:
   status, class, polygon metadata, generation timestamps, and placeholder
   owner IDs.
 - `placed_instances`: objects placed into a landlet from catalog templates,
-  including any per-instance crop override (see "Extensible products (crop)").
+  including any per-instance crop override (see "Extensible products (crop)")
+  and uniform Resize scale factor (see "Frontend-only Resize").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
 - `landlet_versions`: immutable layout snapshot metadata.
@@ -1416,6 +1428,40 @@ ceiling — `SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M`
 — stays consistent regardless of which input changed height last, and
 tracks the dome's own growth as it rises to clear tall builds.
 
+## Frontend-only Resize
+
+A real uniform scale for a placed instance (`mesh.userData.scale`, persisted
+as the instance's `scale` field), entirely separate from Trim's per-axis
+`crop` above — for a model whose own source came in at the wrong physical
+size entirely (an uploaded scan authored many times too large or too small),
+not something limited to templates that declare themselves extensible.
+`#mode-resize` sits alongside Move/Rotate/Trim in the same gizmo-mode row,
+enabled for any single selected item (unlike Trim, which stays disabled for
+anything not extensible).
+
+The gizmo itself is a second `TransformControls` instance (`scaleControls`)
+in `'scale'` mode, with `showX`/`showY`/`showZ` all set `false` so only its
+built-in uniform (center) handle is interactive — a per-axis drag would
+distort the model exactly the way Trim is careful never to, so those handles
+are hidden rather than merely discouraged. A numeric field
+(`#resize-scale-input`, shown as a percentage) offers the same exact-value
+alternative Trim's own length field does.
+
+TransformControls' scale mode scales an object about its own local origin,
+which sits at the object's vertical *center* once placed (see
+`createMeshForInstance`'s "z = height / 2 rests it on ground" convention) —
+left alone, growing the scale would sink the object into whatever it's
+resting on, and shrinking it would lift it into the air, since only the
+geometry grows/shrinks while `position.z` stays fixed. `keepRestingOnScaleChange`
+recomputes `position.z` on every scale change to keep the object's *bottom*
+edge exactly where it was — not assumed to be bare ground, since Snap can
+rest an item on top of another one — so it grows/shrinks in place rather
+than visibly sinking or floating.
+
+`scale` factors into `meshDimensions()` alongside `crop`, so collision,
+landlet-bounds clamping, and stacking all see a resized item's real
+(scaled) footprint rather than its template-declared one.
+
 ## Frontend-only settings (Units)
 
 `src/settings.js` holds a small `localStorage`-backed preference —
@@ -1424,7 +1470,7 @@ tab (four tabs exist: General/Shop/Build/Sell; only General has a control
 today, the rest are placeholders reserved for future settings). This is
 purely a display/input convenience: every length is still measured,
 persisted, and sent to the API in meters exactly as described above. Ft
-mode only changes how a length is *formatted* for reading (the resize
+mode only changes how a length is *formatted* for reading (the Trim
 field's unit suffix, the Seller modal's dimension/minimum-length text) and
 how a typed number is *parsed* back into meters before it reaches any
 `crop`/`metadata.extensible` value sent to the server.

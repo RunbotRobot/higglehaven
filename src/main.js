@@ -508,7 +508,7 @@ translateControls.addEventListener('objectChange', () => {
   object.position.set(resolved.x, resolved.y, resolved.z);
 });
 
-// Resize: shortens an extensible product (see extensibleAxes) along its
+// Trim: shortens an extensible product (see extensibleAxes) along its
 // seller-declared axis — cutting a door or a length of lumber down to fit,
 // rather than the builder being stuck with whatever size the seller
 // uploaded. TransformControls' own scale-mode gizmo drives the live drag —
@@ -521,43 +521,43 @@ translateControls.addEventListener('objectChange', () => {
 // so nothing about the mesh actually ends up stretched; scale is never
 // part of what's persisted or rendered at rest, only how the drag feels
 // while it's happening.
-const resizeControls = new TransformControls(camera, renderer.domElement);
-resizeControls.setMode('scale');
-scene.add(resizeControls.getHelper());
+const trimControls = new TransformControls(camera, renderer.domElement);
+trimControls.setMode('scale');
+scene.add(trimControls.getHelper());
 
 // Which local axis this drag is cropping, and the crop length in effect
 // when it started — both fixed for the duration of one drag, set by
-// setGizmoMode when the Resize gizmo attaches (see attachResizeControls).
-let resizeAxis = null;
-let resizeStartLength = 0;
+// setGizmoMode when the Trim gizmo attaches (see attachTrimControls).
+let trimAxis = null;
+let trimStartLength = 0;
 
 // Converts the gizmo's live (still-unclamped, still just a raw multiplier
-// of resizeStartLength) scale factor into the actual crop length it
+// of trimStartLength) scale factor into the actual crop length it
 // represents right now.
 function currentDragCropLength(object) {
   const template = object.userData.template;
-  const extensible = extensibleAxes(template)[resizeAxis];
-  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
-  const requestedLength = resizeStartLength * object.scale[resizeAxis];
+  const extensible = extensibleAxes(template)[trimAxis];
+  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[trimAxis]];
+  const requestedLength = trimStartLength * object.scale[trimAxis];
   return THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
 }
 
 // A separate object, swapped in only while the drag is live, that shows
 // the *actual* cropped result at the pointer's current position — see
-// updateResizePreview. The real object being dragged is hidden underneath
+// updateTrimPreview. The real object being dragged is hidden underneath
 // it for the same span; TransformControls keeps tracking that real
 // object's own .scale the whole time (completely untouched by any of
 // this), so nothing here risks the kind of internal-state desync the
 // camera edge-pan fix elsewhere in this file had to work around.
-let resizePreviewMesh = null;
-let resizePreviewTimer = null;
-// The crop length resizePreviewMesh actually represents — lets
-// updateResizePreview skip a pointless rebuild when a drag is pinned at
+let trimPreviewMesh = null;
+let trimPreviewTimer = null;
+// The crop length trimPreviewMesh actually represents — lets
+// updateTrimPreview skip a pointless rebuild when a drag is pinned at
 // the min/max and further pointer movement can't change the clamped
 // result, and lets a stale, slower-to-resolve request recognize it's been
-// superseded (see resizePreviewRequestId).
-let resizePreviewLength = null;
-let resizePreviewRequestId = 0;
+// superseded (see trimPreviewRequestId).
+let trimPreviewLength = null;
+let trimPreviewRequestId = 0;
 
 // Rebuilding a real model's cropped geometry isn't free (it's a full
 // reload + clip), so this runs on a short throttle off objectChange
@@ -565,10 +565,10 @@ let resizePreviewRequestId = 0;
 // "live", not frequent enough to visibly lag a dense scanned mesh.
 const RESIZE_PREVIEW_THROTTLE_MS = 120;
 
-async function updateResizePreview(object) {
+async function updateTrimPreview(object) {
   const clampedLength = currentDragCropLength(object);
-  if (resizePreviewMesh && resizePreviewLength === clampedLength) return;
-  const requestId = ++resizePreviewRequestId;
+  if (trimPreviewMesh && trimPreviewLength === clampedLength) return;
+  const requestId = ++trimPreviewRequestId;
   const instanceLike = {
     instanceId: object.userData.instanceId,
     templateId: object.userData.template.templateId,
@@ -578,7 +578,7 @@ async function updateResizePreview(object) {
     rotationX: object.rotation.x,
     rotationY: object.rotation.y,
     rotationZ: object.rotation.z,
-    crop: { ...object.userData.crop, [resizeAxis]: clampedLength },
+    crop: { ...object.userData.crop, [trimAxis]: clampedLength },
   };
   const preview = await createMeshForInstance(instanceLike);
   // The drag may have already ended, moved to a different object, or been
@@ -586,17 +586,17 @@ async function updateResizePreview(object) {
   // and objectChange's throttled one can both be in flight at once right
   // after a drag starts) while that reload was in flight — stale results
   // get discarded rather than popped in after the fact.
-  if (!preview || !resizeControls.dragging || resizeControls.object !== object || requestId !== resizePreviewRequestId) {
+  if (!preview || !trimControls.dragging || trimControls.object !== object || requestId !== trimPreviewRequestId) {
     if (preview) disposeObject(preview);
     return;
   }
-  if (resizePreviewMesh) {
-    scene.remove(resizePreviewMesh);
-    disposeObject(resizePreviewMesh);
+  if (trimPreviewMesh) {
+    scene.remove(trimPreviewMesh);
+    disposeObject(trimPreviewMesh);
   }
-  resizePreviewMesh = preview;
-  resizePreviewLength = clampedLength;
-  scene.add(resizePreviewMesh);
+  trimPreviewMesh = preview;
+  trimPreviewLength = clampedLength;
+  scene.add(trimPreviewMesh);
   object.visible = false;
   // The selection outline tracks whatever mesh it was built for via its
   // own world matrix every frame regardless of that mesh's own .visible —
@@ -608,20 +608,20 @@ async function updateResizePreview(object) {
     outline.helper.visible = false;
     outline.fill.visible = false;
   }
-  resizeLengthInputEl.value = toDisplayLength(clampedLength).toFixed(2);
+  trimLengthInputEl.value = toDisplayLength(clampedLength).toFixed(2);
 }
 
-function clearResizePreview(object) {
-  if (resizePreviewTimer) {
-    clearTimeout(resizePreviewTimer);
-    resizePreviewTimer = null;
+function clearTrimPreview(object) {
+  if (trimPreviewTimer) {
+    clearTimeout(trimPreviewTimer);
+    trimPreviewTimer = null;
   }
-  if (resizePreviewMesh) {
-    scene.remove(resizePreviewMesh);
-    disposeObject(resizePreviewMesh);
-    resizePreviewMesh = null;
+  if (trimPreviewMesh) {
+    scene.remove(trimPreviewMesh);
+    disposeObject(trimPreviewMesh);
+    trimPreviewMesh = null;
   }
-  resizePreviewLength = null;
+  trimPreviewLength = null;
   if (object) {
     object.visible = true;
     const outline = selectionOutlines.get(object);
@@ -632,24 +632,24 @@ function clearResizePreview(object) {
   }
 }
 
-resizeControls.addEventListener('objectChange', () => {
-  const object = resizeControls.object;
-  if (!object || !resizeAxis || !resizeControls.dragging || resizePreviewTimer) return;
-  resizePreviewTimer = setTimeout(() => {
-    resizePreviewTimer = null;
-    updateResizePreview(object);
+trimControls.addEventListener('objectChange', () => {
+  const object = trimControls.object;
+  if (!object || !trimAxis || !trimControls.dragging || trimPreviewTimer) return;
+  trimPreviewTimer = setTimeout(() => {
+    trimPreviewTimer = null;
+    updateTrimPreview(object);
   }, RESIZE_PREVIEW_THROTTLE_MS);
 });
 
-resizeControls.addEventListener('dragging-changed', async (event) => {
+trimControls.addEventListener('dragging-changed', async (event) => {
   controls.enabled = !event.value;
-  const object = resizeControls.object;
-  if (!object || !resizeAxis) return;
+  const object = trimControls.object;
+  if (!object || !trimAxis) return;
   if (event.value) {
     pushUndoSnapshot();
-    resizeStartLength = effectiveLength(object.userData.template, object.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
+    trimStartLength = effectiveLength(object.userData.template, object.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
     // Hide the real object immediately, before even the first preview has
-    // loaded, rather than waiting for updateResizePreview to do it once
+    // loaded, rather than waiting for updateTrimPreview to do it once
     // its (throttled, async) result comes back. TransformControls starts
     // live-stretching object.scale the instant the drag begins — without
     // this, that raw, unclamped stretch was the only thing on screen for
@@ -665,21 +665,84 @@ resizeControls.addEventListener('dragging-changed', async (event) => {
       outline.helper.visible = false;
       outline.fill.visible = false;
     }
-    updateResizePreview(object);
+    updateTrimPreview(object);
     return;
   }
   const clampedLength = currentDragCropLength(object);
-  clearResizePreview(object);
+  clearTrimPreview(object);
   object.scale.set(1, 1, 1);
-  const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [resizeAxis]: clampedLength });
+  const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [trimAxis]: clampedLength });
   const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
   updated.position.set(clamped.x, clamped.y, clamped.z);
   updated.userData.safePosition = updated.position.clone();
-  resizeControls.attach(updated);
+  trimControls.attach(updated);
   persistLayout();
   syncUpdate(updated);
-  updateResizeLengthInput();
+  updateTrimLengthInput();
 });
+
+// Resize: a real uniform scale, independent of Trim above — for a placed
+// item whose own source model came in at the wrong physical size entirely
+// (e.g. an uploaded scan authored many times too large or too small),
+// rather than any per-axis shortening. Unlike Trim, this needs no special
+// per-drag preview handling: TransformControls' own scale-mode gizmo can
+// just be allowed to update object.scale directly and persist normally,
+// since a uniform scale never distorts the model the way an unclamped
+// per-axis stretch would. Only its uniform (center) handle is meant to be
+// used — per-axis handles are hidden (see below) so a drag can't
+// accidentally stretch one axis independently of the others.
+const scaleControls = new TransformControls(camera, renderer.domElement);
+scaleControls.setMode('scale');
+scaleControls.showX = false;
+scaleControls.showY = false;
+scaleControls.showZ = false;
+scene.add(scaleControls.getHelper());
+wireDraggingBehavior(scaleControls);
+
+const MIN_SCALE = 0.001;
+const MAX_SCALE = 1000;
+
+// TransformControls' scale gizmo scales an object about its own local
+// origin, which sits at the object's vertical *center* once placed (see
+// createMeshForInstance's own "z = height / 2 rests it on ground"
+// convention) — left alone, growing the scale would sink the object into
+// whatever it's resting on and shrinking it would lift it into the air,
+// since only the geometry grows/shrinks while position.z stays fixed.
+// Recomputing position.z to keep the object's *bottom* edge exactly where
+// it was before this scale change — not assuming that's bare ground,
+// since Snap can rest an item on top of another one — keeps it resting on
+// whatever surface it was already on, growing/shrinking only upward from
+// there, the way a real object being resized in place actually would.
+function keepRestingOnScaleChange(object, oldScale, newScale) {
+  const unscaledHeight = effectiveLength(object.userData.template, object.userData, 'z', 'height');
+  const bottom = object.position.z - (unscaledHeight * oldScale) / 2;
+  object.position.z = bottom + (unscaledHeight * newScale) / 2;
+}
+
+scaleControls.addEventListener('objectChange', () => {
+  const object = scaleControls.object;
+  if (!object) return;
+  // The uniform handle already applies the same factor to all three axes,
+  // but clamp and re-sync explicitly rather than trusting that — cheap
+  // insurance against an extreme drag producing a degenerate (near-zero
+  // or absurdly large) scale.
+  const uniform = THREE.MathUtils.clamp(object.scale.x, MIN_SCALE, MAX_SCALE);
+  object.scale.setScalar(uniform);
+  keepRestingOnScaleChange(object, object.userData.scale ?? 1, uniform);
+  object.userData.scale = uniform;
+  updateResizeScaleInput();
+});
+
+// Reflects the selected item's current scale into the numeric field, as a
+// percentage — called on selection change and right after a drag-driven
+// resize, so the field never shows a stale value. (Its own .addEventListener
+// registration lives further down, alongside trimLengthInputEl's — both
+// need their DOM refs, declared later in the file, to already exist.)
+function updateResizeScaleInput() {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  resizeScaleInputEl.value = Math.round((mesh.userData.scale ?? 1) * 100);
+}
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
@@ -800,23 +863,24 @@ function effectiveLength(template, instance, axis, dimensionKey) {
 }
 
 // A placed mesh's real, current footprint — its template's dimensions with
-// any crop (mesh.userData.crop, set in createMeshForInstance) applied.
-// Collision, landlet-bounds clamping, and stacking all need this rather
-// than the template's raw dimensions, or a cropped item would still claim
-// its full uncropped footprint for those purposes.
+// any crop (mesh.userData.crop, set in createMeshForInstance) and uniform
+// Resize scale (mesh.userData.scale) applied. Collision, landlet-bounds
+// clamping, and stacking all need this rather than the template's raw
+// dimensions, or a cropped/resized item would still claim its full
+// template-declared footprint for those purposes.
 function meshDimensions(mesh) {
-  const { template, crop } = mesh.userData;
+  const { template, crop, scale = 1 } = mesh.userData;
   return {
-    width: crop?.x ?? template.dimensions.width,
-    depth: crop?.y ?? template.dimensions.depth,
-    height: crop?.z ?? template.dimensions.height,
+    width: (crop?.x ?? template.dimensions.width) * scale,
+    depth: (crop?.y ?? template.dimensions.depth) * scale,
+    height: (crop?.z ?? template.dimensions.height) * scale,
   };
 }
 
 const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
 
 // Swaps `mesh` for a freshly built Object3D reflecting `crop` — used by
-// the resize UI itself, and by restoreSnapshot when an undo/redo jump
+// the Trim UI itself, and by restoreSnapshot when an undo/redo jump
 // lands an *existing* mesh (reused rather than recreated, see its doc
 // comment) on a snapshot with a different crop than the mesh currently
 // has. Always goes through createMeshForInstance rather than mutating the
@@ -844,6 +908,7 @@ async function replaceMeshWithCrop(mesh, crop) {
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
     crop: nextCrop,
+    scale: mesh.userData.scale ?? 1,
   };
   const newMesh = await createMeshForInstance(instanceLike);
   if (!newMesh) return mesh;
@@ -1011,6 +1076,13 @@ async function createMeshForInstance(instance) {
   object.userData.instanceId = instance.instanceId ?? instance.id;
   object.userData.template = template;
   object.userData.crop = { ...(instance.crop || {}) };
+  // A real uniform Resize (see scaleControls), entirely separate from
+  // Trim's per-axis crop above — for a placed item whose own source model
+  // came in at the wrong physical size. Applied to the whole returned
+  // object (box fallback or real model container alike) so it scales
+  // everything uniformly, position included via Object3D's own transform.
+  object.userData.scale = instance.scale ?? 1;
+  object.scale.setScalar(object.userData.scale);
   return object;
 }
 
@@ -1040,6 +1112,7 @@ function persistLayout() {
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
     crop: mesh.userData.crop,
+    scale: mesh.userData.scale ?? 1,
   }));
   saveInstances(instances);
 }
@@ -1061,6 +1134,7 @@ function instanceFromMesh(mesh) {
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
     crop: mesh.userData.crop,
+    scale: mesh.userData.scale ?? 1,
   };
 }
 
@@ -1150,6 +1224,7 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true 
     rotationY: overrides.rotationY ?? 0,
     rotationZ: overrides.rotationZ ?? 0,
     crop: overrides.crop,
+    scale: overrides.scale ?? 1,
   };
   const mesh = await addInstanceToScene(instance);
   if (!mesh) return null;
@@ -1488,7 +1563,7 @@ async function showAxisPreview(template, container, highlightAxis) {
   // Not selected yet: all three read as a neutral, evenly-weighted legend.
   // Once an axis is picked, that one arrow turns bright yellow and the
   // other two mute to gray — the same "this one's the live one" language
-  // the resize gizmo itself uses elsewhere. highlightAxis === null (the
+  // the Trim gizmo itself uses elsewhere. highlightAxis === null (the
   // default, general-viewing look) skips arrows entirely.
   const arrows = [];
   const labels = [];
@@ -1672,7 +1747,7 @@ function renderSellerList() {
 
     // Extensibility (see docs/API.md) is a real but rare need — collapsed
     // by default so the row reads as "a product with some buttons," not
-    // as a resize-configuration form.
+    // as a trim-configuration form.
     const existingAxis = primaryExtensibleAxis(template) || '';
     const extensibilityToggle = document.createElement('button');
     extensibilityToggle.className = 'seller-extensibility-toggle';
@@ -1783,7 +1858,7 @@ function closeSellerModal() {
   disposeAxisPreview();
   // A save in here can change whether the currently-selected item (if any)
   // is extensible — updateSelectionUI() only normally re-runs on an actual
-  // selection *change*, so without this the Resize button/field would keep
+  // selection *change*, so without this the Trim button/field would keep
   // showing whatever was true when the modal opened, stale until the
   // builder reselected something.
   updateSelectionUI();
@@ -1801,7 +1876,7 @@ const settingsTabsEl = document.getElementById('settings-tabs');
 const settingsSectionEl = document.getElementById('settings-section');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
-const resizeUnitLabelEl = document.getElementById('resize-unit-label');
+const trimUnitLabelEl = document.getElementById('trim-unit-label');
 
 let activeSettingsTab = 'general';
 
@@ -1809,8 +1884,8 @@ let activeSettingsTab = 'general';
 // reflects it immediately rather than only after the next selection change
 // or modal reopen.
 function refreshUnitDisplays() {
-  resizeUnitLabelEl.textContent = unitSuffix();
-  updateResizeLengthInput();
+  trimUnitLabelEl.textContent = unitSuffix();
+  updateTrimLengthInput();
   if (sellerModalEl.classList.contains('visible')) renderSellerList();
 }
 
@@ -1873,10 +1948,10 @@ function closeSettingsModal() {
 }
 settingsBtn.addEventListener('click', openSettingsModal);
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
-// Only the static unit suffix needs painting at load — updateResizeLengthInput()
+// Only the static unit suffix needs painting at load — updateTrimLengthInput()
 // depends on selectedMeshes, declared further below, and no-ops correctly
 // (there's nothing selected yet) once that's ready.
-resizeUnitLabelEl.textContent = unitSuffix();
+trimUnitLabelEl.textContent = unitSuffix();
 
 // Only one gizmo is ever attached at a time. Showing both simultaneously
 // was tried first and rejected: the rotate ring and the translate handles
@@ -1887,9 +1962,12 @@ resizeUnitLabelEl.textContent = unitSuffix();
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
 const modeRotateBtn = document.getElementById('mode-rotate');
+const modeTrimBtn = document.getElementById('mode-trim');
+const trimLengthControlEl = document.getElementById('trim-length-control');
+const trimLengthInputEl = document.getElementById('trim-length-input');
 const modeResizeBtn = document.getElementById('mode-resize');
-const resizeLengthControlEl = document.getElementById('resize-length-control');
-const resizeLengthInputEl = document.getElementById('resize-length-input');
+const resizeScaleControlEl = document.getElementById('resize-scale-control');
+const resizeScaleInputEl = document.getElementById('resize-scale-input');
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const deleteBtn = document.getElementById('delete-item');
@@ -1958,6 +2036,16 @@ async function restoreSnapshot(snapshot) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
       mesh = await replaceMeshWithCrop(mesh, inst.crop);
+      // replaceMeshWithCrop only reconciles crop — a Resize scale change
+      // (with no crop change alongside it, the common case for an undo/redo
+      // jump across just a resize) would otherwise never get restored on a
+      // *reused* mesh, since the rebuild path above only triggers on an
+      // actual crop difference and carries the mesh's own (stale) scale
+      // forward when it does. Position (already restored above) was
+      // captured at whatever scale was in effect at snapshot time, so it
+      // doesn't need re-deriving here — only the scale itself does.
+      mesh.scale.setScalar(inst.scale ?? 1);
+      mesh.userData.scale = inst.scale ?? 1;
       mesh.userData.safePosition = mesh.position.clone();
       updatedMeshes.push(mesh);
     } else {
@@ -1997,7 +2085,7 @@ async function redo() {
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
 
-// Only the first axis a template declares extensible gets a Resize handle
+// Only the first axis a template declares extensible gets a Trim handle
 // — every extensible template in the catalog today (door, lumber-board)
 // only ever declares one, and offering a single handle at a time keeps the
 // gizmo simple. A template wanting more than one resizable axis at once is
@@ -2007,23 +2095,23 @@ function primaryExtensibleAxis(template) {
   return axes ? Object.keys(axes)[0] : null;
 }
 
-function attachResizeControls(mesh) {
-  resizeAxis = primaryExtensibleAxis(mesh.userData.template);
-  resizeControls.showX = resizeAxis === 'x';
-  resizeControls.showY = resizeAxis === 'y';
-  resizeControls.showZ = resizeAxis === 'z';
-  resizeControls.attach(mesh);
-  updateResizeLengthInput();
+function attachTrimControls(mesh) {
+  trimAxis = primaryExtensibleAxis(mesh.userData.template);
+  trimControls.showX = trimAxis === 'x';
+  trimControls.showY = trimAxis === 'y';
+  trimControls.showZ = trimAxis === 'z';
+  trimControls.attach(mesh);
+  updateTrimLengthInput();
 }
 
 // Reflects the selected item's current cropped length into the numeric
-// field — called on selection change and right after a drag-driven resize
+// field — called on selection change and right after a drag-driven trim
 // commits, so the field never shows a stale value.
-function updateResizeLengthInput() {
-  if (selectedMeshes.size !== 1 || !resizeAxis) return;
+function updateTrimLengthInput() {
+  if (selectedMeshes.size !== 1 || !trimAxis) return;
   const [mesh] = selectedMeshes;
-  const length = effectiveLength(mesh.userData.template, mesh.userData, resizeAxis, AXIS_DIMENSION_KEY[resizeAxis]);
-  resizeLengthInputEl.value = toDisplayLength(length).toFixed(2);
+  const length = effectiveLength(mesh.userData.template, mesh.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
+  trimLengthInputEl.value = toDisplayLength(length).toFixed(2);
 }
 
 let currentGizmoMode = 'translate';
@@ -2031,19 +2119,28 @@ function setGizmoMode(mode) {
   currentGizmoMode = mode;
   modeMoveBtn.classList.toggle('active', mode === 'translate');
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
+  modeTrimBtn.classList.toggle('active', mode === 'trim');
   modeResizeBtn.classList.toggle('active', mode === 'resize');
   translateControls.detach();
   rotateControls.detach();
-  resizeControls.detach();
-  resizeLengthControlEl.classList.remove('visible');
+  trimControls.detach();
+  scaleControls.detach();
+  trimLengthControlEl.classList.remove('visible');
+  resizeScaleControlEl.classList.remove('visible');
   if (selectedMeshes.size === 1) {
     const [mesh] = selectedMeshes;
-    if (mode === 'resize') {
-      // Not every selection can be resized — fall back to Move rather than
+    if (mode === 'trim') {
+      // Not every selection can be trimmed — fall back to Move rather than
       // leaving every gizmo detached and nothing visibly attached at all.
       if (!extensibleAxes(mesh.userData.template)) return setGizmoMode('translate');
-      attachResizeControls(mesh);
-      resizeLengthControlEl.classList.add('visible');
+      attachTrimControls(mesh);
+      trimLengthControlEl.classList.add('visible');
+      return;
+    }
+    if (mode === 'resize') {
+      scaleControls.attach(mesh);
+      updateResizeScaleInput();
+      resizeScaleControlEl.classList.add('visible');
       return;
     }
     // 'local' is what makes moving a single item along its own rotated
@@ -2080,6 +2177,10 @@ modeRotateBtn.addEventListener('click', () => {
   exitMultiSelectMode();
   setGizmoMode('rotate');
 });
+modeTrimBtn.addEventListener('click', () => {
+  exitMultiSelectMode();
+  setGizmoMode('trim');
+});
 modeResizeBtn.addEventListener('click', () => {
   exitMultiSelectMode();
   setGizmoMode('resize');
@@ -2088,28 +2189,52 @@ modeResizeBtn.addEventListener('click', () => {
 // Exact-value alternative to the drag handle above — typing a length
 // commits the same way releasing the handle does: an undo snapshot, a
 // clamped, non-stretched geometry rebuild, and a sync to the backend.
-resizeLengthInputEl.addEventListener('change', async () => {
-  if (selectedMeshes.size !== 1 || !resizeAxis) return;
+trimLengthInputEl.addEventListener('change', async () => {
+  if (selectedMeshes.size !== 1 || !trimAxis) return;
   const [mesh] = selectedMeshes;
   const template = mesh.userData.template;
-  const extensible = extensibleAxes(template)[resizeAxis];
-  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[resizeAxis]];
-  const requestedDisplayLength = Number(resizeLengthInputEl.value);
+  const extensible = extensibleAxes(template)[trimAxis];
+  const maxLength = template.dimensions[AXIS_DIMENSION_KEY[trimAxis]];
+  const requestedDisplayLength = Number(trimLengthInputEl.value);
   if (!Number.isFinite(requestedDisplayLength)) {
-    updateResizeLengthInput(); // revert to the last valid value
+    updateTrimLengthInput(); // revert to the last valid value
     return;
   }
   const requestedLength = fromDisplayLength(requestedDisplayLength);
   const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
   pushUndoSnapshot();
-  const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [resizeAxis]: clampedLength });
+  const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [trimAxis]: clampedLength });
   const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
   updated.position.set(clamped.x, clamped.y, clamped.z);
   updated.userData.safePosition = updated.position.clone();
-  resizeControls.attach(updated);
+  trimControls.attach(updated);
   persistLayout();
   syncUpdate(updated);
-  updateResizeLengthInput();
+  updateTrimLengthInput();
+});
+
+// Exact-value alternative to the Resize drag handle above — typing a
+// percentage commits the same way releasing the handle does: an undo
+// snapshot and a sync to the backend.
+resizeScaleInputEl.addEventListener('change', async () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  const requestedPercent = Number(resizeScaleInputEl.value);
+  if (!Number.isFinite(requestedPercent) || requestedPercent <= 0) {
+    updateResizeScaleInput(); // revert to the last valid value
+    return;
+  }
+  const uniform = THREE.MathUtils.clamp(requestedPercent / 100, MIN_SCALE, MAX_SCALE);
+  pushUndoSnapshot();
+  mesh.scale.setScalar(uniform);
+  keepRestingOnScaleChange(mesh, mesh.userData.scale ?? 1, uniform);
+  mesh.userData.scale = uniform;
+  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
+  mesh.position.set(clamped.x, clamped.y, clamped.z);
+  mesh.userData.safePosition = mesh.position.clone();
+  persistLayout();
+  syncUpdate(mesh);
+  updateResizeScaleInput();
 });
 
 // Colliding with other products (see resolveByAxis above) is a helpful
@@ -2199,10 +2324,12 @@ function updateSelectionUI() {
   if (count === 0) {
     productInfoEl.textContent = HINT_TEXT;
     modeControlsEl.classList.remove('visible');
-    resizeLengthControlEl.classList.remove('visible');
+    trimLengthControlEl.classList.remove('visible');
+    resizeScaleControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
-    resizeControls.detach();
+    trimControls.detach();
+    scaleControls.detach();
     return;
   }
   productInfoEl.textContent = count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`;
@@ -2214,11 +2341,15 @@ function updateSelectionUI() {
   // Move, Snap, Copy, Delete — in the same position regardless of selection
   // count; removing it from the layout entirely let the rest reflow into
   // different left/right groupings depending on whether Rotate happened to
-  // be there. Resize follows the same reasoning, disabled (not hidden) for
-  // both a multi-item selection and a single non-extensible one.
+  // be there. Trim follows the same reasoning, disabled (not hidden) for
+  // both a multi-item selection and a single non-extensible one. Resize
+  // has no group form either (dragging several items' independent uniform
+  // scales as one gesture isn't a well-defined operation) but applies to
+  // any single item regardless of extensibility, unlike Trim.
   modeRotateBtn.disabled = count !== 1;
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
-  modeResizeBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
+  modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
+  modeResizeBtn.disabled = !singleMesh;
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -2230,11 +2361,14 @@ function updateSelectionUI() {
     // reattaches the gizmo to whatever's already selected here.
     modeMoveBtn.classList.remove('active');
     modeRotateBtn.classList.remove('active');
+    modeTrimBtn.classList.remove('active');
     modeResizeBtn.classList.remove('active');
-    resizeLengthControlEl.classList.remove('visible');
+    trimLengthControlEl.classList.remove('visible');
+    resizeScaleControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
-    resizeControls.detach();
+    trimControls.detach();
+    scaleControls.detach();
     return;
   }
   if (count === 1) {
@@ -2337,6 +2471,7 @@ function copySelection() {
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
     crop: mesh.userData.crop,
+    scale: mesh.userData.scale ?? 1,
   }));
   pasteBtn.disabled = false;
   // There's nothing left to multi-select once the copy is captured, and
@@ -2463,6 +2598,7 @@ async function placeClipboardItems(items, x, y, supportZ) {
       rotationY: item.rotationY,
       rotationZ: item.rotationZ,
       crop: item.crop,
+      scale: item.scale,
     }, { sync: false });
     if (mesh) placed.push(mesh);
   }

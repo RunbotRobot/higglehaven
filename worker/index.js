@@ -771,8 +771,8 @@ async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -1097,12 +1097,12 @@ async function handleLandletDraft(request, db, landletId) {
     await db.batch([
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
       db.prepare(`
-        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
+        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
-          json_extract(value, '$.label'), json_extract(value, '$.crop')
+          json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale')
         FROM json_each(?)
       `).bind(landletId, JSON.stringify(instances)),
       db.prepare(`
@@ -1116,8 +1116,8 @@ async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -1766,12 +1766,12 @@ async function handleInstances(request, db, route, url) {
         x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
         rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
         rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        scale = excluded.scale, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...instanceParams(instance))));
     const stored = await getInstancesById(db, instanceIds);
@@ -1822,9 +1822,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop)).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -1839,9 +1839,9 @@ async function handleInstances(request, db, route, url) {
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, route[1]).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
@@ -2055,7 +2055,20 @@ function validateInstance(input, fallbackId) {
     rotationZ: finiteNumber(input.rotationZ ?? 0, 'rotationZ'),
     label: input.label || null,
     crop: validateCropShape(input.crop),
+    scale: validateScale(input.scale),
   };
+}
+
+// A real uniform Resize (see docs/API.md's "Frontend-only Resize"),
+// entirely separate from crop's per-axis shortening — 1 means "rendered
+// at the template's own declared size." Bounded (loosely) against zero,
+// negative, and non-finite values reaching the database at all; the
+// frontend applies its own tighter [0.001, 1000] clamp for what a drag or
+// typed value can actually produce, so this is a backstop against a
+// malformed request, not the real UX limit.
+function validateScale(value) {
+  if (value === undefined || value === null) return 1;
+  return positiveNumber(value, 'scale');
 }
 
 // { x?: number, y?: number, z?: number } — how far a builder has cropped
@@ -2085,7 +2098,7 @@ function templateParams(template) {
 function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
     instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
-    JSON.stringify(instance.crop)];
+    JSON.stringify(instance.crop), instance.scale];
 }
 
 function landletParams(landlet) {
@@ -2123,6 +2136,7 @@ function instanceFromRow(row) {
     rotationZ: row.rotation_z_rad,
     label: row.label,
     crop: JSON.parse(row.crop_json || '{}'),
+    scale: row.scale,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2211,6 +2225,7 @@ function versionInstanceFromRow(row) {
     rotationZ: row.rotation_z_rad,
     label: row.label,
     crop: JSON.parse(row.crop_json || '{}'),
+    scale: row.scale,
   };
 }
 

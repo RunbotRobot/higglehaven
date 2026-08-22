@@ -356,14 +356,14 @@
          a physical button's own material would visibly depress into,
          rather than an opacity/filter overlay sitting on top of it or a
          label swap that reads like the button now does something else. */
-      /* Resize's numeric field — same pill shape as the buttons around it,
-         but only ever shown for a single extensible selection (see
-         updateSelectionUI), unlike Resize itself which stays present but
-         disabled the rest of the time for the same layout-stability reason
-         documented on button:disabled above. Hidden by display, not
-         disabled, since there's no meaningful "disabled" number to show for
-         a non-extensible item. */
-      #resize-length-control {
+      /* Trim's and Resize's numeric fields — same pill shape as the buttons
+         around them, but only ever shown for a selection each respectively
+         applies to (see updateSelectionUI), unlike the mode buttons
+         themselves which stay present but disabled the rest of the time
+         for the same layout-stability reason documented on button:disabled
+         above. Hidden by display, not disabled, since there's no
+         meaningful "disabled" number to show when a field doesn't apply. */
+      .gizmo-numeric-control {
         display: none;
         align-items: center;
         gap: 4px;
@@ -373,10 +373,10 @@
         color: rgba(255, 255, 255, 0.8);
         font: 14px/1.4 sans-serif;
       }
-      #resize-length-control.visible {
+      .gizmo-numeric-control.visible {
         display: inline-flex;
       }
-      #resize-length-input {
+      .gizmo-numeric-control input {
         width: 4.5em;
         border: none;
         border-radius: 4px;
@@ -1083,9 +1083,13 @@
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
+      <button id="mode-trim" type="button">Trim</button>
+      <label id="trim-length-control" class="gizmo-numeric-control">
+        <input id="trim-length-input" type="number" step="0.01" min="0" /><span id="trim-unit-label">m</span>
+      </label>
       <button id="mode-resize" type="button">Resize</button>
-      <label id="resize-length-control">
-        <input id="resize-length-input" type="number" step="0.01" min="0" /><span id="resize-unit-label">m</span>
+      <label id="resize-scale-control" class="gizmo-numeric-control">
+        <input id="resize-scale-input" type="number" step="1" min="1" /><span>%</span>
       </label>
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
