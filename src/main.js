@@ -580,15 +580,18 @@ for (const group of [trimControls._gizmo.picker.scale, trimControls._gizmo.gizmo
 // read again once another drag (which always resets it first) is active.
 let trimAxis = null;
 let trimStartLength = 0;
+let trimStartScale = 1;
 
 // Converts the gizmo's live (still-unclamped, still just a raw multiplier
 // of trimStartLength) scale factor into the actual crop length it
-// represents right now.
+// represents right now. Dividing out trimStartScale cancels any
+// pre-existing per-instance scale the drag's own multiplier would
+// otherwise inherit — see trimStartScale's own comment.
 function currentDragCropLength(object) {
   const template = object.userData.template;
   const extensible = extensibleAxes(template)[trimAxis];
   const maxLength = template.dimensions[AXIS_DIMENSION_KEY[trimAxis]];
-  const requestedLength = trimStartLength * object.scale[trimAxis];
+  const requestedLength = trimStartLength * (object.scale[trimAxis] / trimStartScale);
   return THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
 }
 
@@ -709,6 +712,16 @@ trimControls.addEventListener('dragging-changed', async (event) => {
     if (!trimAxis) return;
     pushUndoSnapshot();
     trimStartLength = effectiveLength(object.userData.template, object.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
+    // TransformControls' scale gizmo starts multiplying from the object's
+    // own *current* scale, not from 1 — for the ordinary case (no legacy
+    // per-instance Resize scale applied) that's already 1 and this is a
+    // no-op, but a pre-existing scaled instance (from before Resize was
+    // removed from Build mode) would otherwise have that leftover scale
+    // silently folded into the drag's own multiplier, cropping to a
+    // fraction of the intended length. Dividing it back out in
+    // currentDragCropLength keeps the drag reading as "how much of the
+    // template's full length is this" regardless of a legacy scale.
+    trimStartScale = object.userData.scale ?? 1;
     // Hide the real object immediately, before even the first preview has
     // loaded, rather than waiting for updateTrimPreview to do it once
     // its (throttled, async) result comes back. TransformControls starts
@@ -2588,7 +2601,11 @@ function updateTrimLengthInput() {
     const active = !!axes[axis];
     field.classList.toggle('active', active);
     if (!active) continue;
-    const length = effectiveLength(mesh.userData.template, mesh.userData, axis, AXIS_DIMENSION_KEY[axis]);
+    // effectiveLength lives in the template's own (unscaled) space — a
+    // legacy instance carrying a per-instance Resize scale from before
+    // that feature was removed still needs its crop length shown as the
+    // real, currently-rendered size, not the pre-scale one.
+    const length = effectiveLength(mesh.userData.template, mesh.userData, axis, AXIS_DIMENSION_KEY[axis]) * (mesh.userData.scale ?? 1);
     field.querySelector('.trim-length-input').value = toDisplayLength(length).toFixed(2);
   }
 }
@@ -2772,8 +2789,17 @@ for (const field of trimAxisFieldEls) {
       updateTrimLengthInput(); // revert to the last valid value
       return;
     }
+    // The typed value is a real, final measured length — "choose the
+    // final measured size after the trim" — but crop is stored in the
+    // template's own unscaled space (see effectiveLength). Clamping and
+    // storing in that same real space first, then converting once at the
+    // very end, keeps a legacy per-instance Resize scale (see
+    // trimStartScale's own comment) from silently turning "3 feet" into a
+    // fraction of that.
+    const scale = mesh.userData.scale ?? 1;
     const requestedLength = fromDisplayLength(requestedDisplayLength);
-    const clampedLength = THREE.MathUtils.clamp(requestedLength, extensible.minM, maxLength);
+    const clampedRealLength = THREE.MathUtils.clamp(requestedLength, extensible.minM * scale, maxLength * scale);
+    const clampedLength = clampedRealLength / scale;
     pushUndoSnapshot();
     const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [axis]: clampedLength });
     const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
