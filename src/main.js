@@ -1483,10 +1483,9 @@ uploadSubmitBtn.addEventListener('click', async () => {
     const dimensions = await measureModelDimensions(modelUrl);
 
     setUploadStatus('Creating product…');
-    // Uploading from Build mode doesn't otherwise require a seller
-    // identity to already be chosen (only Sell mode's own entry points
-    // do) — ensure one now rather than tagging the new template with
-    // whatever builder identity happens to be active.
+    // Upload Model only lives inside the (already-open) Seller modal now,
+    // which already guaranteed a seller identity to open at all — this is
+    // just a defensive fallback, not the primary path to one.
     const uploaderSellerId = await ensureSellerIdentity();
     const template = await createCatalogTemplate({
       name,
@@ -1499,8 +1498,11 @@ uploadSubmitBtn.addEventListener('click', async () => {
     activeCatalog.push(template);
     buildCatalogPickerButtons();
     closeUploadModal();
-
-    enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
+    // Back to the Seller modal it was opened from, with the new product
+    // showing up right away — not straight into a Build-mode tap-to-place
+    // flow, since Upload Model can now be reached from Shop (no landlet to
+    // place onto at all) as easily as from Build.
+    renderSellerList();
   } catch (err) {
     console.error('Custom product upload failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
@@ -1973,9 +1975,15 @@ function renderSellerList() {
 // Ensures a seller identity is active before showing the modal. Only
 // reachable via the #mode-nav Sell tab (openSellerModal call sites below),
 // which calls this rather than separately remembering to await
-// ensureSellerIdentity() first.
+// ensureSellerIdentity() first. Backing out of that picker (Close) means
+// there's still no seller identity — just leave the Seller modal unopened
+// rather than showing it with nothing to filter its list by.
 async function openSellerModal() {
-  await ensureSellerIdentity();
+  const id = await ensureSellerIdentity();
+  if (!id) {
+    updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
+    return;
+  }
   renderSellerList();
   sellerModalEl.classList.add('visible');
 }
@@ -1988,6 +1996,13 @@ function closeSellerModal() {
   // showing whatever was true when the modal opened, stale until the
   // builder reselected something.
   updateSelectionUI();
+  // Sell never actually changes currentMode (see #mode-nav's own click
+  // handler below — it's a modal overlay on top of Build/Shop, not a real
+  // mode transition), so leaving it needs to explicitly restore whichever
+  // of Shop/Build's nav buttons was really active underneath, rather than
+  // leaving Sell looking active forever once its own highlight (also set
+  // there) was the last thing to touch these buttons.
+  updateModeNavUI();
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
 
@@ -3483,15 +3498,26 @@ async function renderIdentityList() {
     const row = document.createElement('div');
     row.className = 'identity-row';
 
-    const info = document.createElement('div');
-    info.className = 'identity-row-info';
+    // Rename/Delete/Play only show once this row is actually tapped —
+    // showing them inline next to the name on every row meant the name
+    // itself had to be truncated to leave them room, cutting off exactly
+    // the thing a builder/seller most needs to read. Tapping a different
+    // row's toggle collapses whichever one was open before it.
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'identity-row-toggle';
     const labelEl = document.createElement('div');
     labelEl.className = 'identity-row-label';
     labelEl.textContent = identity.label;
     const idEl = document.createElement('div');
     idEl.className = 'identity-row-id';
     idEl.textContent = id;
-    info.append(labelEl, idEl);
+    toggle.append(labelEl, idEl);
+    toggle.addEventListener('click', () => {
+      const wasExpanded = row.classList.contains('expanded');
+      for (const otherRow of identityListEl.querySelectorAll('.identity-row')) otherRow.classList.remove('expanded');
+      if (!wasExpanded) row.classList.add('expanded');
+    });
 
     const actions = document.createElement('div');
     actions.className = 'identity-row-actions';
@@ -3531,17 +3557,32 @@ async function renderIdentityList() {
     chooseBtn.addEventListener('click', () => identityOnChoose(id));
     actions.append(renameBtn, deleteBtn, chooseBtn);
 
-    row.append(info, actions);
+    row.append(toggle, actions);
     identityListEl.appendChild(row);
   }
 }
+
+// Resolves the promise a pending runIdentityMenu() call returned, if any —
+// set for the span of that call, read by identityCloseBtn's own handler
+// below. null the rest of the time (including during openBuilderSwitcher/
+// openSellerSwitcher, which manage identityOnChoose directly rather than
+// through this promise-returning flow, so Close there is a plain dismiss).
+let pendingIdentityResolve = null;
 
 function runIdentityMenu(kind, setActiveId) {
   return new Promise((resolve) => {
     identityKind = kind;
     identityModalTitleEl.textContent = `Choose a ${kind.noun}`;
-    identityCloseBtn.style.display = 'none';
+    // The builder flow's own escape hatch is "Shop instead" (showShopEscape)
+    // — Close doesn't make sense there since nothing's loaded yet for it to
+    // go back to. The seller flow has no such button (Sell is only ever
+    // reached from an already-loaded Shop/Build scene, and "go to Shop"
+    // isn't a meaningful additional option from inside it) but does have
+    // something real to cancel back to, so it gets Close instead.
+    identityCloseBtn.style.display = kind.showShopEscape ? 'none' : '';
+    pendingIdentityResolve = resolve;
     identityOnChoose = (id) => {
+      pendingIdentityResolve = null;
       setActiveId(id);
       identityModalEl.classList.remove('visible');
       resolve(id);
@@ -3563,26 +3604,34 @@ function runIdentityMenu(kind, setActiveId) {
 // hanging forever with no way to resolve. Builder and seller each need
 // their own promise here, not one shared — both flows can genuinely be
 // in flight together (Build mode's own startup menu and a Sell tap).
+// Builder's own mandatory flow never actually offers Close (see
+// runIdentityMenu), so `id` here is never really null in practice — but
+// the check costs nothing and keeps this symmetric with ensureSellerIdentity,
+// which does need it.
 let builderIdentityFlowPromise = null;
 function ensureBuilderIdentity() {
   if (builderId) return Promise.resolve(builderId);
   if (!builderIdentityFlowPromise) {
     builderIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.builder, setActiveBuilderId).then((id) => {
-      builderId = id;
       builderIdentityFlowPromise = null;
+      if (id) builderId = id;
       return id;
     });
   }
   return builderIdentityFlowPromise;
 }
 
+// Resolves to null (rather than a sellerId) if the builder closes the
+// picker instead of choosing one — callers (openSellerModal, the upload
+// flow) need to check for that and back out cleanly rather than treating
+// a cancel as if a seller had been chosen.
 let sellerIdentityFlowPromise = null;
 function ensureSellerIdentity() {
   if (sellerId) return Promise.resolve(sellerId);
   if (!sellerIdentityFlowPromise) {
     sellerIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.seller, setActiveSellerId).then((id) => {
-      sellerId = id;
       sellerIdentityFlowPromise = null;
+      if (id) sellerId = id;
       return id;
     });
   }
@@ -3638,6 +3687,16 @@ sellerIdentityBtn.addEventListener('click', openSellerSwitcher);
 
 identityCloseBtn.addEventListener('click', () => {
   identityModalEl.classList.remove('visible');
+  // Only set during a runIdentityMenu() call still awaiting a choice (the
+  // seller flow's own mandatory picker, since the builder one hides Close
+  // entirely) — openBuilderSwitcher/openSellerSwitcher manage their own
+  // identityOnChoose directly and never set this, so Close there stays a
+  // plain dismiss with nothing left to resolve.
+  if (pendingIdentityResolve) {
+    const resolve = pendingIdentityResolve;
+    pendingIdentityResolve = null;
+    resolve(null);
+  }
 });
 
 identityNewBtn.addEventListener('click', async () => {
@@ -4263,6 +4322,12 @@ for (const btn of modeNavButtons) {
   btn.addEventListener('click', async () => {
     const target = btn.dataset.mode;
     if (target === 'sell') {
+      // Sell is a modal overlay, not a real mode transition (currentMode
+      // never becomes 'sell' — see updateModeNavUI's own comment), so its
+      // nav button needs to be marked active here explicitly rather than
+      // through the usual currentMode-driven highlighting; closeSellerModal
+      // restores the real Shop/Build highlighting once it closes.
+      for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === 'sell');
       // openSellerModal() itself ensures a seller identity — no builder
       // identity or claimed landlet needed to sell, only to build.
       openSellerModal();

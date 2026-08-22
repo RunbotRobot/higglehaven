@@ -473,7 +473,11 @@
       #upload-modal {
         position: fixed;
         inset: 0;
-        z-index: 20;
+        /* Reachable only from inside the Seller modal (z-index 20) now —
+           needs to stack above it rather than tie, the same "open a modal
+           over an already-open one" pattern the identity modal uses over
+           the claim modal. */
+        z-index: 25;
         display: none;
         align-items: center;
         justify-content: center;
@@ -879,27 +883,38 @@
         max-height: 45vh;
         overflow-y: auto;
       }
+      /* Rename/Delete/Play used to sit inline next to the name on every
+         row, which meant the name itself had to be truncated (ellipsis) to
+         leave them room — on a long label there wasn't enough width left to
+         read it at all. Now a row shows just its name at full width; tapping
+         it (identity-row-toggle) reveals the actions below instead, so the
+         name always gets the room it needs and the actions only cost space
+         once you've actually picked a row. */
       .identity-row {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
+        flex-direction: column;
+        gap: 8px;
         background: rgb(255 255 255 / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
       }
-      .identity-row-info {
-        min-width: 0;
+      .identity-row-toggle {
         display: flex;
         flex-direction: column;
+        align-items: flex-start;
         gap: 2px;
+        width: 100%;
+        background: none;
+        border: none;
+        padding: 0;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
       }
       .identity-row-label {
         font-size: 14px;
         color: #fff;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
       }
       .identity-row-id {
         font-size: 10px;
@@ -907,9 +922,12 @@
         overflow-wrap: anywhere;
       }
       .identity-row-actions {
-        display: flex;
+        display: none;
         gap: 6px;
-        flex-shrink: 0;
+        flex-wrap: wrap;
+      }
+      .identity-row.expanded .identity-row-actions {
+        display: flex;
       }
       .identity-row-actions button,
       #identity-new-btn,
@@ -1135,7 +1153,6 @@
     </div>
     <div id="add-item-panel">
       <button id="add-item-btn" type="button">+ Add Item</button>
-      <button id="upload-model-btn" type="button">+ Upload Model</button>
       <button id="toggle-multiselect" type="button">Multi-Select</button>
       <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled>Paste</button>
@@ -1170,6 +1187,7 @@
           Products this seller identity has uploaded (plus any custom upload nobody's claimed yet). Extensible axis
           and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
+        <button id="upload-model-btn" type="button">+ Upload Model</button>
         <div id="seller-list"></div>
         <div id="seller-status"></div>
         <div id="seller-modal-actions">
