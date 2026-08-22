@@ -1443,7 +1443,6 @@ uploadSubmitBtn.addEventListener('click', async () => {
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerListEl = document.getElementById('seller-list');
 const sellerStatusEl = document.getElementById('seller-status');
-const sellerBtn = document.getElementById('seller-btn');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
 
 function myProducts() {
@@ -1869,11 +1868,10 @@ function renderSellerList() {
   }
 }
 
-// Ensures a seller identity is active before showing the modal — reachable
-// two ways that don't already guarantee one: #seller-btn ("My Products")
-// directly from inside Build mode, and the #mode-nav Sell tab from
-// anywhere. Both just call this rather than each separately remembering
-// to await ensureSellerIdentity() first.
+// Ensures a seller identity is active before showing the modal. Only
+// reachable via the #mode-nav Sell tab (openSellerModal call sites below),
+// which calls this rather than separately remembering to await
+// ensureSellerIdentity() first.
 async function openSellerModal() {
   await ensureSellerIdentity();
   renderSellerList();
@@ -1889,7 +1887,6 @@ function closeSellerModal() {
   // builder reselected something.
   updateSelectionUI();
 }
-sellerBtn.addEventListener('click', openSellerModal);
 sellerCloseBtn.addEventListener('click', closeSellerModal);
 
 // Settings: local, per-device display preferences — nothing here is ever

@@ -481,10 +481,11 @@ never a squash:
 Still no real accounts (same dev-mode caveat as Builders/Sellers above), but
 a template's `sellerId` is a genuinely separate identity from whichever
 builder uploaded it — see "Sellers" above. Reaching Sell mode (the `#mode-nav`
-Sell tab, or Build mode's own "My Products" button) ensures a seller identity
-is chosen first if one isn't already (`ensureSellerIdentity` in `src/main.js`)
-— no builder identity or claimed landlet needed, only a seller one. The
-frontend's "My Products" button opens a modal listing every template whose
+Sell tab — the only way in; there is deliberately no "My Products" shortcut
+from Build mode) ensures a seller identity is chosen first if one isn't
+already (`ensureSellerIdentity` in `src/main.js`) — no builder identity or
+claimed landlet needed, only a seller one. The Sell modal lists every
+template whose
 `sellerId` matches the active seller, plus any custom-uploaded template with
 a `null` `sellerId` (covers products uploaded before sellers existed as their
 own concept). A "Seller identity" button inside the modal reopens the same
