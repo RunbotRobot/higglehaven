@@ -548,6 +548,35 @@
       #upload-status.error {
         color: #ffb4a8;
       }
+      #upload-dimensions-hint {
+        font-size: 12px;
+        color: rgb(255 255 255 / 0.65);
+      }
+      #upload-dimensions-preview {
+        width: 100%;
+        height: 170px;
+        border-radius: 10px;
+        background: rgb(0 0 0 / 0.25);
+        touch-action: none;
+      }
+      .upload-dimension-field {
+        display: flex;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px;
+      }
+      .upload-dimension-field span:first-child {
+        flex: 1;
+      }
+      .upload-dimension-input {
+        width: 5.5em;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(255 255 255 / 0.1);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+      }
       #upload-modal-actions {
         display: flex;
         justify-content: flex-end;
@@ -1177,18 +1206,39 @@
     </div>
     <div id="upload-modal">
       <div id="upload-modal-content">
-        <h2>Add a custom product</h2>
-        <label>
-          Name
-          <input id="upload-name" type="text" placeholder="e.g. Brick" />
-        </label>
-        <label id="upload-file-label">
-          .glb file
-          <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary" />
-        </label>
-        <div id="upload-hint">
-          We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
-          80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster.
+        <h2 id="upload-modal-title">Add a custom product</h2>
+        <div id="upload-step-file">
+          <label>
+            Name
+            <input id="upload-name" type="text" placeholder="e.g. Brick" />
+          </label>
+          <label id="upload-file-label">
+            .glb file
+            <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary" />
+          </label>
+          <div id="upload-hint">
+            We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
+            80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster.
+          </div>
+        </div>
+        <div id="upload-step-dimensions" hidden>
+          <div id="upload-dimensions-hint">
+            Third-party models are often imported at the wrong real-world size. Set this product's actual
+            dimensions below — changing one adjusts the other two to keep its proportions.
+          </div>
+          <div id="upload-dimensions-preview"></div>
+          <label class="upload-dimension-field" data-axis="x">
+            <span>Width (X)</span>
+            <input class="upload-dimension-input" data-axis="x" type="number" step="0.01" min="0.01" /><span class="upload-dimension-unit">m</span>
+          </label>
+          <label class="upload-dimension-field" data-axis="y">
+            <span>Depth (Y)</span>
+            <input class="upload-dimension-input" data-axis="y" type="number" step="0.01" min="0.01" /><span class="upload-dimension-unit">m</span>
+          </label>
+          <label class="upload-dimension-field" data-axis="z">
+            <span>Height (Z)</span>
+            <input class="upload-dimension-input" data-axis="z" type="number" step="0.01" min="0.01" /><span class="upload-dimension-unit">m</span>
+          </label>
         </div>
         <div id="upload-status"></div>
         <div id="upload-modal-actions">

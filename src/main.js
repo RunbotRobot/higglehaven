@@ -940,6 +940,7 @@ function meshDimensions(mesh) {
 }
 
 const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
+const AXIS_LIST = ['x', 'y', 'z'];
 
 // Swaps `mesh` for a freshly built Object3D reflecting `crop` — used by
 // the Trim UI itself, and by restoreSnapshot when an undo/redo jump
@@ -1518,12 +1519,32 @@ addItemBtn.addEventListener('click', () => {
 // persistent catalog entry has nowhere to live in offline/fallback mode,
 // since catalog.js is a static file, not a runtime data store.
 const uploadModalEl = document.getElementById('upload-modal');
+const uploadModalTitleEl = document.getElementById('upload-modal-title');
+const uploadStepFileEl = document.getElementById('upload-step-file');
+const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
+const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
 const uploadNameInput = document.getElementById('upload-name');
 const uploadFileInput = document.getElementById('upload-file-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
 const uploadModelBtn = document.getElementById('upload-model-btn');
+const uploadDimensionInputEls = {
+  x: document.querySelector('.upload-dimension-input[data-axis="x"]'),
+  y: document.querySelector('.upload-dimension-input[data-axis="y"]'),
+  z: document.querySelector('.upload-dimension-input[data-axis="z"]'),
+};
+const uploadDimensionUnitEls = [...document.querySelectorAll('.upload-dimension-unit')];
+
+// Upload is a two-step wizard sharing one modal shell: 'file' (name + pick
+// a .glb) then 'dimensions' (confirm/adjust the measured real-world size
+// before the product is actually created). uploadModelUrl/
+// uploadOriginalDimensions hold what step 'file' produced, since step
+// 'dimensions' needs them and the R2 upload shouldn't happen twice.
+let uploadStep = 'file';
+let uploadModelUrl = null;
+let uploadOriginalDimensions = null;
+let uploadDimensionPreview = null;
 
 function setUploadStatus(text, isError) {
   uploadStatusEl.textContent = text;
@@ -1536,17 +1557,49 @@ function formatBytes(bytes) {
   return `${bytes}B`;
 }
 
+function disposeUploadDimensionPreview() {
+  uploadDimensionsPreviewEl.innerHTML = '';
+  if (!uploadDimensionPreview) return;
+  uploadDimensionPreview.controls.dispose();
+  uploadDimensionPreview.renderer.dispose();
+  disposeObject(uploadDimensionPreview.previewObject);
+  for (const arrow of uploadDimensionPreview.arrows) {
+    arrow.line.geometry.dispose();
+    arrow.line.material.dispose();
+    arrow.cone.geometry.dispose();
+    arrow.cone.material.dispose();
+  }
+  for (const sprite of uploadDimensionPreview.labels) {
+    sprite.material.map.dispose();
+    sprite.material.dispose();
+  }
+  uploadDimensionPreview = null;
+}
+
+function resetUploadModalToFileStep() {
+  uploadStep = 'file';
+  uploadModelUrl = null;
+  uploadOriginalDimensions = null;
+  disposeUploadDimensionPreview();
+  uploadModalTitleEl.textContent = 'Upload Model';
+  uploadStepFileEl.hidden = false;
+  uploadStepDimensionsEl.hidden = true;
+  uploadSubmitBtn.textContent = 'Add Product';
+}
+
 function openUploadModal() {
   catalogPickerEl.classList.remove('visible');
   uploadNameInput.value = '';
   uploadFileInput.value = '';
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
+  resetUploadModalToFileStep();
   uploadModalEl.classList.add('visible');
 }
 
 function closeUploadModal() {
   uploadModalEl.classList.remove('visible');
+  resetUploadModalToFileStep();
 }
 
 uploadModelBtn.addEventListener('click', openUploadModal);
@@ -1565,7 +1618,161 @@ async function measureModelDimensions(modelUrl) {
   return { width: size.x, depth: size.y, height: size.z };
 }
 
-uploadSubmitBtn.addEventListener('click', async () => {
+function setUploadDimensionInputs(dimensionsMeters) {
+  for (const axis of AXIS_LIST) {
+    const key = AXIS_DIMENSION_KEY[axis];
+    uploadDimensionInputEls[axis].value = toDisplayLength(dimensionsMeters[key]).toFixed(2);
+  }
+}
+
+function currentUploadDimensionsMeters() {
+  const dims = {};
+  for (const axis of AXIS_LIST) {
+    const key = AXIS_DIMENSION_KEY[axis];
+    dims[key] = fromDisplayLength(Number(uploadDimensionInputEls[axis].value));
+  }
+  return dims;
+}
+
+function refreshUploadDimensionUnits() {
+  const suffix = unitSuffix();
+  for (const el of uploadDimensionUnitEls) el.textContent = suffix;
+}
+
+// Editing any one dimension field rescales the OTHER TWO in lockstep to
+// hold the model's original proportions — always computed fresh off the
+// originally-measured dimensions (never off whatever's currently
+// displayed), so repeated edits can't compound rounding error.
+for (const axis of AXIS_LIST) {
+  uploadDimensionInputEls[axis].addEventListener('input', () => {
+    if (!uploadOriginalDimensions) return;
+    const key = AXIS_DIMENSION_KEY[axis];
+    const editedMeters = fromDisplayLength(Number(uploadDimensionInputEls[axis].value));
+    if (!Number.isFinite(editedMeters) || editedMeters <= 0) return;
+    const scaleFactor = editedMeters / uploadOriginalDimensions[key];
+    if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) return;
+    for (const otherAxis of AXIS_LIST) {
+      if (otherAxis === axis) continue;
+      const otherKey = AXIS_DIMENSION_KEY[otherAxis];
+      uploadDimensionInputEls[otherAxis].value = toDisplayLength(uploadOriginalDimensions[otherKey] * scaleFactor).toFixed(2);
+    }
+    updateUploadDimensionLabels();
+  });
+}
+
+// A wider rounded-rect badge sized for a numeric string like "1.24m",
+// unlike makeAxisLabelSprite's single-letter circular badge. Exposes
+// userData.setText so the same sprite can be redrawn in place as the
+// seller edits a dimension field.
+function makeDimensionLabelSprite(text, colorHex) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 160;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  const draw = (label) => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
+    ctx.beginPath();
+    ctx.roundRect(2, 12, canvas.width - 4, canvas.height - 24, 16);
+    ctx.fill();
+    ctx.fillStyle = '#16240a';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+    texture.needsUpdate = true;
+  };
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  sprite.renderOrder = 1;
+  draw(text);
+  sprite.userData.setText = draw;
+  return sprite;
+}
+
+// Shows the freshly-uploaded (not-yet-created) model with its X/Y/Z
+// dimensions labeled, mirroring the Seller modal's extensibility axis
+// preview (showAxisPreview) but for a model that has no catalog template
+// yet, so it's loaded directly via loadModelInstance rather than
+// createMeshForInstance. The arrows/geometry are sized once to the
+// original measured bounding box and never rescaled afterward — since
+// dimension edits are always proportion-preserving (a uniform scale),
+// every possible edit renders identically, so only the label text needs
+// to change as the seller types (see updateUploadDimensionLabels).
+async function showUploadDimensionPreview(modelUrl) {
+  disposeUploadDimensionPreview();
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'seller-preview-canvas';
+  uploadDimensionsPreviewEl.appendChild(canvas);
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(2, -3, 4);
+  scene.add(sun);
+
+  const previewObject = await loadModelInstance(modelUrl);
+  scene.add(previewObject);
+
+  const box = new THREE.Box3().setFromObject(previewObject);
+  const size = box.getSize(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.05);
+
+  const rect = canvas.getBoundingClientRect();
+  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
+  camera.up.set(0, 0, 1);
+  const dist = radius * 2.6;
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(rect.width, rect.height, false);
+
+  const controls = new OrbitControls(camera, canvas);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = false;
+  controls.enablePan = false;
+  controls.minDistance = dist * 0.35;
+  controls.maxDistance = dist * 3;
+  const render = () => renderer.render(scene, camera);
+  controls.addEventListener('change', render);
+
+  const axisDims = { x: size.x, y: size.y, z: size.z };
+  const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+  const arrows = [];
+  const labels = [];
+  for (const axis of AXIS_LIST) {
+    const length = axisDims[axis] / 2 + radius * 0.35;
+    const color = AXIS_ARROW_COLORS[axis];
+    const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
+    scene.add(arrow);
+    arrows.push(arrow);
+    const label = makeDimensionLabelSprite('', color);
+    label.position.copy(dirs[axis]).multiplyScalar(length * 1.25);
+    const labelScale = radius * 0.5;
+    label.scale.set(labelScale, labelScale * 0.4, labelScale);
+    scene.add(label);
+    labels.push(label);
+  }
+
+  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render };
+  updateUploadDimensionLabels();
+}
+
+function updateUploadDimensionLabels() {
+  if (!uploadDimensionPreview) return;
+  const dims = currentUploadDimensionsMeters();
+  const axisLabelDims = { x: dims.width, y: dims.depth, z: dims.height };
+  AXIS_LIST.forEach((axis, i) => {
+    uploadDimensionPreview.labels[i].userData.setText(formatLength(axisLabelDims[axis]));
+  });
+  uploadDimensionPreview.render();
+}
+
+async function handleUploadFileStep() {
   const name = uploadNameInput.value.trim();
   if (!name) {
     setUploadStatus('Name is required.', true);
@@ -1600,7 +1807,38 @@ uploadSubmitBtn.addEventListener('click', async () => {
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
+    uploadModelUrl = modelUrl;
+    uploadOriginalDimensions = dimensions;
+    setUploadDimensionInputs(dimensions);
+    refreshUploadDimensionUnits();
 
+    setUploadStatus('Loading preview…');
+    await showUploadDimensionPreview(modelUrl);
+
+    uploadStep = 'dimensions';
+    uploadModalTitleEl.textContent = 'Confirm Dimensions';
+    uploadStepFileEl.hidden = true;
+    uploadStepDimensionsEl.hidden = false;
+    uploadSubmitBtn.textContent = 'Create Product';
+    setUploadStatus('');
+  } catch (err) {
+    console.error('Custom product upload failed:', err);
+    setUploadStatus(err.message || 'Something went wrong.', true);
+  } finally {
+    uploadSubmitBtn.disabled = false;
+  }
+}
+
+async function handleUploadDimensionsStep() {
+  const name = uploadNameInput.value.trim();
+  const dimensions = currentUploadDimensionsMeters();
+  if (!Object.values(dimensions).every((value) => Number.isFinite(value) && value > 0)) {
+    setUploadStatus('Enter a positive size for each dimension.', true);
+    return;
+  }
+
+  uploadSubmitBtn.disabled = true;
+  try {
     setUploadStatus('Creating product…');
     // Upload Model only lives inside the (already-open) Seller modal now,
     // which already guaranteed a seller identity to open at all — this is
@@ -1610,7 +1848,7 @@ uploadSubmitBtn.addEventListener('click', async () => {
       name,
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
-      modelUrl,
+      modelUrl: uploadModelUrl,
       sellerId: uploaderSellerId,
     });
 
@@ -1623,11 +1861,16 @@ uploadSubmitBtn.addEventListener('click', async () => {
     // place onto at all) as easily as from Build.
     renderSellerList();
   } catch (err) {
-    console.error('Custom product upload failed:', err);
+    console.error('Custom product creation failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
   } finally {
     uploadSubmitBtn.disabled = false;
   }
+}
+
+uploadSubmitBtn.addEventListener('click', () => {
+  if (uploadStep === 'file') handleUploadFileStep();
+  else handleUploadDimensionsStep();
 });
 
 // Seller product management: lets a seller mark their own uploaded
@@ -1652,7 +1895,6 @@ function myProducts() {
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
 }
 
-const AXIS_LIST = ['x', 'y', 'z'];
 const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
 
 // On-demand product preview: a small self-contained Three.js scene,
