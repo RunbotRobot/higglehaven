@@ -12,7 +12,13 @@
 // defeating the point.
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
+// A locally patched copy, not the stock addon — see its own doc comment.
+// The stock SimplifyModifier silently drops any geometry attribute outside
+// position/uv/normal/tangent/color, including a secondary UV set some
+// export pipelines put a texture on; this one carries uv1/uv2/uv3 through
+// decimation too; see git history for the version of this file that
+// instead detected and skipped simplifying those meshes entirely.
+import { SimplifyModifier } from './vendor/SimplifyModifierExtraUV.js';
 
 // Real-time web/mobile products should be tiny (see catalog.js's own
 // comments) — a few thousand triangles is already generous detail for
@@ -37,26 +43,6 @@ const simplifier = new SimplifyModifier();
 function countTriangles(geometry) {
   const count = geometry.index ? geometry.index.count : geometry.attributes.position.count;
   return Math.round(count / 3);
-}
-
-// SimplifyModifier only ever preserves the geometry attributes named
-// 'position', 'uv', 'normal', 'tangent', and 'color' through its
-// edge-collapse decimation (see its own source) — any other attribute,
-// including a second UV set ('uv1'/'uv2'/'uv3', glTF's TEXCOORD_1/2/3),
-// gets silently deleted. A texture bound to one of those channels (not
-// unheard of — some export pipelines put a base color or other map on a
-// non-zero UV set) would then re-export referencing a UV channel that no
-// longer exists on the decimated geometry, which can render solid black
-// or garbled rather than the product's real appearance. Detecting that
-// upfront and skipping simplification for just that mesh trades away some
-// file-size savings on this one mesh for guaranteed-correct appearance,
-// rather than risking a visibly broken product to save a few KB.
-const TEXTURE_MAP_PROPERTIES = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap', 'bumpMap'];
-function usesNonPrimaryUvChannel(material) {
-  const materials = Array.isArray(material) ? material : [material];
-  return materials.some((mat) =>
-    TEXTURE_MAP_PROPERTIES.some((prop) => mat?.[prop] && (mat[prop].channel ?? 0) !== 0),
-  );
 }
 
 // onProgress(status) is called with short human-readable status strings as
@@ -96,11 +82,6 @@ export async function optimizeModelFile(file, onProgress) {
     trianglesBefore += triangleCount;
 
     if (triangleCount <= TARGET_TRIANGLES_PER_MESH) {
-      trianglesAfter += triangleCount;
-      return;
-    }
-
-    if (usesNonPrimaryUvChannel(child.material)) {
       trianglesAfter += triangleCount;
       return;
     }
