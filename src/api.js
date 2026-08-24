@@ -308,3 +308,32 @@ export async function updateCatalogTemplate(templateId, patch) {
 export async function deleteCatalogTemplate(templateId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }
+
+// Builder-facing notifications (see migrations/0038_notifications.sql) —
+// currently only ever produced by a seller changing a placed product's
+// dimensions. unreadOnly narrows the list server-side rather than filtering
+// client-side, since the same call is used both for the unread badge count
+// and (without the flag) the full history list.
+export async function fetchNotifications(builderId, { unreadOnly = false } = {}) {
+  const query = new URLSearchParams({ builderId });
+  if (unreadOnly) query.set('unreadOnly', 'true');
+  const { notifications } = await requestJson(`/notifications?${query.toString()}`);
+  return notifications;
+}
+
+export async function markNotificationRead(notificationId) {
+  const { notification } = await requestJson(`/notifications/${encodeURIComponent(notificationId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ read: true }),
+  });
+  return notification;
+}
+
+export async function markAllNotificationsRead(builderId) {
+  await requestJson('/notifications/mark-all-read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ builderId }),
+  });
+}

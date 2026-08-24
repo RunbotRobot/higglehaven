@@ -236,10 +236,40 @@
         color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
       }
-      #settings-btn {
+      /* Only relevant to builders (see notifyBuildersOfDimensionChange) —
+         hidden in Shop mode alongside identity-btn (SHOP_HIDDEN_BUILDER_UI_IDS
+         in main.js). Sits between Identity and Settings. */
+      #notifications-btn {
         position: fixed;
         top: 48px;
         left: 78px;
+        z-index: 10;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+      }
+      #notifications-badge {
+        display: inline-block;
+        min-width: 15px;
+        margin-left: 5px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: #d9483a;
+        color: #fff;
+        font-size: 10px;
+        line-height: 15px;
+        text-align: center;
+      }
+      #notifications-badge[hidden] {
+        display: none;
+      }
+      #settings-btn {
+        position: fixed;
+        top: 48px;
+        left: 148px;
         z-index: 10;
         padding: 5px 12px;
         border-radius: 999px;
@@ -841,6 +871,37 @@
         font: 13px/1.4 sans-serif;
         width: 5.5em;
       }
+      /* Edit Size's own panel/row/input — visually identical to
+         .seller-extensibility-panel/.seller-axis-row/.seller-min-input
+         above but kept as fully separate classes (see main.js's own
+         comment) so existing per-row lookups that assume exactly one
+         .seller-extensibility-panel, or exactly three .seller-axis-row,
+         per row aren't broken by this second panel's own elements. */
+      .seller-size-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-size-panel[hidden] {
+        display: none;
+      }
+      .seller-size-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 13px/1.4 sans-serif;
+        color: #fff;
+      }
+      .seller-size-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(255 255 255 / 0.1);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+        width: 5.5em;
+      }
       .seller-save-btn {
         padding: 6px 14px;
         border-radius: 999px;
@@ -857,6 +918,24 @@
         color: rgb(255 255 255 / 0.65);
       }
       .seller-row-status.error {
+        color: #ffb4a8;
+      }
+      .seller-size-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-size-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-size-status {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.65);
+      }
+      .seller-size-status.error {
         color: #ffb4a8;
       }
       #seller-status {
@@ -966,6 +1045,76 @@
         background: rgb(255 255 255 / 0.15);
         color: #fff;
         font: 14px/1.4 sans-serif;
+      }
+      /* Same modal shell as #settings-modal. */
+      #notifications-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.5);
+        padding: 16px;
+      }
+      #notifications-modal.visible {
+        display: flex;
+      }
+      #notifications-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #notifications-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #notifications-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .notification-row {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(255 255 255 / 0.08);
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.9);
+      }
+      .notification-row.unread {
+        background: rgb(255 255 255 / 0.16);
+        cursor: pointer;
+      }
+      .notification-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.5);
+      }
+      #notifications-empty {
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.6);
+      }
+      #notifications-mark-all-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
+      #notifications-mark-all-btn:disabled {
+        opacity: 0.5;
       }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
@@ -1253,6 +1402,7 @@
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>
     <button id="identity-btn" type="button">Identity</button>
+    <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
     <button id="settings-btn" type="button">Settings</button>
     <div id="mode-nav">
       <button class="mode-nav-btn" data-mode="shop" type="button">Shop</button>
@@ -1358,6 +1508,15 @@
         <div id="seller-modal-actions">
           <button id="seller-identity-btn" type="button">Seller identity</button>
         </div>
+      </div>
+    </div>
+    <div id="notifications-modal">
+      <div id="notifications-modal-content">
+        <button id="notifications-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Notices</h2>
+        <button id="notifications-mark-all-btn" type="button">Mark all read</button>
+        <div id="notifications-list"></div>
+        <div id="notifications-empty">Nothing here yet.</div>
       </div>
     </div>
     <div id="settings-modal">

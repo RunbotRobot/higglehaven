@@ -35,6 +35,9 @@ import {
   renameSeller,
   deleteSeller,
   fetchAllLandlets,
+  fetchNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -2084,9 +2087,146 @@ function renderSellerList() {
 
     const dims = document.createElement('div');
     dims.className = 'seller-row-dims';
-    const { width, depth, height } = template.dimensions;
-    dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
+    const refreshDimsText = () => {
+      const { width, depth, height } = template.dimensions;
+      dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
+    };
+    refreshDimsText();
     details.appendChild(dims);
+
+    // Edit Size: correct a mis-measured (or since-outgrown) real-world
+    // size after the fact — proportional-only, same as the upload
+    // wizard's own dimensions step (handleUploadDimensionsStep), since
+    // Trim (not this) is the tool for changing one instance's own aspect
+    // ratio. A real uploaded model gets its actual geometry rescaled to
+    // match (rescaleModelFile) and re-uploaded before the template is
+    // patched — a placeholder box product has no model file to rescale,
+    // so its dimensions alone are patched. Either way, the server-side
+    // PATCH handler notifies every builder with this template placed
+    // (see notifyBuildersOfDimensionChange) — nothing extra to call here.
+    const sizeToggle = document.createElement('button');
+    // Own classes throughout, not shared with the Extensibility toggle/
+    // panel/rows below despite the identical look (same CSS rules, applied
+    // to both) — several existing tests select the Extensibility panel's
+    // axis rows/inputs by class and index (nth(0)/(1)/(2)) assuming exactly
+    // three such elements per row; a second, earlier-in-DOM set under a
+    // shared class would silently shift those indices.
+    sizeToggle.className = 'seller-extensibility-toggle seller-size-toggle';
+    sizeToggle.type = 'button';
+    sizeToggle.textContent = 'Edit Size ▾';
+    details.appendChild(sizeToggle);
+
+    const sizePanel = document.createElement('div');
+    sizePanel.className = 'seller-size-panel';
+    sizePanel.hidden = true;
+    details.appendChild(sizePanel);
+
+    const sizeInputs = {};
+    for (const axis of AXIS_LIST) {
+      const axisRow = document.createElement('label');
+      axisRow.className = 'seller-size-row';
+      const text = document.createElement('span');
+      text.textContent = AXIS_ROW_LABELS[axis];
+      const input = document.createElement('input');
+      input.className = 'seller-size-input';
+      input.type = 'number';
+      input.step = '0.01';
+      input.min = '0';
+      axisRow.appendChild(text);
+      axisRow.appendChild(input);
+      sizePanel.appendChild(axisRow);
+      sizeInputs[axis] = input;
+    }
+
+    function fillSizeInputs() {
+      for (const axis of AXIS_LIST) {
+        sizeInputs[axis].value = toDisplayLength(template.dimensions[AXIS_DIMENSION_KEY[axis]]).toFixed(2);
+      }
+    }
+    fillSizeInputs();
+
+    // Editing one axis rescales the other two in lockstep off the
+    // template's own current dimensions (not whatever's mid-edit in the
+    // other fields), so repeated edits can't compound rounding error —
+    // same approach as the upload wizard's proportional linking.
+    for (const axis of AXIS_LIST) {
+      sizeInputs[axis].addEventListener('input', () => {
+        const key = AXIS_DIMENSION_KEY[axis];
+        const editedMeters = fromDisplayLength(Number(sizeInputs[axis].value));
+        if (!Number.isFinite(editedMeters) || editedMeters <= 0) return;
+        const scaleFactor = editedMeters / template.dimensions[key];
+        if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) return;
+        for (const otherAxis of AXIS_LIST) {
+          if (otherAxis === axis) continue;
+          const otherKey = AXIS_DIMENSION_KEY[otherAxis];
+          sizeInputs[otherAxis].value = toDisplayLength(template.dimensions[otherKey] * scaleFactor).toFixed(2);
+        }
+      });
+    }
+
+    // Own classes, not .seller-row-status/.seller-save-btn (see the
+    // classes comment above the toggle/panel) — several tests read "the"
+    // row status or click "the" save button by class alone, assuming just
+    // one of each per row.
+    const sizeStatus = document.createElement('div');
+    sizeStatus.className = 'seller-size-status';
+
+    const sizeSaveBtn = document.createElement('button');
+    sizeSaveBtn.className = 'seller-size-save-btn';
+    sizeSaveBtn.type = 'button';
+    sizeSaveBtn.textContent = 'Save Size';
+    sizeSaveBtn.addEventListener('click', async () => {
+      sizeStatus.textContent = '';
+      sizeStatus.classList.remove('error');
+      const nextDimensions = {
+        width: fromDisplayLength(Number(sizeInputs.x.value)),
+        depth: fromDisplayLength(Number(sizeInputs.y.value)),
+        height: fromDisplayLength(Number(sizeInputs.z.value)),
+      };
+      if (!Object.values(nextDimensions).every((value) => Number.isFinite(value) && value > 0)) {
+        sizeStatus.textContent = 'Enter a positive size for each dimension.';
+        sizeStatus.classList.add('error');
+        return;
+      }
+      if (!dimensionsChanged(nextDimensions, template.dimensions)) {
+        sizeStatus.textContent = 'No change.';
+        return;
+      }
+      sizeSaveBtn.disabled = true;
+      try {
+        const patch = { dimensions: nextDimensions };
+        if (template.modelUrl?.startsWith('/uploads/')) {
+          const scaleFactor = nextDimensions.width / template.dimensions.width;
+          sizeStatus.textContent = 'Rescaling model…';
+          const originalBlob = await fetch(template.modelUrl).then((res) => res.blob());
+          const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
+          sizeStatus.textContent = 'Uploading resized model…';
+          patch.modelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+        }
+        sizeStatus.textContent = 'Saving…';
+        const updated = await updateCatalogTemplate(template.templateId, patch);
+        Object.assign(template, updated);
+        refreshDimsText();
+        buildCatalogPickerButtons();
+        if (axisPreview?.templateId === template.templateId) {
+          showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
+        }
+        sizeStatus.textContent = 'Saved — any builder with this placed has been notified.';
+      } catch (err) {
+        sizeStatus.textContent = err.message || 'Could not resize.';
+        sizeStatus.classList.add('error');
+      } finally {
+        sizeSaveBtn.disabled = false;
+      }
+    });
+    sizePanel.appendChild(sizeSaveBtn);
+    sizePanel.appendChild(sizeStatus);
+
+    sizeToggle.addEventListener('click', () => {
+      sizePanel.hidden = !sizePanel.hidden;
+      sizeToggle.textContent = `Edit Size ${sizePanel.hidden ? '▾' : '▴'}`;
+      if (!sizePanel.hidden) fillSizeInputs();
+    });
 
     const rowStatus = document.createElement('div');
     rowStatus.className = 'seller-row-status';
@@ -2357,6 +2497,10 @@ async function openSellerModal() {
 function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
   disposeAxisPreview();
+  // An Edit Size save while this modal was open can have just created a
+  // notification for this same builder identity — refresh the badge now
+  // rather than leaving it stale until the next Build-mode entry.
+  refreshNotificationsBadge();
   // A save in here can change whether the currently-selected item (if any)
   // is extensible — updateSelectionUI() only normally re-runs on an actual
   // selection *change*, so without this the Trim button/field would keep
@@ -4056,6 +4200,99 @@ identityNewBtn.addEventListener('click', async () => {
   renderIdentityList();
 });
 
+// Builder-facing notifications (see migrations/0038_notifications.sql) —
+// currently only ever produced by a seller changing a placed product's
+// dimensions (notifyBuildersOfDimensionChange, worker/index.js). A plain
+// pill button + badge count, refreshed whenever a builder identity
+// resolves or the modal itself opens/closes — no live polling, since
+// nothing else in this app pushes updates to an already-open tab either.
+const notificationsBtn = document.getElementById('notifications-btn');
+const notificationsBadgeEl = document.getElementById('notifications-badge');
+const notificationsModalEl = document.getElementById('notifications-modal');
+const notificationsCloseBtn = document.getElementById('notifications-close-btn');
+const notificationsListEl = document.getElementById('notifications-list');
+const notificationsEmptyEl = document.getElementById('notifications-empty');
+const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+
+async function refreshNotificationsBadge() {
+  if (!builderId) return;
+  try {
+    const unread = await fetchNotifications(builderId, { unreadOnly: true });
+    notificationsBadgeEl.textContent = String(unread.length);
+    notificationsBadgeEl.hidden = unread.length === 0;
+  } catch (err) {
+    console.warn('Could not refresh notifications badge:', err);
+  }
+}
+
+function formatNotificationTime(isoString) {
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+async function renderNotifications() {
+  notificationsListEl.innerHTML = '';
+  if (!builderId) return;
+  let notifications;
+  try {
+    notifications = await fetchNotifications(builderId);
+  } catch (err) {
+    notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
+    notificationsEmptyEl.hidden = false;
+    return;
+  }
+  notificationsEmptyEl.hidden = notifications.length > 0;
+  for (const notification of notifications) {
+    const row = document.createElement('div');
+    row.className = 'notification-row';
+    row.classList.toggle('unread', !notification.readAt);
+    const message = document.createElement('div');
+    message.textContent = notification.message;
+    row.appendChild(message);
+    const time = document.createElement('div');
+    time.className = 'notification-row-time';
+    time.textContent = formatNotificationTime(notification.createdAt);
+    row.appendChild(time);
+    // Tapping any notice marks just that one read — simpler than a
+    // separate per-row dismiss button, and "Mark all read" still exists
+    // for clearing the whole list at once.
+    if (!notification.readAt) {
+      row.addEventListener('click', async () => {
+        try {
+          await markNotificationRead(notification.notificationId);
+          row.classList.remove('unread');
+          refreshNotificationsBadge();
+        } catch (err) {
+          console.warn('Could not mark notification read:', err);
+        }
+      });
+    }
+    notificationsListEl.appendChild(row);
+  }
+}
+
+notificationsBtn.addEventListener('click', () => {
+  notificationsModalEl.classList.add('visible');
+  renderNotifications();
+});
+notificationsCloseBtn.addEventListener('click', () => {
+  notificationsModalEl.classList.remove('visible');
+  refreshNotificationsBadge();
+});
+notificationsMarkAllBtn.addEventListener('click', async () => {
+  if (!builderId) return;
+  notificationsMarkAllBtn.disabled = true;
+  try {
+    await markAllNotificationsRead(builderId);
+    await renderNotifications();
+    await refreshNotificationsBadge();
+  } catch (err) {
+    console.warn('Could not mark all notifications read:', err);
+  } finally {
+    notificationsMarkAllBtn.disabled = false;
+  }
+});
+
 // Shop: a visitor mode reached straight from the builder-choice screen, no
 // identity needed, since visiting doesn't build or claim anything. Unlike
 // the claim flyover (a separate small canvas/renderer showing a top-down
@@ -4508,7 +4745,7 @@ function unloadShopLandletInstances(entry) {
 // leaving Shop mode (via #mode-nav's Build/Sell buttons) reloads the page
 // rather than trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'identity-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'identity-btn', 'notifications-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
 ];
 
 async function enterShopMode() {
@@ -5161,6 +5398,7 @@ async function bootstrap() {
   currentMode = 'build';
   updateModeNavUI();
   builderId = await ensureBuilderIdentity();
+  refreshNotificationsBadge();
   let instances;
   try {
     currentLandletId = await resolveLandletId();
