@@ -6,18 +6,34 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>higglehaven (dev)</title>
     <style>
-      /* Shared brand colors for every translucent UI pill. --pill-rgb is a
-         dark, desaturated version of the wordmark's green (rather than
-         plain black) so product-info, the gizmo buttons, etc. all read as
-         "this app" instead of a generic gray overlay. Space-separated RGB
-         (no commas) so each usage can pick its own alpha via
-         rgb(var(--pill-rgb) / a) — the modern slash-alpha syntax requires
-         space-separated channels; combining it with the legacy comma-
-         separated form is invalid CSS and silently drops the whole
-         declaration, which is exactly what a comma-separated value here did
-         everywhere it was used (every pill background in the app). */
+      /* Shared brand colors. Space-separated RGB (no commas) so each usage
+         can pick its own alpha via rgb(var(--x-rgb) / a) — the modern
+         slash-alpha syntax requires space-separated channels; combining it
+         with the legacy comma-separated form is invalid CSS and silently
+         drops the whole declaration, which is exactly what a comma-
+         separated value here did everywhere it was used.
+
+         Two different surfaces share this palette but read very
+         differently:
+         --pill-rgb is the small floating HUD chrome (mode-nav, the gizmo
+         buttons, Add Item, product-info, ...) — a pale, light green so it
+         reads as "this app" without going as dark/heavy as a real dialog.
+         Text on it uses --pill-text (dark, for contrast against a light
+         background) rather than white.
+         --panel-rgb is the large, text-heavy dialogs (Upload/Seller/
+         Identity/Settings/Claim, and the Add Item catalog picker) — kept
+         at the old dark green, since a whole screen of pale green behind a
+         lot of white text would be a much bigger, glarier surface than a
+         small pill ever is. These keep plain white text, unchanged.
+         --brand-green is reserved for an *active* pill's state (e.g. the
+         Shop tab once you're in it) — deliberately more saturated than the
+         idle --pill-rgb so "selected" still reads as a step up in
+         intensity, not just a different hue. */
       :root {
-        --pill-rgb: 36 56 20;
+        --pill-rgb: 214 232 190;
+        --pill-text: #16240a;
+        --pill-text-soft: rgb(22 36 10 / 0.65);
+        --panel-rgb: 36 56 20;
         --brand-green: #6ca42e;
       }
       html, body {
@@ -55,7 +71,11 @@
         left: 12px;
         z-index: 10;
         pointer-events: none;
-        background: rgb(var(--pill-rgb) / 0.55);
+        /* The wordmark art is itself green — sitting on the pale-green
+           pill background every other bit of chrome now uses would leave
+           it low-contrast, exactly what this background exists to avoid
+           (see the comment above it). Keeps the old dark panel color. */
+        background: rgb(var(--panel-rgb) / 0.55);
         border-radius: 8px;
         padding: 4px 10px;
         display: flex;
@@ -108,7 +128,7 @@
         background: rgb(var(--pill-rgb) / 0.65);
         padding: 8px 14px;
         border-radius: 8px;
-        color: #fff;
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
         pointer-events: none;
       }
@@ -119,7 +139,7 @@
         background: rgb(var(--pill-rgb) / 0.55);
         padding: 6px 12px;
         border-radius: 8px;
-        color: rgb(255 255 255 / 0.8);
+        color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
         white-space: nowrap;
         pointer-events: none;
@@ -213,7 +233,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.55);
-        color: rgb(255 255 255 / 0.85);
+        color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
       }
       #settings-btn {
@@ -225,7 +245,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.55);
-        color: rgb(255 255 255 / 0.85);
+        color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
       }
       /* The three peer top-level views — always reachable regardless of
@@ -245,7 +265,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.55);
-        color: rgb(255 255 255 / 0.85);
+        color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
       }
       .mode-nav-btn.active {
@@ -257,7 +277,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.65);
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       #undo-redo-panel button:disabled {
@@ -277,7 +297,7 @@
         border-radius: 6px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.6);
-        color: rgba(255, 255, 255, 0.85);
+        color: var(--pill-text-soft);
         font: 11px/1.4 sans-serif;
       }
       #product-info {
@@ -285,7 +305,7 @@
         top: 12px;
         left: 50%;
         transform: translateX(-50%);
-        color: #fff;
+        color: var(--pill-text);
         background: rgb(var(--pill-rgb) / 0.65);
         padding: 8px 14px;
         border-radius: 8px;
@@ -293,6 +313,15 @@
         text-align: center;
         pointer-events: none;
         z-index: 10;
+      }
+      /* Whatever this hint currently says (the default "tap to inspect"
+         prompt, a selected item's name, ...) is stale and redundant once
+         the catalog picker is open — the builder is choosing a product to
+         place, not looking at the world. Pure CSS so it stays correct
+         regardless of which of catalog-picker's several close paths (pick
+         a tile, re-tap Add Item, tap elsewhere, paste, ...) fires. */
+      body:has(#catalog-picker.visible) #product-info {
+        display: none;
       }
       #gizmo-mode-controls {
         position: fixed;
@@ -335,7 +364,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.5);
-        color: rgba(255, 255, 255, 0.8);
+        color: var(--pill-text-soft);
         font: 14px/1.4 sans-serif;
         transition: transform 100ms ease, background-color 100ms ease, color 100ms ease;
       }
@@ -370,7 +399,7 @@
         padding: 8px 14px;
         border-radius: 999px;
         background: rgb(var(--pill-rgb) / 0.5);
-        color: rgba(255, 255, 255, 0.8);
+        color: var(--pill-text-soft);
         font: 14px/1.4 sans-serif;
       }
       .gizmo-numeric-control.visible {
@@ -382,8 +411,8 @@
         border-radius: 4px;
         padding: 2px 4px;
         font: inherit;
-        background: rgba(255, 255, 255, 0.15);
-        color: #fff;
+        background: rgb(0 0 0 / 0.1);
+        color: var(--pill-text);
       }
       /* Trim can apply to more than one axis at once (see docs/API.md) —
          each axis gets its own labeled field inside #trim-length-control,
@@ -426,23 +455,32 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.65);
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
       }
       #catalog-picker {
         display: none;
-        grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
-        gap: 8px;
-        background: rgb(var(--pill-rgb) / 0.65);
+        position: relative;
+        /* Nearly opaque, matching every real modal panel (upload/seller/
+           identity/settings) — 0.65 (an ordinary floating pill's alpha)
+           let the land show through behind it clearly enough to make the
+           listings hard to read. */
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 10px;
-        padding: 8px;
+        padding: 36px 8px 8px;
         max-width: min(90vw, 360px);
         max-height: 50vh;
-        overflow-y: auto;
       }
       #catalog-picker.visible {
+        display: block;
+      }
+      #catalog-picker-grid {
         display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+        gap: 8px;
+        max-height: calc(50vh - 44px);
+        overflow-y: auto;
       }
       .catalog-tile {
         display: flex;
@@ -475,7 +513,7 @@
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.65);
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
       }
@@ -505,11 +543,12 @@
         display: flex;
       }
       #upload-modal-content {
+        position: relative;
         width: 100%;
         max-width: 360px;
         max-height: 90vh;
         overflow-y: auto;
-        background: rgb(var(--pill-rgb) / 0.97);
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
         color: #fff;
@@ -517,6 +556,32 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
+      }
+      /* Shared close ("x") button for every modal — upper-right corner,
+         replacing what used to be a scattered mix of inline Cancel/Close/
+         Back buttons at the bottom of each one. One consistent place to
+         look for "get me out of here" instead of a different label and
+         position in every popup. */
+      .modal-close-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: rgb(255 255 255 / 0.12);
+        color: #fff;
+        font-size: 18px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .modal-close-btn:hover {
+        background: rgb(255 255 255 / 0.22);
       }
       #upload-modal-content h2 {
         margin: 0;
@@ -616,11 +681,12 @@
         display: flex;
       }
       #seller-modal-content {
+        position: relative;
         width: 100%;
         max-width: 420px;
         max-height: 90vh;
         overflow-y: auto;
-        background: rgb(var(--pill-rgb) / 0.97);
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
         color: #fff;
@@ -651,6 +717,28 @@
         background: rgb(255 255 255 / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
+        transition: background-color 100ms ease;
+      }
+      .seller-row.expanded {
+        background: rgb(108 164 46 / 0.28);
+      }
+      .seller-row-toggle {
+        display: flex;
+        width: 100%;
+        background: none;
+        border: none;
+        padding: 0;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+      .seller-row-details {
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .seller-row.expanded .seller-row-details {
+        display: flex;
       }
       /* No truncation — a product's full name matters more here than a
          tidy single line, and unlike the catalog picker's own compact
@@ -803,11 +891,12 @@
         display: flex;
       }
       #settings-modal-content {
+        position: relative;
         width: 100%;
         max-width: 360px;
         max-height: 90vh;
         overflow-y: auto;
-        background: rgb(var(--pill-rgb) / 0.97);
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
         color: #fff;
@@ -901,11 +990,12 @@
         display: flex;
       }
       #identity-modal-content {
+        position: relative;
         width: 100%;
         max-width: 360px;
         max-height: 90vh;
         overflow-y: auto;
-        background: rgb(var(--pill-rgb) / 0.97);
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
         color: #fff;
@@ -943,6 +1033,13 @@
         background: rgb(255 255 255 / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
+        transition: background-color 100ms ease;
+      }
+      /* Selected but no action chosen yet — a visible cue that this row
+         (not some other one) is the one whose Rename/Delete/Build-or-Sell
+         options are now showing below it. */
+      .identity-row.expanded {
+        background: rgb(108 164 46 / 0.28);
       }
       .identity-row-toggle {
         display: flex;
@@ -1020,11 +1117,12 @@
         display: flex;
       }
       #claim-modal-content {
+        position: relative;
         width: 100%;
         max-width: 440px;
         max-height: 90vh;
         overflow-y: auto;
-        background: rgb(var(--pill-rgb) / 0.97);
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
         color: #fff;
@@ -1198,10 +1296,14 @@
       <button id="toggle-multiselect" type="button">Multi-Select</button>
       <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled>Paste</button>
-      <div id="catalog-picker"></div>
+      <div id="catalog-picker">
+        <button id="catalog-picker-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <div id="catalog-picker-grid"></div>
+      </div>
     </div>
     <div id="upload-modal">
       <div id="upload-modal-content">
+        <button id="upload-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="upload-modal-title">Add a custom product</h2>
         <div id="upload-step-file">
           <label>
@@ -1238,13 +1340,13 @@
         </div>
         <div id="upload-status"></div>
         <div id="upload-modal-actions">
-          <button id="upload-cancel-btn" type="button">Cancel</button>
           <button id="upload-submit-btn" type="button">Add Product</button>
         </div>
       </div>
     </div>
     <div id="seller-modal">
       <div id="seller-modal-content">
+        <button id="seller-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>My products</h2>
         <div id="seller-hint">
           Products this seller identity has uploaded (plus any custom upload nobody's claimed yet). Extensible axis
@@ -1255,12 +1357,12 @@
         <div id="seller-status"></div>
         <div id="seller-modal-actions">
           <button id="seller-identity-btn" type="button">Seller identity</button>
-          <button id="seller-close-btn" type="button">Close</button>
         </div>
       </div>
     </div>
     <div id="settings-modal">
       <div id="settings-modal-content">
+        <button id="settings-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Settings</h2>
         <div id="settings-tabs">
           <button class="settings-tab-btn" type="button" data-section="general">General</button>
@@ -1269,13 +1371,11 @@
           <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
         </div>
         <div id="settings-section"></div>
-        <div id="settings-modal-actions">
-          <button id="settings-close-btn" type="button">Close</button>
-        </div>
       </div>
     </div>
     <div id="identity-modal">
       <div id="identity-modal-content">
+        <button id="identity-close-btn" class="modal-close-btn" type="button" style="display: none" aria-label="Close">&times;</button>
         <h2 id="identity-modal-title">Choose a builder</h2>
         <div id="identity-hint">
           Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to build as, rename any
@@ -1285,11 +1385,11 @@
         <button id="identity-new-btn" type="button">+ New identity</button>
         <button id="shop-btn" type="button">Shop — fly through the world</button>
         <div id="identity-status"></div>
-        <button id="identity-close-btn" type="button" style="display: none">Close</button>
       </div>
     </div>
     <div id="claim-modal">
       <div id="claim-modal-content">
+        <button id="claim-back-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Claim a landlet</h2>
         <div id="claim-hint">Fly around the world, tap a plot to see it, then claim it below. You can only claim one.</div>
         <div id="claim-map-wrap">
@@ -1305,7 +1405,6 @@
         </div>
         <div id="claim-status"></div>
         <div id="claim-modal-actions">
-          <button id="claim-back-btn" type="button">Back</button>
           <button id="claim-grow-btn" type="button" style="display: none">Grow the world</button>
           <button id="claim-refresh-btn" type="button">Refresh</button>
         </div>

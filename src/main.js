@@ -1335,6 +1335,8 @@ productInfoEl.textContent = HINT_TEXT;
 // fetch resolves.
 const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
+const catalogPickerGridEl = document.getElementById('catalog-picker-grid');
+const catalogPickerCloseBtn = document.getElementById('catalog-picker-close-btn');
 
 // A template's appearance never changes after creation (there's no edit
 // flow for its color or model), so a thumbnail rendered once this session
@@ -1426,7 +1428,7 @@ function renderCatalogThumbnail(template) {
 }
 
 function buildCatalogPickerButtons() {
-  catalogPickerEl.replaceChildren();
+  catalogPickerGridEl.replaceChildren();
   for (const template of activeCatalog) {
     const tile = document.createElement('button');
     tile.type = 'button';
@@ -1447,7 +1449,7 @@ function buildCatalogPickerButtons() {
       catalogPickerEl.classList.remove('visible');
       enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
     });
-    catalogPickerEl.appendChild(tile);
+    catalogPickerGridEl.appendChild(tile);
 
     if (!catalogThumbnailCache.has(template.templateId)) {
       renderCatalogThumbnail(template).then((dataUrl) => {
@@ -1462,6 +1464,9 @@ addItemBtn.addEventListener('click', () => {
     return;
   }
   catalogPickerEl.classList.toggle('visible');
+});
+catalogPickerCloseBtn.addEventListener('click', () => {
+  catalogPickerEl.classList.remove('visible');
 });
 
 // Custom product upload: a builder's own model (photogrammetry scan,
@@ -2050,27 +2055,49 @@ function renderSellerList() {
     const row = document.createElement('div');
     row.className = 'seller-row';
 
+    // Dims/actions/preview/extensibility only show once this row is
+    // actually tapped — mirrors the identity picker's own row redesign
+    // (task #87), for the same reason: a product's full name matters more
+    // than room for buttons it doesn't need yet.
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'seller-row-toggle';
     const label = document.createElement('div');
     label.className = 'seller-row-label';
     label.textContent = template.name;
-    row.appendChild(label);
+    toggle.appendChild(label);
+    row.appendChild(toggle);
+
+    const details = document.createElement('div');
+    details.className = 'seller-row-details';
+    row.appendChild(details);
+
+    toggle.addEventListener('click', () => {
+      const wasExpanded = row.classList.contains('expanded');
+      for (const otherRow of sellerListEl.querySelectorAll('.seller-row')) otherRow.classList.remove('expanded');
+      // A collapsed row's preview would otherwise keep a live WebGL
+      // context running inside a display:none panel for nothing.
+      disposeAxisPreview();
+      previewBtn.classList.remove('active');
+      if (!wasExpanded) row.classList.add('expanded');
+    });
 
     const dims = document.createElement('div');
     dims.className = 'seller-row-dims';
     const { width, depth, height } = template.dimensions;
     dims.textContent = `${formatLength(width)} × ${formatLength(depth)} × ${formatLength(height)}`;
-    row.appendChild(dims);
+    details.appendChild(dims);
 
     const rowStatus = document.createElement('div');
     rowStatus.className = 'seller-row-status';
 
     const actions = document.createElement('div');
     actions.className = 'seller-row-actions';
-    row.appendChild(actions);
+    details.appendChild(actions);
 
     const previewContainer = document.createElement('div');
     previewContainer.className = 'seller-row-preview';
-    row.appendChild(previewContainer);
+    details.appendChild(previewContainer);
 
     // General-purpose look-it-over view by default (no axis arrows) — see
     // showAxisPreview's own doc comment. Toggling reuses the single
@@ -2198,12 +2225,12 @@ function renderSellerList() {
     extensibilityToggle.type = 'button';
     const anyAxisOn = () => Object.keys(existingExtensible).length > 0;
     extensibilityToggle.textContent = anyAxisOn() ? 'Extensibility (on) ▾' : 'Extensibility ▾';
-    row.appendChild(extensibilityToggle);
+    details.appendChild(extensibilityToggle);
 
     const extensibilityPanel = document.createElement('div');
     extensibilityPanel.className = 'seller-extensibility-panel';
     extensibilityPanel.hidden = true;
-    row.appendChild(extensibilityPanel);
+    details.appendChild(extensibilityPanel);
 
     const axisRows = {};
     function checkedAxes() {
@@ -2307,7 +2334,7 @@ function renderSellerList() {
     });
 
     extensibilityPanel.appendChild(saveBtn);
-    row.appendChild(rowStatus);
+    details.appendChild(rowStatus);
     sellerListEl.appendChild(row);
   }
 }
@@ -3754,6 +3781,7 @@ const IDENTITY_KINDS = {
   builder: {
     noun: 'builder',
     idField: 'builderId',
+    chooseLabel: 'Build',
     fetch: fetchBuilders,
     create: createBuilder,
     rename: renameBuilder,
@@ -3769,6 +3797,7 @@ const IDENTITY_KINDS = {
   seller: {
     noun: 'seller',
     idField: 'sellerId',
+    chooseLabel: 'Sell',
     fetch: fetchSellers,
     create: createSeller,
     rename: renameSeller,
@@ -3868,7 +3897,7 @@ async function renderIdentityList() {
     const chooseBtn = document.createElement('button');
     chooseBtn.type = 'button';
     chooseBtn.className = 'identity-choose-btn';
-    chooseBtn.textContent = 'Play';
+    chooseBtn.textContent = kind.chooseLabel;
     chooseBtn.addEventListener('click', () => identityOnChoose(id));
     actions.append(renameBtn, deleteBtn, chooseBtn);
 
