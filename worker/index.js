@@ -264,6 +264,10 @@ async function handleApi(request, env, url) {
     return handleSellers(request, env.DB, route);
   }
 
+  if (route[0] === 'notifications') {
+    return handleNotifications(request, env.DB, route, url);
+  }
+
   if (route[0] === 'catalog') {
     return handleCatalog(request, env.DB, route, url, env.MODELS);
   }
@@ -708,6 +712,11 @@ async function handleCatalog(request, db, route, url, models) {
           price_cents = ?, seller_id = ?, model_url = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
     `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, JSON.stringify(template.metadata), route[1]).run();
+    await notifyBuildersOfDimensionChange(db, template, {
+      width: existing.width_m,
+      depth: existing.depth_m,
+      height: existing.height_m,
+    });
     return json({ template });
   }
 
@@ -717,6 +726,35 @@ async function handleCatalog(request, db, route, url, models) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// A seller changing a product's real-world size after it's already been
+// placed somewhere leaves every existing instance still looking like the
+// old size (createMeshForInstance never re-scales an already-placed
+// mesh) — silently wrong until a builder happens to re-open that
+// landlet. Rather than try to auto-fix placements the seller never
+// touched, this just tells every builder who has one so they can decide
+// what to do about it themselves.
+async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
+  const { width, depth, height } = template.dimensions;
+  const changed = Math.abs(width - oldDimensions.width) > 1e-4 ||
+    Math.abs(depth - oldDimensions.depth) > 1e-4 ||
+    Math.abs(height - oldDimensions.height) > 1e-4;
+  if (!changed) return;
+
+  const { results } = await db.prepare(`
+    SELECT DISTINCT l.owner_builder_id AS builderId
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
+  `).bind(template.templateId).all();
+  if (results.length === 0) return;
+
+  const fmt = (m) => `${m.toFixed(2)}m`;
+  const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have one placed. Check that it still fits where you put it.`;
+  await db.batch(results.map((row) => db.prepare(
+    'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
+  ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId)));
 }
 
 async function assertUploadedModelExists(bucket, modelUrl) {
@@ -954,6 +992,61 @@ async function handleSellers(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// Builder-facing notifications (see notifyBuildersOfDimensionChange) — a
+// plain read-and-acknowledge list, not a full inbox: no pagination cursor
+// since one builder's outstanding count should stay small in practice,
+// and no DELETE since a read notification is still useful history for
+// "wait, when did that change?"
+async function handleNotifications(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const unreadOnlyParam = url.searchParams.get('unreadOnly');
+    const conditions = ['builder_id = ?'];
+    const bindings = [builderId];
+    if (unreadOnlyParam === 'true') conditions.push('read_at IS NULL');
+    const { results } = await db.prepare(`
+      SELECT * FROM notifications WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100
+    `).bind(...bindings).all();
+    return json({ notifications: results.map(notificationFromRow) });
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    const existing = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Notification not found' }, 404);
+    const input = await readJson(request);
+    if (input.read === true) {
+      await db.prepare(`
+        UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE notification_id = ?
+      `).bind(route[1]).run();
+    }
+    const updated = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
+    return json({ notification: notificationFromRow(updated) });
+  }
+
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'mark-all-read') {
+    const input = await readJson(request);
+    const builderId = stringValue(input.builderId, 'builderId');
+    await db.prepare(`
+      UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ? AND read_at IS NULL
+    `).bind(builderId).run();
+    return json({ ok: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function notificationFromRow(row) {
+  return {
+    notificationId: row.notification_id,
+    builderId: row.builder_id,
+    message: row.message,
+    templateId: row.template_id,
+    createdAt: row.created_at,
+    readAt: row.read_at,
+  };
 }
 
 function sellerFromRow(row) {
