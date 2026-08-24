@@ -2043,12 +2043,13 @@ async function handleInstances(request, db, route, url) {
         x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
         rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
         rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
-        scale = excluded.scale, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        scale = excluded.scale, is_community_sign = excluded.is_community_sign,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...instanceParams(instance))));
     const stored = await getInstancesById(db, instanceIds);
@@ -2099,9 +2100,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -2116,9 +2117,9 @@ async function handleInstances(request, db, route, url) {
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, route[1]).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
@@ -2128,7 +2129,70 @@ async function handleInstances(request, db, route, url) {
     return json({ deleted: true });
   }
 
+  if (route.length >= 3 && route[2] === 'posts') {
+    return handleSignPosts(request, db, route);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// Posts on a "community sign" instance (docs/SPEC.md §6, migrations/0041) —
+// nested under /instances/:id/posts rather than a top-level /sign-posts
+// collection since a post never exists independent of the sign it's on,
+// the same reasoning /landlets/:id/versions already follows. No ownership
+// check on DELETE (moderation) — same no-real-auth caveat as every other
+// dev-mode identity in this file (see handleBundles' own note); the
+// frontend only shows a delete control to the sign's own landlet's
+// builder.
+async function handleSignPosts(request, db, route) {
+  const instanceId = route[1];
+
+  if (request.method === 'GET' && route.length === 3) {
+    const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
+    const { results } = await db.prepare(`
+      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at LIMIT 200
+    `).bind(instanceId).all();
+    return json({ posts: results.map(signPostFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 3) {
+    const instance = await db.prepare('SELECT instance_id, is_community_sign FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
+    if (!instance.is_community_sign) {
+      throw new HttpError('This placed instance is not marked as a community sign', 400);
+    }
+    const input = await readJson(request);
+    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const text = stringValue(input.text, 'text');
+    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    const postId = `post-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO sign_posts (post_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
+    `).bind(postId, instanceId, authorLabel, text).run();
+    const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    return json({ post: signPostFromRow(row) }, 201);
+  }
+
+  if (request.method === 'DELETE' && route.length === 4) {
+    const postId = route[3];
+    const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
+    if (!existing) return json({ error: 'Post not found' }, 404);
+    await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function signPostFromRow(row) {
+  return {
+    postId: row.post_id,
+    instanceId: row.instance_id,
+    authorLabel: row.author_label,
+    text: row.text,
+    createdAt: row.created_at,
+  };
 }
 
 function routePath(pathname) {
@@ -2333,6 +2397,10 @@ function validateInstance(input, fallbackId) {
     label: input.label || null,
     crop: validateCropShape(input.crop),
     scale: validateScale(input.scale),
+    // docs/API.md's "Community signs" — per-*instance* opt-in (unlike
+    // flooring's per-template metadata flag), since any single placement of
+    // any product can become a sign independently of its other copies.
+    isCommunitySign: input.isCommunitySign === true,
   };
 }
 
@@ -2375,7 +2443,7 @@ function templateParams(template) {
 function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
     instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
-    JSON.stringify(instance.crop), instance.scale];
+    JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0];
 }
 
 function landletParams(landlet) {
@@ -2414,6 +2482,7 @@ function instanceFromRow(row) {
     label: row.label,
     crop: JSON.parse(row.crop_json || '{}'),
     scale: row.scale,
+    isCommunitySign: Boolean(row.is_community_sign),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

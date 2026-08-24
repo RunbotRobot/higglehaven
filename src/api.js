@@ -436,3 +436,24 @@ export async function fetchSharedBundles() {
 export async function deleteBundle(bundleId) {
   await requestJson(`/bundles/${encodeURIComponent(bundleId)}`, { method: 'DELETE' });
 }
+
+// Community sign posts (see migrations/0041_community_signs.sql) — nested
+// under the sign's own instanceId, not a top-level collection, since a post
+// never exists independent of the sign it's on.
+export async function fetchSignPosts(instanceId) {
+  const { posts } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
+  return posts;
+}
+
+export async function createSignPost(instanceId, { authorLabel, text }) {
+  const { post } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorLabel, text }),
+  });
+  return post;
+}
+
+export async function deleteSignPost(instanceId, postId) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, { method: 'DELETE' });
+}

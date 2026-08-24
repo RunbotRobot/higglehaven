@@ -48,6 +48,8 @@ import {
   createBundle,
   updateBundle,
   deleteBundle,
+  fetchSignPosts,
+  createSignPost,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -1351,6 +1353,12 @@ async function createMeshForInstance(instance) {
   // transform.
   object.userData.scale = instance.scale ?? 1;
   object.scale.setScalar(object.userData.scale);
+  // Community signs (docs/API.md's "Community signs") — a per-instance
+  // flag, unlike flooring's per-template one, so it lives on the instance
+  // itself rather than being derived from the template. Flooring can't
+  // also be a sign (its own branch above never sets this), which is fine —
+  // nothing in the spec calls for a flat ground patch to double as one.
+  object.userData.isCommunitySign = instance.isCommunitySign ?? false;
   return object;
 }
 
@@ -1381,6 +1389,7 @@ function persistLayout() {
     rotationZ: mesh.rotation.z,
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
+    isCommunitySign: mesh.userData.isCommunitySign ?? false,
   }));
   saveInstances(instances);
 }
@@ -1403,6 +1412,7 @@ function instanceFromMesh(mesh) {
     rotationZ: mesh.rotation.z,
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
+    isCommunitySign: mesh.userData.isCommunitySign ?? false,
   };
 }
 
@@ -3207,6 +3217,7 @@ function trimInputEl(axis) {
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
+const communitySignBtn = document.getElementById('toggle-community-sign');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -3689,6 +3700,13 @@ function updateSelectionUI() {
   modeRotateBtn.disabled = count !== 1;
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
+  // Community Sign (docs/API.md's "Community signs") only makes sense for
+  // one specific placed object at a time, same reasoning as Trim above —
+  // disabled (not hidden) for a multi-item selection so the button row
+  // doesn't reflow.
+  communitySignBtn.disabled = !singleMesh;
+  communitySignBtn.classList.toggle('active', !!singleMesh?.userData.isCommunitySign);
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓' : 'Community Sign';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -3881,6 +3899,21 @@ saveBundleBtn.addEventListener('click', async () => {
   } finally {
     saveBundleBtn.disabled = false;
   }
+});
+
+// Community Sign (docs/SPEC.md §6, docs/API.md's "Community signs") — an
+// immediate-PATCH toggle on the single selected instance, the same pattern
+// the Seller modal's own Flooring button uses for a per-instance/per-
+// template boolean rather than a form with its own Save step. Just flips
+// the flag and re-syncs the mesh like any ordinary move/rotate would (see
+// syncUpdate) — there's no separate endpoint for this one field.
+communitySignBtn.addEventListener('click', async () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  mesh.userData.isCommunitySign = !mesh.userData.isCommunitySign;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
 });
 
 // Placement-pending state: set by tapping a catalog item, the upload
@@ -4945,6 +4978,7 @@ const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
+const shopSignHintEl = document.getElementById('shop-sign-hint');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
@@ -4957,6 +4991,18 @@ const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
+// Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
+// shopper-authored posts fade in as the camera approaches a sign and back
+// out past it, rather than a hard show/hide cutoff, the same
+// proximity-as-opacity idea the spec's own in-world social feed calls for
+// generally ("size/opacity as a function of distance"). SIGN_INTERACT_RADIUS_M
+// is deliberately much tighter than the fade radius — close enough to
+// plausibly be able to read the sign at all before "Leave a Note" appears.
+const SIGN_FADE_NEAR_M = 4; // fully opaque at/within this distance
+const SIGN_FADE_FAR_M = 20; // fully transparent at/beyond this distance
+const SIGN_INTERACT_RADIUS_M = 8;
+const SIGN_MAX_VISIBLE_POSTS = 5;
+const SHOPPER_LABEL_KEY = 'higglehaven.shopperLabel';
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -5069,6 +5115,13 @@ let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
+// Every currently-loaded community-sign instance: { mesh, group, instanceId,
+// posts, sprites }. Populated/torn down alongside its landlet's own
+// objects (see loadShopLandletInstances/unloadShopLandletInstances) rather
+// than kept in its own load radius — a sign is exactly as "loaded" as the
+// rest of its landlet.
+const shopSigns = [];
+let nearestActiveSign = null; // whichever sign #shop-sign-hint currently targets, or null
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -5311,6 +5364,7 @@ function updateShopMovement(now) {
     shopLastProximityCheck = now;
     updateShopProximity();
   }
+  updateSignFade();
 }
 
 function updateShopProximity() {
@@ -5349,8 +5403,143 @@ async function loadShopLandletInstances(entry) {
     entry.group.add(object);
     entry.objects.push(object);
     growShopDomeIfNeeded(object);
+    if (object.userData.isCommunitySign) registerShopSign(object, entry);
   }
 }
+
+// A sign starts with no posts loaded — fetched once, here, right as it
+// enters the world (rather than re-fetched on every proximity tick), then
+// kept in sync locally by promptLeaveNote's own optimistic append. If the
+// fetch loses the race with the landlet being unloaded again (camera
+// wandered off before it resolved), the `shopSigns.includes` check drops
+// the result on the floor rather than resurrecting sprites for a sign
+// that's no longer in the scene.
+function registerShopSign(mesh, entry) {
+  const sign = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, posts: [], sprites: [] };
+  shopSigns.push(sign);
+  fetchSignPosts(sign.instanceId).then((posts) => {
+    if (!shopSigns.includes(sign)) return;
+    sign.posts = posts;
+    rebuildSignSprites(sign);
+  }).catch(() => {});
+}
+
+function disposeSignSprites(sign) {
+  for (const sprite of sign.sprites) {
+    sign.group.remove(sprite);
+    sprite.material.map?.dispose();
+    sprite.material.dispose();
+  }
+  sign.sprites = [];
+}
+
+// Renders a canvas-texture Sprite per post (THREE Sprites always face the
+// camera on their own, so this needs no manual billboarding) stacked
+// vertically above the sign's own footprint. Capped at
+// SIGN_MAX_VISIBLE_POSTS most-recent posts — an unbounded stack would
+// eventually tower well past where the fade radius could ever make it
+// readable anyway. Opacity starts at 0 and is driven entirely by
+// updateSignFade() every frame, not set here.
+function rebuildSignSprites(sign) {
+  disposeSignSprites(sign);
+  const baseHeight = meshDimensions(sign.mesh).height;
+  const recent = sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS);
+  recent.forEach((post, i) => {
+    const sprite = makeSignPostSprite(`${post.authorLabel}: ${post.text}`);
+    sprite.position.set(sign.mesh.position.x, sign.mesh.position.y, sign.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    sprite.material.opacity = 0;
+    sign.group.add(sprite);
+    sign.sprites.push(sprite);
+  });
+}
+
+// A single line of white-on-dark text baked into a canvas texture — the
+// simplest possible in-world text rendering, and enough for a short social
+// post. Long posts (up to 280 chars server-side) are truncated for display;
+// this is a floating nameplate-style sign, not a page to scroll.
+function makeSignPostSprite(text) {
+  const display = text.length > 70 ? `${text.slice(0, 69)}…` : text;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontSize = 48;
+  ctx.font = `${fontSize}px sans-serif`;
+  const paddingX = 20;
+  canvas.width = Math.ceil(ctx.measureText(display).width) + paddingX * 2;
+  canvas.height = Math.round(fontSize * 1.7);
+  // Sizing the canvas above resets its 2D context — font has to be set again
+  // before the actual draw calls below.
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = 'rgba(20, 24, 18, 0.85)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#f5f5f0';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(display, paddingX, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  const WORLD_UNITS_PER_PX = 0.012; // tuned so a typical post reads clearly from SIGN_INTERACT_RADIUS_M away
+  sprite.scale.set(canvas.width * WORLD_UNITS_PER_PX, canvas.height * WORLD_UNITS_PER_PX, 1);
+  return sprite;
+}
+
+// Called every Shop-mode frame (not throttled like updateShopProximity —
+// opacity needs to read as a smooth fade, not a 400ms-stepped one). Two
+// independent jobs: fade every loaded sign's post sprites by the camera's
+// distance to that sign, and track which single nearest in-range sign (if
+// any) #shop-sign-hint currently targets.
+function updateSignFade() {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const sign of shopSigns) {
+    const world = sign.mesh.getWorldPosition(scratchSignWorldPos);
+    const distance = world.distanceTo(camera.position);
+    const opacity = 1 - THREE.MathUtils.clamp(
+      (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
+    );
+    for (const sprite of sign.sprites) sprite.material.opacity = opacity;
+    if (distance <= SIGN_INTERACT_RADIUS_M && distance < nearestDistance) {
+      nearest = sign;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest !== nearestActiveSign) {
+    nearestActiveSign = nearest;
+    shopSignHintEl.classList.toggle('visible', !!nearest);
+  }
+}
+const scratchSignWorldPos = new THREE.Vector3();
+
+// Remembered across visits (but not required — a fresh prompt() with no
+// stored value just asks each time) so a shopper leaving several notes in
+// one session, or returning later, isn't re-asked their name every time —
+// the same lightweight "no real accounts" convention as everything else in
+// this dev-mode identity story.
+function shopperLabel() {
+  const existing = localStorage.getItem(SHOPPER_LABEL_KEY);
+  const label = prompt('Your name (shown on the sign):', existing || '');
+  if (!label || !label.trim()) return null;
+  localStorage.setItem(SHOPPER_LABEL_KEY, label.trim());
+  return label.trim();
+}
+
+shopSignHintEl.addEventListener('click', async () => {
+  const sign = nearestActiveSign;
+  if (!sign) return;
+  const authorLabel = shopperLabel();
+  if (!authorLabel) return;
+  const text = prompt('Your note (up to 280 characters):', '');
+  if (!text || !text.trim()) return;
+  shopSignHintEl.disabled = true;
+  try {
+    const post = await createSignPost(sign.instanceId, { authorLabel, text: text.trim() });
+    sign.posts.push(post);
+    rebuildSignSprites(sign);
+  } catch (err) {
+    alert(err.message || 'Could not post to this sign.');
+  } finally {
+    shopSignHintEl.disabled = false;
+  }
+});
 
 function disposeObject3D(object) {
   object.traverse((child) => {
@@ -5368,6 +5557,15 @@ function unloadShopLandletInstances(entry) {
     disposeObject3D(object);
   }
   entry.objects = [];
+  for (const sign of [...shopSigns]) {
+    if (sign.group !== entry.group) continue;
+    disposeSignSprites(sign);
+    shopSigns.splice(shopSigns.indexOf(sign), 1);
+    if (nearestActiveSign === sign) {
+      nearestActiveSign = null;
+      shopSignHintEl.classList.remove('visible');
+    }
+  }
 }
 
 // The normal builder UI (toolbar, product hint, camera debug, undo/redo,

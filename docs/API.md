@@ -1285,6 +1285,7 @@ migration.
   "label": null,
   "crop": {},
   "scale": 1,
+  "isCommunitySign": false,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1304,6 +1305,10 @@ any instance regardless of whether its template is extensible — see
 default) means "rendered at the template's own declared size." Validated only
 loosely server-side (must be a positive finite number) — the frontend's own
 Resize control applies the real UX-facing `[0.001, 1000]` bound.
+
+`isCommunitySign` flags this one specific placement as a "community sign"
+— see "Community signs" below for the posts API it unlocks and the
+Shop-mode rendering it drives.
 
 ### `GET /api/instances`
 
@@ -1579,9 +1584,138 @@ despite an identical look, not a shared one — a selector meant for one must
 never accidentally hit another (this bit a test once already — see the
 share-toggle's own comment in `src/main.js`).
 
+## Community signs
+
+docs/SPEC.md §6's in-world social feed: "Builders flag any placed object as
+a 'community sign' — becomes a content-bearing slot. Shopper-authored posts
+fade in/out based on proximity — zero explicit clicking required" (the
+"no flat 2D UI layer, ever" rule the spec states right above that). Unlike
+flooring (`metadata.flooring` on a catalog *template*, migrations/0035),
+`isCommunitySign` lives on the placed *instance* itself
+(`migrations/0041_community_signs.sql`) — any single placement of any
+product can become a sign independently of every other copy of it, since
+flagging is a builder decision about one specific spot, not about the
+product.
+
+### Instance shape
+
+`isCommunitySign` (boolean, defaults `false`) is just another field on the
+ordinary placed-instance object (see "Placed instances" above) —
+set/cleared through the same `PATCH /api/instances/:id` every other
+per-instance change already goes through, nothing new on that endpoint
+itself.
+
+### `GET /api/instances/:instanceId/posts`
+
+Lists every post on that sign, oldest first, capped at 200. `404` if the
+instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
+
+```json
+{
+  "postId": "post-...",
+  "instanceId": "placeholder-tree-...",
+  "authorLabel": "A Shopper",
+  "text": "Great little shop!",
+  "createdAt": "2026-08-24T00:00:00.000Z"
+}
+```
+
+### `POST /api/instances/:instanceId/posts`
+
+Body: `{ "authorLabel", "text" }`, both required, `text` capped at 280
+characters. `400` if the target instance isn't currently flagged
+`isCommunitySign` — a post can't outlive or predate the flag that makes it
+visible at all. `404` if the instance doesn't exist.
+
+### `DELETE /api/instances/:instanceId/posts/:postId`
+
+Moderation — "Builder controls the sign's physical form and moderates."
+`404` if the post doesn't exist (or belongs to a different instance).
+Deleting the sign instance itself cascades to every post on it
+(`ON DELETE CASCADE`, migrations/0041) — no orphaned posts left behind.
+
+No ownership check on any of these three — same no-real-auth caveat as
+`handleBundles`' own note above; the frontend has no moderation UI at all
+yet (see "Known gaps" below), so this is enforced nowhere today.
+
+### Frontend wiring — Build mode
+
+A "Community Sign" toggle sits in `#gizmo-mode-controls` next to Save
+Bundle, enabled only for a single-item selection (same reasoning as Trim —
+"which one sign" has no group answer). Clicking it flips
+`mesh.userData.isCommunitySign` and re-syncs the mesh through the ordinary
+`syncUpdate` path (see `instanceFromMesh`) — no dedicated endpoint call,
+identical to how an ordinary move/rotate persists.
+
+### Frontend wiring — Shop mode
+
+Every loaded sign gets its posts fetched once as it enters the scene
+(`registerShopSign` in `src/main.js`) and rendered as one canvas-texture
+`THREE.Sprite` per post (`makeSignPostSprite`), stacked vertically above
+the sign's own footprint (using `meshDimensions` for the base height, the
+same shared function flooring's own fix keeps consistent — see "Ground/
+flooring products" above). Sprites always face the camera on their own
+(a `THREE.Sprite` built-in), so no manual billboarding is needed.
+
+`updateSignFade`, called every Shop-mode frame (not throttled like
+`updateShopProximity`, so the fade itself reads smoothly rather than in
+400ms steps), does two things: sets every visible sign's post-sprite
+opacity from a linear falloff between `SIGN_FADE_NEAR_M` (4m, fully
+opaque) and `SIGN_FADE_FAR_M` (20m, fully transparent) — the spec's own
+"size/opacity as a function of distance" — and tracks whichever single
+sign (if any) is within the much tighter `SIGN_INTERACT_RADIUS_M` (8m),
+showing `#shop-sign-hint` ("Leave a Note") only for that one.
+
+Leaving a note is two `prompt()` calls — a name (remembered afterward in
+`localStorage` under `higglehaven.shopperLabel` so a returning or prolific
+poster isn't re-asked every time) and the note text — then
+`createSignPost` followed by an optimistic local append and
+`rebuildSignSprites`, rather than re-fetching the whole list. This is the
+one place in Shop mode that's a plain browser dialog rather than in-world
+geometry; the spec's "no flat 2D UI, ever" rule reads as being about the
+persistent *feed itself* (which this fully honors — no panel, no list, no
+scrollable UI), not about a one-shot text-entry prompt, and every other
+dev-mode naming flow in this app already uses the identical pattern.
+
+Signs and their sprites are torn down alongside the rest of their
+landlet's objects in `unloadShopLandletInstances` — a sign is exactly as
+"loaded" as anything else on its landlet, not tracked on its own load
+radius.
+
+### Testing note
+
+`e2e/community-signs.test.mjs` covers the Build-mode toggle button and the
+full posts API (create/list/delete/cascade-on-instance-delete, plus the
+"can't post to a non-sign" 400) end to end through the browser. The
+Shop-mode camera-distance fade and the `prompt()`-driven "Leave a Note"
+flow are **not** covered by the automated suite, for the same reason raw
+TransformControls drags aren't (see "Frontend-only alignment assist"
+above) — real camera movement and native browser dialogs are exactly the
+kind of interaction this project's e2e suite has consistently avoided
+automating, in favor of an equivalent non-drag write path where one exists
+(here, the same `POST .../posts` the button itself calls). Verified
+manually instead: a temporary `window.__debugAlign.camera` hook (removed
+before committing) let a script set the shopper's position directly,
+confirming sprite opacity reads ~0 far away and ~1 up close, `#shop-sign-
+hint` shows/hides exactly at `SIGN_INTERACT_RADIUS_M`, posts fetch and
+render correctly, and clicking through both prompts appends a real post
+and a matching new sprite. That same manual pass caught a real bug before
+it shipped: `#shop-sign-hint`'s first CSS placement (`bottom: 68px`,
+centered) directly overlapped `#shop-vertical-controls` (`bottom: 78px`,
+also centered) — the up/down flight buttons' own invisible-when-inactive
+hit area silently ate every tap intended for the note button. Fixed by
+moving it to `bottom: 180px`, clear of that column entirely.
+
+### Known gaps
+
+No frontend moderation UI for `DELETE .../posts/:postId` yet — the
+endpoint exists and is tested (see above), but nothing in Build mode
+currently surfaces a sign's posts with a delete control. A builder wanting
+to remove an unwanted post today would need to call the API directly.
+
 ## D1 schema overview
 
-The migrations currently create twelve main backend tables:
+The migrations currently create thirteen main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -1606,6 +1740,9 @@ The migrations currently create twelve main backend tables:
 - `notifications`: builder-facing notices, currently only ever created by a
   seller's product-dimension change (see "Notifications" above).
 - `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
+- `sign_posts`: shopper-authored posts on a placed instance flagged
+  `isCommunitySign` (see "Community signs" above), cascade-deleted with
+  their instance.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending

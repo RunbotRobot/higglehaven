@@ -1539,6 +1539,131 @@ describe('Worker API', () => {
   });
 });
 
+describe('Community signs', () => {
+  it('toggles isCommunitySign on a placed instance and round-trips it', async () => {
+    const created = await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-toggle-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.instance.isCommunitySign).toBe(false);
+
+    const toggled = await api('/instances/sign-toggle-instance', {
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunitySign: true }),
+    });
+    expect(toggled.response.status).toBe(200);
+    expect(toggled.body.instance.isCommunitySign).toBe(true);
+
+    const fetched = await api('/instances/sign-toggle-instance');
+    expect(fetched.body.instance.isCommunitySign).toBe(true);
+  });
+
+  it('rejects a post on an instance not marked as a community sign', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'not-a-sign-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 2,
+        y: 2,
+      }),
+    });
+
+    const rejected = await api('/instances/not-a-sign-instance/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Hello!' }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/not marked as a community sign/);
+  });
+
+  it('creates, lists, and moderates posts on a community sign', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-with-posts',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 3,
+        y: 3,
+        isCommunitySign: true,
+      }),
+    });
+
+    const emptyList = await api('/instances/sign-with-posts/posts');
+    expect(emptyList.response.status).toBe(200);
+    expect(emptyList.body.posts).toEqual([]);
+
+    const missingText = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper' }),
+    });
+    expect(missingText.response.status).toBe(400);
+
+    const tooLong = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'x'.repeat(281) }),
+    });
+    expect(tooLong.response.status).toBe(400);
+
+    const posted = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
+    });
+    expect(posted.response.status).toBe(201);
+    expect(posted.body.post).toMatchObject({
+      instanceId: 'sign-with-posts',
+      authorLabel: 'A Shopper',
+      text: 'Great little shop!',
+    });
+    expect(posted.body.post.postId).toMatch(/^post-/);
+
+    const listed = await api('/instances/sign-with-posts/posts');
+    expect(listed.body.posts).toHaveLength(1);
+    expect(listed.body.posts[0].postId).toBe(posted.body.post.postId);
+
+    const deleted = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listedAfterDelete = await api('/instances/sign-with-posts/posts');
+    expect(listedAfterDelete.body.posts).toEqual([]);
+
+    const deleteMissing = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
+    expect(deleteMissing.response.status).toBe(404);
+  });
+
+  it('cascades post deletion when the sign instance itself is deleted', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-to-delete',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 4,
+        y: 4,
+        isCommunitySign: true,
+      }),
+    });
+    await api('/instances/sign-to-delete/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Nice place' }),
+    });
+    await api('/instances/sign-to-delete', { method: 'DELETE' });
+
+    const afterDelete = await api('/instances/sign-to-delete/posts');
+    expect(afterDelete.response.status).toBe(404);
+  });
+});
+
 describe('Builders', () => {
   it('creates, lists, renames, and validates builders', async () => {
     const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Ada' }) });
