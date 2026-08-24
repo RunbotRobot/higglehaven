@@ -1057,10 +1057,29 @@ function notificationFromRow(row) {
 // docs/API.md's "Bundles") — a named, persisted version of the same
 // relative-offset shape the frontend's own Copy/Paste already builds in
 // memory (copySelection/placeClipboardItems in src/main.js). No rename of
-// a bundle's *contents* here — only its name — since there's no frontend
-// flow for editing a saved bundle's items; delete and re-save covers that.
+// a bundle's *contents* here — only its name/shared flag — since there's no
+// frontend flow for editing a saved bundle's items; delete and re-save
+// covers that.
+//
+// `shared` (see migrations/0040_bundle_sharing.sql) only controls
+// visibility — a shared bundle is still owned by whoever created it, and
+// this endpoint does no ownership check on PATCH/DELETE (same no-real-auth
+// caveat as every other dev-mode identity in this file). The frontend is
+// the only thing enforcing "only your own bundles show a delete/share
+// button" (see renderBundleTiles in src/main.js).
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
+    // Two independent listings, not one filtered by both: `shared=true` is
+    // the community tab (every builder's shared bundles, not just one
+    // builder's), while `builderId` alone is "my bundles" (everything this
+    // builder owns, shared or not) — a builder's own shared bundles should
+    // keep showing in their own private list too, not move out of it.
+    if (url.searchParams.get('shared') === 'true') {
+      const { results } = await db.prepare(`
+        SELECT * FROM bundles WHERE shared = 1 ORDER BY created_at DESC LIMIT 100
+      `).all();
+      return json({ bundles: results.map(bundleFromRow) });
+    }
     const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
     const { results } = await db.prepare(`
       SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
@@ -1073,12 +1092,13 @@ async function handleBundles(request, db, route, url) {
     const builderId = stringValue(input.builderId, 'builderId');
     const name = stringValue(input.name, 'name');
     const items = validateBundleItems(input.items);
+    const shared = input.shared === true;
     await assertReferenceExists(db, 'builders', 'builder_id', builderId, 'builderId');
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
     const bundleId = `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
-      INSERT INTO bundles (bundle_id, builder_id, name, items_json) VALUES (?, ?, ?, ?)
-    `).bind(bundleId, builderId, name, JSON.stringify(items)).run();
+      INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
+    `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
     return json({ bundle: bundleFromRow(row) }, 201);
   }
@@ -1087,10 +1107,13 @@ async function handleBundles(request, db, route, url) {
     const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Bundle not found' }, 404);
     const input = await readJson(request);
-    const name = stringValue(input.name, 'name');
+    // Both fields optional and independent — a rename shouldn't have to
+    // also resend the current shared flag, and vice versa.
+    const name = input.name === undefined ? existing.name : stringValue(input.name, 'name');
+    const shared = input.shared === undefined ? Boolean(existing.shared) : input.shared === true;
     await db.prepare(`
-      UPDATE bundles SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, route[1]).run();
+      UPDATE bundles SET name = ?, shared = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, shared ? 1 : 0, route[1]).run();
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     return json({ bundle: bundleFromRow(updated) });
   }
@@ -1137,6 +1160,7 @@ function bundleFromRow(row) {
     builderId: row.builder_id,
     name: row.name,
     items: JSON.parse(row.items_json),
+    shared: Boolean(row.shared),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
