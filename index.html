@@ -505,12 +505,40 @@
       #catalog-picker.visible {
         display: block;
       }
+      /* Client-side only — filters the already-built tiles by name rather
+         than re-querying or re-rendering thumbnails, since a template's
+         appearance/name never changes mid-session (see buildCatalogPickerButtons's
+         own thumbnail-cache comment). Matters once the catalog has more
+         than a screenful of products to scroll through. */
+      #catalog-search-input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(255 255 255 / 0.1);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+      }
       #catalog-picker-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
         gap: 8px;
-        max-height: calc(50vh - 44px);
+        max-height: calc(50vh - 88px);
         overflow-y: auto;
+      }
+      .catalog-tile[hidden] {
+        display: none;
+      }
+      #catalog-picker-empty {
+        padding: 12px 4px;
+        color: rgb(255 255 255 / 0.65);
+        font: 13px/1.4 sans-serif;
+      }
+      #catalog-picker-empty[hidden] {
+        display: none;
       }
       .catalog-tile {
         display: flex;
@@ -1448,7 +1476,9 @@
       <button id="paste-btn" type="button" disabled>Paste</button>
       <div id="catalog-picker">
         <button id="catalog-picker-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <input id="catalog-search-input" type="text" placeholder="Search products…" />
         <div id="catalog-picker-grid"></div>
+        <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
       </div>
     </div>
     <div id="upload-modal">

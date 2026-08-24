@@ -1340,6 +1340,9 @@ const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
 const catalogPickerGridEl = document.getElementById('catalog-picker-grid');
 const catalogPickerCloseBtn = document.getElementById('catalog-picker-close-btn');
+const catalogSearchInputEl = document.getElementById('catalog-search-input');
+const catalogPickerEmptyEl = document.getElementById('catalog-picker-empty');
+const catalogPickerEmptyQueryEl = document.getElementById('catalog-picker-empty-query');
 
 // A template's appearance never changes after creation (there's no edit
 // flow for its color or model), so a thumbnail rendered once this session
@@ -1430,12 +1433,33 @@ function renderCatalogThumbnail(template) {
   return result;
 }
 
+// Client-side name filtering (see #catalog-search-input's own CSS comment)
+// — toggles each already-built tile's `hidden` attribute rather than
+// re-querying the catalog or touching the thumbnail cache, since neither a
+// template's name nor its appearance changes mid-session. Reads whatever
+// buildCatalogPickerButtons last stamped into each tile's dataset.name, so
+// it's safe to call any time after the grid exists, including right after
+// a rebuild while the picker itself is closed.
+function filterCatalogTiles() {
+  const query = catalogSearchInputEl.value.trim().toLowerCase();
+  let anyVisible = false;
+  for (const tile of catalogPickerGridEl.children) {
+    const matches = !query || tile.dataset.name.includes(query);
+    tile.hidden = !matches;
+    if (matches) anyVisible = true;
+  }
+  catalogPickerEmptyEl.hidden = anyVisible || !query;
+  catalogPickerEmptyQueryEl.textContent = catalogSearchInputEl.value.trim();
+}
+catalogSearchInputEl.addEventListener('input', filterCatalogTiles);
+
 function buildCatalogPickerButtons() {
   catalogPickerGridEl.replaceChildren();
   for (const template of activeCatalog) {
     const tile = document.createElement('button');
     tile.type = 'button';
     tile.className = 'catalog-tile';
+    tile.dataset.name = template.name.toLowerCase();
 
     const thumb = document.createElement('img');
     thumb.className = 'catalog-thumb';
@@ -1460,13 +1484,22 @@ function buildCatalogPickerButtons() {
       });
     }
   }
+  filterCatalogTiles();
 }
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
     cancelPlacementMode();
     return;
   }
+  const opening = !catalogPickerEl.classList.contains('visible');
   catalogPickerEl.classList.toggle('visible');
+  if (opening) {
+    // Fresh search each time the picker opens, rather than carrying over
+    // whatever was last typed — the same "reset on open" pattern the
+    // upload modal's own file step uses.
+    catalogSearchInputEl.value = '';
+    filterCatalogTiles();
+  }
 });
 catalogPickerCloseBtn.addEventListener('click', () => {
   catalogPickerEl.classList.remove('visible');
