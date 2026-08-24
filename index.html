@@ -669,6 +669,20 @@
         font-size: 16px;
         line-height: 1;
       }
+      /* Same size/shape again, own class for the same reason .bundle-tile-share
+         has one — a selector for any one of rename/share/delete must never
+         accidentally hit another. */
+      .bundle-tile-rename {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.12);
+        color: rgb(255 255 255 / 0.85);
+        font-size: 14px;
+        line-height: 1;
+      }
       #upload-model-btn,
       #toggle-multiselect,
       #toggle-measure,

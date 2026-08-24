@@ -1543,7 +1543,8 @@ are genuinely sign-constrained.
 
 Updates `name` and/or `shared` — both optional and independent; omitting
 one leaves it at its current value rather than requiring the full object
-back. There's no way to edit a saved bundle's `items` — the frontend has no
+back — the frontend's Rename button only ever sends `{ name }`. There's no
+way to edit a saved bundle's `items` — the frontend has no
 UI for that; delete and re-save from a fresh selection instead.
 
 ### `DELETE /api/bundles/:bundleId`
@@ -1569,13 +1570,14 @@ Community if a neighbor has shared one. Tapping a tile arms placement with
 same pending-placement shape a Paste uses, so `handlePlacementClick`'s
 existing clipboard-placement path needs no changes to place a bundle.
 
-A tile only shows its delete (×) and share-toggle (⇧/⇩) buttons when
-`bundle.builderId` matches the active builder — the one place the frontend
-actually enforces the ownership the backend doesn't (see this section's own
-opening paragraph). Those two controls use separate CSS classes
-(`.bundle-tile-delete` / `.bundle-tile-share`) despite an identical look,
-not a shared one — a selector meant for one must never accidentally hit the
-other.
+A tile only shows its rename (✎), share-toggle (⇧/⇩), and delete (×)
+buttons when `bundle.builderId` matches the active builder — the one place
+the frontend actually enforces the ownership the backend doesn't (see this
+section's own opening paragraph). All three use separate CSS classes
+(`.bundle-tile-rename` / `.bundle-tile-share` / `.bundle-tile-delete`)
+despite an identical look, not a shared one — a selector meant for one must
+never accidentally hit another (this bit a test once already — see the
+share-toggle's own comment in `src/main.js`).
 
 ## D1 schema overview
 

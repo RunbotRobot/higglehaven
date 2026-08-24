@@ -85,6 +85,16 @@ const bundleTileText = await page.locator('.bundle-tile').first().textContent();
 console.log('bundle section visible after saving (should be true):', bundleSectionVisible);
 console.log('bundle tile text (should mention the name and 2 items):', bundleTileText);
 
+// Rename it. launchPage's dialog handler always answers prompt() with the
+// same fixed LABEL, which is useless for a rename check (the "new" name
+// would equal the old one) — monkey-patch window.prompt directly instead
+// of fighting Playwright's dialog-event handler for just this one call.
+await page.evaluate(() => { window.prompt = () => 'Renamed Bundle'; });
+await page.click('.bundle-tile-rename');
+await page.waitForTimeout(500);
+const bundleTileTextAfterRename = await page.locator('.bundle-tile').first().textContent();
+console.log('bundle tile text after rename (should say Renamed Bundle):', bundleTileTextAfterRename);
+
 // Place it elsewhere — both items should land together and end up selected.
 await page.locator('.bundle-tile-place').first().click();
 await page.waitForTimeout(300);
@@ -106,6 +116,7 @@ const pass = bundleSectionHiddenInitially &&
   selectionText.includes('2 items selected') &&
   savedStatus.includes('Saved') && savedStatus.includes('2 item') &&
   bundleSectionVisible && bundleTileText.includes(LABEL) && bundleTileText.includes('2 items') &&
+  bundleTileTextAfterRename.includes('Renamed Bundle') &&
   infoAfterBundlePlacement.includes('2 items selected') &&
   bundleSectionHiddenAfterDelete &&
   errors.length === 0;

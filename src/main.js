@@ -1573,6 +1573,27 @@ function renderBundlePicker() {
     tile.appendChild(placeBtn);
 
     if (owned) {
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'bundle-tile-rename';
+      renameBtn.textContent = '✎';
+      renameBtn.setAttribute('aria-label', `Rename bundle "${bundle.name}"`);
+      renameBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const next = prompt('Rename this bundle', bundle.name);
+        if (!next || !next.trim() || next.trim() === bundle.name) return;
+        renameBtn.disabled = true;
+        try {
+          const updated = await updateBundle(bundle.bundleId, { name: next.trim() });
+          Object.assign(bundle, updated);
+          renderBundlePicker();
+        } catch (err) {
+          console.warn('Could not rename bundle:', err);
+          renameBtn.disabled = false;
+        }
+      });
+      tile.appendChild(renameBtn);
+
       const shareToggleBtn = document.createElement('button');
       shareToggleBtn.type = 'button';
       // Own class, not shared with .bundle-tile-delete despite the same
