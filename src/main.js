@@ -466,10 +466,133 @@ let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" check
 let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
 const groupMovePivotStartPosition = new THREE.Vector3(); // pivot's position when the drag began (fixed for the whole drag)
 
+// Alignment assist (docs/SPEC.md §3: "transient guide near an alignment
+// opportunity, continued movement releases it, pausing commits it") — only
+// for a single selected item's own Move drag, not a group move (which
+// already has its own collision/bounds logic above; stacking alignment
+// snapping on top of that is a lot more moving parts for a feature this
+// deliberately simple isn't worth the risk to). Deliberately X/Y only —
+// height is what snapToSurfaces (resting on another item) is for.
+//
+// "Conservative starting threshold, tune via playtesting" is the spec's
+// own words for this exact number — SNAP_M is how close an edge/center has
+// to get before it grabs at all; RELEASE_M (wider, for hysteresis) is how
+// far the raw drag has to move on before a held snap actually lets go, so
+// a snap reads as a magnet with some grip rather than flickering on/off
+// right at one threshold.
+const ALIGNMENT_SNAP_M = 0.05;
+const ALIGNMENT_RELEASE_M = 0.15;
+const ALIGNMENT_GUIDE_COLOR = 0xff33cc;
+
+const alignmentGuideMaterial = new THREE.LineDashedMaterial({ color: ALIGNMENT_GUIDE_COLOR, dashSize: 0.2, gapSize: 0.1, depthTest: false });
+function makeAlignmentGuide() {
+  const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+  const line = new THREE.Line(geometry, alignmentGuideMaterial);
+  line.visible = false;
+  line.renderOrder = 999;
+  scene.add(line);
+  return line;
+}
+const alignmentGuideX = makeAlignmentGuide(); // shown when the dragged item's X is currently snapped — drawn running along Y, at the shared X coordinate
+const alignmentGuideY = makeAlignmentGuide(); // same, for a Y snap — drawn running along X
+
+// null per axis when nothing's currently snapped; otherwise
+// { guideCoordinate, snappedValue } — guideCoordinate is the world
+// coordinate the snap is holding onto (what the hysteresis check below
+// measures the raw drag against), snappedValue is what the dragged mesh's
+// own center gets set to so its matching edge/center actually lands there.
+const alignmentSnapState = { x: null, y: null };
+
+// Own local half-extent along `axis` — ignoring rotation, same simplifying
+// axis-aligned-bounding-box assumption the group-move bounds clamp above
+// already makes for every placed item, extensibility axes included.
+function alignmentHalfExtent(mesh, axis) {
+  const dims = meshDimensions(mesh);
+  return (axis === 'x' ? dims.width : dims.depth) / 2;
+}
+
+// Every other placed item's own min/center/max along `axis`, each a
+// candidate the dragged item might snap to.
+function alignmentTargets(movingMesh, axis) {
+  const targets = [];
+  for (const mesh of productMeshes) {
+    if (mesh === movingMesh) continue;
+    const half = alignmentHalfExtent(mesh, axis);
+    const center = mesh.position[axis];
+    targets.push(center - half, center, center + half);
+  }
+  return targets;
+}
+
+// Finds the single closest edge/center match (if any, within
+// ALIGNMENT_SNAP_M) between the dragged item's own three candidate
+// positions (its min/center/max, computed at the *requested* rawValue) and
+// every other item's own three. Only ever the single best match — two
+// simultaneous candidates this close together would just be visual noise,
+// and the dragged item can only actually align to one line at a time.
+function findAlignmentSnap(movingMesh, axis, rawValue) {
+  const half = alignmentHalfExtent(movingMesh, axis);
+  const movingCandidates = [rawValue - half, rawValue, rawValue + half];
+  const targets = alignmentTargets(movingMesh, axis);
+  let best = null;
+  for (const movingCandidate of movingCandidates) {
+    for (const target of targets) {
+      const distance = Math.abs(movingCandidate - target);
+      if (distance < ALIGNMENT_SNAP_M && (!best || distance < best.distance)) {
+        best = { distance, guideCoordinate: target, snappedValue: rawValue + (target - movingCandidate) };
+      }
+    }
+  }
+  return best;
+}
+
+function resolveAlignmentAxis(axis, movingMesh, rawValue) {
+  const held = alignmentSnapState[axis];
+  if (held && Math.abs(rawValue - held.guideCoordinate) < ALIGNMENT_RELEASE_M) {
+    return held.snappedValue; // still within the release band — keep holding, ignore rawValue entirely
+  }
+  const found = findAlignmentSnap(movingMesh, axis, rawValue);
+  alignmentSnapState[axis] = found;
+  return found ? found.snappedValue : rawValue;
+}
+
+// A guide line spans the whole landlet along the axis it's perpendicular
+// to (X snap -> a line running the landlet's Y extent, and vice versa) at
+// the world height of whichever item is currently selected, so it reads
+// clearly above the ground rather than embedded in it.
+function updateAlignmentGuides(movingMesh) {
+  const half = LANDLET_SIDE_M / 2;
+  const z = movingMesh ? movingMesh.position.z : 0;
+  if (alignmentSnapState.x) {
+    const x = alignmentSnapState.x.guideCoordinate;
+    alignmentGuideX.geometry.setFromPoints([new THREE.Vector3(x, -half, z), new THREE.Vector3(x, half, z)]);
+    alignmentGuideX.computeLineDistances();
+    alignmentGuideX.visible = true;
+  } else {
+    alignmentGuideX.visible = false;
+  }
+  if (alignmentSnapState.y) {
+    const y = alignmentSnapState.y.guideCoordinate;
+    alignmentGuideY.geometry.setFromPoints([new THREE.Vector3(-half, y, z), new THREE.Vector3(half, y, z)]);
+    alignmentGuideY.computeLineDistances();
+    alignmentGuideY.visible = true;
+  } else {
+    alignmentGuideY.visible = false;
+  }
+}
+
 // resolveByAxis needs a known-good starting point to sweep from — captured
 // fresh at the start of every drag, since the object's position right
 // before a drag begins is by definition already collision-free.
 translateControls.addEventListener('dragging-changed', (event) => {
+  if (!event.value) {
+    // Drag ended (or this is the initial false event some TransformControls
+    // versions fire before anything ever started) — nothing should stay
+    // held or visible once nobody's actively dragging.
+    alignmentSnapState.x = null;
+    alignmentSnapState.y = null;
+    updateAlignmentGuides(null);
+  }
   if (!event.value || !translateControls.object) return;
   if (translateControls.object === groupMovePivot) {
     groupMoveMeshes = [...selectedMeshes];
@@ -555,6 +678,15 @@ translateControls.addEventListener('objectChange', () => {
     const safe = object.userData.safePosition ?? object.position;
     resolved = resolveByAxis(object, safe, requested);
   }
+  // Alignment assist runs last, on the already landlet-clamped and
+  // collision-resolved position — it only ever nudges within whatever room
+  // those two already left, never fights them for it.
+  resolved = {
+    x: resolveAlignmentAxis('x', object, resolved.x),
+    y: resolveAlignmentAxis('y', object, resolved.y),
+    z: resolved.z,
+  };
+  updateAlignmentGuides(object);
   object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
   object.position.set(resolved.x, resolved.y, resolved.z);
 });

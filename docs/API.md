@@ -1798,6 +1798,59 @@ than visibly sinking or floating.
 landlet-bounds clamping, and stacking all see a resized item's real
 (scaled) footprint rather than its template-declared one.
 
+## Frontend-only alignment assist
+
+docs/SPEC.md §3's "Alignment assist: snap-with-escape model — transient
+guide near an alignment opportunity, continued movement releases it,
+pausing commits it." Purely frontend, touches no persisted state beyond
+whatever an ordinary Move drag was already going to write — there's
+nothing here for the backend to know about.
+
+Only applies to a single selected item's own Move (translate) drag, not a
+group move — a group move already has its own collision/bounds-clamping
+logic (`resolveGroupAxisDelta` and friends), and layering alignment
+snapping on top of that too was a lot more moving parts for a feature this
+deliberately simple isn't worth the risk to. X/Y only, not height — height
+alignment (resting on top of another item) is what `snapToSurfaces`
+already does.
+
+While dragging, the moved item's own min/center/max along each axis are
+compared against every *other* placed item's own min/center/max
+(`alignmentTargets`/`findAlignmentSnap` in `src/main.js`) — both computed
+as a plain axis-aligned box from `meshDimensions`, ignoring rotation, the
+same simplifying assumption the group-move bounds clamp already makes for
+every placed item. The closest pair within `ALIGNMENT_SNAP_M` (0.05m — the
+spec's own words, "conservative starting threshold, tune via
+playtesting," apply literally to this constant) snaps the dragged item's
+matching edge/center exactly onto the target, and a dashed magenta guide
+line spans the landlet at that coordinate for as long as the snap holds.
+
+The "continued movement releases it, pausing commits it" half is
+hysteresis, not velocity tracking: once snapped, the position stays frozen
+at the snapped value as long as the *raw* (unsnapped) drag request stays
+within a second, wider `ALIGNMENT_RELEASE_M` (0.15m) of the held target —
+only once the raw request drifts past that does it let go and start
+tracking the pointer directly again (immediately eligible to find a fresh
+snap on the very next frame). This is what keeps a snap reading as a
+magnet with some real grip instead of flickering on/off right at one
+threshold. Alignment assist runs last in the drag pipeline, after the
+landlet-bounds clamp and `snapToSurfaces`' own collision resolution — it
+only ever nudges within whatever room those two already left, never
+contests them for it.
+
+No automated test covers the drag-triggered snap itself, for the same
+reason Trim's own drag *handle* doesn't (see "Extensible products (crop)"
+above, "Dragging the Trim gizmo") — simulating a precise TransformControls
+drag headlessly is fragile on its own terms, and this project's e2e suite
+already avoids it in favor of an equivalent non-drag write path where one
+exists. Alignment assist has no such equivalent (there's nothing to type
+into a field), so it was instead verified manually: two items placed at
+known coordinates via the API, a real mouse drag on the Move gizmo,
+reading the resulting synced position back out. That pass confirmed the
+snap engages exactly on an edge match, holds through several more small
+mouse movements, and correctly releases once the drag genuinely moves on
+— all three of the behaviors this section describes.
+
 ## Frontend-only Measure
 
 A one-shot ruler for a question none of the placement tools answer on their
