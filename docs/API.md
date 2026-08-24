@@ -368,6 +368,10 @@ than deep-merging into it. A caller that wants to change one key inside
 existing `metadata` first and send the whole merged object back — see
 "Extensible products (crop)" above.
 
+If the request actually changes `dimensions`, every builder with a placed
+instance of this template gets a notification once the update succeeds —
+see "Notifications" below.
+
 ### `DELETE /api/catalog/:templateId`
 
 Deletes a catalog template. D1 foreign-key behavior may reject deletion while
@@ -518,14 +522,21 @@ identity picker to switch or rename — unlike switching builders, this
 doesn't reload the page, since nothing about the Build/Shop scene depends on
 which seller is active.
 
-Each row leads with the product's name (wraps rather than truncating — this
-is the one piece of information a seller actually came here to read) and its
-dimensions, then four action buttons — Preview, Rename, Duplicate, Delete —
-with extensibility tucked behind a collapsed "Extensibility ▾" toggle rather
-than shown inline. Extensibility is a real feature (see above) but a rare
-one; putting its controls behind a deliberate expand keeps the row itself
-readable as "a product with some buttons" rather than a resize-configuration
-form every seller has to visually parse whether they need it or not.
+Each row leads with just the product's name; tapping it (`.seller-row-toggle`)
+expands the row to reveal everything else — dimensions, action buttons, and
+the Extensibility/Edit Size panels — the same collapse-until-tapped pattern
+the identity picker uses for builder/seller rows. Tapping a different row's
+toggle collapses whichever one was open, and a collapsed row's live preview
+(if any) is torn down (`disposeAxisPreview`) rather than left rendering
+behind a `display:none` panel.
+
+An expanded row shows its dimensions, then four action buttons — Preview,
+Rename, Duplicate, Delete — with Edit Size and Extensibility each tucked
+behind their own collapsed toggle rather than shown inline. Both are real
+features but rare needs; putting their controls behind a deliberate expand
+keeps the row itself readable as "a product with some buttons" rather than
+a resize-configuration form every seller has to visually parse whether they
+need it or not.
 
 - **Preview** renders that product — the real model or placeholder box,
   exactly as Build mode would show it — into a small self-contained Three.js
@@ -572,6 +583,43 @@ object — the endpoint replaces `metadata` wholesale rather than
 deep-merging it, so the frontend reads the existing value first and only
 replaces the `extensible` key (built fresh from all three rows' current
 state) before sending it back.
+
+### Editing a product's size
+
+A seller can correct a mis-measured (or since-outgrown) real-world size
+after the fact from the row's own "Edit Size ▾" toggle — three
+proportionally-linked inputs pre-filled with the template's current
+`dimensions`, the same proportional-linking behavior as the upload wizard's
+own dimensions step (editing one axis rescales the other two off the
+template's *current* size, not whatever's mid-edit in the other fields, so
+repeated edits can't compound rounding error).
+
+Saving does one of two things depending on whether the template has a real
+uploaded model:
+
+- If `modelUrl` starts with `/uploads/` (a real seller-uploaded model, not a
+  placeholder box), the actual model file is fetched, rescaled via
+  `rescaleModelFile` (the same helper the upload wizard uses when a seller
+  adjusts a freshly-measured size before creating the product — see
+  "Frontend-only Resize" below for why declared dimensions must always
+  exactly match the model's own rendered size), and re-uploaded before the
+  template is patched with both the new `dimensions` and the new
+  `modelUrl` in one request.
+- If there's no real model (a placeholder-box product), only `dimensions`
+  is patched — there's no geometry to rescale.
+
+Either way this is a plain `PATCH /api/catalog/:templateId`, so the same
+request that changes the declared size is what triggers
+`notifyBuildersOfDimensionChange` server-side (see "Notifications" above) —
+the frontend doesn't separately call anything to notify affected builders.
+
+Edit Size's own DOM elements (`.seller-size-panel`, `.seller-size-row`,
+`.seller-size-input`, `.seller-size-save-btn`, `.seller-size-status`) are
+deliberately not shared with the Extensibility panel's classes above despite
+looking identical — several tests select "the" Extensibility row/input/save
+button/status by class alone, assuming exactly one (or exactly three) per
+row, and a second, earlier-in-DOM panel under the same class would silently
+break those assumptions.
 
 ## World settings
 
@@ -1352,9 +1400,67 @@ Response:
 }
 ```
 
+## Notifications
+
+Builder-facing notifications — currently produced by exactly one thing: a
+seller changing a placed template's real-world dimensions (see "Editing a
+product's size" under "Managing extensibility — the Seller modal" above).
+The table is deliberately generic (a plain `message` string, not a typed
+"dimension change" event) so future notification kinds don't need their own
+table or endpoints. There's no pagination cursor — one builder's outstanding
+count is expected to stay small — and no `DELETE`, since a read notification
+is still useful history ("wait, when did that change?").
+
+### Notification object
+
+```json
+{
+  "notificationId": "notification-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "builderId": "builder-7f3a1c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "message": "\"Oak Table\" was resized by its seller to 1.20m x 0.80m x 0.75m — you have one placed. Check that it still fits where you put it.",
+  "templateId": "3c2b1a90-...",
+  "createdAt": "2026-08-24T00:00:00.000Z",
+  "readAt": null
+}
+```
+
+`templateId` is set null (not cascaded) if the referenced template is later
+deleted — the message text already names the product, so the notification
+stays meaningful without a live template to point back at.
+
+### `GET /api/notifications`
+
+Lists a builder's notifications, newest first, capped at 100. `builderId` is
+a required query parameter. `unreadOnly=true` narrows the list to
+`readAt IS NULL` server-side — the same call backs both the unread badge
+count (`unreadOnly=true`) and the full history list (omitted) in the
+frontend's Notices panel.
+
+### `PATCH /api/notifications/:notificationId`
+
+Marks one notification read. Request body: `{ "read": true }`. Returns
+`404` if the notification doesn't exist.
+
+### `POST /api/notifications/mark-all-read`
+
+Marks every one of a builder's unread notifications read at once. Request
+body: `{ "builderId": "..." }`.
+
+### How a notification gets created
+
+`PATCH /api/catalog/:templateId` (see "Catalog templates" above) compares
+the request's `dimensions` against the template's stored values before
+applying the update. If any axis actually changed (beyond float rounding
+noise), it looks up every distinct builder who owns a landlet with a placed
+instance of that template (`placed_instances` joined to `landlets` on
+`owner_builder_id`), and inserts one notification per affected builder in a
+single `db.batch()` alongside the update — so a pure rename, price change,
+or extensibility edit creates no notifications at all, only an actual size
+change does.
+
 ## D1 schema overview
 
-The migrations currently create ten main backend tables:
+The migrations currently create eleven main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -1376,6 +1482,8 @@ The migrations currently create ten main backend tables:
 - `land_candidate_rings`: atomic radial reservations for procedurally generated
   candidate bands, including boundary signatures that keep adjacent polygonal
   rings seam-compatible and optional parent links for derived ring chains.
+- `notifications`: builder-facing notices, currently only ever created by a
+  seller's product-dimension change (see "Notifications" above).
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending
