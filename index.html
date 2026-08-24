@@ -387,6 +387,21 @@
         display: none;
         flex-wrap: wrap;
         justify-content: center;
+        /* Both max-width AND width (not max-width alone) — a wrapping flex
+           row with only max-width shrinks to whatever "optimal line
+           breaking" width Chromium picks (empirically far narrower than
+           94vw once there are several buttons, since it minimizes total
+           line count rather than maximizing row width), which packs far
+           fewer buttons per row than the budget actually allows and grows
+           the panel much taller than necessary. That extra height isn't
+           just cosmetic on a phone-width viewport: it can reach down far
+           enough to sit on top of the 3D canvas itself and silently
+           swallow taps meant for it (found via e2e/bundles.test.mjs
+           failing to select a placed tree once this row had enough
+           buttons — see the Community Sign click handler's own comment in
+           src/main.js). Forcing the full budget-width used per row keeps
+           the panel as short as the button count actually requires. */
+        width: 94vw;
         max-width: 94vw;
         gap: 8px;
         z-index: 10;
@@ -1328,6 +1343,105 @@
       #notifications-mark-all-btn:disabled {
         opacity: 0.5;
       }
+      /* Same modal shell as #notifications-modal — a builder's moderation
+         view for one specific community sign's posts (see "Community
+         signs" in docs/API.md), opened from #manage-sign-posts in
+         #gizmo-mode-controls. Deliberately its own classes throughout
+         (.sign-post-row, not a reused .notification-row) despite the near-
+         identical look — notification-row's own unread/click-to-mark-read
+         behavior doesn't apply here, and this project has hit the same
+         "shared class, different button" bug more than once by reusing a
+         class across genuinely different elements (see the bundle
+         share-toggle's own comment). */
+      #sign-posts-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.5);
+        padding: 16px;
+      }
+      #sign-posts-modal.visible {
+        display: flex;
+      }
+      #sign-posts-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sign-posts-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #sign-posts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sign-post-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(255 255 255 / 0.08);
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.9);
+      }
+      .sign-post-row-body {
+        min-width: 0;
+      }
+      .sign-post-row-author {
+        font-weight: 600;
+      }
+      .sign-post-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.5);
+      }
+      .sign-post-row-delete {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: rgba(140, 20, 20, 0.55);
+        color: #fff;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #sign-posts-empty {
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.6);
+      }
+      /* Un-flagging a sign lives here, inside the moderation panel, rather
+         than as its own always-present toolbar button next to Community
+         Sign — see that button's own click-handler comment for why (a
+         second toolbar button here once pushed #gizmo-mode-controls tall
+         enough on a phone-width viewport to physically overlap and
+         intercept taps meant for the 3D canvas beneath it). */
+      #sign-posts-unflag-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
          first) and reopenable any time afterward from #identity-btn or the
@@ -1742,6 +1856,15 @@
         <button id="notifications-mark-all-btn" type="button">Mark all read</button>
         <div id="notifications-list"></div>
         <div id="notifications-empty">Nothing here yet.</div>
+      </div>
+    </div>
+    <div id="sign-posts-modal">
+      <div id="sign-posts-modal-content">
+        <button id="sign-posts-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Sign Posts</h2>
+        <div id="sign-posts-list"></div>
+        <div id="sign-posts-empty">No posts on this sign yet.</div>
+        <button id="sign-posts-unflag-btn" type="button">Remove Community Sign</button>
       </div>
     </div>
     <div id="settings-modal">

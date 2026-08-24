@@ -1635,17 +1635,48 @@ Deleting the sign instance itself cascades to every post on it
 (`ON DELETE CASCADE`, migrations/0041) — no orphaned posts left behind.
 
 No ownership check on any of these three — same no-real-auth caveat as
-`handleBundles`' own note above; the frontend has no moderation UI at all
-yet (see "Known gaps" below), so this is enforced nowhere today.
+`handleBundles`' own note above; the frontend's Manage Posts panel (below)
+is the only thing hiding the delete control from a builder who doesn't own
+the sign's landlet.
 
 ### Frontend wiring — Build mode
 
 A "Community Sign" toggle sits in `#gizmo-mode-controls` next to Save
 Bundle, enabled only for a single-item selection (same reasoning as Trim —
-"which one sign" has no group answer). Clicking it flips
-`mesh.userData.isCommunitySign` and re-syncs the mesh through the ordinary
-`syncUpdate` path (see `instanceFromMesh`) — no dedicated endpoint call,
-identical to how an ordinary move/rotate persists.
+"which one sign" has no group answer). The first click flips
+`mesh.userData.isCommunitySign` to `true` and re-syncs the mesh through
+the ordinary `syncUpdate` path (see `instanceFromMesh`) — no dedicated
+endpoint call, identical to how an ordinary move/rotate persists. Once
+already flagged, clicking the *same* button again opens `#sign-posts-modal`
+(below) instead of un-flagging directly — un-flagging moved inside that
+modal's own "Remove Community Sign" button.
+
+This two-purposes-one-button design replaced an earlier version with a
+separate, always-present "Manage Posts" button next to it. That version
+shipped a real layout bug: on a phone-width viewport, `#gizmo-mode-controls`
+wraps its buttons across several rows, and one more button was enough to
+push the row's total height down far enough to physically overlap the 3D
+canvas beneath it — silently swallowing taps meant for a placed item
+(caught by `e2e/bundles.test.mjs`, an unrelated test, suddenly failing to
+select a placed tree). Folding the two actions into one button removes
+that extra row. The container was also given an explicit `width: 94vw`
+alongside its existing `max-width: 94vw` for the same reason: a wrapping
+flex row with only `max-width` set shrinks to whatever *narrower* "optimal
+line-breaking" width the browser picks (it minimizes line count, not
+row width), which packs noticeably fewer buttons per row — and therefore
+grows noticeably taller — than the actual space budget allows.
+
+`#sign-posts-modal` is the same modal shell `#notifications-modal` already
+establishes, reused for its shape but not its classes (`.sign-post-row`,
+not `.notification-row` — see that CSS rule's own comment on why this
+project keeps a class per genuinely different element even when the look
+is identical). Build mode itself never renders a sign's post sprites
+(those are Shop-mode-only, see below), so this modal is the only place a
+builder ever sees what's actually been posted. Each row's only action is
+a delete (×) button calling `DELETE .../posts/:postId` and re-rendering
+the list; the modal's own "Remove Community Sign" button un-flags the
+instance (`isCommunitySign = false`, synced the same way the initial flag
+was set) and closes the modal.
 
 ### Frontend wiring — Shop mode
 
@@ -1684,9 +1715,16 @@ radius.
 
 ### Testing note
 
-`e2e/community-signs.test.mjs` covers the Build-mode toggle button and the
-full posts API (create/list/delete/cascade-on-instance-delete, plus the
-"can't post to a non-sign" 400) end to end through the browser. The
+`e2e/community-signs.test.mjs` covers the Build-mode toggle-then-manage
+button (flag on, second click opens the panel), the Manage Posts panel
+itself (row count/content, deleting a post through its own × button and
+confirming that persists server-side, and un-flagging via "Remove
+Community Sign"), and the full posts API
+(create/list/delete/cascade-on-instance-delete, plus the "can't post to a
+non-sign" 400 — that last one in `worker/index.test.js` instead, not the
+browser suite, since deliberately triggering a non-2xx `fetch` there logs
+a console error the suite's own errors-must-be-empty convention would
+misread as a real bug) end to end through the browser. The
 Shop-mode camera-distance fade and the `prompt()`-driven "Leave a Note"
 flow are **not** covered by the automated suite, for the same reason raw
 TransformControls drags aren't (see "Frontend-only alignment assist"
@@ -1705,13 +1743,6 @@ centered) directly overlapped `#shop-vertical-controls` (`bottom: 78px`,
 also centered) — the up/down flight buttons' own invisible-when-inactive
 hit area silently ate every tap intended for the note button. Fixed by
 moving it to `bottom: 180px`, clear of that column entirely.
-
-### Known gaps
-
-No frontend moderation UI for `DELETE .../posts/:postId` yet — the
-endpoint exists and is tested (see above), but nothing in Build mode
-currently surfaces a sign's posts with a delete control. A builder wanting
-to remove an unwanted post today would need to call the API directly.
 
 ## D1 schema overview
 

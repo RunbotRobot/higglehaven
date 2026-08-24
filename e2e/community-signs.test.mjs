@@ -5,9 +5,13 @@
 // see updateSignFade/makeSignPostSprite in src/main.js, not covered here
 // for the same reason raw TransformControls drags aren't: a real camera-
 // distance-driven fade and a window.prompt-driven post flow are exercised
-// manually instead, documented in docs/API.md). This test covers the two
-// pieces that ARE reliably automatable: the build-mode toggle button
-// itself, and the backend sign-posts API it unlocks.
+// manually instead, documented in docs/API.md). This test covers the
+// pieces that ARE reliably automatable: the build-mode toggle button (a
+// second click, once already flagged, opens the Manage Posts panel
+// instead of un-flagging directly — see that button's own click-handler
+// comment in src/main.js for why), the Manage Posts moderation panel
+// (#sign-posts-modal, including its own "Remove Community Sign" button),
+// and the backend sign-posts API all three unlock.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Community Sign Suite Tester';
@@ -39,7 +43,7 @@ console.log('Community Sign button label before toggling (should be plain "Commu
 await communitySignBtn().click();
 await page.waitForTimeout(500);
 const labelAfterOn = await communitySignBtn().textContent();
-console.log('Community Sign button label after toggling on (should include a checkmark):', labelAfterOn);
+console.log('Community Sign button label after toggling on (should mention Manage):', labelAfterOn);
 
 // Read back the persisted flag directly from the API.
 const { landlets } = (await fetchJson('/api/landlets?limit=100')).body;
@@ -55,7 +59,7 @@ await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Love this place!' }),
 });
-const secondPost = await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
+await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ authorLabel: 'Another Shopper', text: 'Great selection.' }),
@@ -63,19 +67,36 @@ const secondPost = await fetchJson(`/api/instances/${signInstance.instanceId}/po
 const { posts } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
 console.log('posts on the sign (should be 2, oldest first):', posts.map((p) => `${p.authorLabel}: ${p.text}`));
 
-// Moderation: delete one post.
-const deleteResult = await fetchJson(`/api/instances/${signInstance.instanceId}/posts/${secondPost.body.post.postId}`, { method: 'DELETE' });
-const { posts: postsAfterDelete } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
-console.log('posts after deleting one (should be 1):', postsAfterDelete.length);
-
-// Toggle back off — the button label and the persisted flag should both revert.
+// A second click on the same (still-selected) button now opens Manage
+// Posts instead of un-flagging.
 await communitySignBtn().click();
+await page.waitForSelector('#sign-posts-modal.visible', { timeout: 5000 });
+await page.waitForTimeout(300);
+const rowCountInPanel = await page.locator('.sign-post-row').count();
+const firstRowText = await page.locator('.sign-post-row').first().textContent();
+console.log('rows shown in the panel (should be 2):', rowCountInPanel);
+console.log('first row mentions author+text (should mention "A Shopper" and "Love this place!"):', firstRowText);
+
+// Delete the second post via its row's own × button (not the API directly)
+// — this is the actual moderation path a builder would use.
+await page.locator('.sign-post-row').filter({ hasText: 'Another Shopper' }).locator('.sign-post-row-delete').click();
+await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, { timeout: 5000 });
+const rowCountAfterDelete = await page.locator('.sign-post-row').count();
+console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
+
+const { posts: postsAfterDelete } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
+console.log('posts persisted server-side after the panel delete (should be 1, the surviving one authored by "A Shopper"):', postsAfterDelete.map((p) => p.authorLabel));
+
+// "Remove Community Sign," inside the panel, un-flags and closes it.
+await page.click('#sign-posts-unflag-btn');
 await page.waitForTimeout(500);
+const modalHiddenAfterUnflag = await page.locator('#sign-posts-modal').evaluate((el) => !el.classList.contains('visible'));
 const labelAfterOff = await communitySignBtn().textContent();
 const { instances: instancesAfterOff } = (await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`)).body;
 const signInstanceAfterOff = instancesAfterOff.find((i) => i.instanceId === signInstance.instanceId);
-console.log('Community Sign button label after toggling off (should be plain again):', labelAfterOff);
-console.log('isCommunitySign persisted after toggling off (should be false):', signInstanceAfterOff.isCommunitySign);
+console.log('sign-posts-modal closed after unflagging (should be true):', modalHiddenAfterUnflag);
+console.log('Community Sign button label after unflagging (should be plain again):', labelAfterOff);
+console.log('isCommunitySign persisted after unflagging (should be false):', signInstanceAfterOff.isCommunitySign);
 
 // (The 400 rejection for posting to a non-sign instance is covered by
 // worker/index.test.js's own "Community signs" describe block instead of
@@ -88,9 +109,12 @@ const pass = labelBefore.trim() === 'Community Sign' &&
   signInstance.isCommunitySign === true &&
   posts.length === 2 &&
   posts[0].text === 'Love this place!' &&
-  deleteResult.status === 200 &&
-  postsAfterDelete.length === 1 &&
+  rowCountInPanel === 2 &&
+  firstRowText.includes('A Shopper') && firstRowText.includes('Love this place!') &&
+  rowCountAfterDelete === 1 &&
+  postsAfterDelete.length === 1 && postsAfterDelete[0].authorLabel === 'A Shopper' &&
+  modalHiddenAfterUnflag &&
   labelAfterOff.trim() === 'Community Sign' &&
   signInstanceAfterOff.isCommunitySign === false &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Community Sign toggle + sign-posts API', errors });
+await finish(browser, { pass, label: 'Community Sign toggle + Manage Posts panel + sign-posts API', errors });

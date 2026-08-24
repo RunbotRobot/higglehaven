@@ -50,6 +50,7 @@ import {
   deleteBundle,
   fetchSignPosts,
   createSignPost,
+  deleteSignPost,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -3706,7 +3707,11 @@ function updateSelectionUI() {
   // doesn't reflow.
   communitySignBtn.disabled = !singleMesh;
   communitySignBtn.classList.toggle('active', !!singleMesh?.userData.isCommunitySign);
-  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓' : 'Community Sign';
+  // Once flagged, this same button opens the Manage Posts panel instead of
+  // un-flagging directly (see its own click handler) — the label makes
+  // that click destination explicit rather than reading like a second
+  // identical toggle.
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓ (Manage)' : 'Community Sign';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -3902,15 +3907,114 @@ saveBundleBtn.addEventListener('click', async () => {
 });
 
 // Community Sign (docs/SPEC.md §6, docs/API.md's "Community signs") — an
-// immediate-PATCH toggle on the single selected instance, the same pattern
-// the Seller modal's own Flooring button uses for a per-instance/per-
-// template boolean rather than a form with its own Save step. Just flips
-// the flag and re-syncs the mesh like any ordinary move/rotate would (see
-// syncUpdate) — there's no separate endpoint for this one field.
+// immediate-PATCH flag on the single selected instance the first time (the
+// same pattern the Seller modal's own Flooring button uses for a
+// per-instance/per-template boolean rather than a form with its own Save
+// step). Once already flagged, this same button instead opens the Manage
+// Posts panel (#sign-posts-modal, below) rather than un-flagging directly
+// — un-flagging lives inside that panel's own "Remove Community Sign"
+// button instead. A dedicated always-present "Manage Posts" toolbar button
+// was tried first and reverted: on a phone-width viewport it pushed
+// #gizmo-mode-controls' wrapped button row tall enough to physically
+// overlap and intercept taps meant for the 3D canvas beneath it (caught by
+// e2e/bundles.test.mjs — an unrelated test — suddenly failing to select a
+// placed tree). Folding both actions into one button removes that extra
+// row entirely.
 communitySignBtn.addEventListener('click', async () => {
   if (selectedMeshes.size !== 1) return;
   const [mesh] = selectedMeshes;
-  mesh.userData.isCommunitySign = !mesh.userData.isCommunitySign;
+  if (mesh.userData.isCommunitySign) {
+    openSignPostsModal(mesh);
+    return;
+  }
+  mesh.userData.isCommunitySign = true;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
+});
+
+// A builder's moderation view onto one sign's posts (see docs/API.md's
+// "Community signs"), reusing the same modal shell #notifications-modal
+// already establishes. Build mode never renders a sign's post sprites
+// itself (those are Shop-mode-only, see registerShopSign), so this modal
+// is the only place a builder ever sees what's actually been posted.
+const signPostsModalEl = document.getElementById('sign-posts-modal');
+const signPostsCloseBtn = document.getElementById('sign-posts-close-btn');
+const signPostsListEl = document.getElementById('sign-posts-list');
+const signPostsEmptyEl = document.getElementById('sign-posts-empty');
+const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
+let signPostsTargetMesh = null;
+
+function formatSignPostTime(isoString) {
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+async function renderSignPosts() {
+  signPostsListEl.innerHTML = '';
+  if (!signPostsTargetMesh) return;
+  const instanceId = signPostsTargetMesh.userData.instanceId;
+  let posts;
+  try {
+    posts = await fetchSignPosts(instanceId);
+  } catch (err) {
+    signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
+    signPostsEmptyEl.hidden = false;
+    return;
+  }
+  signPostsEmptyEl.hidden = posts.length > 0;
+  for (const post of posts) {
+    const row = document.createElement('div');
+    row.className = 'sign-post-row';
+    const body = document.createElement('div');
+    body.className = 'sign-post-row-body';
+    const author = document.createElement('div');
+    author.className = 'sign-post-row-author';
+    author.textContent = post.authorLabel;
+    body.appendChild(author);
+    const text = document.createElement('div');
+    text.textContent = post.text;
+    body.appendChild(text);
+    const time = document.createElement('div');
+    time.className = 'sign-post-row-time';
+    time.textContent = formatSignPostTime(post.createdAt);
+    body.appendChild(time);
+    row.appendChild(body);
+    const deleteRowBtn = document.createElement('button');
+    deleteRowBtn.className = 'sign-post-row-delete';
+    deleteRowBtn.type = 'button';
+    deleteRowBtn.textContent = '×';
+    deleteRowBtn.setAttribute('aria-label', 'Delete post');
+    deleteRowBtn.addEventListener('click', async () => {
+      deleteRowBtn.disabled = true;
+      try {
+        await deleteSignPost(instanceId, post.postId);
+        await renderSignPosts();
+      } catch (err) {
+        console.warn('Could not delete post:', err);
+        deleteRowBtn.disabled = false;
+      }
+    });
+    row.appendChild(deleteRowBtn);
+    signPostsListEl.appendChild(row);
+  }
+}
+
+function openSignPostsModal(mesh) {
+  signPostsTargetMesh = mesh;
+  signPostsModalEl.classList.add('visible');
+  renderSignPosts();
+}
+signPostsCloseBtn.addEventListener('click', () => {
+  signPostsModalEl.classList.remove('visible');
+  signPostsTargetMesh = null;
+});
+signPostsUnflagBtn.addEventListener('click', async () => {
+  if (!signPostsTargetMesh) return;
+  const mesh = signPostsTargetMesh;
+  mesh.userData.isCommunitySign = false;
+  signPostsModalEl.classList.remove('visible');
+  signPostsTargetMesh = null;
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
