@@ -268,6 +268,10 @@ async function handleApi(request, env, url) {
     return handleNotifications(request, env.DB, route, url);
   }
 
+  if (route[0] === 'bundles') {
+    return handleBundles(request, env.DB, route, url);
+  }
+
   if (route[0] === 'catalog') {
     return handleCatalog(request, env.DB, route, url, env.MODELS);
   }
@@ -1046,6 +1050,95 @@ function notificationFromRow(row) {
     templateId: row.template_id,
     createdAt: row.created_at,
     readAt: row.read_at,
+  };
+}
+
+// Saved groups a builder can stamp down together in one tap (see
+// docs/API.md's "Bundles") — a named, persisted version of the same
+// relative-offset shape the frontend's own Copy/Paste already builds in
+// memory (copySelection/placeClipboardItems in src/main.js). No rename of
+// a bundle's *contents* here — only its name — since there's no frontend
+// flow for editing a saved bundle's items; delete and re-save covers that.
+async function handleBundles(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const { results } = await db.prepare(`
+      SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
+    `).bind(builderId).all();
+    return json({ bundles: results.map(bundleFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 1) {
+    const input = await readJson(request);
+    const builderId = stringValue(input.builderId, 'builderId');
+    const name = stringValue(input.name, 'name');
+    const items = validateBundleItems(input.items);
+    await assertReferenceExists(db, 'builders', 'builder_id', builderId, 'builderId');
+    await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
+    const bundleId = `bundle-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO bundles (bundle_id, builder_id, name, items_json) VALUES (?, ?, ?, ?)
+    `).bind(bundleId, builderId, name, JSON.stringify(items)).run();
+    const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+    return json({ bundle: bundleFromRow(row) }, 201);
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Bundle not found' }, 404);
+    const input = await readJson(request);
+    const name = stringValue(input.name, 'name');
+    await db.prepare(`
+      UPDATE bundles SET name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, route[1]).run();
+    const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+    return json({ bundle: bundleFromRow(updated) });
+  }
+
+  if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Bundle not found' }, 404);
+    await db.prepare('DELETE FROM bundles WHERE bundle_id = ?').bind(route[1]).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// Each item is { templateId, dx, dy, dz, rotationX, rotationY, rotationZ,
+// crop, scale } — dx/dy/dz and the rotations are offsets/orientations, not
+// positions, so (unlike most other dimension-shaped fields in this file)
+// they're allowed to be negative or zero. Reuses validateCropShape and
+// validateScale directly since this is exactly the shape those already
+// validate for a placed instance.
+function validateBundleItems(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new HttpError('items must be a non-empty array', 400);
+  }
+  if (input.length > 250) {
+    throw new HttpError('items cannot exceed 250 entries', 400);
+  }
+  return input.map((item, index) => ({
+    templateId: stringValue(item.templateId, `items[${index}].templateId`),
+    dx: finiteNumber(item.dx, `items[${index}].dx`),
+    dy: finiteNumber(item.dy, `items[${index}].dy`),
+    dz: finiteNumber(item.dz, `items[${index}].dz`),
+    rotationX: finiteNumber(item.rotationX ?? 0, `items[${index}].rotationX`),
+    rotationY: finiteNumber(item.rotationY ?? 0, `items[${index}].rotationY`),
+    rotationZ: finiteNumber(item.rotationZ ?? 0, `items[${index}].rotationZ`),
+    crop: validateCropShape(item.crop),
+    scale: validateScale(item.scale),
+  }));
+}
+
+function bundleFromRow(row) {
+  return {
+    bundleId: row.bundle_id,
+    builderId: row.builder_id,
+    name: row.name,
+    items: JSON.parse(row.items_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
