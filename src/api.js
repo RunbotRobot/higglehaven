@@ -337,3 +337,58 @@ export async function markAllNotificationsRead(builderId) {
     body: JSON.stringify({ builderId }),
   });
 }
+
+// Landlet versions (see docs/API.md's "Landlet drafts"/"Landlet versions") —
+// immutable snapshots of a landlet's placed instances, separate from the
+// mutable placed_instances rows a builder is actively editing. A landlet's
+// activeVersionId points at whichever snapshot (if any) shoppers see; a
+// landlet that's never been published has none, and Shop mode falls back to
+// showing the live draft in that case (see loadShopLandletInstances).
+export async function fetchLandletVersions(landletId, { limit, cursor } = {}) {
+  const query = new URLSearchParams();
+  if (limit) query.set('limit', String(limit));
+  if (cursor) query.set('cursor', cursor);
+  const qs = query.toString();
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/versions${qs ? `?${qs}` : ''}`);
+}
+
+// Snapshots the landlet's *current* live instances as a new immutable
+// version — this alone doesn't change what shoppers see (see
+// activateLandletVersion); "Publish" in the UI does both in sequence.
+export async function saveLandletVersion(landletId, { name, metadata } = {}) {
+  const { version } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/versions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, metadata }),
+  });
+  return version;
+}
+
+// Version metadata plus its snapshotted `instances` array (same shape as an
+// ordinary placed instance — see worker/index.js's versionInstanceFromRow —
+// so it can be handed straight to createMeshForInstance or replaceLandletDraft).
+export async function fetchLandletVersion(landletId, versionId) {
+  const { version } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/versions/${encodeURIComponent(versionId)}`);
+  return version;
+}
+
+// Points the landlet's activeVersionId at an existing snapshot — the
+// builder's own live draft is untouched, only what Shop mode shows changes.
+export async function activateLandletVersion(landletId, versionId) {
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/versions/${encodeURIComponent(versionId)}/activate`, {
+    method: 'POST',
+  });
+}
+
+// Atomically replaces the landlet's entire live draft (every placed
+// instance) with `instances` — used to restore an older version into the
+// editor. Always creates a new version snapshot of its own as a side effect
+// (even restoring counts as a save), giving a clean audit trail back to
+// "restored from Version N" rather than silently overwriting history.
+export async function replaceLandletDraft(landletId, { instances, versionName, versionMetadata } = {}) {
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/draft`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instances, versionName, versionMetadata }),
+  });
+}

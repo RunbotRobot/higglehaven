@@ -1207,6 +1207,20 @@ Landlet versions are immutable snapshots of a landlet's placed instances. The
 mutable `placed_instances` rows remain the builder's current draft, while a
 landlet's `activeVersionId` points at the snapshot intended for shoppers.
 
+**Frontend wiring:** the Settings modal's Build tab (`renderBuildSettingsSection`
+in `src/main.js`) is the only UI surface for any of this. "Publish" saves the
+current draft as a new version and activates it in one step (the common
+case); each history row also offers "Set Live" (activate that version alone,
+`POST .../activate`, current draft untouched) and "Restore to Editor"
+(`PUT .../draft` with that version's own `instances`, replacing the live
+draft — confirmed first, since it discards unsaved live edits, though the
+restore itself creates one more version, so it's not actually destructive).
+Shop mode (`loadShopLandletInstances`) renders a landlet's active version
+when `activeVersionId` is set, and falls back to the live draft
+(`GET /api/instances`) when it's `null` — i.e. a landlet that's never been
+published shows shoppers the same thing a builder currently sees, which is
+also what every landlet did before this feature existed.
+
 ### `GET /api/landlets/:landletId/versions`
 
 Lists snapshot metadata newest-first. Each record includes `versionId`,

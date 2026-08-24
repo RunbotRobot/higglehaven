@@ -38,6 +38,11 @@ import {
   fetchNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  fetchLandletVersions,
+  saveLandletVersion,
+  fetchLandletVersion,
+  activateLandletVersion,
+  replaceLandletDraft,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -2579,14 +2584,22 @@ function renderSettingsSection() {
     btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
   }
 
-  if (activeSettingsTab !== 'general') {
-    const note = document.createElement('div');
-    note.className = 'settings-empty-note';
-    note.textContent = 'Nothing to configure here yet.';
-    settingsSectionEl.appendChild(note);
+  if (activeSettingsTab === 'general') {
+    renderGeneralSettingsSection();
+    return;
+  }
+  if (activeSettingsTab === 'build') {
+    renderBuildSettingsSection();
     return;
   }
 
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'Nothing to configure here yet.';
+  settingsSectionEl.appendChild(note);
+}
+
+function renderGeneralSettingsSection() {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
@@ -2614,6 +2627,166 @@ function renderSettingsSection() {
   }
   field.appendChild(radioRow);
   settingsSectionEl.appendChild(field);
+}
+
+// Publish + Version History (see docs/API.md's "Landlet drafts"/"Landlet
+// versions") — the one place the already-existing draft/version/activate
+// backend gets a frontend. Only meaningful while actually in Build mode on
+// a claimed landlet (Settings itself stays reachable from Shop too, but
+// there's no landlet to publish from there).
+function renderBuildSettingsSection() {
+  if (currentMode !== 'build' || !currentLandletId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Enter Build mode on a claimed landlet to publish or manage versions.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+  const landletId = currentLandletId;
+
+  const publishField = document.createElement('div');
+  publishField.className = 'settings-field';
+  const publishLabel = document.createElement('span');
+  publishLabel.textContent = 'Publish';
+  publishField.appendChild(publishLabel);
+  const publishHint = document.createElement('div');
+  publishHint.className = 'settings-empty-note';
+  publishHint.textContent = 'Shoppers see whatever was last published here, not your live edits, until you publish again.';
+  publishField.appendChild(publishHint);
+  const publishBtn = document.createElement('button');
+  publishBtn.type = 'button';
+  publishBtn.className = 'version-action-btn';
+  publishBtn.textContent = 'Publish';
+  publishField.appendChild(publishBtn);
+  const publishStatus = document.createElement('div');
+  publishStatus.id = 'build-publish-status';
+  publishStatus.className = 'settings-empty-note';
+  publishField.appendChild(publishStatus);
+  settingsSectionEl.appendChild(publishField);
+
+  const historyField = document.createElement('div');
+  historyField.className = 'settings-field';
+  const historyLabel = document.createElement('span');
+  historyLabel.textContent = 'Version History';
+  historyField.appendChild(historyLabel);
+  const historyList = document.createElement('div');
+  historyList.className = 'version-list';
+  historyField.appendChild(historyList);
+  settingsSectionEl.appendChild(historyField);
+
+  async function renderVersionHistory() {
+    historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let versions;
+    let activeVersionId;
+    try {
+      [{ versions }, { activeVersionId }] = await Promise.all([
+        fetchLandletVersions(landletId, { limit: 20 }),
+        fetchLandlet(landletId),
+      ]);
+    } catch (err) {
+      historyList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load version history.';
+      historyList.appendChild(errNote);
+      return;
+    }
+    historyList.innerHTML = '';
+    if (versions.length === 0) {
+      historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
+      return;
+    }
+    for (const version of versions) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+      const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+      info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+
+      const setLiveBtn = document.createElement('button');
+      setLiveBtn.type = 'button';
+      setLiveBtn.className = 'version-action-btn';
+      setLiveBtn.textContent = 'Set Live';
+      setLiveBtn.disabled = version.versionId === activeVersionId;
+      setLiveBtn.addEventListener('click', async () => {
+        setLiveBtn.disabled = true;
+        try {
+          await activateLandletVersion(landletId, version.versionId);
+          // Feedback goes through the shared publishStatus, not a status
+          // element inside this row — renderVersionHistory() (below) tears
+          // down and rebuilds every row's DOM, including this one, so
+          // anything set on a per-row element here would be wiped before
+          // ever actually being visible.
+          publishStatus.textContent = `Shoppers now see "${version.name}".`;
+          publishStatus.classList.remove('error');
+          renderVersionHistory();
+        } catch (err) {
+          publishStatus.textContent = err.message || 'Could not activate.';
+          publishStatus.classList.add('error');
+          setLiveBtn.disabled = false;
+        }
+      });
+      actions.appendChild(setLiveBtn);
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'version-action-btn';
+      restoreBtn.textContent = 'Restore to Editor';
+      restoreBtn.addEventListener('click', async () => {
+        if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+        restoreBtn.disabled = true;
+        publishStatus.textContent = 'Restoring…';
+        publishStatus.classList.remove('error');
+        try {
+          const full = await fetchLandletVersion(landletId, version.versionId);
+          await replaceLandletDraft(landletId, {
+            instances: full.instances,
+            versionName: `Restored from "${version.name}"`,
+          });
+          // Simplest correct way to get the live scene back in sync with
+          // whatever the server now holds — the same "something changed
+          // server-side, reload" pattern openBuilderSwitcher and
+          // claimBackBtn already use elsewhere in this file.
+          sessionStorage.setItem(START_MODE_KEY, 'build');
+          location.reload();
+        } catch (err) {
+          publishStatus.textContent = err.message || 'Could not restore.';
+          publishStatus.classList.add('error');
+          restoreBtn.disabled = false;
+        }
+      });
+      actions.appendChild(restoreBtn);
+
+      row.appendChild(actions);
+      historyList.appendChild(row);
+    }
+  }
+
+  publishBtn.addEventListener('click', async () => {
+    publishBtn.disabled = true;
+    publishStatus.textContent = 'Publishing…';
+    publishStatus.classList.remove('error');
+    try {
+      const version = await saveLandletVersion(landletId, {});
+      await activateLandletVersion(landletId, version.versionId);
+      publishStatus.textContent = `Published as "${version.name}" — shoppers now see this.`;
+      renderVersionHistory();
+    } catch (err) {
+      publishStatus.textContent = err.message || 'Could not publish.';
+      publishStatus.classList.add('error');
+    } finally {
+      publishBtn.disabled = false;
+    }
+  });
+
+  renderVersionHistory();
 }
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
@@ -4738,7 +4911,15 @@ function updateShopProximity() {
 async function loadShopLandletInstances(entry) {
   let instances;
   try {
-    instances = await fetchInstances(entry.record.landletId);
+    // A landlet that's actually been published (see the Build settings
+    // tab's "Publish"/Version History) shows shoppers a frozen snapshot,
+    // not the builder's own live in-progress edits — the whole point of a
+    // draft/publish split. A landlet with no activeVersionId has never
+    // been published, so this falls back to the live draft (today's
+    // behavior for every landlet that existed before this feature).
+    instances = entry.record.activeVersionId
+      ? (await fetchLandletVersion(entry.record.landletId, entry.record.activeVersionId)).instances
+      : await fetchInstances(entry.record.landletId);
   } catch {
     entry.loaded = false; // allow a later pass to retry
     return;
