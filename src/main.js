@@ -684,7 +684,10 @@ translateControls.addEventListener('objectChange', () => {
   resolved = {
     x: resolveAlignmentAxis('x', object, resolved.x),
     y: resolveAlignmentAxis('y', object, resolved.y),
-    z: resolved.z,
+    // Flooring is always flush with the ground (see isFlooringTemplate) —
+    // free to move in X/Y like anything else, but the Z (blue) gizmo arrow
+    // shouldn't be able to lift a "patch of ground" up into the air.
+    z: isFlooringTemplate(object.userData.template) ? FLOORING_THICKNESS_M / 2 : resolved.z,
   };
   updateAlignmentGuides(object);
   object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
@@ -1042,6 +1045,15 @@ function effectiveLength(template, instance, axis, dimensionKey) {
 // template-declared footprint for those purposes.
 function meshDimensions(mesh) {
   const { template, crop, scale = 1 } = mesh.userData;
+  // Every caller here — clampToLandlet's own minimum-z floor, collision
+  // resolution, the group-move bounds clamp, alignment assist's own
+  // half-extent — needs to agree a flooring mesh is genuinely thin, not
+  // whatever height the seller declared for the (unused, for flooring)
+  // full-size model. Defined once here rather than special-cased at every
+  // call site.
+  if (isFlooringTemplate(template)) {
+    return { width: template.dimensions.width, depth: template.dimensions.depth, height: FLOORING_THICKNESS_M };
+  }
   return {
     width: (crop?.x ?? template.dimensions.width) * scale,
     depth: (crop?.y ?? template.dimensions.depth) * scale,
@@ -1051,6 +1063,23 @@ function meshDimensions(mesh) {
 
 const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
 const AXIS_LIST = ['x', 'y', 'z'];
+
+// Ground/flooring products (docs/SPEC.md §3: "placing a specific real
+// flooring/sod product replaces [the default grass] within that
+// footprint") — a template opts in via metadata.flooring (toggled in the
+// Seller modal), not a separate catalog field, the same lightweight
+// pattern extensibleAxes already uses for metadata.extensible. Always
+// renders as a thin flat plane at true ground level regardless of the
+// template's own declared height or whether it has a real uploaded model
+// — true texture-masking of the shared ground mesh within an arbitrary
+// footprint is a real rendering problem or its own; a thin tinted slab
+// reads as "this patch of ground is now this product" without it, the
+// same simplification a placeholder box already stands in for any product
+// with no real model.
+const FLOORING_THICKNESS_M = 0.02;
+function isFlooringTemplate(template) {
+  return template.metadata?.flooring === true;
+}
 
 // Swaps `mesh` for a freshly built Object3D reflecting `crop` — used by
 // the Trim UI itself, and by restoreSnapshot when an undo/redo jump
@@ -1266,6 +1295,28 @@ async function createMeshForInstance(instance) {
     // insurance against crashing the whole scene over one bad instance.
     console.warn(`No catalog template "${instance.templateId}" — skipping instance ${instance.instanceId ?? instance.id}`);
     return null;
+  }
+  if (isFlooringTemplate(template)) {
+    // A deliberately separate, much simpler path — no model loading, no
+    // crop/extensibility, no uniform-scale legacy handling (none of the
+    // Resize/Trim tools apply to flooring — it's always its own declared
+    // footprint, always thin, always at the ground). Only x/y and
+    // rotationZ from the instance are meaningful; z is always the fixed
+    // ground thickness regardless of what's stored (see the
+    // objectChange handler's own flooring clamp for why a stale non-zero
+    // z from before this feature existed, or a stray drag, can't stick).
+    const width = template.dimensions.width;
+    const depth = template.dimensions.depth;
+    const geometry = new THREE.BoxGeometry(width, depth, FLOORING_THICKNESS_M);
+    const material = new THREE.MeshStandardMaterial({ color: template.color });
+    const object = new THREE.Mesh(geometry, material);
+    object.position.set(instance.x ?? 0, instance.y ?? 0, FLOORING_THICKNESS_M / 2);
+    object.rotation.z = instance.rotationZ ?? 0;
+    object.userData.instanceId = instance.instanceId ?? instance.id;
+    object.userData.template = template;
+    object.userData.crop = {};
+    object.userData.scale = 1;
+    return object;
   }
   const width = effectiveLength(template, instance, 'x', 'width');
   const depth = effectiveLength(template, instance, 'y', 'depth');
@@ -2684,6 +2735,36 @@ function renderSellerList() {
       }
     });
     actions.appendChild(deleteBtn);
+
+    // Ground/flooring (docs/SPEC.md §3, see isFlooringTemplate in this
+    // file) — a single opt-in flag, not a numeric form like Extensibility
+    // or Edit Size, so a plain immediate-PATCH toggle button fits better
+    // than a collapsed panel with its own Save step.
+    const flooringToggleBtn = document.createElement('button');
+    flooringToggleBtn.className = 'seller-row-action-btn';
+    flooringToggleBtn.type = 'button';
+    flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
+    flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
+    flooringToggleBtn.addEventListener('click', async () => {
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      flooringToggleBtn.disabled = true;
+      try {
+        const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
+        if (!nextMetadata.flooring) delete nextMetadata.flooring;
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
+        flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
+        buildCatalogPickerButtons();
+      } catch (err) {
+        rowStatus.textContent = err.message || 'Could not update.';
+        rowStatus.classList.add('error');
+      } finally {
+        flooringToggleBtn.disabled = false;
+      }
+    });
+    actions.appendChild(flooringToggleBtn);
 
     // Extensibility (see docs/API.md) is a real but rare need — collapsed
     // by default so the row reads as "a product with some buttons," not

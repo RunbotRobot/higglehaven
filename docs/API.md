@@ -1851,6 +1851,63 @@ snap engages exactly on an edge match, holds through several more small
 mouse movements, and correctly releases once the drag genuinely moves on
 — all three of the behaviors this section describes.
 
+## Ground/flooring products
+
+docs/SPEC.md §3: "placing a specific real flooring/sod product replaces
+[the default grass] within that footprint." A seller opts a catalog
+template into this behavior via `metadata.flooring: true` (checked by
+`isFlooringTemplate()` in `src/main.js`), toggled by a plain "Flooring" /
+"Flooring ✓" button on each row of the Seller modal — the same
+immediate-PATCH pattern the row's other action buttons already use, not a
+collapsed panel with its own Save step, since it's a single boolean rather
+than a numeric form like Extensibility or Edit Size.
+
+True texture-masking of the shared ground mesh within an arbitrary
+footprint — so a placed sod patch actually looks like grass blending into
+the surrounding grass, or a placed tile patch looks like tile — is a real
+rendering problem on its own and out of scope here. Flooring instead
+always renders as a thin, flat, tinted slab (`FLOORING_THICKNESS_M` =
+0.02m, `template.color`) at true ground level, ignoring the template's own
+declared height and (if it has one) its uploaded model entirely. This is
+the same simplification a placeholder colored box already stands in for
+any product with no real model — "this patch of ground is now this
+product," not a faithful render of it. `createMeshForInstance` gives
+flooring its own short-circuited code path for this reason: no model
+loading, no crop/extensibility, no legacy uniform-scale handling, since
+none of Trim/Resize apply to a flat ground patch.
+
+The one subtlety worth calling out: `meshDimensions()` — the single
+function `clampToLandlet`, collision resolution (`resolveByAxis`), the
+group-move bounds clamp, and alignment assist's own half-extent
+calculation all read for "how big is this placed mesh" — has to agree a
+flooring mesh is genuinely thin, not whatever height the seller declared
+for the (unused, for flooring) full-size model it was uploaded from. That
+special case is made once, inside `meshDimensions()` itself, rather than
+at each call site: `isFlooringTemplate(template)` short-circuits it to
+return the fixed `FLOORING_THICKNESS_M` for height regardless of the
+template's own dimensions. Getting this wrong is exactly the bug this
+feature originally shipped with during testing — `clampToLandlet`'s own
+minimum-z floor (`height / 2`) used the crate template's real declared
+height before this fix existed, which forced a flooring instance's z up
+to 0.5 instead of resting at 0.01 flush with the ground. Fixing
+`meshDimensions()` itself, rather than patching `clampToLandlet` alone,
+is what keeps every other consumer of "how tall is this mesh" correct too.
+
+Flooring is free to move in X/Y like any other placed item, but the Move
+gizmo's Z (blue) arrow is prevented from lifting a "patch of ground" up
+into the air: the `objectChange` handler's single-mesh branch pins
+`resolved.z` to `FLOORING_THICKNESS_M / 2` whenever the dragged object's
+template is flooring, after alignment assist and the landlet-bounds/
+collision clamp have already run.
+
+Covered by `e2e/flooring.test.mjs`: marks an uploaded template as
+flooring via the Seller modal toggle, places a tree, then places the
+flooring instance by tapping directly on the tree's own screen position
+(a normal item tapped there would rest on top of the tree via
+`snapToSurfaces`) and reads the persisted instance back from the API to
+confirm its z lands at the thin ground thickness rather than stacked on
+the tree.
+
 ## Frontend-only Measure
 
 A one-shot ruler for a question none of the placement tools answer on their
