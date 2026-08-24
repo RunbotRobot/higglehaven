@@ -1478,9 +1478,15 @@ A bundle is a named, persisted group of placed items a builder can stamp
 down together again later — a durable version of the same relative-offset
 shape the frontend's own Copy/Paste already builds in memory for one
 session (`relativeItemsForMeshes`/`placeClipboardItems` in `src/main.js`;
-see docs/SPEC.md §3's "group items to move together"). Private to the
-owning builder; there's no visibility/sharing flag yet (spec's own
-"explicit opt-in sharing to a community bundle tab" is still open).
+see docs/SPEC.md §3's "group items to move together"). Private by default;
+`shared` is the spec's own "explicit opt-in sharing to a community bundle
+tab" — see `migrations/0040_bundle_sharing.sql`. A shared bundle is still
+owned by whoever created it: `shared` only controls whether *other*
+builders can see and place it, never whether they can rename/reshare/delete
+it. The backend enforces no ownership check at all on `PATCH`/`DELETE` (the
+same no-real-auth caveat as every dev-mode identity in this file) — the
+frontend is the only thing hiding those controls on a bundle you don't own
+(see "Frontend wiring" below).
 
 ### Bundle object
 
@@ -1493,6 +1499,7 @@ owning builder; there's no visibility/sharing flag yet (spec's own
     { "templateId": "brick", "dx": -0.1, "dy": 0, "dz": 0, "rotationX": 0, "rotationY": 0, "rotationZ": 0, "crop": {}, "scale": 1 },
     { "templateId": "brick", "dx": 0.1, "dy": 0, "dz": 0, "rotationX": 0, "rotationY": 0, "rotationZ": 1.57, "crop": {}, "scale": 1 }
   ],
+  "shared": false,
   "createdAt": "2026-08-24T00:00:00.000Z",
   "updatedAt": "2026-08-24T00:00:00.000Z"
 }
@@ -1509,25 +1516,35 @@ loading a bundle needs no translation before it can be placed.
 
 ### `GET /api/bundles`
 
-Lists a builder's bundles, newest first, capped at 100. `builderId` is a
-required query parameter.
+Two independent listings, not one filtered by both:
+
+- `?builderId=X` — that builder's own bundles, newest first, capped at 100
+  (shared or not — a builder's own shared bundles keep showing here too,
+  they just *additionally* surface in the community listing below).
+- `?shared=true` — the community tab: every builder's shared bundles,
+  newest first, capped at 100. `builderId` is ignored/not required here.
+
+Exactly one of the two query parameters is expected per call; there's no
+mode that combines "this builder's bundles, restricted to shared ones."
 
 ### `POST /api/bundles`
 
-Creates a bundle. Request body: `{ "builderId", "name", "items" }`. Each
-item's `templateId` must reference an existing catalog template (checked in
-one batched query, same pattern as the instance batch endpoints); `items`
-must be a non-empty array, capped at 250 entries like an instance batch
-save. `dx`/`dy`/`dz` and the rotation fields may be negative or zero — only
-`crop`/`scale` reuse the stricter validation a placed instance itself gets
-(`validateCropShape`/`validateScale`), since those two are genuinely
-sign-constrained.
+Creates a bundle. Request body: `{ "builderId", "name", "items", "shared"? }`.
+`shared` defaults to `false` (private) if omitted or not literally `true`.
+Each item's `templateId` must reference an existing catalog template
+(checked in one batched query, same pattern as the instance batch
+endpoints); `items` must be a non-empty array, capped at 250 entries like an
+instance batch save. `dx`/`dy`/`dz` and the rotation fields may be negative
+or zero — only `crop`/`scale` reuse the stricter validation a placed
+instance itself gets (`validateCropShape`/`validateScale`), since those two
+are genuinely sign-constrained.
 
 ### `PATCH /api/bundles/:bundleId`
 
-Renames a bundle. Request body: `{ "name" }`. There's no way to edit a
-saved bundle's `items` — the frontend has no UI for that; delete and
-re-save from a fresh selection instead.
+Updates `name` and/or `shared` — both optional and independent; omitting
+one leaves it at its current value rather than requiring the full object
+back. There's no way to edit a saved bundle's `items` — the frontend has no
+UI for that; delete and re-save from a fresh selection instead.
 
 ### `DELETE /api/bundles/:bundleId`
 
@@ -1538,13 +1555,27 @@ doesn't exist.
 
 A "Save Bundle" button sits next to Copy in `#gizmo-mode-controls`,
 available under the same conditions Copy is (≥1 item selected, single- or
-multi-select). Add Item's catalog picker gets a "My Bundles" section below
-the ordinary product grid — hidden entirely until this builder has saved at
-least one — where tapping a bundle tile arms placement with
+multi-select). Naming the bundle (a plain `prompt()`, same as every other
+dev-mode rename in this app) is followed by a `confirm()` asking whether to
+share it — private stays the one-tap default, sharing is the explicit extra
+step the spec calls for.
+
+Add Item's catalog picker gets a bundle section below the ordinary product
+grid, with "My Bundles" / "Community" tabs (`renderBundlePicker` in
+`src/main.js`) — hidden entirely only when *both* lists are empty, so a
+builder who's never saved a bundle themselves still gets to discover
+Community if a neighbor has shared one. Tapping a tile arms placement with
 `enterPlacementMode({ type: 'clipboard', items: bundle.items })`, the exact
 same pending-placement shape a Paste uses, so `handlePlacementClick`'s
-existing clipboard-placement path needs no changes to place a bundle. Each
-tile also has a small delete (×) button, confirmed first.
+existing clipboard-placement path needs no changes to place a bundle.
+
+A tile only shows its delete (×) and share-toggle (⇧/⇩) buttons when
+`bundle.builderId` matches the active builder — the one place the frontend
+actually enforces the ownership the backend doesn't (see this section's own
+opening paragraph). Those two controls use separate CSS classes
+(`.bundle-tile-delete` / `.bundle-tile-share`) despite an identical look,
+not a shared one — a selector meant for one must never accidentally hit the
+other.
 
 ## D1 schema overview
 

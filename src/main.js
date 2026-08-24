@@ -44,7 +44,9 @@ import {
   activateLandletVersion,
   replaceLandletDraft,
   fetchBundles,
+  fetchSharedBundles,
   createBundle,
+  updateBundle,
   deleteBundle,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
@@ -66,6 +68,13 @@ let activeCatalog = FALLBACK_CATALOG;
 // sense as something durable across sessions/landlets, so there's no
 // offline equivalent worth keeping, unlike activeCatalog's FALLBACK_CATALOG.
 let myBundles = [];
+// Every builder's opted-in shared bundles (see migrations/0040_bundle_sharing.sql)
+// — a separate list from myBundles, not a filtered view of it, fetched
+// alongside it in bootstrap() so the picker's section can show/hide
+// correctly based on either tab having something before a builder ever
+// switches to the Community tab.
+let communityBundles = [];
+let activeBundleTab = 'mine';
 
 // There's no auth system yet — a builder is just one of a list of random
 // IDs persisted in localStorage (see builderIdentity.js), chosen via the
@@ -1361,6 +1370,8 @@ const catalogPickerEmptyEl = document.getElementById('catalog-picker-empty');
 const catalogPickerEmptyQueryEl = document.getElementById('catalog-picker-empty-query');
 const bundlePickerSectionEl = document.getElementById('bundle-picker-section');
 const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
+const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
+const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
 // A template's appearance never changes after creation (there's no edit
 // flow for its color or model), so a thumbnail rendered once this session
@@ -1505,18 +1516,45 @@ function buildCatalogPickerButtons() {
   filterCatalogTiles();
 }
 
-// Bundles (see migrations/0039_bundles.sql) — no thumbnail, just a name and
-// item count; tapping one arms placement mode with exactly the same
-// {type:'clipboard', items} shape a Paste does, so handlePlacementClick's
-// existing clipboard-placement path (placeClipboardItems) needs no changes
-// to place a bundle. Section stays hidden entirely until this builder has
-// saved at least one.
-function buildBundlePickerTiles() {
+// Bundles (see migrations/0039_bundles.sql, 0040_bundle_sharing.sql) — no
+// thumbnail, just a name and item count; tapping one arms placement mode
+// with exactly the same {type:'clipboard', items} shape a Paste does, so
+// handlePlacementClick's existing clipboard-placement path
+// (placeClipboardItems) needs no changes to place a bundle.
+//
+// The whole section stays hidden until either list has something — a
+// builder who's never saved a bundle themselves but whose neighbors have
+// shared some still gets to discover the Community tab. Delete (and the
+// Shared/Private toggle) only ever show on a tile this builder actually
+// owns — a shared bundle is still owned by whoever created it (see
+// handleBundles' own comment in worker/index.js); the backend does no
+// ownership check, so this is the only place that's actually enforced.
+function currentBundleTabList() {
+  return activeBundleTab === 'mine' ? myBundles : communityBundles;
+}
+
+function renderBundlePicker() {
+  bundlePickerSectionEl.hidden = myBundles.length === 0 && communityBundles.length === 0;
+  if (bundlePickerSectionEl.hidden) return;
+
+  for (const btn of bundleTabButtons) {
+    btn.classList.toggle('active', btn.dataset.bundleTab === activeBundleTab);
+  }
+
+  const bundles = currentBundleTabList();
   bundlePickerGridEl.replaceChildren();
-  bundlePickerSectionEl.hidden = myBundles.length === 0;
-  for (const bundle of myBundles) {
+  bundlePickerEmptyEl.hidden = bundles.length > 0;
+  if (bundles.length === 0) {
+    bundlePickerEmptyEl.textContent = activeBundleTab === 'mine'
+      ? "You haven't saved any bundles yet — select items and use Save Bundle."
+      : 'No one has shared a bundle yet.';
+    return;
+  }
+
+  for (const bundle of bundles) {
     const tile = document.createElement('div');
     tile.className = 'bundle-tile';
+    const owned = bundle.builderId === builderId;
 
     const placeBtn = document.createElement('button');
     placeBtn.type = 'button';
@@ -1534,26 +1572,66 @@ function buildBundlePickerTiles() {
     });
     tile.appendChild(placeBtn);
 
-    const deleteTileBtn = document.createElement('button');
-    deleteTileBtn.type = 'button';
-    deleteTileBtn.className = 'bundle-tile-delete';
-    deleteTileBtn.setAttribute('aria-label', `Delete bundle "${bundle.name}"`);
-    deleteTileBtn.textContent = '×';
-    deleteTileBtn.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
-      try {
-        await deleteBundle(bundle.bundleId);
-        myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
-        buildBundlePickerTiles();
-      } catch (err) {
-        console.warn('Could not delete bundle:', err);
-      }
-    });
-    tile.appendChild(deleteTileBtn);
+    if (owned) {
+      const shareToggleBtn = document.createElement('button');
+      shareToggleBtn.type = 'button';
+      // Own class, not shared with .bundle-tile-delete despite the same
+      // look — a page.click('.bundle-tile-delete') would otherwise hit
+      // whichever of the two buttons happens to render first in the DOM
+      // instead of the one actually intended.
+      shareToggleBtn.className = 'bundle-tile-share';
+      shareToggleBtn.textContent = bundle.shared ? '⇩' : '⇧';
+      shareToggleBtn.setAttribute(
+        'aria-label',
+        bundle.shared ? `Stop sharing "${bundle.name}"` : `Share "${bundle.name}" to the Community tab`,
+      );
+      shareToggleBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        shareToggleBtn.disabled = true;
+        try {
+          const updated = await updateBundle(bundle.bundleId, { shared: !bundle.shared });
+          Object.assign(bundle, updated);
+          // Sharing/unsharing changes which list(s) this bundle belongs in
+          // — simplest to just re-fetch both rather than hand-patch
+          // communityBundles for an add/remove that only affects this one
+          // tab's membership.
+          [myBundles, communityBundles] = await Promise.all([fetchBundles(builderId), fetchSharedBundles()]);
+          renderBundlePicker();
+        } catch (err) {
+          console.warn('Could not update bundle sharing:', err);
+          shareToggleBtn.disabled = false;
+        }
+      });
+      tile.appendChild(shareToggleBtn);
+
+      const deleteTileBtn = document.createElement('button');
+      deleteTileBtn.type = 'button';
+      deleteTileBtn.className = 'bundle-tile-delete';
+      deleteTileBtn.setAttribute('aria-label', `Delete bundle "${bundle.name}"`);
+      deleteTileBtn.textContent = '×';
+      deleteTileBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
+        try {
+          await deleteBundle(bundle.bundleId);
+          myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
+          communityBundles = communityBundles.filter((b) => b.bundleId !== bundle.bundleId);
+          renderBundlePicker();
+        } catch (err) {
+          console.warn('Could not delete bundle:', err);
+        }
+      });
+      tile.appendChild(deleteTileBtn);
+    }
 
     bundlePickerGridEl.appendChild(tile);
   }
+}
+for (const btn of bundleTabButtons) {
+  btn.addEventListener('click', () => {
+    activeBundleTab = btn.dataset.bundleTab;
+    renderBundlePicker();
+  });
 }
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
@@ -3549,11 +3627,17 @@ saveBundleBtn.addEventListener('click', async () => {
   const meshes = [...selectedMeshes];
   const name = prompt('Name this bundle', '');
   if (!name || !name.trim()) return;
+  // Private by default (docs/SPEC.md's Bundles section) — sharing is an
+  // explicit extra step, not the default, so a plain confirm() dialog
+  // (declined by default on most platforms) rather than folding it into
+  // the name prompt itself.
+  const shared = confirm('Share this bundle to the Community tab so any builder can use it too?');
   saveBundleBtn.disabled = true;
   try {
-    const bundle = await createBundle({ builderId, name: name.trim(), items: relativeItemsForMeshes(meshes) });
+    const bundle = await createBundle({ builderId, name: name.trim(), items: relativeItemsForMeshes(meshes), shared });
     myBundles.unshift(bundle);
-    buildBundlePickerTiles();
+    if (shared) communityBundles.unshift(bundle);
+    renderBundlePicker();
     const count = meshes.length;
     productInfoEl.textContent = `Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`;
     setTimeout(updateSelectionUI, 1200);
@@ -5716,17 +5800,19 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles] = await Promise.all([
-      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(builderId),
+    const [catalog, remoteInstances, landletRecord, bundles, shared] = await Promise.all([
+      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(builderId), fetchSharedBundles(),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
     myBundles = bundles;
+    communityBundles = shared;
     applyLandletShape(landletRecord);
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
     myBundles = [];
+    communityBundles = [];
     currentLandletId = 'starter-landlet';
     // A previously-saved instance list (builder additions/removals/moves)
     // entirely replaces the starter set — not merged with it — since the
@@ -5736,7 +5822,7 @@ async function bootstrap() {
   }
 
   buildCatalogPickerButtons();
-  buildBundlePickerTiles();
+  renderBundlePicker();
   // In parallel: each instance's model load is an independent fetch (and
   // most placed instances share just a handful of cached model URLs), so
   // there's no reason to load them one at a time.

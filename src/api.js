@@ -404,22 +404,33 @@ export async function fetchBundles(builderId) {
   return bundles;
 }
 
-export async function createBundle({ builderId, name, items }) {
+export async function createBundle({ builderId, name, items, shared }) {
   const { bundle } = await requestJson('/bundles', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId, name, items }),
+    body: JSON.stringify({ builderId, name, items, shared }),
   });
   return bundle;
 }
 
-export async function renameBundle(bundleId, name) {
+// A partial update — only send the fields actually changing (see the
+// worker's own PATCH handler, which treats each of name/shared
+// independently and leaves the other untouched when omitted).
+export async function updateBundle(bundleId, patch) {
   const { bundle } = await requestJson(`/bundles/${encodeURIComponent(bundleId)}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(patch),
   });
   return bundle;
+}
+
+// The community tab: every builder's shared bundles, not just one
+// builder's — a separate listing from fetchBundles(builderId), not a
+// filtered version of it (see the worker's own GET handler).
+export async function fetchSharedBundles() {
+  const { bundles } = await requestJson('/bundles?shared=true');
+  return bundles;
 }
 
 export async function deleteBundle(bundleId) {

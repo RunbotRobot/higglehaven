@@ -563,12 +563,16 @@
         text-align: center;
         overflow-wrap: anywhere;
       }
-      /* Bundles (saved multi-item groups, see migrations/0039_bundles.sql) —
-         a separate section below the ordinary product grid, hidden entirely
-         until this builder has saved at least one, so nobody who's never
-         used Multi-Select's Save Bundle sees an empty section. No thumbnail
-         (composing one from several items isn't worth the complexity yet) —
-         just a name and item count. */
+      /* Bundles (saved multi-item groups, see migrations/0039_bundles.sql,
+         0040_bundle_sharing.sql) — a separate section below the ordinary
+         product grid. My Bundles / Community mirror the tab-toggle look
+         .settings-tab-btn already uses. The whole section only shows once
+         there's something in *either* tab to see — a builder who's never
+         used Save Bundle but whose landlet neighbors have shared some still
+         gets to discover the Community tab; one where nobody's shared
+         anything yet doesn't show an empty section for no reason. No
+         thumbnail (composing one from several items isn't worth the
+         complexity yet) — just a name and item count. */
       #bundle-picker-section {
         margin-top: 10px;
         padding-top: 10px;
@@ -577,12 +581,31 @@
       #bundle-picker-section[hidden] {
         display: none;
       }
-      #bundle-picker-heading {
-        margin-bottom: 6px;
+      #bundle-picker-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .bundle-tab-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: transparent;
+        color: rgb(255 255 255 / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .bundle-tab-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #bundle-picker-empty {
+        padding: 8px 4px;
         color: rgb(255 255 255 / 0.6);
         font: 12px/1.4 sans-serif;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+      }
+      #bundle-picker-empty[hidden] {
+        display: none;
       }
       #bundle-picker-grid {
         display: flex;
@@ -625,6 +648,20 @@
         border: none;
         background: rgb(255 255 255 / 0.12);
         color: rgb(255 180 168 / 0.9);
+        font-size: 16px;
+        line-height: 1;
+      }
+      /* Same size/shape as .bundle-tile-delete, own class (see main.js's
+         own comment) so a selector targeting one never accidentally hits
+         the other — this one toggles Share, not delete. */
+      .bundle-tile-share {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.12);
+        color: rgb(255 255 255 / 0.85);
         font-size: 16px;
         line-height: 1;
       }
@@ -1588,8 +1625,12 @@
         <div id="catalog-picker-grid"></div>
         <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
         <div id="bundle-picker-section" hidden>
-          <div id="bundle-picker-heading">My Bundles</div>
+          <div id="bundle-picker-tabs">
+            <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My Bundles</button>
+            <button class="bundle-tab-btn" type="button" data-bundle-tab="community">Community</button>
+          </div>
           <div id="bundle-picker-grid"></div>
+          <div id="bundle-picker-empty" hidden></div>
         </div>
       </div>
     </div>
