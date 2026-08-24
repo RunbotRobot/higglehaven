@@ -74,8 +74,12 @@
         /* The wordmark art is itself green — sitting on the pale-green
            pill background every other bit of chrome now uses would leave
            it low-contrast, exactly what this background exists to avoid
-           (see the comment above it). Keeps the old dark panel color. */
-        background: rgb(var(--panel-rgb) / 0.55);
+           (see the comment above it). Keeps the old dark panel color, at
+           the same near-opaque alpha every modal panel uses (0.97) rather
+           than a lower one — at 0.55 the dark green blended so far toward
+           the sky behind it (especially a bright blue one) that it read as
+           a washed-out gray instead of green, the opposite of the point. */
+        background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 8px;
         padding: 4px 10px;
         display: flex;
