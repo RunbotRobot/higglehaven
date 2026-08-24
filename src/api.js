@@ -392,3 +392,36 @@ export async function replaceLandletDraft(landletId, { instances, versionName, v
     body: JSON.stringify({ instances, versionName, versionMetadata }),
   });
 }
+
+// Bundles (see migrations/0039_bundles.sql) — a saved, named group of items
+// a builder can stamp down together later, in the exact relative-offset
+// shape (dx/dy/dz + rotation + crop + scale per item) placeClipboardItems
+// already consumes for an ordinary Paste, so a fetched bundle's `items` can
+// be handed straight to enterPlacementMode({ type: 'clipboard', items })
+// with no translation. Private to the owning builder.
+export async function fetchBundles(builderId) {
+  const { bundles } = await requestJson(`/bundles?${new URLSearchParams({ builderId })}`);
+  return bundles;
+}
+
+export async function createBundle({ builderId, name, items }) {
+  const { bundle } = await requestJson('/bundles', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ builderId, name, items }),
+  });
+  return bundle;
+}
+
+export async function renameBundle(bundleId, name) {
+  const { bundle } = await requestJson(`/bundles/${encodeURIComponent(bundleId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return bundle;
+}
+
+export async function deleteBundle(bundleId) {
+  await requestJson(`/bundles/${encodeURIComponent(bundleId)}`, { method: 'DELETE' });
+}

@@ -563,6 +563,71 @@
         text-align: center;
         overflow-wrap: anywhere;
       }
+      /* Bundles (saved multi-item groups, see migrations/0039_bundles.sql) —
+         a separate section below the ordinary product grid, hidden entirely
+         until this builder has saved at least one, so nobody who's never
+         used Multi-Select's Save Bundle sees an empty section. No thumbnail
+         (composing one from several items isn't worth the complexity yet) —
+         just a name and item count. */
+      #bundle-picker-section {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgb(255 255 255 / 0.15);
+      }
+      #bundle-picker-section[hidden] {
+        display: none;
+      }
+      #bundle-picker-heading {
+        margin-bottom: 6px;
+        color: rgb(255 255 255 / 0.6);
+        font: 12px/1.4 sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #bundle-picker-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 30vh;
+        overflow-y: auto;
+      }
+      .bundle-tile {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .bundle-tile-place {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: none;
+        background: rgb(255 255 255 / 0.12);
+        color: #fff;
+        font: 13px/1.3 sans-serif;
+        text-align: left;
+      }
+      .bundle-tile-name {
+        overflow-wrap: anywhere;
+      }
+      .bundle-tile-count {
+        color: rgb(255 255 255 / 0.6);
+        font-size: 11px;
+      }
+      .bundle-tile-delete {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.12);
+        color: rgb(255 180 168 / 0.9);
+        font-size: 16px;
+        line-height: 1;
+      }
       #upload-model-btn,
       #toggle-multiselect,
       #toggle-measure,
@@ -1509,6 +1574,7 @@
       </div>
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
+      <button id="save-bundle-item" type="button">Save Bundle</button>
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="add-item-panel">
@@ -1521,6 +1587,10 @@
         <input id="catalog-search-input" type="text" placeholder="Search products…" />
         <div id="catalog-picker-grid"></div>
         <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
+        <div id="bundle-picker-section" hidden>
+          <div id="bundle-picker-heading">My Bundles</div>
+          <div id="bundle-picker-grid"></div>
+        </div>
       </div>
     </div>
     <div id="upload-modal">

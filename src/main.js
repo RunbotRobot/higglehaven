@@ -43,6 +43,9 @@ import {
   fetchLandletVersion,
   activateLandletVersion,
   replaceLandletDraft,
+  fetchBundles,
+  createBundle,
+  deleteBundle,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -55,6 +58,14 @@ import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, for
 // other reference to the catalog goes through this variable rather than
 // FALLBACK_CATALOG directly.
 let activeCatalog = FALLBACK_CATALOG;
+
+// Saved groups a builder can stamp down again together (see migrations/
+// 0039_bundles.sql) — fetched once builderId is settled in bootstrap() and
+// refreshed after any save/delete. Empty (rather than falling back to
+// something local) when the backend's unreachable — a bundle only makes
+// sense as something durable across sessions/landlets, so there's no
+// offline equivalent worth keeping, unlike activeCatalog's FALLBACK_CATALOG.
+let myBundles = [];
 
 // There's no auth system yet — a builder is just one of a list of random
 // IDs persisted in localStorage (see builderIdentity.js), chosen via the
@@ -1348,6 +1359,8 @@ const catalogPickerCloseBtn = document.getElementById('catalog-picker-close-btn'
 const catalogSearchInputEl = document.getElementById('catalog-search-input');
 const catalogPickerEmptyEl = document.getElementById('catalog-picker-empty');
 const catalogPickerEmptyQueryEl = document.getElementById('catalog-picker-empty-query');
+const bundlePickerSectionEl = document.getElementById('bundle-picker-section');
+const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
 
 // A template's appearance never changes after creation (there's no edit
 // flow for its color or model), so a thumbnail rendered once this session
@@ -1490,6 +1503,57 @@ function buildCatalogPickerButtons() {
     }
   }
   filterCatalogTiles();
+}
+
+// Bundles (see migrations/0039_bundles.sql) — no thumbnail, just a name and
+// item count; tapping one arms placement mode with exactly the same
+// {type:'clipboard', items} shape a Paste does, so handlePlacementClick's
+// existing clipboard-placement path (placeClipboardItems) needs no changes
+// to place a bundle. Section stays hidden entirely until this builder has
+// saved at least one.
+function buildBundlePickerTiles() {
+  bundlePickerGridEl.replaceChildren();
+  bundlePickerSectionEl.hidden = myBundles.length === 0;
+  for (const bundle of myBundles) {
+    const tile = document.createElement('div');
+    tile.className = 'bundle-tile';
+
+    const placeBtn = document.createElement('button');
+    placeBtn.type = 'button';
+    placeBtn.className = 'bundle-tile-place';
+    const name = document.createElement('span');
+    name.className = 'bundle-tile-name';
+    name.textContent = bundle.name;
+    const count = document.createElement('span');
+    count.className = 'bundle-tile-count';
+    count.textContent = `${bundle.items.length} item${bundle.items.length === 1 ? '' : 's'}`;
+    placeBtn.append(name, count);
+    placeBtn.addEventListener('click', () => {
+      catalogPickerEl.classList.remove('visible');
+      enterPlacementMode({ type: 'clipboard', items: bundle.items }, `Tap a spot to place "${bundle.name}"`);
+    });
+    tile.appendChild(placeBtn);
+
+    const deleteTileBtn = document.createElement('button');
+    deleteTileBtn.type = 'button';
+    deleteTileBtn.className = 'bundle-tile-delete';
+    deleteTileBtn.setAttribute('aria-label', `Delete bundle "${bundle.name}"`);
+    deleteTileBtn.textContent = '×';
+    deleteTileBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
+      try {
+        await deleteBundle(bundle.bundleId);
+        myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
+        buildBundlePickerTiles();
+      } catch (err) {
+        console.warn('Could not delete bundle:', err);
+      }
+    });
+    tile.appendChild(deleteTileBtn);
+
+    bundlePickerGridEl.appendChild(tile);
+  }
 }
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
@@ -2830,6 +2894,7 @@ function trimInputEl(axis) {
 }
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
+const saveBundleBtn = document.getElementById('save-bundle-item');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -3422,20 +3487,19 @@ deleteBtn.addEventListener('click', () => {
   syncBatchDelete(instanceIds);
 });
 
-// Copy captures each selected item's position/rotation *relative* to the
-// group — offset from the group's centroid in X/Y, and height above the
-// group's lowest bottom surface in Z (its "base") — rather than absolute
-// coordinates, so Paste can reproduce the same relative arrangement
-// anchored whereever the builder taps next (see handlePlacementClick).
-// This is what lets a whole course of a brick wall get copy-pasted as one
-// unit instead of one brick at a time.
-function copySelection() {
-  if (selectedMeshes.size === 0) return;
-  const meshes = [...selectedMeshes];
+// Each selected item's position/rotation *relative* to the group — offset
+// from the group's centroid in X/Y, and height above the group's lowest
+// bottom surface in Z (its "base") — rather than absolute coordinates, so
+// the result can be re-anchored wherever a builder taps next (see
+// handlePlacementClick/placeClipboardItems). Shared by Copy (kept in the
+// in-memory clipboard for this session only) and Save Bundle (persisted to
+// the backend so it survives a reload and works on any landlet) — both
+// just want "this exact arrangement, portable."
+function relativeItemsForMeshes(meshes) {
   const centroidX = meshes.reduce((sum, mesh) => sum + mesh.position.x, 0) / meshes.length;
   const centroidY = meshes.reduce((sum, mesh) => sum + mesh.position.y, 0) / meshes.length;
   const baseZ = Math.min(...meshes.map((mesh) => mesh.position.z - meshDimensions(mesh).height / 2));
-  clipboard = meshes.map((mesh) => ({
+  return meshes.map((mesh) => ({
     templateId: mesh.userData.template.templateId,
     dx: mesh.position.x - centroidX,
     dy: mesh.position.y - centroidY,
@@ -3446,6 +3510,16 @@ function copySelection() {
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
   }));
+}
+
+// Copy captures the current selection into the in-memory clipboard —
+// see relativeItemsForMeshes for the actual offset math this and Save
+// Bundle share. This is what lets a whole course of a brick wall get
+// copy-pasted as one unit instead of one brick at a time.
+function copySelection() {
+  if (selectedMeshes.size === 0) return;
+  const meshes = [...selectedMeshes];
+  clipboard = relativeItemsForMeshes(meshes);
   pasteBtn.disabled = false;
   // There's nothing left to multi-select once the copy is captured, and
   // multi-select repurposes a one-finger drag into a selection swipe —
@@ -3464,6 +3538,32 @@ function copySelection() {
   setTimeout(updateSelectionUI, 1200);
 }
 copyBtn.addEventListener('click', copySelection);
+
+// Save Bundle persists the current selection's relative arrangement to the
+// backend (see relativeItemsForMeshes) so it can be stamped down again
+// later — in a different session, or on a different landlet entirely —
+// rather than only living in this session's in-memory clipboard the way an
+// ordinary Copy does.
+saveBundleBtn.addEventListener('click', async () => {
+  if (selectedMeshes.size === 0) return;
+  const meshes = [...selectedMeshes];
+  const name = prompt('Name this bundle', '');
+  if (!name || !name.trim()) return;
+  saveBundleBtn.disabled = true;
+  try {
+    const bundle = await createBundle({ builderId, name: name.trim(), items: relativeItemsForMeshes(meshes) });
+    myBundles.unshift(bundle);
+    buildBundlePickerTiles();
+    const count = meshes.length;
+    productInfoEl.textContent = `Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`;
+    setTimeout(updateSelectionUI, 1200);
+  } catch (err) {
+    console.error('Could not save bundle:', err);
+    productInfoEl.textContent = err.message || 'Could not save bundle.';
+  } finally {
+    saveBundleBtn.disabled = false;
+  }
+});
 
 // Placement-pending state: set by tapping a catalog item, the upload
 // flow's freshly-created product, or Paste — none of those place anything
@@ -5616,15 +5716,17 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord] = await Promise.all([
-      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId),
+    const [catalog, remoteInstances, landletRecord, bundles] = await Promise.all([
+      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(builderId),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
+    myBundles = bundles;
     applyLandletShape(landletRecord);
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
+    myBundles = [];
     currentLandletId = 'starter-landlet';
     // A previously-saved instance list (builder additions/removals/moves)
     // entirely replaces the starter set — not merged with it — since the
@@ -5634,6 +5736,7 @@ async function bootstrap() {
   }
 
   buildCatalogPickerButtons();
+  buildBundlePickerTiles();
   // In parallel: each instance's model load is an independent fetch (and
   // most placed instances share just a handful of cached model URLs), so
   // there's no reason to load them one at a time.

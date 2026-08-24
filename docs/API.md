@@ -1472,9 +1472,83 @@ single `db.batch()` alongside the update — so a pure rename, price change,
 or extensibility edit creates no notifications at all, only an actual size
 change does.
 
+## Bundles
+
+A bundle is a named, persisted group of placed items a builder can stamp
+down together again later — a durable version of the same relative-offset
+shape the frontend's own Copy/Paste already builds in memory for one
+session (`relativeItemsForMeshes`/`placeClipboardItems` in `src/main.js`;
+see docs/SPEC.md §3's "group items to move together"). Private to the
+owning builder; there's no visibility/sharing flag yet (spec's own
+"explicit opt-in sharing to a community bundle tab" is still open).
+
+### Bundle object
+
+```json
+{
+  "bundleId": "bundle-7f3a1c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "builderId": "builder-3c2b1a90-...",
+  "name": "Brick Pair",
+  "items": [
+    { "templateId": "brick", "dx": -0.1, "dy": 0, "dz": 0, "rotationX": 0, "rotationY": 0, "rotationZ": 0, "crop": {}, "scale": 1 },
+    { "templateId": "brick", "dx": 0.1, "dy": 0, "dz": 0, "rotationX": 0, "rotationY": 0, "rotationZ": 1.57, "crop": {}, "scale": 1 }
+  ],
+  "createdAt": "2026-08-24T00:00:00.000Z",
+  "updatedAt": "2026-08-24T00:00:00.000Z"
+}
+```
+
+Each item's `dx`/`dy` are offsets from the group's centroid and `dz` is
+height above the group's lowest bottom surface (its "base") — not absolute
+coordinates — so the same bundle can be re-anchored anywhere a builder taps
+next. `rotationX`/`rotationY`/`rotationZ`, `crop`, and `scale` carry each
+item's own orientation/crop/uniform-scale through unchanged. This is
+exactly the shape `POST /api/instances/batch` and the frontend's own
+`placeClipboardItems` already expect for "here's a group, anchor it here" —
+loading a bundle needs no translation before it can be placed.
+
+### `GET /api/bundles`
+
+Lists a builder's bundles, newest first, capped at 100. `builderId` is a
+required query parameter.
+
+### `POST /api/bundles`
+
+Creates a bundle. Request body: `{ "builderId", "name", "items" }`. Each
+item's `templateId` must reference an existing catalog template (checked in
+one batched query, same pattern as the instance batch endpoints); `items`
+must be a non-empty array, capped at 250 entries like an instance batch
+save. `dx`/`dy`/`dz` and the rotation fields may be negative or zero — only
+`crop`/`scale` reuse the stricter validation a placed instance itself gets
+(`validateCropShape`/`validateScale`), since those two are genuinely
+sign-constrained.
+
+### `PATCH /api/bundles/:bundleId`
+
+Renames a bundle. Request body: `{ "name" }`. There's no way to edit a
+saved bundle's `items` — the frontend has no UI for that; delete and
+re-save from a fresh selection instead.
+
+### `DELETE /api/bundles/:bundleId`
+
+Deletes a bundle. Response: `{ "deleted": true }`. Returns `404` if it
+doesn't exist.
+
+### Frontend wiring
+
+A "Save Bundle" button sits next to Copy in `#gizmo-mode-controls`,
+available under the same conditions Copy is (≥1 item selected, single- or
+multi-select). Add Item's catalog picker gets a "My Bundles" section below
+the ordinary product grid — hidden entirely until this builder has saved at
+least one — where tapping a bundle tile arms placement with
+`enterPlacementMode({ type: 'clipboard', items: bundle.items })`, the exact
+same pending-placement shape a Paste uses, so `handlePlacementClick`'s
+existing clipboard-placement path needs no changes to place a bundle. Each
+tile also has a small delete (×) button, confirmed first.
+
 ## D1 schema overview
 
-The migrations currently create eleven main backend tables:
+The migrations currently create twelve main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -1498,6 +1572,7 @@ The migrations currently create eleven main backend tables:
   rings seam-compatible and optional parent links for derived ring chains.
 - `notifications`: builder-facing notices, currently only ever created by a
   seller's product-dimension change (see "Notifications" above).
+- `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending
