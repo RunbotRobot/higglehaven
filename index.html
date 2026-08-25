@@ -201,6 +201,25 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* The nearest placed instance's own name/price (docs/API.md's
+         "Catalog templates" — priceCents was never actually surfaced to a
+         shopper anywhere in the UI before this). Non-interactive (unlike
+         the hint buttons above), so it doesn't inherit their cursor/
+         pointer-events, and sits one slot higher than #shop-review-hint
+         since both track the same nearest-instance proximity and should
+         never collide. */
+      #shop-product-info {
+        bottom: 330px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.55);
+        padding: 6px 12px;
+        border-radius: 8px;
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+        white-space: nowrap;
+        pointer-events: none;
+      }
       /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
          right looks (yaw/pitch) — each tracks its own pointer via
          setPointerCapture so both thumbs work at once. The knob is an
@@ -1189,6 +1208,49 @@
       .seller-size-status.error {
         color: #ffb4a8;
       }
+      /* Edit Price — same idiom/reasoning as Edit Size's own panel above,
+         own classes throughout for the same "don't share a class across
+         genuinely different rows/panels" reasoning. */
+      .seller-row-price {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.5);
+      }
+      .seller-price-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-price-panel[hidden] {
+        display: none;
+      }
+      .seller-price-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(255 255 255 / 0.1);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+        width: 8em;
+      }
+      .seller-price-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-price-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-price-status {
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.65);
+      }
+      .seller-price-status.error {
+        color: #ffb4a8;
+      }
       #seller-status {
         font-size: 13px;
         min-height: 18px;
@@ -2125,6 +2187,7 @@
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
+    <div id="shop-product-info" class="shop-ui"></div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-vertical-controls" class="shop-ui">
@@ -2206,6 +2269,10 @@
           <label>
             Name
             <input id="upload-name" type="text" placeholder="e.g. Brick" />
+          </label>
+          <label>
+            Price (optional)
+            <input id="upload-price" type="number" step="0.01" min="0" placeholder="e.g. 12.99" />
           </label>
           <label id="upload-file-label">
             .glb file

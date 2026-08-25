@@ -3010,6 +3010,61 @@ Collision math (client-side) deliberately still only reads `rotationZ` — see
 approximated as its untilted bounding rectangle; this is an accepted
 simplification, not an oversight, since 3D OBB collision isn't implemented.
 
+## Product pricing
+
+`catalog_templates.price_cents` (`priceCents` in the API) existed in the
+schema and worker validation from the very start of this project, but
+before this section was written, nothing in the frontend ever set it or
+displayed it — a seller had no way to give a product a price through the
+UI at all, and a shopper had no way to see one. This closes that gap on
+both sides, using the field exactly as it already existed server-side (no
+migration needed).
+
+### Seller-side: setting a price
+
+The upload wizard's first step (name + `.glb` file) gains an optional
+"Price" field, right after Name. A blank field means `priceCents: null`
+("no price set"), not `0` — mirroring `priceCents`' own null-means-unset
+convention everywhere else in this file. Entered as dollars, converted to
+cents (`Math.round(dollars * 100)`) before the `POST /api/catalog` call
+that actually creates the template.
+
+For a product that's already been created (uploaded before this feature
+existed, or a seller who skipped the price at upload time), each row in
+the Seller modal's own list (`#seller-list`, see "Sellers" above) shows its
+current price right under its dimensions — `formatPriceCents`, or "Not
+priced" when `null` — and gains an "Edit Price" collapsed panel (same
+collapsed-panel-with-a-Save-step idiom as that row's existing "Edit Size"
+panel): one numeric input, pre-filled from the current price (blank if
+unset), and a Save button that `PATCH`es `{ priceCents }` — `null` again if
+the field is cleared back to blank, not `0`.
+
+### Shop-side: seeing a price
+
+`#shop-product-info`, a new non-interactive text line, shows the nearest
+placed instance's own product name and price (`"<name> — <price>"`, or
+just `"<name>"` when unpriced) using the exact same proximity tracking
+Product Reviews already established (`shopReviews`/`updateReviewFade`,
+`SIGN_INTERACT_RADIUS_M`) — no new registration or fade logic needed, since
+"nearest reviewable instance" and "nearest instance to show info for" are
+the same thing now that every instance is unconditionally reviewable. It
+sits one slot higher than `#shop-review-hint` (`bottom: 330px` vs. `280px`)
+so both can show together without colliding.
+
+### Testing note
+
+`e2e/product-pricing.test.mjs` covers the seller-side contract end to end
+through the real UI: setting a price during upload, the row's own display
+of it, editing an unpriced product's price afterward via "Edit Price," and
+clearing a price back to blank (verified as `null` server-side, not `0`,
+at every step). `#shop-product-info`'s display isn't covered there for the
+same reason real Shop-mode camera movement never is in this suite (see
+"Product reviews" above's own testing note) — verified manually instead,
+using a temporary `window.__debugProductInfo` hook (removed before
+committing, confirmed via `grep`) to move the camera next to a priced
+instance and screenshot the result alongside `#shop-review-hint` to
+confirm the two stack without overlapping.
+
 ## Automated tests
 
 Run the Worker integration suite with:

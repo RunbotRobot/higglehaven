@@ -1953,6 +1953,7 @@ const uploadStepFileEl = document.getElementById('upload-step-file');
 const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
 const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
 const uploadNameInput = document.getElementById('upload-name');
+const uploadPriceInput = document.getElementById('upload-price');
 const uploadFileInput = document.getElementById('upload-file-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
@@ -2019,6 +2020,7 @@ function resetUploadModalToFileStep() {
 function openUploadModal() {
   catalogPickerEl.classList.remove('visible');
   uploadNameInput.value = '';
+  uploadPriceInput.value = '';
   uploadFileInput.value = '';
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
@@ -2275,6 +2277,19 @@ async function handleUploadDimensionsStep() {
     setUploadStatus('Enter a positive size for each dimension.', true);
     return;
   }
+  // Price is genuinely optional — a blank field means "no price set" (null),
+  // not zero, mirroring priceCents' own null-means-unset convention
+  // everywhere else (docs/API.md's "Catalog templates").
+  const priceInput = uploadPriceInput.value.trim();
+  let priceCents = null;
+  if (priceInput) {
+    const dollars = Number(priceInput);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      setUploadStatus('Price must be a non-negative number, or left blank.', true);
+      return;
+    }
+    priceCents = Math.round(dollars * 100);
+  }
 
   uploadSubmitBtn.disabled = true;
   try {
@@ -2305,6 +2320,7 @@ async function handleUploadDimensionsStep() {
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
       sellerId: uploaderSellerId,
+      priceCents,
     });
 
     activeCatalog.push(template);
@@ -2562,6 +2578,14 @@ function renderSellerList() {
     refreshDimsText();
     details.appendChild(dims);
 
+    const priceText = document.createElement('div');
+    priceText.className = 'seller-row-price';
+    const refreshPriceText = () => {
+      priceText.textContent = template.priceCents == null ? 'Not priced' : formatPriceCents(template.priceCents);
+    };
+    refreshPriceText();
+    details.appendChild(priceText);
+
     // Edit Size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
     // wizard's own dimensions step (handleUploadDimensionsStep), since
@@ -2694,6 +2718,82 @@ function renderSellerList() {
       sizePanel.hidden = !sizePanel.hidden;
       sizeToggle.textContent = `Edit Size ${sizePanel.hidden ? '▾' : '▴'}`;
       if (!sizePanel.hidden) fillSizeInputs();
+    });
+
+    // Edit Price: the only way a seller can ever set/change a product's
+    // priceCents after upload (the upload wizard's own price field only
+    // covers creation) — same collapsed-panel-with-a-Save-step idiom as
+    // Edit Size just above, own classes throughout for the same reasons.
+    const priceToggle = document.createElement('button');
+    priceToggle.className = 'seller-extensibility-toggle seller-price-toggle';
+    priceToggle.type = 'button';
+    priceToggle.textContent = 'Edit Price ▾';
+    details.appendChild(priceToggle);
+
+    const pricePanel = document.createElement('div');
+    pricePanel.className = 'seller-price-panel';
+    pricePanel.hidden = true;
+    details.appendChild(pricePanel);
+
+    const priceInput = document.createElement('input');
+    priceInput.className = 'seller-price-input';
+    priceInput.type = 'number';
+    priceInput.step = '0.01';
+    priceInput.min = '0';
+    priceInput.placeholder = 'e.g. 12.99, or blank for no price';
+    pricePanel.appendChild(priceInput);
+
+    function fillPriceInput() {
+      priceInput.value = template.priceCents == null ? '' : (template.priceCents / 100).toFixed(2);
+    }
+    fillPriceInput();
+
+    const priceStatus = document.createElement('div');
+    priceStatus.className = 'seller-price-status';
+
+    const priceSaveBtn = document.createElement('button');
+    priceSaveBtn.className = 'seller-price-save-btn';
+    priceSaveBtn.type = 'button';
+    priceSaveBtn.textContent = 'Save Price';
+    priceSaveBtn.addEventListener('click', async () => {
+      priceStatus.textContent = '';
+      priceStatus.classList.remove('error');
+      const trimmed = priceInput.value.trim();
+      let priceCents = null;
+      if (trimmed) {
+        const dollars = Number(trimmed);
+        if (!Number.isFinite(dollars) || dollars < 0) {
+          priceStatus.textContent = 'Price must be a non-negative number, or left blank.';
+          priceStatus.classList.add('error');
+          return;
+        }
+        priceCents = Math.round(dollars * 100);
+      }
+      if (priceCents === template.priceCents) {
+        priceStatus.textContent = 'No change.';
+        return;
+      }
+      priceSaveBtn.disabled = true;
+      try {
+        const updated = await updateCatalogTemplate(template.templateId, { priceCents });
+        Object.assign(template, updated);
+        refreshPriceText();
+        priceStatus.textContent = 'Saved.';
+        priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
+      } catch (err) {
+        priceStatus.textContent = err.message || 'Could not save.';
+        priceStatus.classList.add('error');
+      } finally {
+        priceSaveBtn.disabled = false;
+      }
+    });
+    pricePanel.appendChild(priceSaveBtn);
+    pricePanel.appendChild(priceStatus);
+
+    priceToggle.addEventListener('click', () => {
+      pricePanel.hidden = !pricePanel.hidden;
+      priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
+      if (!pricePanel.hidden) fillPriceInput();
     });
 
     const rowStatus = document.createElement('div');
@@ -3351,6 +3451,16 @@ function renderBuildSettingsSection() {
 }
 
 function formatDallers(cents) {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+// A catalog template's own priceCents (docs/API.md's "Catalog templates")
+// is a real-world USD price a shopper would pay for the product — a
+// distinct concept from dállers (the platform's internal commission
+// currency, formatDallers above) even though the cents-to-dollars math is
+// identical, so this stays its own named helper rather than reusing that
+// one.
+function formatPriceCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
@@ -5847,6 +5957,7 @@ const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
+const shopProductInfoEl = document.getElementById('shop-product-info');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
@@ -6531,6 +6642,11 @@ function updateReviewFade() {
   if (nearest !== nearestActiveReview) {
     nearestActiveReview = nearest;
     shopReviewHintEl.classList.toggle('visible', !!nearest);
+    shopProductInfoEl.classList.toggle('visible', !!nearest);
+    if (nearest) {
+      const { name, priceCents } = nearest.mesh.userData.template;
+      shopProductInfoEl.textContent = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+    }
   }
 }
 
@@ -6760,6 +6876,7 @@ function unloadShopLandletInstances(entry) {
     if (nearestActiveReview === review) {
       nearestActiveReview = null;
       shopReviewHintEl.classList.remove('visible');
+      shopProductInfoEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise
