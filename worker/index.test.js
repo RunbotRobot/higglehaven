@@ -2105,6 +2105,11 @@ describe('Auctions', () => {
     const sellerAfter = builders.body.builders.find((b) => b.builderId === owner);
     expect(sellerAfter.dallersBalanceCents).toBe(2500);
 
+    const sellerNotices = await api(`/notifications?builderId=${owner}`);
+    expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $25.00'))).toBe(true);
+    const bidderNotices = await api(`/notifications?builderId=${bidder}`);
+    expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
+
     // Resolving again is a harmless no-op, not an error — it just returns
     // the already-ended auction's current (unchanged) state. The 409 case
     // is specifically "not due yet," covered by the next test.
@@ -2142,6 +2147,9 @@ describe('Auctions', () => {
     const landlet = await api('/landlets/auction-relinquish-landlet');
     expect(landlet.body.landlet.status).toBe('greenbelt');
     expect(landlet.body.landlet.ownerBuilderId).toBeNull();
+
+    const notices = await api(`/notifications?builderId=${owner}`);
+    expect(notices.body.notifications.some((n) => n.message.includes('released to greenbelt'))).toBe(true);
   });
 
   it('keeps an unsold reserved (>$0 starting bid) auction with its seller', async () => {
@@ -2160,6 +2168,38 @@ describe('Auctions', () => {
     const landlet = await api('/landlets/auction-reserved-landlet');
     expect(landlet.body.landlet.status).toBe('claimed');
     expect(landlet.body.landlet.ownerBuilderId).toBe(owner);
+
+    const notices = await api(`/notifications?builderId=${owner}`);
+    expect(notices.body.notifications.some((n) => n.message.includes('you keep the land'))).toBe(true);
+  });
+
+  it('notifies the seller of each new bid and the previous highest bidder of being outbid', async () => {
+    const owner = await createBuilder('Bid Notice Owner');
+    const bidderA = await createBuilder('Bid Notice Bidder A');
+    const bidderB = await createBuilder('Bid Notice Bidder B');
+    await createGreenbeltLandlet('auction-bid-notice-landlet');
+    await claim('auction-bid-notice-landlet', owner);
+    const started = await api('/landlets/auction-bid-notice-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 1000 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+
+    await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 1000 }),
+    });
+    const ownerAfterFirstBid = await api(`/notifications?builderId=${owner}`);
+    expect(ownerAfterFirstBid.body.notifications.some((n) => n.message.includes('New bid of $10.00'))).toBe(true);
+    // No previous bidder to outbid yet.
+    const bidderAAfterFirstBid = await api(`/notifications?builderId=${bidderA}`);
+    expect(bidderAAfterFirstBid.body.notifications).toHaveLength(0);
+
+    await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1500 }),
+    });
+    const ownerAfterSecondBid = await api(`/notifications?builderId=${owner}`);
+    expect(ownerAfterSecondBid.body.notifications.filter((n) => n.message.includes('New bid'))).toHaveLength(2);
+    const bidderANotified = await api(`/notifications?builderId=${bidderA}`);
+    expect(bidderANotified.body.notifications.some((n) => n.message.includes('outbid') && n.message.includes('$15.00'))).toBe(true);
   });
 
   it('auto-resolves an expired auction when the list endpoint is read, without an explicit resolve call', async () => {

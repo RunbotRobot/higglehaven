@@ -1316,7 +1316,7 @@ async function handleAuctionBids(request, db, route) {
     await requireBuilder(db, builderId);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
     const highest = await db.prepare(`
-      SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+      SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
     `).bind(auctionId).first();
     const minimumCents = highest ? highest.amount_cents + 1 : resolved.starting_bid_cents;
     if (amountCents < minimumCents) {
@@ -1327,6 +1327,7 @@ async function handleAuctionBids(request, db, route) {
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)
     `).bind(bidId, auctionId, builderId, amountCents).run();
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
+    await notifyOfNewBid(db, resolved, amountCents, builderId, highest);
     const bidRow = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).first();
     return json({ bid: auctionBidFromRow(bidRow) }, 201);
   }
@@ -1393,6 +1394,10 @@ async function resolveAuction(db, auction) {
         UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE auction_id = ?
       `).bind(highest.bid_id, auction.auction_id),
+      notificationStatement(db, auction.seller_builder_id,
+        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your dállers balance.`),
+      notificationStatement(db, highest.bidder_builder_id,
+        `You won the auction for ${auction.landlet_id} at ${formatCents(highest.amount_cents)}! It's yours to build on now.`),
     );
   } else if (auction.starting_bid_cents === 0) {
     statements.push(
@@ -1405,14 +1410,45 @@ async function resolveAuction(db, auction) {
         WHERE landlet_id = ?
       `).bind(auction.landlet_id),
       db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
+      notificationStatement(db, auction.seller_builder_id,
+        `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
     );
   } else {
     statements.push(
       db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
+      notificationStatement(db, auction.seller_builder_id,
+        `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`),
     );
   }
   await db.batch(statements);
   return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+}
+
+// Bid-notification counterpart to resolveAuction's own — fired right
+// after a bid is successfully recorded, not batched atomically with it
+// (best-effort, same convention notifyBuildersOfDimensionChange already
+// follows: notifications are informational, never worth failing the
+// actual write over).
+async function notifyOfNewBid(db, auction, amountCents, bidderBuilderId, previousHighest) {
+  const statements = [
+    notificationStatement(db, auction.seller_builder_id,
+      `New bid of ${formatCents(amountCents)} on your auction for ${auction.landlet_id}.`),
+  ];
+  if (previousHighest && previousHighest.bidder_builder_id !== bidderBuilderId) {
+    statements.push(notificationStatement(db, previousHighest.bidder_builder_id,
+      `You've been outbid on ${auction.landlet_id} — new high bid ${formatCents(amountCents)}.`));
+  }
+  await db.batch(statements);
+}
+
+function notificationStatement(db, builderId, message) {
+  return db.prepare(
+    'INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)',
+  ).bind(`notification-${crypto.randomUUID()}`, builderId, message);
+}
+
+function formatCents(cents) {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 async function auctionFromRow(db, row) {

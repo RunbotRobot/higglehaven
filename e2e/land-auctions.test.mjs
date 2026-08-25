@@ -2,8 +2,9 @@
 // acquisition auctions") — Settings' own Auctions tab. Two independent
 // browser pages stand in for two different builders, the same pattern
 // e2e/bundle-sharing.test.mjs already uses, since bidding is inherently a
-// two-party interaction. Covers starting a voluntary auction and placing a
-// bid through the real UI end to end. Resolution itself (ownership
+// two-party interaction. Covers starting a voluntary auction, placing a
+// bid, and the seller's resulting new-bid notification, all through the
+// real UI end to end. Resolution itself (ownership
 // transfer, dállers payout, greenbelt release) is NOT covered here — every
 // path requires the auction to actually be past its end time, and the
 // shortest duration the API accepts is 1 hour (matching the spec's own
@@ -99,6 +100,18 @@ await sellerPage.waitForTimeout(500);
 const sellerSeesBidText = await sellerPage.locator('.auction-row').first().textContent();
 console.log('seller\'s own view after the bid (should mention $15.00):', sellerSeesBidText);
 
+// The bid also fired a real builder-facing notification (see
+// notifyOfNewBid in worker/index.js) — reuses the existing notifications
+// system/UI wholesale (a plain message, no templateId), so this closes
+// the loop on the actual end-user-visible surface, not just the API.
+await sellerPage.click('#settings-close-btn');
+await sellerPage.waitForTimeout(300);
+await sellerPage.click('#notifications-btn');
+await sellerPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
+await sellerPage.waitForTimeout(300);
+const sellerNoticeText = await sellerPage.locator('.notification-row').first().textContent();
+console.log('seller\'s notification for the new bid (should mention "New bid of $15.00"):', sellerNoticeText);
+
 await bidderSession.browser.close();
 
 const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnAuctionText.includes('$10.00') &&
@@ -108,5 +121,6 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   afterBidText.includes('$15.00') && afterBidText.includes('1 bid') &&
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
   sellerSeesBidText.includes('$15.00') &&
+  sellerNoticeText.includes('New bid of $15.00') &&
   errors.length === 0;
 await finish(sellerSession.browser, { pass, label: 'Land acquisition auctions: start + bid through the real UI', errors });

@@ -2046,6 +2046,35 @@ lazily or via the explicit endpoint:
   it was — the seller wanted to retain it if unsold, so nothing about
   ownership or the build changes, only `auctions.status` becomes `ended`.
 
+### Notifications
+
+Bidding and resolution both feed the existing builder-facing notifications
+system (see "Notifications" above) wholesale — a plain message, no new
+type or schema, since it was already built generic for exactly this
+("future notification kinds don't need their own table," per that
+table's own migration comment). No frontend changes were needed either:
+`renderNotifications` only ever reads `notification.message`, so these
+just show up.
+
+- **`notifyOfNewBid`** (called right after a bid is recorded, not batched
+  atomically with it — best-effort, the same convention
+  `notifyBuildersOfDimensionChange` already follows): notifies the
+  seller of every new bid, and separately notifies the *previous* highest
+  bidder that they've been outbid — skipped if the same builder just
+  raised their own bid, since there's no one to notify in that case.
+- **`resolveAuction`** notifies, batched atomically with the rest of
+  resolution: on a win, the seller ("sold for $X") and the winner
+  ("you won"); on an unsold `$0` auction, the seller that it released to
+  greenbelt; on an unsold reserved auction, the seller that they keep the
+  land.
+
+Covered by `worker/index.test.js` (a notification-content assertion added
+to each existing resolution-outcome test, plus a dedicated case for the
+new-bid/outbid pair) and `e2e/land-auctions.test.mjs` (the seller's real
+notification, read through the actual Notifications modal after the
+bidder's bid — confirms the whole path works end to end, not just that
+a row landed in the table).
+
 ### Frontend wiring
 
 Settings' own "Auctions" tab (`renderAuctionsSettingsSection` in
