@@ -2571,3 +2571,141 @@ describe('Friendships', () => {
     expect(rejected.response.status).toBe(400);
   });
 });
+
+describe('Prohibited categories and digital goods', () => {
+  it('rejects a listing whose name matches a prohibited phrase', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'prohibited-name-listing',
+        name: 'Realistic Handgun Replica',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/prohibited-categories policy/);
+  });
+
+  it('rejects a listing whose category or subcategory matches a prohibited phrase', async () => {
+    const byCategory = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'prohibited-category-listing',
+        name: 'Ordinary Sounding Item',
+        category: 'illegal drug paraphernalia',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(byCategory.response.status).toBe(400);
+
+    const bySubcategory = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'prohibited-subcategory-listing',
+        name: 'Ordinary Sounding Item Two',
+        subcategory: 'counterfeit goods',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(bySubcategory.response.status).toBe(400);
+  });
+
+  it('does not false-positive on ordinary placeholder/furniture names', async () => {
+    const allowed = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'ordinary-oak-chair',
+        name: 'Oak Chair',
+        category: 'furniture',
+        subcategory: 'seating',
+        color: '#8b5a2b',
+        dimensions: { width: 0.5, depth: 0.5, height: 0.9 },
+      }),
+    });
+    expect(allowed.response.status).toBe(201);
+  });
+
+  it('also rejects a prohibited rename via PATCH and a prohibited entry via batch create', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'renamed-to-prohibited',
+        name: 'Plain Table',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    const renamed = await api('/catalog/renamed-to-prohibited', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Illegal Drug Table' }),
+    });
+    expect(renamed.response.status).toBe(400);
+
+    const batch = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [{
+          templateId: 'batch-prohibited-listing',
+          name: 'Ammunition Box',
+          color: '#111111',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        }],
+      }),
+    });
+    expect(batch.response.status).toBe(400);
+  });
+
+  it('rejects an invalid digitalGoodDisclaimer key and accepts a valid one', async () => {
+    const invalid = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-invalid',
+        name: 'Mystery Download',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        metadata: { digitalGoodDisclaimer: 'seller-made-up-wording' },
+      }),
+    });
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body.error).toMatch(/digitalGoodDisclaimer must be one of/);
+
+    const valid = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-valid',
+        name: 'Downloadable Gift Card',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        metadata: { digitalGoodDisclaimer: 'gift-card' },
+      }),
+    });
+    expect(valid.response.status).toBe(201);
+    expect(valid.body.template.metadata.digitalGoodDisclaimer).toBe('gift-card');
+
+    const fetched = await api('/catalog/digital-good-valid');
+    expect(fetched.body.template.metadata.digitalGoodDisclaimer).toBe('gift-card');
+  });
+
+  it('lets a digital-good flag be cleared by omitting it from a metadata replace', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-to-clear',
+        name: 'Temporary Digital Good',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        metadata: { digitalGoodDisclaimer: 'art-file' },
+      }),
+    });
+    const cleared = await api('/catalog/digital-good-to-clear', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.digitalGoodDisclaimer).toBeUndefined();
+  });
+});

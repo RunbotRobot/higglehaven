@@ -1954,6 +1954,13 @@ const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions')
 const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
 const uploadNameInput = document.getElementById('upload-name');
 const uploadPriceInput = document.getElementById('upload-price');
+const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
+const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
+const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
+
+uploadDigitalGoodCheckbox.addEventListener('change', () => {
+  uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
+});
 const uploadFileInput = document.getElementById('upload-file-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
@@ -2021,6 +2028,9 @@ function openUploadModal() {
   catalogPickerEl.classList.remove('visible');
   uploadNameInput.value = '';
   uploadPriceInput.value = '';
+  uploadDigitalGoodCheckbox.checked = false;
+  uploadDigitalGoodDisclaimerLabel.hidden = true;
+  uploadDigitalGoodDisclaimerSelect.value = 'gift-card';
   uploadFileInput.value = '';
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
@@ -2314,6 +2324,10 @@ async function handleUploadDimensionsStep() {
     // which already guaranteed a seller identity to open at all — this is
     // just a defensive fallback, not the primary path to one.
     const uploaderSellerId = await ensureSellerIdentity();
+    const metadata = {};
+    if (uploadDigitalGoodCheckbox.checked) {
+      metadata.digitalGoodDisclaimer = uploadDigitalGoodDisclaimerSelect.value;
+    }
     const template = await createCatalogTemplate({
       name,
       dimensions,
@@ -2321,6 +2335,7 @@ async function handleUploadDimensionsStep() {
       modelUrl: finalModelUrl,
       sellerId: uploaderSellerId,
       priceCents,
+      metadata,
     });
 
     activeCatalog.push(template);
@@ -2585,6 +2600,95 @@ function renderSellerList() {
     };
     refreshPriceText();
     details.appendChild(priceText);
+
+    // Digital good disclosure (docs/SPEC.md §4) — shown right under price
+    // when set, same "Not X" convention as price's own "Not priced".
+    const digitalGoodText = document.createElement('div');
+    digitalGoodText.className = 'seller-row-digital-good';
+    const refreshDigitalGoodText = () => {
+      const key = template.metadata?.digitalGoodDisclaimer;
+      digitalGoodText.textContent = key ? `Digital good: ${DIGITAL_GOOD_DISCLAIMER_TEXT[key]}` : 'Not a digital good';
+    };
+    refreshDigitalGoodText();
+    details.appendChild(digitalGoodText);
+
+    const digitalGoodToggle = document.createElement('button');
+    digitalGoodToggle.className = 'seller-extensibility-toggle seller-digital-good-toggle';
+    digitalGoodToggle.type = 'button';
+    digitalGoodToggle.textContent = 'Edit Digital Good ▾';
+    details.appendChild(digitalGoodToggle);
+
+    const digitalGoodPanel = document.createElement('div');
+    digitalGoodPanel.className = 'seller-digital-good-panel';
+    digitalGoodPanel.hidden = true;
+    details.appendChild(digitalGoodPanel);
+
+    const digitalGoodCheckboxLabel = document.createElement('label');
+    digitalGoodCheckboxLabel.className = 'seller-digital-good-checkbox-label';
+    const digitalGoodCheckbox = document.createElement('input');
+    digitalGoodCheckbox.type = 'checkbox';
+    digitalGoodCheckboxLabel.appendChild(digitalGoodCheckbox);
+    digitalGoodCheckboxLabel.appendChild(document.createTextNode('This is a digital good'));
+    digitalGoodPanel.appendChild(digitalGoodCheckboxLabel);
+
+    const digitalGoodSelect = document.createElement('select');
+    digitalGoodSelect.className = 'seller-digital-good-select';
+    for (const [key, text] of Object.entries(DIGITAL_GOOD_DISCLAIMER_TEXT)) {
+      const option = document.createElement('option');
+      option.value = key;
+      option.textContent = text;
+      digitalGoodSelect.appendChild(option);
+    }
+    digitalGoodPanel.appendChild(digitalGoodSelect);
+
+    function fillDigitalGoodInputs() {
+      const key = template.metadata?.digitalGoodDisclaimer;
+      digitalGoodCheckbox.checked = !!key;
+      digitalGoodSelect.value = key || 'gift-card';
+      digitalGoodSelect.hidden = !digitalGoodCheckbox.checked;
+    }
+    fillDigitalGoodInputs();
+    digitalGoodCheckbox.addEventListener('change', () => {
+      digitalGoodSelect.hidden = !digitalGoodCheckbox.checked;
+    });
+
+    const digitalGoodStatus = document.createElement('div');
+    digitalGoodStatus.className = 'seller-digital-good-status';
+
+    const digitalGoodSaveBtn = document.createElement('button');
+    digitalGoodSaveBtn.className = 'seller-digital-good-save-btn';
+    digitalGoodSaveBtn.type = 'button';
+    digitalGoodSaveBtn.textContent = 'Save Digital Good';
+    digitalGoodSaveBtn.addEventListener('click', async () => {
+      digitalGoodStatus.textContent = '';
+      digitalGoodStatus.classList.remove('error');
+      const nextMetadata = { ...template.metadata };
+      if (digitalGoodCheckbox.checked) {
+        nextMetadata.digitalGoodDisclaimer = digitalGoodSelect.value;
+      } else {
+        delete nextMetadata.digitalGoodDisclaimer;
+      }
+      digitalGoodSaveBtn.disabled = true;
+      try {
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        refreshDigitalGoodText();
+        digitalGoodStatus.textContent = 'Saved.';
+      } catch (err) {
+        digitalGoodStatus.textContent = err.message || 'Could not save.';
+        digitalGoodStatus.classList.add('error');
+      } finally {
+        digitalGoodSaveBtn.disabled = false;
+      }
+    });
+    digitalGoodPanel.appendChild(digitalGoodSaveBtn);
+    digitalGoodPanel.appendChild(digitalGoodStatus);
+
+    digitalGoodToggle.addEventListener('click', () => {
+      digitalGoodPanel.hidden = !digitalGoodPanel.hidden;
+      digitalGoodToggle.textContent = `Edit Digital Good ${digitalGoodPanel.hidden ? '▾' : '▴'}`;
+      if (!digitalGoodPanel.hidden) fillDigitalGoodInputs();
+    });
 
     // Edit Size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
@@ -3463,6 +3567,16 @@ function formatDallers(cents) {
 function formatPriceCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
+
+// Mirrors worker/index.js's own DIGITAL_GOOD_DISCLAIMER_TEXT (docs/SPEC.md
+// §4's "clear higglehaven-controlled disclaimer") — kept as a second copy
+// here rather than fetched from the server, since it's small, static, and
+// needed synchronously while building each seller-row's DOM.
+const DIGITAL_GOOD_DISCLAIMER_TEXT = {
+  'gift-card': 'Digital gift card to a real business',
+  'art-file': 'Digital art or print file',
+  'software-tool': 'higglehaven-ecosystem software tool',
+};
 
 function formatAuctionTimeRemaining(isoString) {
   const ms = new Date(isoString).getTime() - Date.now();
@@ -6644,8 +6758,14 @@ function updateReviewFade() {
     shopReviewHintEl.classList.toggle('visible', !!nearest);
     shopProductInfoEl.classList.toggle('visible', !!nearest);
     if (nearest) {
-      const { name, priceCents } = nearest.mesh.userData.template;
-      shopProductInfoEl.textContent = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+      const { name, priceCents, metadata } = nearest.mesh.userData.template;
+      let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+      // The "clear higglehaven-controlled disclaimer" digital goods require
+      // (docs/SPEC.md §4) — shown to the shopper right where they'd
+      // otherwise assume every placed item is a physical one.
+      const disclaimerKey = metadata?.digitalGoodDisclaimer;
+      if (disclaimerKey) text += ` (${DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]})`;
+      shopProductInfoEl.textContent = text;
     }
   }
 }

@@ -3065,6 +3065,121 @@ committing, confirmed via `grep`) to move the camera next to a priced
 instance and screenshot the result alongside `#shop-review-hint` to
 confirm the two stack without overlapping.
 
+## Prohibited categories and digital goods
+
+docs/SPEC.md §4: "Prohibited categories (baseline, eBay/Etsy-referenced):
+weapons capable of serious harm, controlled substances/paraphernalia,
+adult content, counterfeit/unauthorized trademarked goods, live animals,"
+and "Digital goods — narrow, conditional exception (supersedes earlier
+'excluded by default') ... permitted if the listing includes (a) a
+representative 3D model and (b) a clear higglehaven-controlled disclaimer
+of what's actually delivered." Neither of these existed in any form before
+this section — catalog template creation had no content-policy check at
+all, and there was no way to mark or disclose a digital good.
+
+### Prohibited categories
+
+A plain phrase blocklist (`PROHIBITED_CONTENT_PHRASES` in `worker/index.js`)
+checked against a template's `name`/`category`/`subcategory` (joined,
+lowercased, substring match) on every create, update, and batch
+create/update — called from inside `validateTemplate` itself, so every
+write path gets it automatically rather than needing a check at each route.
+A match returns `400` naming which phrase matched:
+
+```json
+{ "error": "This listing appears to violate higglehaven's prohibited-categories policy (matched \"assault rifle\")" }
+```
+
+This is **not real content moderation** — there is no image or AI review
+anywhere in this dev-mode backend, only a baseline keyword check, matching
+the spec's own "baseline, eBay/Etsy-referenced" framing rather than a
+claim of rigorous enforcement. The phrase list is deliberately multi-word
+("assault rifle," not "gun" alone) to keep the false-positive rate low
+against a catalog that's mostly ordinary placeholder/furniture names —
+"Oak Chair" or "Toy Gun" (fictional example) style names are not, on their
+own, going to match a phrase like "handgun" or "firearm." Existing seed
+data (the built-in placeholder catalog, inserted directly via migration
+SQL) is entirely unaffected — this only runs at the application layer, on
+writes made through the API.
+
+### Digital goods
+
+There is no separate `isDigitalGood` boolean — a catalog template *is* a
+digital good exactly when `metadata.digitalGoodDisclaimer` is set, the
+same single-flag-in-metadata simplicity flooring (`migrations/0035`) and
+extensibility already use. The value is one of a small, platform-controlled
+set of keys — never freeform seller text, matching the spec's own "clear
+**higglehaven-controlled** disclaimer" (not the seller's own wording):
+
+| Key | Disclosed as |
+|---|---|
+| `gift-card` | "This is a digital gift card to a real business, delivered as a code — not a physical item." |
+| `art-file` | "This is a digital art or print file, delivered as a download — not a physical item." |
+| `software-tool` | "This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item." |
+
+`assertValidDigitalGoodDisclaimer` (also called from inside `validateTemplate`)
+rejects any other value with `400`. Requirement (a) from the spec quote
+above — "a representative 3D model" — needs no separate check here, since
+every catalog template already either has a real `modelUrl` or renders as
+a placeholder box regardless of this feature; there was never a path to a
+template with no visual representation at all.
+
+Since this dev-mode app has no checkout or delivery mechanism of any kind
+(real or digital), "digital goods are excluded by default" has nothing
+concrete to be excepted *from* here — the only part of this spec item with
+a real, enforceable rule is (b), the mandatory controlled disclaimer, which
+is what this actually implements.
+
+### Frontend wiring
+
+The upload wizard's first step gains a "This is a digital good" checkbox
+and a disclaimer `<select>` (revealed only once checked) right after Price.
+Submitting builds `metadata.digitalGoodDisclaimer` from the selected option
+before the `POST /api/catalog` call. Each Seller-modal row shows "Digital
+good: `<disclosure text>`" or "Not a digital good" right under its price,
+with its own "Edit Digital Good" collapsed panel (checkbox + select + Save,
+same collapsed-panel-with-a-Save-step idiom as that row's "Edit Price" and
+"Edit Size" panels, deliberately kept as fully separate classes throughout
+— `.seller-digital-good-*` — despite being visually identical, the same
+"don't share a class across genuinely different rows/panels" reasoning
+Extensibility vs. Edit Size already established) for setting, changing, or
+clearing it afterward. Unchecking and saving deletes the metadata key
+entirely rather than setting it `false` or `null` — the same clear-to-
+absent convention flooring's own toggle uses.
+
+`#shop-product-info` (see "Product pricing" above) appends the disclosure
+text in parentheses when the nearest instance is a digital good — a
+shopper standing next to one sees `"<name> — <price> (<disclosure>)"`
+rather than assuming every placed item is a physical one they could pick
+up.
+
+A prohibited-content rejection surfaces through the exact same upload-flow
+error path every other validation failure already does (`setUploadStatus`
+in the wizard's own catch block) — no special-cased UI for it.
+
+### Testing note
+
+`worker/index.test.js`'s "Prohibited categories and digital goods" describe
+block owns the full validation matrix: name/category/subcategory phrase
+matching, a same-session ordinary-furniture-name control case (proving the
+blocklist doesn't false-positive on normal products), rejection via both
+`PATCH` (renaming an existing listing into violation) and batch create, an
+invalid `digitalGoodDisclaimer` key, a valid one round-tripping through
+`GET`, and clearing one via a full `metadata` replace. `e2e/digital-
+goods.test.mjs` covers the digital-good checkbox/disclaimer picker and the
+Seller modal's "Edit Digital Good" panel through the real UI (set at
+upload, edit afterward, clear back to "not a digital good"). The
+prohibited-categories rejection is deliberately **not** exercised through
+the e2e suite even though the upload wizard is a real, reachable path to
+it — triggering that real rejected `fetch` from inside the page logs a
+"Failed to load resource" console error (plus this app's own
+`console.error` in the upload catch block) that would trip the suite's own
+`errors.length === 0` check, the same reasoning already documented for
+community signs/calendar's own analogous `400` cases. `#shop-product-info`'s
+digital-good text was verified manually alongside its price display (see
+"Product pricing" above's own testing note), using the same temporary
+debug-hook technique.
+
 ## Automated tests
 
 Run the Worker integration suite with:

@@ -2976,6 +2976,56 @@ function errorMessages(error) {
   return messages.join(' ');
 }
 
+// Baseline prohibited-content policy (docs/SPEC.md §4: "Prohibited
+// categories (baseline, eBay/Etsy-referenced): weapons capable of serious
+// harm, controlled substances/paraphernalia, adult content,
+// counterfeit/unauthorized trademarked goods, live animals."). A plain
+// phrase blocklist checked against name/category/subcategory — not real
+// content moderation (no image/AI review exists anywhere in this dev-mode
+// backend), just the same "honest simplest form" baseline this project
+// applies elsewhere. Deliberately phrase-based rather than single loose
+// words ("firearm," not "gun" alone) to keep false positives low against a
+// catalog that's mostly ordinary placeholder/furniture names.
+const PROHIBITED_CONTENT_PHRASES = [
+  'firearm', 'handgun', 'assault rifle', 'ammunition', 'explosive device',
+  'illegal drug', 'narcotic', 'drug paraphernalia', 'cocaine', 'heroin', 'methamphetamine',
+  'adult content', 'pornographic', 'explicit sexual content',
+  'counterfeit', 'knockoff replica',
+  'live animal', 'live pet sale',
+];
+
+function assertNotProhibitedContent(template) {
+  const haystack = [template.name, template.category, template.subcategory]
+    .filter(Boolean).join(' ').toLowerCase();
+  const match = PROHIBITED_CONTENT_PHRASES.find((phrase) => haystack.includes(phrase));
+  if (match) {
+    throw new HttpError(`This listing appears to violate higglehaven's prohibited-categories policy (matched "${match}")`, 400);
+  }
+}
+
+// Digital goods (docs/SPEC.md §4: "Digital goods — narrow, conditional
+// exception ... permitted if the listing includes (a) a representative 3D
+// model [already required of every template regardless] and (b) a clear
+// higglehaven-controlled disclaimer of what's actually delivered."). The
+// disclaimer text is platform-controlled, not seller-authored freeform
+// text — a seller picks one of these fixed keys, not their own wording, so
+// `metadata.digitalGoodDisclaimer` only ever stores the key. There is no
+// separate "isDigitalGood" flag: a template is a digital good exactly when
+// this key is present, the same single-flag-in-metadata simplicity as
+// flooring (migrations/0035) and extensibility.
+const DIGITAL_GOOD_DISCLAIMER_TEXT = {
+  'gift-card': 'This is a digital gift card to a real business, delivered as a code — not a physical item.',
+  'art-file': 'This is a digital art or print file, delivered as a download — not a physical item.',
+  'software-tool': 'This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item.',
+};
+
+function assertValidDigitalGoodDisclaimer(metadata) {
+  if (metadata.digitalGoodDisclaimer === undefined) return;
+  if (!DIGITAL_GOOD_DISCLAIMER_TEXT[metadata.digitalGoodDisclaimer]) {
+    throw new HttpError(`metadata.digitalGoodDisclaimer must be one of: ${Object.keys(DIGITAL_GOOD_DISCLAIMER_TEXT).join(', ')}`, 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -2995,6 +3045,8 @@ function validateTemplate(input, fallbackId) {
     metadata: input.metadata || {},
   };
   JSON.stringify(template.metadata);
+  assertNotProhibitedContent(template);
+  assertValidDigitalGoodDisclaimer(template.metadata);
   return template;
 }
 
