@@ -1898,4 +1898,35 @@ describe('Builders', () => {
     expect(deleted.response.status).toBe(200);
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
+
+  it('grants Pioneer to the next successful claim only when nobody currently holds it', async () => {
+    // Earlier tests in this file already claimed landlets, so a pioneer
+    // very likely already exists by this point — reset directly via the DB
+    // (not exposed over the HTTP API on purpose; this is a test-only
+    // escape hatch) so this test's own outcome is deterministic regardless
+    // of execution order.
+    await env.DB.prepare('UPDATE builders SET is_pioneer = 0').run();
+
+    const first = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'First Claimer' }) });
+    const second = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Second Claimer' }) });
+    await createGreenbeltLandlet('pioneer-first-landlet');
+    await createGreenbeltLandlet('pioneer-second-landlet');
+
+    await api('/landlets/pioneer-first-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId: first.body.builder.builderId }),
+    });
+    await api('/landlets/pioneer-second-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId: second.body.builder.builderId }),
+    });
+
+    const list = await api('/builders');
+    const firstAfter = list.body.builders.find((b) => b.builderId === first.body.builder.builderId);
+    const secondAfter = list.body.builders.find((b) => b.builderId === second.body.builder.builderId);
+    expect(firstAfter.isPioneer).toBe(true);
+    expect(secondAfter.isPioneer).toBe(false);
+
+    const { results } = await env.DB.prepare('SELECT builder_id FROM builders WHERE is_pioneer = 1').all();
+    expect(results).toHaveLength(1);
+    expect(results[0].builder_id).toBe(first.body.builder.builderId);
+  });
 });

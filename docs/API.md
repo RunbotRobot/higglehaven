@@ -81,10 +81,14 @@ one server-side list instead of every browser inventing its own in
 {
   "builderId": "builder-3c9e9c50-2b10-4ba9-b62c-2abfd48b64f7",
   "label": "Ada",
+  "isPioneer": false,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
 ```
+
+`isPioneer` is docs/SPEC.md §3's founding/pioneer recognition — see
+"Founding/pioneer recognition" below.
 
 ### `GET /api/builders`
 
@@ -141,6 +145,60 @@ Response:
 ```
 
 Returns `404` if the builder doesn't exist.
+
+## Founding/pioneer recognition
+
+docs/SPEC.md §3: "permanent 'Pioneer' profile badge (grows in prestige
+over time)... **Explicitly no larger starter plot for founding
+builders**... Recognition stays reputational/historical only." Only the
+badge itself is built (`migrations/0043_pioneer_recognition.sql`) — the
+spec's separate "founding history" page (the real "nail-chalice"
+launch-day lore) isn't something a dev session can honestly fabricate;
+that's real narrative content only the operator can supply, so it's left
+for later as a known gap, not guessed at.
+
+`isPioneer` lives on the builder (`builders.is_pioneer`), not derived live
+from current landlet ownership, so the distinction survives even if that
+builder later releases their land — matching "permanent." At most one
+builder holds it at a time. `POST /api/landlets/:id/claim` grants it to
+the very next successful claim, but only when nobody currently holds it:
+
+```sql
+UPDATE builders SET is_pioneer = 1 WHERE builder_id = ? AND NOT EXISTS (
+  SELECT 1 FROM builders WHERE is_pioneer = 1
+)
+```
+
+Deleting the pioneer builder's account (`DELETE /api/builders/:id`, the
+only way today to lose a claim outright) deletes that row entirely, which
+frees the distinction for whoever claims next rather than leaving it
+permanently unclaimable — a reasonable dev-mode reading given the spec's
+real-world intent (the actual first builder, presumably permanent in
+practice) doesn't have to account for a builder being deleted at all.
+
+The migration backfills `is_pioneer` for a world that already had claims
+before this feature shipped: whichever existing builder owns the
+earliest-claimed landlet (by `claimable_at`, the same "when this became
+claimable" timestamp `landlets` already tracks) becomes the pioneer
+retroactively, the same "don't erase builders who got here before this
+feature existed" reasoning `migrations/0032`'s own builder-roster backfill
+already follows.
+
+This app has no separate profile page, so the identity roster row — the
+one place a builder's own name is actually shown (`renderIdentityList` in
+`src/main.js`) — is the closest fit: a builder currently holding
+`isPioneer` gets a small "🏆 Pioneer" badge next to their label there.
+Sellers have no such concept; `identity.isPioneer` is simply `undefined`
+for a seller row, so the badge never renders for one.
+
+Covered by `e2e/pioneer-badge.test.mjs`: the very first claim on a fresh
+world becomes pioneer and shows the badge in the roster; a second builder
+claiming a second landlet afterward does not also become pioneer.
+
+### Known gaps
+
+The spec's "founding history" page (launch-day lore) isn't built — see
+this section's own opening paragraph for why.
 
 ## Sellers
 

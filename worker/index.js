@@ -943,6 +943,7 @@ function builderFromRow(row) {
   return {
     builderId: row.builder_id,
     label: row.label,
+    isPioneer: Boolean(row.is_pioneer),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1278,6 +1279,16 @@ async function handleLandlets(request, db, route, url) {
 
     if (result.meta.changes === 0) {
       await explainClaimConflict(db, route[1], builderId);
+    } else {
+      // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0043) —
+      // granted to whichever builder's claim is the next one to land once
+      // nobody currently holds the distinction, not just at world-launch
+      // time. No-ops silently once someone already holds it.
+      await db.prepare(`
+        UPDATE builders SET is_pioneer = 1 WHERE builder_id = ? AND NOT EXISTS (
+          SELECT 1 FROM builders WHERE is_pioneer = 1
+        )
+      `).bind(builderId).run();
     }
 
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
