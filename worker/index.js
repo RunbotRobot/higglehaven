@@ -2567,10 +2567,17 @@ async function handleCalendarEvents(request, db, route) {
     const authorLabel = stringValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // scheduledAt is optional — most events are just a plain announcement
+    // (docs/SPEC.md §6's "event postings"), with a real one-shot trigger
+    // moment (the spec's own "confetti-cannon" example) an explicit extra
+    // step, not the default.
+    const scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
+      ? null
+      : isoDateString(input.scheduledAt, 'scheduledAt');
     const eventId = `event-${crypto.randomUUID()}`;
     await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
-    `).bind(eventId, instanceId, authorLabel, text).run();
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at) VALUES (?, ?, ?, ?, ?)
+    `).bind(eventId, instanceId, authorLabel, text, scheduledAt).run();
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
   }
@@ -2583,7 +2590,43 @@ async function handleCalendarEvents(request, db, route) {
     return json({ deleted: true });
   }
 
+  // The one-shot creative-tool trigger itself (docs/API.md's "Community
+  // calendar" — "scheduled confetti-cannon trigger"). Route:
+  // /instances/:instanceId/events/:eventId/trigger, i.e. route =
+  // ['instances', instanceId, 'events', eventId, 'trigger'] — route[3] is
+  // the eventId here, one level deeper than DELETE's own route[3] above
+  // (which IS the eventId for a 4-element route; this is a 5-element one).
+  // Idempotent, like the auction resolve endpoint: calling it before
+  // scheduledAt, on an event with no scheduledAt at all, or on one
+  // already triggered is never an error, just a no-op — `triggered` in
+  // the response tells the caller whether *this* call was the one that
+  // actually fired it, since only that caller should play the effect
+  // locally.
+  if (request.method === 'POST' && route.length === 5 && route[4] === 'trigger') {
+    return handleCalendarEventTrigger(db, instanceId, route[3]);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+async function handleCalendarEventTrigger(db, instanceId, eventId) {
+  const event = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
+  if (!event) return json({ error: 'Event not found' }, 404);
+  if (!event.scheduled_at || event.triggered_at || event.scheduled_at > new Date().toISOString()) {
+    return json({ event: calendarEventFromRow(event), triggered: false });
+  }
+  await db.prepare(`
+    UPDATE calendar_events SET triggered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE event_id = ? AND triggered_at IS NULL
+  `).bind(eventId).run();
+  const updated = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+  // The WHERE ... triggered_at IS NULL guard above is what actually makes
+  // this safe against a race (two callers both passing the earlier check
+  // at once): only whichever UPDATE actually lands first flips the row,
+  // and event.triggered_at is guaranteed null here (the early return
+  // above already handled the already-triggered case), so a non-null
+  // updated.triggered_at means this call is the one that just fired it.
+  return json({ event: calendarEventFromRow(updated), triggered: updated.triggered_at !== null });
 }
 
 function calendarEventFromRow(row) {
@@ -2592,8 +2635,18 @@ function calendarEventFromRow(row) {
     instanceId: row.instance_id,
     authorLabel: row.author_label,
     text: row.text,
+    scheduledAt: row.scheduled_at,
+    triggeredAt: row.triggered_at,
     createdAt: row.created_at,
   };
+}
+
+function isoDateString(value, field) {
+  const text = stringValue(value, field);
+  if (Number.isNaN(new Date(text).getTime())) {
+    throw new HttpError(`${field} must be a valid date/time string`, 400);
+  }
+  return new Date(text).toISOString();
 }
 
 function routePath(pathname) {

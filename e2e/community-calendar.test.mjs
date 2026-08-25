@@ -86,6 +86,36 @@ console.log('rows shown after deleting one via the panel (should be 1):', rowCou
 const { events: eventsAfterDelete } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
 console.log('events persisted server-side after the panel delete (should be 1, the surviving one authored by "A Builder"):', eventsAfterDelete.map((e) => e.authorLabel));
 
+// Scheduled events + the one-shot creative-tool trigger (docs/SPEC.md
+// §6's own "scheduled confetti-cannon" example) — posted directly via the
+// API (the in-world "Add an Event" flow's own third, optional prompt for
+// this isn't reachable here for the same reason the rest of Shop mode's
+// prompt-driven flow isn't — see this file's own header comment), but the
+// Manage Events panel's *display* of a scheduled event, and the trigger
+// endpoint's own no-op-before-due behavior, are both real UI/API surfaces
+// this test can and does cover. The full due->fires->shows-"Fired at"
+// path needs scheduled_at forced into the past, which (unlike
+// worker/index.test.js) this suite has no direct D1 access to do — that
+// half is covered by worker/index.test.js's own dedicated case instead.
+await page.click('#calendar-events-close-btn');
+await page.waitForTimeout(300);
+const scheduledPost = await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ authorLabel: 'A Builder', text: 'Fireworks!', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+});
+const scheduledEventId = scheduledPost.body.event.eventId;
+
+await communityCalendarBtn().click();
+await page.waitForSelector('#calendar-events-modal.visible', { timeout: 5000 });
+await page.waitForTimeout(300);
+const scheduledRowText = await page.locator('.calendar-event-row').filter({ hasText: 'Fireworks!' }).textContent();
+console.log('scheduled (not yet due) event row (should show "Scheduled for"):', scheduledRowText);
+
+// Not yet due — triggering now should be a no-op.
+const notDueTrigger = await fetchJson(`/api/instances/${calendarInstance.instanceId}/events/${scheduledEventId}/trigger`, { method: 'POST' });
+console.log('trigger attempt before it is due (should be triggered: false):', notDueTrigger.body.triggered);
+
 // "Remove Community Calendar," inside the panel, un-flags and closes it.
 await page.click('#calendar-events-unflag-btn');
 await page.waitForTimeout(500);
@@ -111,8 +141,10 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   firstRowText.includes('A Builder') && firstRowText.includes('Bonfire night') &&
   rowCountAfterDelete === 1 &&
   eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === 'A Builder' &&
+  scheduledRowText.includes('Scheduled for') &&
+  notDueTrigger.body.triggered === false &&
   modalHiddenAfterUnflag &&
   labelAfterOff.trim() === 'Community Calendar' &&
   calendarInstanceAfterOff.isCommunityCalendar === false &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Community Calendar toggle + Manage Events panel + calendar-events API', errors });
+await finish(browser, { pass, label: 'Community Calendar toggle + Manage Events panel + calendar-events API + scheduled events', errors });

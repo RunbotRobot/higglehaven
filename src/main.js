@@ -55,6 +55,7 @@ import {
   fetchCalendarEvents,
   createCalendarEvent,
   deleteCalendarEvent,
+  triggerCalendarEvent,
   startAuction,
   fetchAuctions,
   placeBid,
@@ -4401,6 +4402,14 @@ async function renderCalendarEvents() {
     time.className = 'calendar-event-row-time';
     time.textContent = formatCalendarEventTime(event.createdAt);
     body.appendChild(time);
+    if (event.scheduledAt) {
+      const schedule = document.createElement('div');
+      schedule.className = 'calendar-event-row-time';
+      schedule.textContent = event.triggeredAt
+        ? `🎉 Fired at ${formatCalendarEventTime(event.triggeredAt)}`
+        : `⏳ Scheduled for ${formatCalendarEventTime(event.scheduledAt)}`;
+      body.appendChild(schedule);
+    }
     row.appendChild(body);
     const deleteRowBtn = document.createElement('button');
     deleteRowBtn.className = 'calendar-event-row-delete';
@@ -5921,6 +5930,11 @@ function updateShopMovement(now) {
   }
   updateSignFade();
   updateCalendarFade();
+  if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
+    lastScheduledEventCheck = now;
+    checkScheduledCalendarEvents();
+  }
+  updateConfettiBursts(dt);
 }
 
 function updateShopProximity() {
@@ -6126,6 +6140,95 @@ function updateCalendarFade() {
   }
 }
 
+// The creative-tool trigger itself (docs/SPEC.md §6's own "scheduled
+// confetti-cannon" example, docs/API.md's "Community calendar"). Checked
+// periodically (SCHEDULED_EVENT_CHECK_INTERVAL_MS) across every currently-
+// loaded calendar's already-fetched events, rather than re-fetching the
+// events list itself — a stale local isCommunityCalendar event cache
+// missing a brand-new event from another session is an acceptable gap for
+// a purely-cosmetic effect, and re-fetching every check would mean a
+// network round trip per calendar every 10 seconds regardless of whether
+// anything's actually due.
+const SCHEDULED_EVENT_CHECK_INTERVAL_MS = 10000;
+let lastScheduledEventCheck = 0;
+function checkScheduledCalendarEvents() {
+  const nowIso = new Date().toISOString();
+  for (const calendar of shopCalendars) {
+    for (const event of calendar.events) {
+      if (!event.scheduledAt || event.triggeredAt || event.scheduledAt > nowIso) continue;
+      triggerCalendarEvent(calendar.instanceId, event.eventId).then(({ event: updated, triggered }) => {
+        // Cache the server's own triggeredAt locally regardless of who
+        // actually won the race, so a lost race doesn't keep retrying
+        // this same event every 10 seconds for the rest of the visit.
+        event.triggeredAt = updated.triggeredAt;
+        if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
+      }).catch(() => {});
+    }
+  }
+}
+
+// A lightweight, dependency-free particle burst — small flat tumbling
+// squares with an outward+upward launch velocity and simple downward
+// gravity, faded out and disposed once their short lifespan ends. Not
+// literally "a confetti cannon" (the spec's own phrase is one illustrative
+// example of "creative-tool support," not a specific effect to replicate
+// pixel-for-pixel) — this is the same idea in the simplest form this
+// app's existing rendering toolkit (plain THREE.Mesh, no particle-system
+// library) can produce cheaply.
+const CONFETTI_COLORS = [0xff6b6b, 0xffd93d, 0x6bcb77, 0x4d96ff, 0xff922b, 0xda77f2];
+const CONFETTI_PARTICLE_COUNT = 24;
+const CONFETTI_GRAVITY_M_S2 = 4;
+const CONFETTI_LIFESPAN_S = 2.5;
+const confettiBursts = [];
+
+function spawnConfettiBurst(localPosition, group) {
+  const particles = [];
+  for (let i = 0; i < CONFETTI_PARTICLE_COUNT; i++) {
+    const color = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
+    const geometry = new THREE.PlaneGeometry(0.12, 0.12);
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(localPosition);
+    mesh.position.z += 0.3; // launches from just above the calendar's own footprint, not its exact center
+    group.add(mesh);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 2;
+    particles.push({
+      mesh,
+      velocity: new THREE.Vector3(Math.cos(angle) * speed, Math.sin(angle) * speed, 3 + Math.random() * 2),
+      spin: new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8),
+    });
+  }
+  confettiBursts.push({ particles, group, elapsed: 0 });
+}
+
+function disposeConfettiBurst(burst) {
+  for (const particle of burst.particles) {
+    burst.group.remove(particle.mesh);
+    particle.mesh.geometry.dispose();
+    particle.mesh.material.dispose();
+  }
+}
+
+function updateConfettiBursts(dt) {
+  for (const burst of [...confettiBursts]) {
+    burst.elapsed += dt;
+    const fade = 1 - THREE.MathUtils.clamp(burst.elapsed / CONFETTI_LIFESPAN_S, 0, 1);
+    for (const particle of burst.particles) {
+      particle.velocity.z -= CONFETTI_GRAVITY_M_S2 * dt;
+      particle.mesh.position.addScaledVector(particle.velocity, dt);
+      particle.mesh.rotation.x += particle.spin.x * dt;
+      particle.mesh.rotation.y += particle.spin.y * dt;
+      particle.mesh.rotation.z += particle.spin.z * dt;
+      particle.mesh.material.opacity = fade;
+    }
+    if (burst.elapsed >= CONFETTI_LIFESPAN_S) {
+      disposeConfettiBurst(burst);
+      confettiBursts.splice(confettiBursts.indexOf(burst), 1);
+    }
+  }
+}
+
 // Remembered across visits (but not required — a fresh prompt() with no
 // stored value just asks each time) so a shopper leaving several notes in
 // one session, or returning later, isn't re-asked their name every time —
@@ -6165,9 +6268,26 @@ shopCalendarHintEl.addEventListener('click', async () => {
   if (!authorLabel) return;
   const text = prompt('Event details (up to 280 characters):', '');
   if (!text || !text.trim()) return;
+  // Optional third step — most events are just a plain announcement (the
+  // two prompts above already cover that), a real scheduled moment (the
+  // spec's own "creative-tool support like a scheduled confetti-cannon
+  // trigger") is an explicit extra ask. Left blank, this posts exactly
+  // like it always has.
+  const scheduleInput = prompt(
+    'Schedule a special moment? Enter a date/time (e.g. 2026-08-26T20:00), or leave blank for just a note:', '',
+  );
+  let scheduledAt;
+  if (scheduleInput && scheduleInput.trim()) {
+    const parsed = new Date(scheduleInput.trim());
+    if (Number.isNaN(parsed.getTime())) {
+      alert('Could not understand that date/time — try a format like 2026-08-26T20:00. Posting without a scheduled moment.');
+    } else {
+      scheduledAt = parsed.toISOString();
+    }
+  }
   shopCalendarHintEl.disabled = true;
   try {
-    const event = await createCalendarEvent(calendar.instanceId, { authorLabel, text: text.trim() });
+    const event = await createCalendarEvent(calendar.instanceId, { authorLabel, text: text.trim(), scheduledAt });
     calendar.events.push(event);
     rebuildCalendarSprites(calendar);
   } catch (err) {
@@ -6210,6 +6330,14 @@ function unloadShopLandletInstances(entry) {
       nearestActiveCalendar = null;
       shopCalendarHintEl.classList.remove('visible');
     }
+  }
+  // Any confetti burst still mid-flight on this landlet would otherwise
+  // keep animating on (and eventually try to remove itself from) a group
+  // whose other contents just got disposed above.
+  for (const burst of [...confettiBursts]) {
+    if (burst.group !== entry.group) continue;
+    disposeConfettiBurst(burst);
+    confettiBursts.splice(confettiBursts.indexOf(burst), 1);
   }
 }
 

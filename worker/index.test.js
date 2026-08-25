@@ -1811,6 +1811,93 @@ describe('Community calendar', () => {
     const afterDelete = await api('/instances/calendar-to-delete/events');
     expect(afterDelete.response.status).toBe(404);
   });
+
+  it('accepts an optional scheduledAt and validates it', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-scheduled-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 10,
+        y: 10,
+        isCommunityCalendar: true,
+      }),
+    });
+
+    const plain = await api('/instances/calendar-scheduled-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
+    });
+    expect(plain.body.event.scheduledAt).toBeNull();
+    expect(plain.body.event.triggeredAt).toBeNull();
+
+    const invalid = await api('/instances/calendar-scheduled-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bad date', scheduledAt: 'not a date' }),
+    });
+    expect(invalid.response.status).toBe(400);
+
+    const scheduled = await api('/instances/calendar-scheduled-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
+    });
+    expect(scheduled.response.status).toBe(201);
+    expect(scheduled.body.event.scheduledAt).toBe('2026-08-26T20:00:00.000Z');
+    expect(scheduled.body.event.triggeredAt).toBeNull();
+  });
+
+  it('only triggers the creative-tool effect once it is actually due, and only once ever', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-trigger-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 11,
+        y: 11,
+        isCommunityCalendar: true,
+      }),
+    });
+
+    const future = await api('/instances/calendar-trigger-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    });
+    const futureEventId = future.body.event.eventId;
+    const notDueYet = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
+    expect(notDueYet.response.status).toBe(200);
+    expect(notDueYet.body.triggered).toBe(false);
+    expect(notDueYet.body.event.triggeredAt).toBeNull();
+
+    const noSchedule = await api('/instances/calendar-trigger-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
+    });
+    const noScheduleTrigger = await api(`/instances/calendar-trigger-instance/events/${noSchedule.body.event.eventId}/trigger`, { method: 'POST' });
+    expect(noScheduleTrigger.body.triggered).toBe(false);
+
+    // Force it into the past directly via the DB, the same test-only
+    // escape hatch used throughout this file (see the Auctions describe
+    // block's own comment) rather than waiting a real moment or mocking
+    // Date globally.
+    await env.DB.prepare(`UPDATE calendar_events SET scheduled_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?`).bind(futureEventId).run();
+
+    const firstTrigger = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
+    expect(firstTrigger.response.status).toBe(200);
+    expect(firstTrigger.body.triggered).toBe(true);
+    expect(firstTrigger.body.event.triggeredAt).not.toBeNull();
+
+    // A second call — e.g. a later visitor's Shop-mode session noticing
+    // the same due event — is a harmless no-op, not a second effect.
+    const secondTrigger = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
+    expect(secondTrigger.response.status).toBe(200);
+    expect(secondTrigger.body.triggered).toBe(false);
+    expect(secondTrigger.body.event.triggeredAt).toBe(firstTrigger.body.event.triggeredAt);
+
+    const triggerOnMissing = await api('/instances/calendar-trigger-instance/events/event-does-not-exist/trigger', { method: 'POST' });
+    expect(triggerOnMissing.response.status).toBe(404);
+  });
 });
 
 describe('Builders', () => {

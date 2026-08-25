@@ -1906,6 +1906,135 @@ button appends both a real event and a matching new sprite, using the
 same temporary `window.__debugAlign.camera` hook (removed before
 committing).
 
+## Scheduled calendar events + creative-tool trigger
+
+docs/SPEC.md §6's own example of where "Community calendar" could grow —
+"creative-tool support like a scheduled confetti-cannon trigger" — explicitly
+called out of scope in "Community calendar" above at the time that feature
+shipped. `migrations/0046_calendar_scheduled_events.sql` adds it: every
+calendar event can now optionally carry a real scheduled instant instead of
+just freeform text. `scheduled_at` stays `NULL` for a plain announcement
+("Market day Saturday!" typed as text, same as before this migration) and is
+only set when the author actually wants a real one-shot visual moment tied to
+a specific time. `triggered_at` records that the effect has fired for real,
+once, ever.
+
+Posting an event now accepts an optional `scheduledAt` (any string
+`Date.parse` can read; validated and normalized to ISO-8601, `400` on an
+unparseable value):
+
+```json
+POST /api/instances/:instanceId/events
+{ "authorLabel": "...", "text": "...", "scheduledAt": "2026-08-26T20:00:00.000Z" }
+```
+
+The response's `event` object gains `scheduledAt`/`triggeredAt` (both `null`
+unless set/fired) alongside the existing `eventId`/`instanceId`/
+`authorLabel`/`text`/`createdAt`.
+
+### `POST /api/instances/:instanceId/events/:eventId/trigger`
+
+The lazy-resolution pattern this codebase already uses for auction
+resolution (see "Land acquisition auctions" below), applied here too: there
+is no Cloudflare Cron Trigger anywhere in this app, so nothing fires a
+scheduled event on a schedule. Instead, any Shop-mode session that happens to
+have the event loaded polls this endpoint periodically, and whichever caller
+happens to hit it first, after `scheduled_at` has passed, is the one that
+fires it:
+
+- Not found → `404`.
+- Not yet due (`scheduled_at` is `NULL`, in the future, or already
+  triggered) → `200` with `{ event, triggered: false }`, a pure no-op.
+- Due and not yet triggered → sets `triggered_at` to the current time via a
+  `WHERE ... AND triggered_at IS NULL` guard, then returns
+  `{ event, triggered: true }`.
+
+That `IS NULL` guard is what makes concurrent calls safe: if two sessions
+both notice the same event is due at once, only one `UPDATE` actually lands
+first and flips the row, so only one of the two calls ever gets
+`triggered: true` back. This is a deliberate, honest simplification, not an
+oversight — this app has no live multiplayer presence at all (no
+sockets, no shared session state between concurrent shoppers), so there is
+no way to synchronize a shared live moment across simultaneous viewers
+regardless of how the trigger is implemented. Whoever's client notices it's
+due first triggers it for good; every visitor afterward, including the one
+who lost the race, just sees an ordinary past event with `triggeredAt` set
+and no replay.
+
+### Frontend wiring
+
+The in-world "Add an Event" flow (`#shop-calendar-hint`'s click handler) now
+asks a third, optional `prompt()` after the existing author/text ones:
+"Schedule a special moment? Enter a date/time ..., or leave blank for just a
+note." Left blank, posting behaves exactly as it did before this feature. An
+unparseable date/time posts as a plain note instead of failing, with an
+`alert()` explaining why — a mistyped schedule shouldn't cost the shopper
+their whole post.
+
+Every loaded calendar's already-fetched events are checked once every
+`SCHEDULED_EVENT_CHECK_INTERVAL_MS` (10s), inside the same per-frame
+`updateShopMovement` loop signs/calendars/alignment/day-night already hook
+into (`checkScheduledCalendarEvents`). This checks local, already-cached
+event data rather than re-fetching the events list — a stale local cache
+missing a brand-new event from another session is an acceptable gap for a
+purely cosmetic effect, and a network round trip per calendar every 10
+seconds regardless of whether anything's due would not be. Any event whose
+`scheduledAt` has passed and isn't yet `triggeredAt` calls the trigger
+endpoint above; when the response says `triggered: true`, a confetti burst
+spawns at that calendar's position.
+
+The confetti itself (`spawnConfettiBurst`/`updateConfettiBursts`/
+`disposeConfettiBurst`) is a small, dependency-free particle system: 24
+flat `THREE.PlaneGeometry` squares in random bright colors, launched
+outward and upward from the calendar with random per-particle velocity and
+spin, integrated by hand (gravity, position, rotation, fade-out opacity)
+inside the same per-frame loop, and disposed once their ~2.5s lifespan ends
+or their landlet unloads. This is not a literal "confetti cannon" — the
+spec's own phrase is one illustrative example of "creative-tool support,"
+not a specific effect to replicate pixel-for-pixel — just the same idea in
+the simplest form this app's existing rendering toolkit (plain
+`THREE.Mesh`, no particle-system library) can produce cheaply. Particles are
+added as children of the calendar's own Shop-mode group and positioned
+using the calendar mesh's local (not world) position, since both are
+siblings under that same group.
+
+The Build-mode "Manage Events" panel (`renderCalendarEvents`) shows a
+scheduled-but-not-yet-due event as "⏳ Scheduled for <date>", and a fired
+one as "🎉 Fired at <date>" once `triggeredAt` is set — giving a builder a
+way to see the state of a scheduled event without needing to be present in
+Shop mode when it fires.
+
+### Testing note
+
+The due→fires→one-shot lifecycle needs a timestamp forced into the past,
+which `worker/index.test.js` can do directly via `env.DB` (D1's own test
+binding) but `e2e/community-calendar.test.mjs` cannot — there is no public
+API for rewriting an event's `scheduled_at`, by design. The split this
+produces mirrors the auction lazy-resolution tests: `worker/index.test.js`'s
+"Community calendar" describe block owns the full contract (accepting and
+validating `scheduledAt`, a future-scheduled event triggering as a no-op,
+forcing `scheduled_at` into the past via direct `env.DB.prepare(...)` and
+confirming triggering it then fires it exactly once — a second trigger
+attempt returns the same `triggeredAt` unchanged — and a 404 for a
+nonexistent event id), while `e2e/community-calendar.test.mjs` covers what's
+actually reachable through the real UI/HTTP surface without D1 access:
+posting a far-future (`2099`) scheduled event, confirming the Manage Events
+panel renders it as "Scheduled for," and confirming the trigger endpoint is
+a real no-op before it's due.
+
+The confetti particle system itself and the full scheduled→due→trigger→
+spawn pipeline (including the actual on-screen visual result) were verified
+manually: a temporary `window.__debugConfetti` hook (removed before
+committing, confirmed via `grep`) exposed `spawnConfettiBurst`,
+`checkScheduledCalendarEvents`, `shopCalendars`, and `confettiBursts` to a
+Playwright script that posted a near-future scheduled event, entered Shop
+mode, invoked the check once the schedule had passed, confirmed the server
+returned `triggered: true` exactly once, confirmed a burst appeared in
+`confettiBursts` and cleared itself after its lifespan, and repositioned the
+camera to screenshot the burst mid-flight — visually confirming colored
+tumbling squares actually render, rather than just confirming the
+data/state changes a DOM-only assertion could see.
+
 ## Land acquisition auctions
 
 docs/SPEC.md §5's "simplified auction system" — the mechanism only, not
@@ -2149,7 +2278,9 @@ The migrations currently create sixteen main backend tables:
   their instance.
 - `calendar_events`: builder-authored events on a placed instance flagged
   `isCommunityCalendar` (see "Community calendar" above), cascade-deleted
-  with their instance.
+  with their instance. Optionally carries `scheduled_at`/`triggered_at` for
+  the one-shot creative-tool trigger (see "Scheduled calendar events +
+  creative-tool trigger" above).
 - `auctions`: land acquisition auction listings on a claimed landlet (see
   "Land acquisition auctions" above).
 - `auction_bids`: bids placed on an auction, cascade-deleted with it.

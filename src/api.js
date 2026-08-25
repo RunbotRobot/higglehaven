@@ -466,17 +466,25 @@ export async function fetchCalendarEvents(instanceId) {
   return events;
 }
 
-export async function createCalendarEvent(instanceId, { authorLabel, text }) {
+export async function createCalendarEvent(instanceId, { authorLabel, text, scheduledAt } = {}) {
   const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, text }),
+    body: JSON.stringify({ authorLabel, text, scheduledAt }),
   });
   return event;
 }
 
 export async function deleteCalendarEvent(instanceId, eventId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
+}
+
+// The one-shot creative-tool trigger (docs/SPEC.md §6's own "scheduled
+// confetti-cannon" example) — see docs/API.md's "Community calendar" for
+// why this is idempotent and safe to call speculatively any time a
+// calendar's events are loaded, not just once a builder is sure it's due.
+export async function triggerCalendarEvent(instanceId, eventId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}/trigger`, { method: 'POST' });
 }
 
 // Land acquisition auctions (see migrations/0045_auctions.sql).
