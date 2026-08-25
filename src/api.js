@@ -487,6 +487,27 @@ export async function triggerCalendarEvent(instanceId, eventId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}/trigger`, { method: 'POST' });
 }
 
+// Product reviews (see migrations/0047_product_reviews.sql) — same nested-
+// under-the-instance shape as sign posts/calendar events above, for the
+// same reason. GET's response also carries averageRating/count so callers
+// don't need to recompute them from the raw list.
+export async function fetchProductReviews(instanceId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews`);
+}
+
+export async function createProductReview(instanceId, { authorLabel, rating, text } = {}) {
+  const { review } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorLabel, rating, text }),
+  });
+  return review;
+}
+
+export async function deleteProductReview(instanceId, reviewId) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
+}
+
 // Land acquisition auctions (see migrations/0045_auctions.sql).
 export async function startAuction(landletId, { builderId, startingBidCents, durationHours } = {}) {
   const { auction } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/auction`, {

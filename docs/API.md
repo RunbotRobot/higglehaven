@@ -1906,6 +1906,105 @@ button appends both a real event and a matching new sprite, using the
 same temporary `window.__debugAlign.camera` hook (removed before
 committing).
 
+## Product reviews
+
+docs/SPEC.md §5's "Review incentives: small dáller bonus for genuine,
+substantive reviews, capped per account/period." The dáller-bonus half is
+explicitly out of scope here, same reasoning "Community calendar" gave for
+carving out its own out-of-scope half: there is no shopper account/balance
+concept anywhere in this app to credit a bonus to — only builders ever hold
+dállers, and only for their own commission earnings. This covers the
+reviewable-content half only.
+
+Structurally a third clone of "Community signs" and "Community calendar"
+above: `is_reviewable` is a per-*instance* opt-in flag
+(`migrations/0047_product_reviews.sql`), same toggle-then-manage Build-mode
+button, same Shop-mode proximity-hint-and-post flow, same nested-under-the-
+instance content collection (`product_reviews`, its own table, cascade-
+deleted with the instance). An instance can be a sign, a calendar, and
+reviewable all three at once — independent flags, independently toggled and
+moderated, same as signs/calendar's own relationship.
+
+One deliberate design choice worth calling out explicitly: reviews attach to
+the *placement a builder chose to open up*, not to the underlying catalog
+template or seller. In a real e-commerce system a product review belongs to
+the product/seller, not to wherever a copy of it happens to be displayed —
+but this app has no seller-side moderation or trust infrastructure at all,
+and its existing no-central-authority governance model (docs/SPEC.md §3: no
+mechanism for anyone but the builder to control content on their own land)
+already answers "who moderates this" the same way it does for signs and
+calendars. Making the seller (rather than the builder who placed the
+instance) own moderation would need real seller accountability
+infrastructure this app doesn't have; making the *builder* own it, exactly
+like every other piece of shopper-authored content here, keeps the whole
+moderation story consistent with one rule instead of two.
+
+### `GET /api/instances/:instanceId/reviews`, `POST .../reviews`, `DELETE .../reviews/:reviewId`
+
+Nested under the instance, same shape as sign posts/calendar events, with
+one addition: `rating`, a required integer from 1 to 5 (`400` outside that
+range or non-integer). `text` is genuinely optional here — a bare star
+rating is already a complete, useful review — capped at 280 characters when
+present. `POST` is rejected with `400` unless the target instance is
+currently flagged `isReviewable`.
+
+```json
+POST /api/instances/:instanceId/reviews
+{ "authorLabel": "...", "rating": 5, "text": "Lovely spot!" }
+```
+
+`GET`'s response carries the raw list plus a computed summary, so no caller
+needs to re-derive it from the list itself:
+
+```json
+{ "reviews": [ { "reviewId": "review-...", "instanceId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely spot!", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
+```
+
+`averageRating` is `null` when there are no reviews yet (never `0`, which
+would misleadingly read as "rated, and rated at the bottom").
+
+### Frontend wiring
+
+"Product Reviews" sits in `#gizmo-mode-controls` right after Community
+Calendar, with the identical toggle-then-manage design as both (first click
+flags it, a second click while already flagged opens
+`#product-reviews-modal` instead of un-flagging — moderation, the averaged
+summary, and un-flagging all live inside that modal, mirroring
+`#calendar-events-modal`). In Shop mode, `registerShopReview`/
+`rebuildReviewSprites`/`updateReviewFade` mirror their sign/calendar
+counterparts exactly, reusing the same `makeSignPostSprite`,
+`SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/`SIGN_INTERACT_RADIUS_M`/
+`SIGN_MAX_VISIBLE_POSTS` constants, and per-frame `updateShopMovement` hook.
+`#shop-review-hint` ("Rate this Product") sits one slot higher still than
+`#shop-calendar-hint` (`bottom: 280px` vs. `230px`/`180px`) so all three
+hints can show at once near an instance flagged as more than one of the
+three without colliding.
+
+Rating is collected via a `prompt()` asking for a whole number 1-5
+(re-prompted with an `alert()` on anything else), then an optional second
+`prompt()` for a text comment — mirroring the calendar hint's own optional
+third step for scheduling. In-world, each review renders as floating fading
+text reading `"<author> ★★★☆☆: <text>"` (or just the author/stars when no
+text was left), stacked the same way sign posts/calendar events are.
+
+### Testing note
+
+`e2e/product-reviews.test.mjs` mirrors `e2e/community-calendar.test.mjs`
+exactly (see that file's own testing note for what it covers and why the
+Shop-mode fade/posting flow is verified manually instead of automated). The
+manual pass here confirmed `#shop-review-hint` shows/hides correctly at
+`SIGN_INTERACT_RADIUS_M` and that a posted review's star-rating text sprite
+actually renders on screen (not just that the underlying data changed),
+using a temporary `window.__debugReviews` hook (removed before committing,
+confirmed via `grep`) to reposition the camera and screenshot the sprite
+close-up. The 400 rejection for posting to a non-reviewable instance is
+covered by `worker/index.test.js`'s own "Product reviews" describe block
+rather than the e2e suite — triggering a real rejected `fetch` from inside
+the page logs a "Failed to load resource" console error that would trip the
+e2e suite's own `errors.length === 0` check, the same reasoning
+`community-signs.test.mjs` and `community-calendar.test.mjs` already
+documented for their own analogous 400 cases.
+
 ## Scheduled calendar events + creative-tool trigger
 
 docs/SPEC.md §6's own example of where "Community calendar" could grow —
@@ -2281,6 +2380,9 @@ The migrations currently create sixteen main backend tables:
   with their instance. Optionally carries `scheduled_at`/`triggered_at` for
   the one-shot creative-tool trigger (see "Scheduled calendar events +
   creative-tool trigger" above).
+- `product_reviews`: shopper-authored star ratings (+ optional text) on a
+  placed instance flagged `isReviewable` (see "Product reviews" above),
+  cascade-deleted with their instance.
 - `auctions`: land acquisition auction listings on a claimed landlet (see
   "Land acquisition auctions" above).
 - `auction_bids`: bids placed on an auction, cascade-deleted with it.

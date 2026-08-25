@@ -56,6 +56,9 @@ import {
   createCalendarEvent,
   deleteCalendarEvent,
   triggerCalendarEvent,
+  fetchProductReviews,
+  createProductReview,
+  deleteProductReview,
   startAuction,
   fetchAuctions,
   placeBid,
@@ -1424,6 +1427,9 @@ async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
+  // Product reviews (docs/API.md's "Product reviews") — same per-instance-
+  // flag reasoning as the two flags above, independent of both.
+  object.userData.isReviewable = instance.isReviewable ?? false;
   return object;
 }
 
@@ -1456,6 +1462,7 @@ function persistLayout() {
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
     isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
+    isReviewable: mesh.userData.isReviewable ?? false,
   }));
   saveInstances(instances);
 }
@@ -1480,6 +1487,7 @@ function instanceFromMesh(mesh) {
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
     isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
+    isReviewable: mesh.userData.isReviewable ?? false,
   };
 }
 
@@ -3534,6 +3542,7 @@ const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
+const productReviewsBtn = document.getElementById('toggle-product-reviews');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -4033,6 +4042,12 @@ function updateSelectionUI() {
   communityCalendarBtn.disabled = !singleMesh;
   communityCalendarBtn.classList.toggle('active', !!singleMesh?.userData.isCommunityCalendar);
   communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
+  // Product Reviews (docs/API.md's "Product reviews") — same reasoning and
+  // same toggle-then-manage button design as Community Sign/Calendar above,
+  // independent of both.
+  productReviewsBtn.disabled = !singleMesh;
+  productReviewsBtn.classList.toggle('active', !!singleMesh?.userData.isReviewable);
+  productReviewsBtn.textContent = singleMesh?.userData.isReviewable ? 'Product Reviews ✓ (Manage)' : 'Product Reviews';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -4446,6 +4461,122 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
   mesh.userData.isCommunityCalendar = false;
   calendarEventsModalEl.classList.remove('visible');
   calendarEventsTargetMesh = null;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
+});
+
+// Product Reviews (docs/SPEC.md §5, docs/API.md's "Product reviews") —
+// structurally identical to Community Sign/Calendar above (same toggle-
+// then-manage button design, same reasoning), independent of both flags.
+productReviewsBtn.addEventListener('click', async () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  if (mesh.userData.isReviewable) {
+    openProductReviewsModal(mesh);
+    return;
+  }
+  mesh.userData.isReviewable = true;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
+});
+
+// A builder's moderation view onto one instance's reviews — same shell/
+// pattern as the sign posts/calendar events modals above.
+const productReviewsModalEl = document.getElementById('product-reviews-modal');
+const productReviewsCloseBtn = document.getElementById('product-reviews-close-btn');
+const productReviewsSummaryEl = document.getElementById('product-reviews-summary');
+const productReviewsListEl = document.getElementById('product-reviews-list');
+const productReviewsEmptyEl = document.getElementById('product-reviews-empty');
+const productReviewsUnflagBtn = document.getElementById('product-reviews-unflag-btn');
+let productReviewsTargetMesh = null;
+
+function formatProductReviewTime(isoString) {
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+function starString(rating) {
+  return '★'.repeat(rating) + '☆'.repeat(5 - rating);
+}
+
+async function renderProductReviews() {
+  productReviewsListEl.innerHTML = '';
+  productReviewsSummaryEl.textContent = '';
+  if (!productReviewsTargetMesh) return;
+  const instanceId = productReviewsTargetMesh.userData.instanceId;
+  let reviews;
+  let averageRating;
+  try {
+    ({ reviews, averageRating } = await fetchProductReviews(instanceId));
+  } catch (err) {
+    productReviewsEmptyEl.textContent = err.message || 'Could not load reviews.';
+    productReviewsEmptyEl.hidden = false;
+    return;
+  }
+  productReviewsEmptyEl.hidden = reviews.length > 0;
+  if (reviews.length > 0) {
+    productReviewsSummaryEl.textContent = `${starString(Math.round(averageRating))} ${averageRating.toFixed(1)} average (${reviews.length} review${reviews.length === 1 ? '' : 's'})`;
+  }
+  for (const review of reviews) {
+    const row = document.createElement('div');
+    row.className = 'product-review-row';
+    const body = document.createElement('div');
+    body.className = 'product-review-row-body';
+    const author = document.createElement('div');
+    author.className = 'product-review-row-author';
+    author.textContent = review.authorLabel;
+    body.appendChild(author);
+    const rating = document.createElement('div');
+    rating.className = 'product-review-row-rating';
+    rating.textContent = starString(review.rating);
+    body.appendChild(rating);
+    if (review.text) {
+      const text = document.createElement('div');
+      text.textContent = review.text;
+      body.appendChild(text);
+    }
+    const time = document.createElement('div');
+    time.className = 'product-review-row-time';
+    time.textContent = formatProductReviewTime(review.createdAt);
+    body.appendChild(time);
+    row.appendChild(body);
+    const deleteRowBtn = document.createElement('button');
+    deleteRowBtn.className = 'product-review-row-delete';
+    deleteRowBtn.type = 'button';
+    deleteRowBtn.textContent = '×';
+    deleteRowBtn.setAttribute('aria-label', 'Delete review');
+    deleteRowBtn.addEventListener('click', async () => {
+      deleteRowBtn.disabled = true;
+      try {
+        await deleteProductReview(instanceId, review.reviewId);
+        await renderProductReviews();
+      } catch (err) {
+        console.warn('Could not delete review:', err);
+        deleteRowBtn.disabled = false;
+      }
+    });
+    row.appendChild(deleteRowBtn);
+    productReviewsListEl.appendChild(row);
+  }
+}
+
+function openProductReviewsModal(mesh) {
+  productReviewsTargetMesh = mesh;
+  productReviewsModalEl.classList.add('visible');
+  renderProductReviews();
+}
+productReviewsCloseBtn.addEventListener('click', () => {
+  productReviewsModalEl.classList.remove('visible');
+  productReviewsTargetMesh = null;
+});
+productReviewsUnflagBtn.addEventListener('click', async () => {
+  if (!productReviewsTargetMesh) return;
+  const mesh = productReviewsTargetMesh;
+  mesh.userData.isReviewable = false;
+  productReviewsModalEl.classList.remove('visible');
+  productReviewsTargetMesh = null;
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
@@ -5531,6 +5662,7 @@ const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
+const shopReviewHintEl = document.getElementById('shop-review-hint');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
@@ -5686,6 +5818,11 @@ let nearestActiveSign = null; // whichever sign #shop-sign-hint currently target
 // Same shape/lifecycle as shopSigns above, for community-calendar instances.
 const shopCalendars = [];
 let nearestActiveCalendar = null;
+// Same shape/lifecycle as shopSigns above, for reviewable instances — a
+// {mesh, group, instanceId, reviews, sprites} entry per loaded one, with
+// `reviews` populated once (registerShopReview) rather than re-fetched.
+const shopReviews = [];
+let nearestActiveReview = null;
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -5930,6 +6067,7 @@ function updateShopMovement(now) {
   }
   updateSignFade();
   updateCalendarFade();
+  updateReviewFade();
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -5975,6 +6113,7 @@ async function loadShopLandletInstances(entry) {
     growShopDomeIfNeeded(object);
     if (object.userData.isCommunitySign) registerShopSign(object, entry);
     if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
+    if (object.userData.isReviewable) registerShopReview(object, entry);
   }
 }
 
@@ -6140,6 +6279,65 @@ function updateCalendarFade() {
   }
 }
 
+// A reviewable instance starts with no reviews loaded — fetched once, here,
+// right as it enters the world, same lifecycle as registerShopSign above.
+function registerShopReview(mesh, entry) {
+  const review = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, reviews: [], sprites: [] };
+  shopReviews.push(review);
+  fetchProductReviews(review.instanceId).then(({ reviews }) => {
+    if (!shopReviews.includes(review)) return;
+    review.reviews = reviews;
+    rebuildReviewSprites(review);
+  }).catch(() => {});
+}
+
+function disposeReviewSprites(review) {
+  for (const sprite of review.sprites) {
+    review.group.remove(sprite);
+    sprite.material.map?.dispose();
+    sprite.material.dispose();
+  }
+  review.sprites = [];
+}
+
+function rebuildReviewSprites(review) {
+  disposeReviewSprites(review);
+  const baseHeight = meshDimensions(review.mesh).height;
+  const recent = review.reviews.slice(-SIGN_MAX_VISIBLE_POSTS);
+  recent.forEach((r, i) => {
+    const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+    const label = r.text ? `${r.authorLabel} ${stars}: ${r.text}` : `${r.authorLabel} ${stars}`;
+    const sprite = makeSignPostSprite(label);
+    sprite.position.set(review.mesh.position.x, review.mesh.position.y, review.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    sprite.material.opacity = 0;
+    review.group.add(sprite);
+    review.sprites.push(sprite);
+  });
+}
+
+// Product reviews' own per-frame fade — identical logic to updateSignFade/
+// updateCalendarFade above, over shopReviews instead of shopSigns.
+function updateReviewFade() {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const review of shopReviews) {
+    const world = review.mesh.getWorldPosition(scratchSignWorldPos);
+    const distance = world.distanceTo(camera.position);
+    const opacity = 1 - THREE.MathUtils.clamp(
+      (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
+    );
+    for (const sprite of review.sprites) sprite.material.opacity = opacity;
+    if (distance <= SIGN_INTERACT_RADIUS_M && distance < nearestDistance) {
+      nearest = review;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest !== nearestActiveReview) {
+    nearestActiveReview = nearest;
+    shopReviewHintEl.classList.toggle('visible', !!nearest);
+  }
+}
+
 // The creative-tool trigger itself (docs/SPEC.md §6's own "scheduled
 // confetti-cannon" example, docs/API.md's "Community calendar"). Checked
 // periodically (SCHEDULED_EVENT_CHECK_INTERVAL_MS) across every currently-
@@ -6297,6 +6495,34 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
 });
 
+shopReviewHintEl.addEventListener('click', async () => {
+  const review = nearestActiveReview;
+  if (!review) return;
+  const authorLabel = shopperLabel();
+  if (!authorLabel) return;
+  const ratingInput = prompt('Rate this product 1-5 stars:', '5');
+  if (!ratingInput || !ratingInput.trim()) return;
+  const rating = Number(ratingInput.trim());
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    alert('Please enter a whole number from 1 to 5.');
+    return;
+  }
+  // A star rating alone is already a complete, useful review — this text
+  // prompt is an optional extra, same as the calendar hint's own scheduling
+  // step above.
+  const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  shopReviewHintEl.disabled = true;
+  try {
+    const posted = await createProductReview(review.instanceId, { authorLabel, rating, text: text?.trim() || undefined });
+    review.reviews.push(posted);
+    rebuildReviewSprites(review);
+  } catch (err) {
+    alert(err.message || 'Could not review this product.');
+  } finally {
+    shopReviewHintEl.disabled = false;
+  }
+});
+
 function disposeObject3D(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
@@ -6329,6 +6555,15 @@ function unloadShopLandletInstances(entry) {
     if (nearestActiveCalendar === calendar) {
       nearestActiveCalendar = null;
       shopCalendarHintEl.classList.remove('visible');
+    }
+  }
+  for (const review of [...shopReviews]) {
+    if (review.group !== entry.group) continue;
+    disposeReviewSprites(review);
+    shopReviews.splice(shopReviews.indexOf(review), 1);
+    if (nearestActiveReview === review) {
+      nearestActiveReview = null;
+      shopReviewHintEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise
