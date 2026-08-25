@@ -457,3 +457,24 @@ export async function createSignPost(instanceId, { authorLabel, text }) {
 export async function deleteSignPost(instanceId, postId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, { method: 'DELETE' });
 }
+
+// Community calendar events (see migrations/0042_community_calendar.sql) —
+// same nested-under-the-instance shape as sign posts above, for the same
+// reason.
+export async function fetchCalendarEvents(instanceId) {
+  const { events } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`);
+  return events;
+}
+
+export async function createCalendarEvent(instanceId, { authorLabel, text }) {
+  const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorLabel, text }),
+  });
+  return event;
+}
+
+export async function deleteCalendarEvent(instanceId, eventId) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
+}

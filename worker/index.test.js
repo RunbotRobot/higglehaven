@@ -1664,6 +1664,155 @@ describe('Community signs', () => {
   });
 });
 
+describe('Community calendar', () => {
+  it('toggles isCommunityCalendar on a placed instance and round-trips it', async () => {
+    const created = await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-toggle-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.instance.isCommunityCalendar).toBe(false);
+
+    const toggled = await api('/instances/calendar-toggle-instance', {
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunityCalendar: true }),
+    });
+    expect(toggled.response.status).toBe(200);
+    expect(toggled.body.instance.isCommunityCalendar).toBe(true);
+
+    const fetched = await api('/instances/calendar-toggle-instance');
+    expect(fetched.body.instance.isCommunityCalendar).toBe(true);
+  });
+
+  it('is independent of isCommunitySign on the same instance', async () => {
+    const created = await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'both-flags-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 6,
+        y: 6,
+        isCommunitySign: true,
+        isCommunityCalendar: true,
+      }),
+    });
+    expect(created.body.instance.isCommunitySign).toBe(true);
+    expect(created.body.instance.isCommunityCalendar).toBe(true);
+
+    const unsetSignOnly = await api('/instances/both-flags-instance', {
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunitySign: false }),
+    });
+    expect(unsetSignOnly.body.instance.isCommunitySign).toBe(false);
+    expect(unsetSignOnly.body.instance.isCommunityCalendar).toBe(true);
+  });
+
+  it('rejects an event on an instance not marked as a community calendar', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'not-a-calendar-instance',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 7,
+        y: 7,
+      }),
+    });
+
+    const rejected = await api('/instances/not-a-calendar-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/not marked as a community calendar/);
+  });
+
+  it('creates, lists, and moderates events on a community calendar', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-with-events',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 8,
+        y: 8,
+        isCommunityCalendar: true,
+      }),
+    });
+
+    const emptyList = await api('/instances/calendar-with-events/events');
+    expect(emptyList.response.status).toBe(200);
+    expect(emptyList.body.events).toEqual([]);
+
+    const missingText = await api('/instances/calendar-with-events/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder' }),
+    });
+    expect(missingText.response.status).toBe(400);
+
+    const tooLong = await api('/instances/calendar-with-events/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'x'.repeat(281) }),
+    });
+    expect(tooLong.response.status).toBe(400);
+
+    const posted = await api('/instances/calendar-with-events/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
+    });
+    expect(posted.response.status).toBe(201);
+    expect(posted.body.event).toMatchObject({
+      instanceId: 'calendar-with-events',
+      authorLabel: 'A Builder',
+      text: 'Bonfire night, Friday 8pm!',
+    });
+    expect(posted.body.event.eventId).toMatch(/^event-/);
+
+    const listed = await api('/instances/calendar-with-events/events');
+    expect(listed.body.events).toHaveLength(1);
+    expect(listed.body.events[0].eventId).toBe(posted.body.event.eventId);
+
+    const deleted = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listedAfterDelete = await api('/instances/calendar-with-events/events');
+    expect(listedAfterDelete.body.events).toEqual([]);
+
+    const deleteMissing = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, { method: 'DELETE' });
+    expect(deleteMissing.response.status).toBe(404);
+  });
+
+  it('cascades event deletion when the calendar instance itself is deleted', async () => {
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-to-delete',
+        landletId: 'starter-landlet',
+        templateId: 'placeholder-tree',
+        x: 9,
+        y: 9,
+        isCommunityCalendar: true,
+      }),
+    });
+    await api('/instances/calendar-to-delete/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Market day' }),
+    });
+    await api('/instances/calendar-to-delete', { method: 'DELETE' });
+
+    const afterDelete = await api('/instances/calendar-to-delete/events');
+    expect(afterDelete.response.status).toBe(404);
+  });
+});
+
 describe('Builders', () => {
   it('creates, lists, renames, and validates builders', async () => {
     const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Ada' }) });

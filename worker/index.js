@@ -2044,12 +2044,13 @@ async function handleInstances(request, db, route, url) {
         rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
         rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
         scale = excluded.scale, is_community_sign = excluded.is_community_sign,
+        is_community_calendar = excluded.is_community_calendar,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...instanceParams(instance))));
     const stored = await getInstancesById(db, instanceIds);
@@ -2100,9 +2101,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -2117,9 +2118,9 @@ async function handleInstances(request, db, route, url) {
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1]).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
@@ -2131,6 +2132,10 @@ async function handleInstances(request, db, route, url) {
 
   if (route.length >= 3 && route[2] === 'posts') {
     return handleSignPosts(request, db, route);
+  }
+
+  if (route.length >= 3 && route[2] === 'events') {
+    return handleCalendarEvents(request, db, route);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -2188,6 +2193,64 @@ async function handleSignPosts(request, db, route) {
 function signPostFromRow(row) {
   return {
     postId: row.post_id,
+    instanceId: row.instance_id,
+    authorLabel: row.author_label,
+    text: row.text,
+    createdAt: row.created_at,
+  };
+}
+
+// Events on a "community calendar" instance (docs/SPEC.md §6,
+// migrations/0042) — structurally identical to handleSignPosts above
+// (nested under /instances/:id/events for the same "never exists
+// independent of its instance" reasoning, same no-ownership-check
+// moderation caveat), deliberately kept as its own separate function and
+// table rather than a shared "board" abstraction over both — see
+// migrations/0042's own comment on why.
+async function handleCalendarEvents(request, db, route) {
+  const instanceId = route[1];
+
+  if (request.method === 'GET' && route.length === 3) {
+    const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
+    const { results } = await db.prepare(`
+      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at LIMIT 200
+    `).bind(instanceId).all();
+    return json({ events: results.map(calendarEventFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 3) {
+    const instance = await db.prepare('SELECT instance_id, is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
+    if (!instance.is_community_calendar) {
+      throw new HttpError('This placed instance is not marked as a community calendar', 400);
+    }
+    const input = await readJson(request);
+    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const text = stringValue(input.text, 'text');
+    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    const eventId = `event-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
+    `).bind(eventId, instanceId, authorLabel, text).run();
+    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    return json({ event: calendarEventFromRow(row) }, 201);
+  }
+
+  if (request.method === 'DELETE' && route.length === 4) {
+    const eventId = route[3];
+    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
+    if (!existing) return json({ error: 'Event not found' }, 404);
+    await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function calendarEventFromRow(row) {
+  return {
+    eventId: row.event_id,
     instanceId: row.instance_id,
     authorLabel: row.author_label,
     text: row.text,
@@ -2401,6 +2464,9 @@ function validateInstance(input, fallbackId) {
     // flooring's per-template metadata flag), since any single placement of
     // any product can become a sign independently of its other copies.
     isCommunitySign: input.isCommunitySign === true,
+    // docs/API.md's "Community calendar" — same per-instance opt-in
+    // reasoning as isCommunitySign, independent of it.
+    isCommunityCalendar: input.isCommunityCalendar === true,
   };
 }
 
@@ -2443,7 +2509,8 @@ function templateParams(template) {
 function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
     instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
-    JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0];
+    JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0,
+    instance.isCommunityCalendar ? 1 : 0];
 }
 
 function landletParams(landlet) {
@@ -2483,6 +2550,7 @@ function instanceFromRow(row) {
     crop: JSON.parse(row.crop_json || '{}'),
     scale: row.scale,
     isCommunitySign: Boolean(row.is_community_sign),
+    isCommunityCalendar: Boolean(row.is_community_calendar),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

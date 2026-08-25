@@ -51,6 +51,9 @@ import {
   fetchSignPosts,
   createSignPost,
   deleteSignPost,
+  fetchCalendarEvents,
+  createCalendarEvent,
+  deleteCalendarEvent,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -1360,6 +1363,10 @@ async function createMeshForInstance(instance) {
   // also be a sign (its own branch above never sets this), which is fine —
   // nothing in the spec calls for a flat ground patch to double as one.
   object.userData.isCommunitySign = instance.isCommunitySign ?? false;
+  // Community calendar (docs/API.md's "Community calendar") — same
+  // per-instance-flag reasoning as isCommunitySign just above, and
+  // independent of it.
+  object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
   return object;
 }
 
@@ -1391,6 +1398,7 @@ function persistLayout() {
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
+    isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
   }));
   saveInstances(instances);
 }
@@ -1414,6 +1422,7 @@ function instanceFromMesh(mesh) {
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
+    isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
   };
 }
 
@@ -3219,6 +3228,7 @@ const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
+const communityCalendarBtn = document.getElementById('toggle-community-calendar');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -3712,6 +3722,12 @@ function updateSelectionUI() {
   // that click destination explicit rather than reading like a second
   // identical toggle.
   communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓ (Manage)' : 'Community Sign';
+  // Community Calendar (docs/API.md's "Community calendar") — same
+  // reasoning and same toggle-then-manage button design as Community Sign
+  // just above, independent of it.
+  communityCalendarBtn.disabled = !singleMesh;
+  communityCalendarBtn.classList.toggle('active', !!singleMesh?.userData.isCommunityCalendar);
+  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -4015,6 +4031,108 @@ signPostsUnflagBtn.addEventListener('click', async () => {
   mesh.userData.isCommunitySign = false;
   signPostsModalEl.classList.remove('visible');
   signPostsTargetMesh = null;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
+});
+
+// Community Calendar (docs/SPEC.md §6, docs/API.md's "Community
+// calendar") — structurally identical to Community Sign just above (same
+// toggle-then-manage button design, same reasoning), deliberately kept as
+// its own independent flag/table rather than merged with signs — see
+// migrations/0042's own comment.
+communityCalendarBtn.addEventListener('click', async () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  if (mesh.userData.isCommunityCalendar) {
+    openCalendarEventsModal(mesh);
+    return;
+  }
+  mesh.userData.isCommunityCalendar = true;
+  updateSelectionUI();
+  persistLayout();
+  await syncUpdate(mesh);
+});
+
+// A builder's moderation view onto one calendar's events — same shell/
+// pattern as the sign posts modal just above.
+const calendarEventsModalEl = document.getElementById('calendar-events-modal');
+const calendarEventsCloseBtn = document.getElementById('calendar-events-close-btn');
+const calendarEventsListEl = document.getElementById('calendar-events-list');
+const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
+const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
+let calendarEventsTargetMesh = null;
+
+function formatCalendarEventTime(isoString) {
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+}
+
+async function renderCalendarEvents() {
+  calendarEventsListEl.innerHTML = '';
+  if (!calendarEventsTargetMesh) return;
+  const instanceId = calendarEventsTargetMesh.userData.instanceId;
+  let events;
+  try {
+    events = await fetchCalendarEvents(instanceId);
+  } catch (err) {
+    calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
+    calendarEventsEmptyEl.hidden = false;
+    return;
+  }
+  calendarEventsEmptyEl.hidden = events.length > 0;
+  for (const event of events) {
+    const row = document.createElement('div');
+    row.className = 'calendar-event-row';
+    const body = document.createElement('div');
+    body.className = 'calendar-event-row-body';
+    const author = document.createElement('div');
+    author.className = 'calendar-event-row-author';
+    author.textContent = event.authorLabel;
+    body.appendChild(author);
+    const text = document.createElement('div');
+    text.textContent = event.text;
+    body.appendChild(text);
+    const time = document.createElement('div');
+    time.className = 'calendar-event-row-time';
+    time.textContent = formatCalendarEventTime(event.createdAt);
+    body.appendChild(time);
+    row.appendChild(body);
+    const deleteRowBtn = document.createElement('button');
+    deleteRowBtn.className = 'calendar-event-row-delete';
+    deleteRowBtn.type = 'button';
+    deleteRowBtn.textContent = '×';
+    deleteRowBtn.setAttribute('aria-label', 'Delete event');
+    deleteRowBtn.addEventListener('click', async () => {
+      deleteRowBtn.disabled = true;
+      try {
+        await deleteCalendarEvent(instanceId, event.eventId);
+        await renderCalendarEvents();
+      } catch (err) {
+        console.warn('Could not delete event:', err);
+        deleteRowBtn.disabled = false;
+      }
+    });
+    row.appendChild(deleteRowBtn);
+    calendarEventsListEl.appendChild(row);
+  }
+}
+
+function openCalendarEventsModal(mesh) {
+  calendarEventsTargetMesh = mesh;
+  calendarEventsModalEl.classList.add('visible');
+  renderCalendarEvents();
+}
+calendarEventsCloseBtn.addEventListener('click', () => {
+  calendarEventsModalEl.classList.remove('visible');
+  calendarEventsTargetMesh = null;
+});
+calendarEventsUnflagBtn.addEventListener('click', async () => {
+  if (!calendarEventsTargetMesh) return;
+  const mesh = calendarEventsTargetMesh;
+  mesh.userData.isCommunityCalendar = false;
+  calendarEventsModalEl.classList.remove('visible');
+  calendarEventsTargetMesh = null;
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
@@ -5083,6 +5201,7 @@ const shopVerticalControlsEl = document.getElementById('shop-vertical-controls')
 const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
+const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
@@ -5107,6 +5226,14 @@ const SIGN_FADE_FAR_M = 20; // fully transparent at/beyond this distance
 const SIGN_INTERACT_RADIUS_M = 8;
 const SIGN_MAX_VISIBLE_POSTS = 5;
 const SHOPPER_LABEL_KEY = 'higglehaven.shopperLabel';
+// Community calendar (docs/SPEC.md §6, docs/API.md's "Community
+// calendar") reuses the SIGN_FADE_NEAR_M/SIGN_FADE_FAR_M/
+// SIGN_INTERACT_RADIUS_M/SIGN_MAX_VISIBLE_POSTS constants above directly
+// rather than declaring near-duplicate CALENDAR_* ones — they're generic
+// "how far can you read floating in-world text" thresholds, not anything
+// specific to signs, so there's nothing calendar-specific to tune
+// separately (unlike the backend's own deliberately-separate table/flag —
+// see migrations/0042's comment on why that split is real).
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -5226,6 +5353,9 @@ const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed t
 // rest of its landlet.
 const shopSigns = [];
 let nearestActiveSign = null; // whichever sign #shop-sign-hint currently targets, or null
+// Same shape/lifecycle as shopSigns above, for community-calendar instances.
+const shopCalendars = [];
+let nearestActiveCalendar = null;
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -5469,6 +5599,7 @@ function updateShopMovement(now) {
     updateShopProximity();
   }
   updateSignFade();
+  updateCalendarFade();
 }
 
 function updateShopProximity() {
@@ -5508,6 +5639,7 @@ async function loadShopLandletInstances(entry) {
     entry.objects.push(object);
     growShopDomeIfNeeded(object);
     if (object.userData.isCommunitySign) registerShopSign(object, entry);
+    if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
   }
 }
 
@@ -5586,6 +5718,43 @@ function makeSignPostSprite(text) {
   return sprite;
 }
 
+// Community calendar — same lifecycle/rendering as the community-sign
+// functions just above (registerShopSign/disposeSignSprites/
+// rebuildSignSprites), reusing makeSignPostSprite directly since it's
+// generic single-line text-sprite rendering with nothing sign-specific in
+// its implementation despite the name.
+function registerShopCalendar(mesh, entry) {
+  const calendar = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, events: [], sprites: [] };
+  shopCalendars.push(calendar);
+  fetchCalendarEvents(calendar.instanceId).then((events) => {
+    if (!shopCalendars.includes(calendar)) return;
+    calendar.events = events;
+    rebuildCalendarSprites(calendar);
+  }).catch(() => {});
+}
+
+function disposeCalendarSprites(calendar) {
+  for (const sprite of calendar.sprites) {
+    calendar.group.remove(sprite);
+    sprite.material.map?.dispose();
+    sprite.material.dispose();
+  }
+  calendar.sprites = [];
+}
+
+function rebuildCalendarSprites(calendar) {
+  disposeCalendarSprites(calendar);
+  const baseHeight = meshDimensions(calendar.mesh).height;
+  const recent = calendar.events.slice(-SIGN_MAX_VISIBLE_POSTS);
+  recent.forEach((event, i) => {
+    const sprite = makeSignPostSprite(`${event.authorLabel}: ${event.text}`);
+    sprite.position.set(calendar.mesh.position.x, calendar.mesh.position.y, calendar.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    sprite.material.opacity = 0;
+    calendar.group.add(sprite);
+    calendar.sprites.push(sprite);
+  });
+}
+
 // Called every Shop-mode frame (not throttled like updateShopProximity —
 // opacity needs to read as a smooth fade, not a 400ms-stepped one). Two
 // independent jobs: fade every loaded sign's post sprites by the camera's
@@ -5612,6 +5781,29 @@ function updateSignFade() {
   }
 }
 const scratchSignWorldPos = new THREE.Vector3();
+
+// Community calendar's own per-frame fade — identical logic to
+// updateSignFade above, over shopCalendars instead of shopSigns.
+function updateCalendarFade() {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const calendar of shopCalendars) {
+    const world = calendar.mesh.getWorldPosition(scratchSignWorldPos);
+    const distance = world.distanceTo(camera.position);
+    const opacity = 1 - THREE.MathUtils.clamp(
+      (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
+    );
+    for (const sprite of calendar.sprites) sprite.material.opacity = opacity;
+    if (distance <= SIGN_INTERACT_RADIUS_M && distance < nearestDistance) {
+      nearest = calendar;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest !== nearestActiveCalendar) {
+    nearestActiveCalendar = nearest;
+    shopCalendarHintEl.classList.toggle('visible', !!nearest);
+  }
+}
 
 // Remembered across visits (but not required — a fresh prompt() with no
 // stored value just asks each time) so a shopper leaving several notes in
@@ -5645,6 +5837,25 @@ shopSignHintEl.addEventListener('click', async () => {
   }
 });
 
+shopCalendarHintEl.addEventListener('click', async () => {
+  const calendar = nearestActiveCalendar;
+  if (!calendar) return;
+  const authorLabel = shopperLabel();
+  if (!authorLabel) return;
+  const text = prompt('Event details (up to 280 characters):', '');
+  if (!text || !text.trim()) return;
+  shopCalendarHintEl.disabled = true;
+  try {
+    const event = await createCalendarEvent(calendar.instanceId, { authorLabel, text: text.trim() });
+    calendar.events.push(event);
+    rebuildCalendarSprites(calendar);
+  } catch (err) {
+    alert(err.message || 'Could not post to this calendar.');
+  } finally {
+    shopCalendarHintEl.disabled = false;
+  }
+});
+
 function disposeObject3D(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
@@ -5668,6 +5879,15 @@ function unloadShopLandletInstances(entry) {
     if (nearestActiveSign === sign) {
       nearestActiveSign = null;
       shopSignHintEl.classList.remove('visible');
+    }
+  }
+  for (const calendar of [...shopCalendars]) {
+    if (calendar.group !== entry.group) continue;
+    disposeCalendarSprites(calendar);
+    shopCalendars.splice(shopCalendars.indexOf(calendar), 1);
+    if (nearestActiveCalendar === calendar) {
+      nearestActiveCalendar = null;
+      shopCalendarHintEl.classList.remove('visible');
     }
   }
 }

@@ -170,6 +170,21 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* Same treatment as #shop-sign-hint just above (see its own comment),
+         stacked one slot higher so both can show at once near an
+         overlapping sign+calendar without colliding. */
+      #shop-calendar-hint {
+        bottom: 230px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        cursor: pointer;
+      }
       /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
          right looks (yaw/pitch) — each tracks its own pointer via
          setPointerCapture so both thumbs work at once. The knob is an
@@ -1442,6 +1457,92 @@
         color: #fff;
         font: 13px/1.4 sans-serif;
       }
+      /* Same shell/reasoning as #sign-posts-modal and its rules just above
+         — a builder's moderation view for one specific community
+         calendar's events, opened from #toggle-community-calendar. */
+      #calendar-events-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.5);
+        padding: 16px;
+      }
+      #calendar-events-modal.visible {
+        display: flex;
+      }
+      #calendar-events-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #calendar-events-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #calendar-events-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .calendar-event-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(255 255 255 / 0.08);
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.9);
+      }
+      .calendar-event-row-body {
+        min-width: 0;
+      }
+      .calendar-event-row-author {
+        font-weight: 600;
+      }
+      .calendar-event-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgb(255 255 255 / 0.5);
+      }
+      .calendar-event-row-delete {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: rgba(140, 20, 20, 0.55);
+        color: #fff;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #calendar-events-empty {
+        font-size: 13px;
+        color: rgb(255 255 255 / 0.6);
+      }
+      #calendar-events-unflag-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(255 255 255 / 0.15);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
          first) and reopenable any time afterward from #identity-btn or the
@@ -1719,6 +1820,7 @@
     <div id="shop-status" class="shop-ui"></div>
     <div id="shop-hint" class="shop-ui">Left stick to walk — right stick to look — hold up/down to fly</div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
+    <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-vertical-controls" class="shop-ui">
@@ -1768,6 +1870,7 @@
       <button id="copy-item" type="button">Copy</button>
       <button id="save-bundle-item" type="button">Save Bundle</button>
       <button id="toggle-community-sign" type="button">Community Sign</button>
+      <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="add-item-panel">
@@ -1865,6 +1968,15 @@
         <div id="sign-posts-list"></div>
         <div id="sign-posts-empty">No posts on this sign yet.</div>
         <button id="sign-posts-unflag-btn" type="button">Remove Community Sign</button>
+      </div>
+    </div>
+    <div id="calendar-events-modal">
+      <div id="calendar-events-modal-content">
+        <button id="calendar-events-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Calendar Events</h2>
+        <div id="calendar-events-list"></div>
+        <div id="calendar-events-empty">No events on this calendar yet.</div>
+        <button id="calendar-events-unflag-btn" type="button">Remove Community Calendar</button>
       </div>
     </div>
     <div id="settings-modal">

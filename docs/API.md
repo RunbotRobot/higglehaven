@@ -1286,6 +1286,7 @@ migration.
   "crop": {},
   "scale": 1,
   "isCommunitySign": false,
+  "isCommunityCalendar": false,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1308,7 +1309,9 @@ Resize control applies the real UX-facing `[0.001, 1000]` bound.
 
 `isCommunitySign` flags this one specific placement as a "community sign"
 — see "Community signs" below for the posts API it unlocks and the
-Shop-mode rendering it drives.
+Shop-mode rendering it drives. `isCommunityCalendar` is the same idea for
+a "community calendar" (see "Community calendar" below) — the two flags
+are independent, and an instance can be both at once.
 
 ### `GET /api/instances`
 
@@ -1744,9 +1747,74 @@ also centered) — the up/down flight buttons' own invisible-when-inactive
 hit area silently ate every tap intended for the note button. Fixed by
 moving it to `bottom: 180px`, clear of that column entirely.
 
+## Community calendar
+
+docs/SPEC.md §6: "Community calendar reuses the identical pattern
+[as community signs], builder-authored (event postings, creative-tool
+support like a scheduled confetti-cannon trigger)." Structurally a twin of
+"Community signs" just above — same per-instance opt-in flag
+(`isCommunityCalendar`, `migrations/0042_community_calendar.sql`), same
+nested-under-the-instance events collection (`calendar_events`, a separate
+table from `sign_posts`), same toggle-then-manage Build-mode button, same
+Shop-mode fade-and-post-a-note flow. Deliberately kept as its own
+independent flag/table rather than merged into one generic "community
+board" concept — see migrations/0042's own comment: calendar events are
+the more likely of the two to grow real fielded data later (an actual
+date/time, RSVPs), at which point a shared abstraction would need
+reworking anyway, so duplicating a small, well-understood pattern now is
+cheaper than guessing at that shared shape today. The "creative-tool
+support like a scheduled confetti-cannon trigger" half of the spec
+sentence is explicitly out of scope here — a stated example of where the
+feature *could* grow, not a requirement of it.
+
+An instance can be a sign and a calendar at once (independent flags,
+independently toggled and moderated) — nothing in the spec says a builder
+must choose one or the other for a given placed object.
+
+### `GET /api/instances/:instanceId/events`, `POST .../events`, `DELETE .../events/:eventId`
+
+Identical contract to the sign posts endpoints above, with `event`/`events`
+in place of `post`/`posts` and `eventId` in place of `postId`:
+`{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
+280 characters, `POST` rejected with `400` unless the target instance is
+currently flagged `isCommunityCalendar`, deletion cascades when the
+instance itself is deleted.
+
+### Frontend wiring
+
+"Community Calendar" sits in `#gizmo-mode-controls` right after Community
+Sign, with the identical toggle-then-manage design (first click flags it,
+a second click while already flagged opens `#calendar-events-modal`
+instead of un-flagging — moderation and un-flagging both live inside that
+modal, mirroring `#sign-posts-modal`). In Shop mode, `registerShopCalendar`/
+`rebuildCalendarSprites`/`updateCalendarFade` mirror their sign
+counterparts exactly, down to reusing `makeSignPostSprite` directly (it's
+generic single-line text-sprite rendering with nothing sign-specific in
+its implementation) and the same `SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/
+`SIGN_INTERACT_RADIUS_M`/`SIGN_MAX_VISIBLE_POSTS` constants — these are
+generic "how far can you read floating in-world text" thresholds, not
+anything sign-specific, so there was nothing calendar-specific to tune
+separately. `#shop-calendar-hint` ("Add an Event") sits at a different
+fixed vertical offset (`bottom: 230px`) than `#shop-sign-hint`
+(`bottom: 180px`) so both can show at once near an overlapping sign and
+calendar without colliding — each is a plain fixed-offset placement rather
+than the dynamic flex-wrap layout that caused the overlap bug described
+in "Community signs" above, so this pairing doesn't share that risk.
+
+### Testing note
+
+`e2e/community-calendar.test.mjs` mirrors `e2e/community-signs.test.mjs`
+exactly (see that file's own testing note for what it covers and why the
+Shop-mode fade/posting flow is verified manually instead of automated).
+The manual pass here also confirmed `#shop-calendar-hint` shows/hides
+correctly at `SIGN_INTERACT_RADIUS_M` and that adding an event via the
+button appends both a real event and a matching new sprite, using the
+same temporary `window.__debugAlign.camera` hook (removed before
+committing).
+
 ## D1 schema overview
 
-The migrations currently create thirteen main backend tables:
+The migrations currently create fourteen main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -1774,6 +1842,9 @@ The migrations currently create thirteen main backend tables:
 - `sign_posts`: shopper-authored posts on a placed instance flagged
   `isCommunitySign` (see "Community signs" above), cascade-deleted with
   their instance.
+- `calendar_events`: builder-authored events on a placed instance flagged
+  `isCommunityCalendar` (see "Community calendar" above), cascade-deleted
+  with their instance.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending
