@@ -478,3 +478,46 @@ export async function createCalendarEvent(instanceId, { authorLabel, text }) {
 export async function deleteCalendarEvent(instanceId, eventId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
 }
+
+// Land acquisition auctions (see migrations/0045_auctions.sql).
+export async function startAuction(landletId, { builderId, startingBidCents, durationHours } = {}) {
+  const { auction } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/auction`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ builderId, startingBidCents, durationHours }),
+  });
+  return auction;
+}
+
+export async function fetchAuctions({ status, landletId } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (landletId) params.set('landletId', landletId);
+  const query = params.toString();
+  const { auctions } = await requestJson(`/auctions${query ? `?${query}` : ''}`);
+  return auctions;
+}
+
+export async function fetchAuction(auctionId) {
+  const { auction } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}`);
+  return auction;
+}
+
+export async function fetchAuctionBids(auctionId) {
+  const { bids } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`);
+  return bids;
+}
+
+export async function placeBid(auctionId, { builderId, amountCents }) {
+  const { bid } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ builderId, amountCents }),
+  });
+  return bid;
+}
+
+export async function resolveAuctionNow(auctionId) {
+  const { auction } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/resolve`, { method: 'POST' });
+  return auction;
+}

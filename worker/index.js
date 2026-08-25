@@ -281,6 +281,10 @@ async function handleApi(request, env, url) {
     return handleBundles(request, env.DB, route, url);
   }
 
+  if (route[0] === 'auctions') {
+    return handleAuctions(request, env.DB, route, url);
+  }
+
   if (route[0] === 'catalog') {
     return handleCatalog(request, env.DB, route, url, env.MODELS);
   }
@@ -959,6 +963,11 @@ function builderFromRow(row) {
     // recognition").
     pioneerRank: row.pioneer_rank ?? null,
     isPioneer: row.pioneer_rank !== null,
+    // Land acquisition auctions (docs/SPEC.md §5, migrations/0045) — a
+    // real, persisted ledger credited when this builder sells a landlet
+    // via auction. See migrations/0045's own note on why bidding itself
+    // isn't gated by having a sufficient balance yet.
+    dallersBalanceCents: row.dallers_balance_cents,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1182,6 +1191,266 @@ function bundleFromRow(row) {
   };
 }
 
+// Land acquisition auctions (docs/SPEC.md §5, migrations/0045_auctions.sql,
+// docs/API.md's "Land acquisition auctions"). Two entry points into this
+// module: handleStartAuction is reached via POST /api/landlets/:id/auction
+// (a landlet-scoped nested route, called from handleLandlets — the same
+// pattern /versions and /draft already use), and handleAuctions handles
+// everything under the top-level /api/auctions collection itself.
+async function handleStartAuction(request, db, landletId) {
+  if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
+  const landlet = await requireLandlet(db, landletId);
+  const input = await readJson(request);
+  const builderId = stringValue(input.builderId, 'builderId');
+  if (landlet.status !== 'claimed' || landlet.owner_builder_id !== builderId) {
+    throw new HttpError('Only the current owner of a claimed landlet can start an auction on it', 400);
+  }
+  const alreadyActive = await db.prepare(`
+    SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
+  `).bind(landletId).first();
+  if (alreadyActive) throw new HttpError('This landlet already has an active auction', 409);
+
+  const startingBidCents = input.startingBidCents === undefined ? 0 : nonnegativeInteger(input.startingBidCents, 'startingBidCents');
+  // "Default 24-hour duration for inactivity-triggered listings; builder-
+  // initiated voluntary auctions may set custom duration" — every auction
+  // reachable today is builder-initiated (there's no inactivity-detection
+  // job in this dev-mode backend to trigger one automatically), so this
+  // default just applies uniformly. Capped at a year as a sanity bound
+  // against a malformed request producing an absurd ends_at — not itself
+  // a spec requirement.
+  const durationHours = input.durationHours === undefined ? 24 : positiveInteger(input.durationHours, 'durationHours');
+  if (durationHours > 8760) throw new HttpError('durationHours must be 8760 (one year) or fewer', 400);
+
+  const auctionId = `auction-${crypto.randomUUID()}`;
+  const endsAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt).run();
+  const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  return json({ auction: await auctionFromRow(db, row) }, 201);
+}
+
+async function handleAuctions(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    await resolveDueAuctions(db);
+    const status = url.searchParams.get('status');
+    if (status !== null && !['active', 'ended'].includes(status)) {
+      throw new HttpError('status must be active or ended', 400);
+    }
+    const landletIdParam = url.searchParams.get('landletId');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (status) {
+      conditions.push('status = ?');
+      bindings.push(status);
+    }
+    if (landletIdParam !== null) {
+      conditions.push('landlet_id = ?');
+      bindings.push(stringValue(landletIdParam, 'landletId'));
+    }
+    if (cursor) {
+      conditions.push('(created_at > ? OR (created_at = ? AND auction_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM auctions ${where}
+      ORDER BY created_at, auction_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      auctions: await Promise.all(page.map((row) => auctionFromRow(db, row))),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.auction_id) : null,
+    });
+  }
+
+  if (request.method === 'GET' && route.length === 2) {
+    const auction = await requireAuction(db, route[1]);
+    const resolved = await resolveAuctionIfDue(db, auction);
+    return json({ auction: await auctionFromRow(db, resolved) });
+  }
+
+  if (route.length === 3 && route[2] === 'bids') {
+    return handleAuctionBids(request, db, route);
+  }
+
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'resolve') {
+    const auction = await requireAuction(db, route[1]);
+    const resolved = await resolveAuctionIfDue(db, auction);
+    if (resolved.status === 'active') {
+      throw new HttpError('This auction has not ended yet', 409);
+    }
+    return json({ auction: await auctionFromRow(db, resolved) });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function handleAuctionBids(request, db, route) {
+  const auctionId = route[1];
+
+  if (request.method === 'GET') {
+    await requireAuction(db, auctionId);
+    const { results } = await db.prepare(`
+      SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 200
+    `).bind(auctionId).all();
+    return json({ bids: results.map(auctionBidFromRow) });
+  }
+
+  if (request.method === 'POST') {
+    const auction = await requireAuction(db, auctionId);
+    const resolved = await resolveAuctionIfDue(db, auction);
+    if (resolved.status !== 'active') {
+      throw new HttpError('This auction has already ended', 409);
+    }
+    const input = await readJson(request);
+    const builderId = stringValue(input.builderId, 'builderId');
+    if (builderId === resolved.seller_builder_id) {
+      throw new HttpError('The seller cannot bid on their own auction', 400);
+    }
+    await requireBuilder(db, builderId);
+    const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
+    const highest = await db.prepare(`
+      SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+    `).bind(auctionId).first();
+    const minimumCents = highest ? highest.amount_cents + 1 : resolved.starting_bid_cents;
+    if (amountCents < minimumCents) {
+      throw new HttpError(`amountCents must be at least ${minimumCents}`, 400);
+    }
+    const bidId = `bid-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)
+    `).bind(bidId, auctionId, builderId, amountCents).run();
+    await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
+    const bidRow = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).first();
+    return json({ bid: auctionBidFromRow(bidRow) }, 201);
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function requireAuction(db, auctionId) {
+  const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  if (!row) throw new HttpError('Auction not found', 404);
+  return row;
+}
+
+// Sweeps every active-but-expired auction and resolves each in turn — the
+// closest this dev-mode backend gets to a real scheduled job (see
+// docs/API.md's own note on why: no Cron Trigger is wired up, so
+// resolution is purely lazy, triggered by whatever request happens to
+// touch auctions next). Called at the top of the list endpoint so a
+// shopper browsing auctions always sees current state without needing to
+// separately poll or trigger resolution themselves.
+async function resolveDueAuctions(db) {
+  const { results } = await db.prepare(`
+    SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  `).all();
+  for (const row of results) await resolveAuction(db, row);
+}
+
+// Single-auction version of the same check, used wherever one specific
+// auction is already being read/acted on (GET one, place a bid, the
+// explicit resolve endpoint) — avoids the full-table sweep above when
+// only one row's state actually matters here.
+async function resolveAuctionIfDue(db, auction) {
+  if (auction.status !== 'active' || auction.ends_at > new Date().toISOString()) return auction;
+  return resolveAuction(db, auction);
+}
+
+// The actual resolution: highest bidder wins and pays the seller (in
+// dállers — see migrations/0045's own note on why bidding isn't
+// balance-gated yet), or the land is released to greenbelt / stays with
+// the seller depending on whether the starting bid was $0 ("explicit
+// willingness to relinquish for free") — see docs/SPEC.md §5. Clearing
+// the landlet's build on a transfer mirrors DELETE /api/builders/:id's
+// own reasoning: a new owner gets the land, not the previous owner's
+// stuff on it.
+async function resolveAuction(db, auction) {
+  const highest = await db.prepare(`
+    SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+  `).bind(auction.auction_id).first();
+
+  const statements = [];
+  if (highest) {
+    statements.push(
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare(`
+        UPDATE landlets
+        SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+      `).bind(highest.bidder_builder_id, auction.landlet_id),
+      db.prepare(`
+        UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?
+      `).bind(highest.amount_cents, auction.seller_builder_id),
+      db.prepare(`
+        UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE auction_id = ?
+      `).bind(highest.bid_id, auction.auction_id),
+    );
+  } else if (auction.starting_bid_cents === 0) {
+    statements.push(
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare(`
+        UPDATE landlets
+        SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+            claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+      `).bind(auction.landlet_id),
+      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
+    );
+  } else {
+    statements.push(
+      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
+    );
+  }
+  await db.batch(statements);
+  return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+}
+
+async function auctionFromRow(db, row) {
+  const highest = await db.prepare(`
+    SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+  `).bind(row.auction_id).first();
+  const bidCount = await db.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind(row.auction_id).first();
+  return {
+    auctionId: row.auction_id,
+    landletId: row.landlet_id,
+    sellerBuilderId: row.seller_builder_id,
+    startingBidCents: row.starting_bid_cents,
+    status: row.status,
+    endsAt: row.ends_at,
+    winningBidId: row.winning_bid_id,
+    highestBidCents: highest ? highest.amount_cents : null,
+    bidCount: bidCount.n,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function auctionBidFromRow(row) {
+  return {
+    bidId: row.bid_id,
+    auctionId: row.auction_id,
+    bidderBuilderId: row.bidder_builder_id,
+    amountCents: row.amount_cents,
+    createdAt: row.created_at,
+  };
+}
+
+function nonnegativeInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
+  return number;
+}
+
 function sellerFromRow(row) {
   return {
     sellerId: row.seller_id,
@@ -1200,6 +1469,10 @@ async function requireSeller(db, sellerId) {
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
     return handleLandletVersions(request, db, route, url);
+  }
+
+  if (route.length === 3 && route[2] === 'auction') {
+    return handleStartAuction(request, db, route[1]);
   }
 
   if (route.length === 3 && route[2] === 'draft') {

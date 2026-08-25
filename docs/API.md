@@ -83,13 +83,16 @@ one server-side list instead of every browser inventing its own in
   "label": "Ada",
   "isPioneer": false,
   "pioneerRank": null,
+  "dallersBalanceCents": 0,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
 ```
 
 `isPioneer`/`pioneerRank` are docs/SPEC.md §3's founding/pioneer
-recognition — see "Founding/pioneer recognition" below.
+recognition — see "Founding/pioneer recognition" below. `dallersBalanceCents`
+is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
+acquisition auctions" below for what can (and can't yet) change it.
 
 ### `GET /api/builders`
 
@@ -1900,9 +1903,191 @@ button appends both a real event and a matching new sprite, using the
 same temporary `window.__debugAlign.camera` hook (removed before
 committing).
 
+## Land acquisition auctions
+
+docs/SPEC.md §5's "simplified auction system" — the mechanism only, not
+the full cash economy around it (see "Deliberate scope boundary" below).
+`migrations/0045_auctions.sql` adds `auctions` and `auction_bids` tables
+plus a `builders.dallers_balance_cents` ledger.
+
+### Deliberate scope boundary
+
+Two things the spec ties to auctions are **not** implemented, because
+neither has anywhere to attach to in this dev-mode backend yet:
+
+- **Land cap** (a per-builder max-total-area limit that grows only via
+  demonstrated commission earnings) doesn't exist anywhere in this
+  codebase — there's no real commerce/checkout pipeline to earn
+  commission from, so there's no earnings figure to gate cap growth on.
+  Starting or winning an auction never checks or changes anything cap-
+  related.
+- **Balance-gated bidding.** Every builder starts at `dallersBalanceCents:
+  0` with no way to earn any except winning an auction as the *seller* —
+  requiring a sufficient balance to *bid* would make the feature
+  untestable today (nobody could ever place a first bid). Bids are
+  validated only against the minimum-increment rule below, never against
+  the bidder's balance. `dallersBalanceCents` is still a real, persisted
+  ledger (not a UI-only number) so a winning seller's proceeds land
+  somewhere meaningful, ready for balance-gating to be added later without
+  a schema change.
+- **Inactivity-triggered auto-listing.** Every auction reachable today is
+  builder-initiated (`POST /api/landlets/:id/auction`) — there's no
+  inactivity-detection job in this dev-mode backend to trigger one
+  automatically, so the spec's "default 24-hour duration for inactivity-
+  triggered listings" just applies as the uniform default for every
+  auction, voluntary or not.
+- **No scheduled resolution job.** There's no Cloudflare Cron Trigger
+  wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
+  resolves every active-but-expired auction before returning results
+  (`resolveDueAuctions` in `worker/index.js`), and any single-auction read
+  or bid attempt resolves that one auction first if it's due
+  (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists for a
+  frontend "time's up, finalize it" action without waiting for a future
+  read to trigger it as a side effect.
+
+### Auction object
+
+```json
+{
+  "auctionId": "auction-7f3a1c20-...",
+  "landletId": "starter-landlet",
+  "sellerBuilderId": "builder-3c2b1a90-...",
+  "startingBidCents": 0,
+  "status": "active",
+  "endsAt": "2026-08-26T00:00:00.000Z",
+  "winningBidId": null,
+  "highestBidCents": null,
+  "bidCount": 0,
+  "createdAt": "2026-08-25T00:00:00.000Z",
+  "updatedAt": "2026-08-25T00:00:00.000Z"
+}
+```
+
+`highestBidCents`/`bidCount` are computed on every read from
+`auction_bids`, not stored columns — cheap at dev scale, and guarantees
+they can never drift out of sync with the actual bid rows the way a
+denormalized counter could. `status` is `active` or `ended`; there's no
+`cancelled` state — a voluntary auction, once started, always runs its
+full course.
+
+### `POST /api/landlets/:landletId/auction`
+
+Starts a voluntary auction. Body: `{ "builderId", "startingBidCents"?,
+"durationHours"? }`. `startingBidCents` defaults to `0`; `durationHours`
+defaults to `24` (docs/SPEC.md §5's own default), capped at `8760` (one
+year) as a sanity bound against a malformed request, not a spec
+requirement. `400` unless `builderId` is the landlet's current owner and
+the landlet is `claimed`. `409` if that landlet already has an active
+auction — one at a time per landlet.
+
+Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
+outcome, read directly off the stored value at resolution time rather
+than a separate flag: **"$0 = explicit willingness to relinquish for free
+if no bids arrive. ≥$0.01 = wants to retain if unsold."**
+
+### `GET /api/auctions`
+
+Lists auctions, cursor-paginated like every other list endpoint in this
+API. Optional `status` (`active`/`ended`) and `landletId` filters. Sweeps
+and resolves every due auction first (see "Deliberate scope boundary"
+above), so an expired-but-not-yet-resolved auction never appears in an
+`active` listing.
+
+### `GET /api/auctions/:auctionId`
+
+A single auction, resolving it first if it's due. `404` if it doesn't
+exist.
+
+### `GET /api/auctions/:auctionId/bids`
+
+Every bid on this auction, highest first (ties broken by earliest),
+capped at 200. `404` if the auction doesn't exist.
+
+### `POST /api/auctions/:auctionId/bids`
+
+Places a bid. Body: `{ "builderId", "amountCents" }`. Resolves the
+auction first if it's due, then `409` if it's not (or is no longer)
+`active`. `400` if the bidder is the seller, or if `amountCents` is below
+the minimum acceptable amount:
+
+- No bids yet: must be `>= startingBidCents` (so a `$0`-starting auction
+  accepts a `$0` first bid — a real bid, not "no bid," and per the spec's
+  own "any bid guarantees eventual transfer," it wins the land for free
+  rather than releasing it to greenbelt).
+- At least one bid already: must be strictly greater than the current
+  highest.
+
+### `POST /api/auctions/:auctionId/resolve`
+
+Resolves this auction if it's currently due (`ends_at` has passed);
+otherwise `409`. Calling it again on an already-ended auction is a
+harmless no-op — `200` with the same (unchanged) already-ended state, not
+an error, matching ordinary idempotent-action expectations rather than
+penalizing a redundant call.
+
+### Resolution
+
+`resolveAuction` in `worker/index.js` — the same logic whether triggered
+lazily or via the explicit endpoint:
+
+- **A winning bid exists:** ownership transfers to the highest bidder
+  (`landlets.owner_builder_id`), the landlet's build is cleared (placed
+  instances, versions, `active_version_id`) exactly like `DELETE
+  /api/builders/:id` already clears a reclaimed landlet's build — a new
+  owner gets the land, not the previous owner's stuff on it — and the
+  seller's `dallersBalanceCents` is credited the winning bid amount
+  (docs/SPEC.md §5: "Dállers raised in a successful auction go to the
+  previously-inactive builder's account"). `auctions.status` becomes
+  `ended`, `winningBidId` records which bid won.
+- **No bids, `startingBidCents` was `0`:** the landlet releases to
+  `greenbelt` (owner cleared, build cleared, `claimable_at` refreshed) —
+  the seller's own explicit "relinquish for free" choice.
+- **No bids, `startingBidCents` was `> 0`:** the landlet stays exactly as
+  it was — the seller wanted to retain it if unsold, so nothing about
+  ownership or the build changes, only `auctions.status` becomes `ended`.
+
+### Frontend wiring
+
+Settings' own "Auctions" tab (`renderAuctionsSettingsSection` in
+`src/main.js`) — its own tab rather than folded into the Build tab
+alongside Publish/Version History, since bidding on someone *else's*
+landlet isn't a "your own Build session" action the way publishing is;
+this tab is reachable regardless of mode. Two independent sections:
+
+- **Sell Your Land** — if the active identity currently owns a claimed
+  landlet with no active auction on it, a small form (starting bid in
+  dollars, duration in hours) and a Start Auction button. Once that
+  landlet has an active auction, this collapses to a one-line summary
+  instead of offering a second start form.
+- **Active Auctions** — every currently-active auction world-wide, each
+  row showing the landlet, current high bid (or the starting bid if none
+  yet), time remaining, and the unsold outcome in plain language. A
+  bid input + Place Bid button appears on every row except the viewer's
+  own listing (nothing useful to bid on your own auction). A "Resolve
+  Now" button appears instead, on any row already past its end time but
+  not yet resolved — a narrow gap that can only happen between one
+  client's fetch and another's, since `GET /api/auctions` itself already
+  resolves anything due before this list is ever built.
+
+### Testing note
+
+`worker/index.test.js`'s own `Auctions` describe block covers the full
+mechanism, including resolution in all three outcomes (win transfers
+land + build clears + seller paid; `$0` unsold releases to greenbelt;
+reserved unsold stays with the seller) and the lazy-resolution paths —
+each forces an auction into the past by setting `ends_at` directly via
+the D1 test binding, the same test-only escape hatch used elsewhere in
+that file, rather than waiting a real hour or mocking `Date` globally.
+`e2e/land-auctions.test.mjs` covers starting an auction and placing a bid
+through the real two-party UI (two independent browser pages, the same
+pattern `e2e/bundle-sharing.test.mjs` already uses) — but deliberately
+**not** resolution itself: every resolution path requires the auction to
+actually be past its end time, and the shortest duration the API accepts
+is 1 hour, so waiting for a real one isn't practical in an e2e run.
+
 ## D1 schema overview
 
-The migrations currently create fourteen main backend tables:
+The migrations currently create sixteen main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -1933,6 +2118,9 @@ The migrations currently create fourteen main backend tables:
 - `calendar_events`: builder-authored events on a placed instance flagged
   `isCommunityCalendar` (see "Community calendar" above), cascade-deleted
   with their instance.
+- `auctions`: land acquisition auction listings on a claimed landlet (see
+  "Land acquisition auctions" above).
+- `auction_bids`: bids placed on an auction, cascade-deleted with it.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending

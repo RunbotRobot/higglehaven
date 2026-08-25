@@ -1960,3 +1960,239 @@ describe('Builders', () => {
     expect(lateAfter.pioneerRank).toBeNull();
   });
 });
+
+describe('Auctions', () => {
+  async function createBuilder(label) {
+    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
+    return res.body.builder.builderId;
+  }
+
+  async function claim(landletId, builderId) {
+    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  }
+
+  it('only lets the current owner start an auction on their own claimed landlet', async () => {
+    const owner = await createBuilder('Auction Owner');
+    const stranger = await createBuilder('Auction Stranger');
+    await createGreenbeltLandlet('auction-ownership-landlet');
+    await claim('auction-ownership-landlet', owner);
+
+    const byStranger = await api('/landlets/auction-ownership-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: stranger }),
+    });
+    expect(byStranger.response.status).toBe(400);
+
+    const onUnclaimed = await api('/landlets/does-not-exist/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner }),
+    });
+    expect(onUnclaimed.response.status).toBe(404);
+
+    const started = await api('/landlets/auction-ownership-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner }),
+    });
+    expect(started.response.status).toBe(201);
+    expect(started.body.auction).toMatchObject({
+      landletId: 'auction-ownership-landlet',
+      sellerBuilderId: owner,
+      startingBidCents: 0,
+      status: 'active',
+      highestBidCents: null,
+      bidCount: 0,
+    });
+
+    const secondAttempt = await api('/landlets/auction-ownership-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner }),
+    });
+    expect(secondAttempt.response.status).toBe(409);
+  });
+
+  it('accepts a custom starting bid and duration', async () => {
+    const owner = await createBuilder('Custom Auction Owner');
+    await createGreenbeltLandlet('auction-custom-landlet');
+    await claim('auction-custom-landlet', owner);
+
+    const started = await api('/landlets/auction-custom-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 500, durationHours: 1 }),
+    });
+    expect(started.response.status).toBe(201);
+    expect(started.body.auction.startingBidCents).toBe(500);
+    const endsAt = new Date(started.body.auction.endsAt).getTime();
+    const createdAt = new Date(started.body.auction.createdAt).getTime();
+    expect(endsAt - createdAt).toBeGreaterThan(59 * 60 * 1000);
+    expect(endsAt - createdAt).toBeLessThan(61 * 60 * 1000);
+  });
+
+  it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
+    const owner = await createBuilder('Bid Rules Owner');
+    const bidderA = await createBuilder('Bidder A');
+    const bidderB = await createBuilder('Bidder B');
+    await createGreenbeltLandlet('auction-bid-rules-landlet');
+    await claim('auction-bid-rules-landlet', owner);
+    const started = await api('/landlets/auction-bid-rules-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 1000 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+
+    const sellerBid = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: owner, amountCents: 2000 }),
+    });
+    expect(sellerBid.response.status).toBe(400);
+
+    const tooLow = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 500 }),
+    });
+    expect(tooLow.response.status).toBe(400);
+
+    const firstBid = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 1000 }),
+    });
+    expect(firstBid.response.status).toBe(201);
+
+    const notHigherEnough = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1000 }),
+    });
+    expect(notHigherEnough.response.status).toBe(400);
+
+    const secondBid = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1500 }),
+    });
+    expect(secondBid.response.status).toBe(201);
+
+    const fetched = await api(`/auctions/${auctionId}`);
+    expect(fetched.body.auction.highestBidCents).toBe(1500);
+    expect(fetched.body.auction.bidCount).toBe(2);
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids.map((b) => b.amountCents)).toEqual([1500, 1000]);
+  });
+
+  it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
+    const owner = await createBuilder('Resolve Winner Owner');
+    const bidder = await createBuilder('Resolve Winner Bidder');
+    await createGreenbeltLandlet('auction-resolve-win-landlet');
+    await claim('auction-resolve-win-landlet', owner);
+    await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'auction-resolve-win-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    });
+    const started = await api('/landlets/auction-resolve-win-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 2500 }),
+    });
+
+    // Force it into the past directly via the DB, the same test-only
+    // escape hatch used elsewhere in this file, rather than waiting a real
+    // hour or mocking Date globally.
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+    expect(resolved.body.auction.status).toBe('ended');
+    expect(resolved.body.auction.winningBidId).not.toBeNull();
+
+    const landlet = await api('/landlets/auction-resolve-win-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder);
+    expect(landlet.body.landlet.status).toBe('claimed');
+    expect(landlet.body.landlet.activeVersionId).toBeNull();
+
+    const instances = await api('/instances?landletId=auction-resolve-win-landlet');
+    expect(instances.body.instances).toEqual([]);
+
+    const builders = await api('/builders');
+    const sellerAfter = builders.body.builders.find((b) => b.builderId === owner);
+    expect(sellerAfter.dallersBalanceCents).toBe(2500);
+
+    // Resolving again is a harmless no-op, not an error — it just returns
+    // the already-ended auction's current (unchanged) state. The 409 case
+    // is specifically "not due yet," covered by the next test.
+    const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolveAgain.response.status).toBe(200);
+    expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+  });
+
+  it('rejects resolving an auction that is not due yet', async () => {
+    const owner = await createBuilder('Not Due Owner');
+    await createGreenbeltLandlet('auction-not-due-landlet');
+    await claim('auction-not-due-landlet', owner);
+    const started = await api('/landlets/auction-not-due-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, durationHours: 24 }),
+    });
+    const notDue = await api(`/auctions/${started.body.auction.auctionId}/resolve`, { method: 'POST' });
+    expect(notDue.response.status).toBe(409);
+  });
+
+  it('releases an unsold $0-starting-bid auction to greenbelt', async () => {
+    const owner = await createBuilder('Relinquish Owner');
+    await createGreenbeltLandlet('auction-relinquish-landlet');
+    await claim('auction-relinquish-landlet', owner);
+    const started = await api('/landlets/auction-relinquish-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+    expect(resolved.body.auction.status).toBe('ended');
+    expect(resolved.body.auction.winningBidId).toBeNull();
+
+    const landlet = await api('/landlets/auction-relinquish-landlet');
+    expect(landlet.body.landlet.status).toBe('greenbelt');
+    expect(landlet.body.landlet.ownerBuilderId).toBeNull();
+  });
+
+  it('keeps an unsold reserved (>$0 starting bid) auction with its seller', async () => {
+    const owner = await createBuilder('Reserved Owner');
+    await createGreenbeltLandlet('auction-reserved-landlet');
+    await claim('auction-reserved-landlet', owner);
+    const started = await api('/landlets/auction-reserved-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 5000, durationHours: 1 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+
+    const landlet = await api('/landlets/auction-reserved-landlet');
+    expect(landlet.body.landlet.status).toBe('claimed');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(owner);
+  });
+
+  it('auto-resolves an expired auction when the list endpoint is read, without an explicit resolve call', async () => {
+    const owner = await createBuilder('Auto Resolve Owner');
+    await createGreenbeltLandlet('auction-auto-resolve-landlet');
+    await claim('auction-auto-resolve-landlet', owner);
+    const started = await api('/landlets/auction-auto-resolve-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const list = await api('/auctions?status=active');
+    expect(list.body.auctions.some((a) => a.auctionId === auctionId)).toBe(false);
+
+    const fetched = await api(`/auctions/${auctionId}`);
+    expect(fetched.body.auction.status).toBe('ended');
+  });
+
+  it('rejects bids on an auction that has already ended', async () => {
+    const owner = await createBuilder('Ended Bid Owner');
+    const bidder = await createBuilder('Ended Bid Bidder');
+    await createGreenbeltLandlet('auction-ended-bid-landlet');
+    await claim('auction-ended-bid-landlet', owner);
+    const started = await api('/landlets/auction-ended-bid-landlet/auction', {
+      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
+    });
+    const auctionId = started.body.auction.auctionId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const bid = await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 100 }),
+    });
+    expect(bid.response.status).toBe(409);
+  });
+});

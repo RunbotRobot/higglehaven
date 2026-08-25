@@ -54,6 +54,10 @@ import {
   fetchCalendarEvents,
   createCalendarEvent,
   deleteCalendarEvent,
+  startAuction,
+  fetchAuctions,
+  placeBid,
+  resolveAuctionNow,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -2988,6 +2992,10 @@ function renderSettingsSection() {
     renderBuildSettingsSection();
     return;
   }
+  if (activeSettingsTab === 'auctions') {
+    renderAuctionsSettingsSection();
+    return;
+  }
 
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
@@ -3183,6 +3191,250 @@ function renderBuildSettingsSection() {
   });
 
   renderVersionHistory();
+}
+
+function formatDallers(cents) {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function formatAuctionTimeRemaining(isoString) {
+  const ms = new Date(isoString).getTime() - Date.now();
+  if (ms <= 0) return 'ending soon';
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+  return hours >= 1 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+}
+
+function formatAuctionSummary(auction) {
+  const bidText = auction.highestBidCents !== null
+    ? `high bid ${formatDallers(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
+    : `no bids yet, starts at ${formatDallers(auction.startingBidCents)}`;
+  const outcomeText = auction.startingBidCents === 0
+    ? 'free to the highest bidder, or released if unsold'
+    : `stays yours at ${formatDallers(auction.startingBidCents)} if unsold`;
+  return `${auction.landletId} — ${bidText} — ${formatAuctionTimeRemaining(auction.endsAt)} — ${outcomeText}`;
+}
+
+// Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
+// acquisition auctions") — its own Settings tab, reachable regardless of
+// mode, since bidding on someone else's landlet isn't a "your own Build
+// session" action the way Publish/Version History is. Covers both
+// starting a voluntary auction on whatever landlet this identity
+// currently owns and browsing/bidding on every other active auction in
+// the world.
+async function renderAuctionsSettingsSection() {
+  if (!builderId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Choose a builder identity to start or bid on an auction.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const startField = document.createElement('div');
+  startField.className = 'settings-field';
+  const startLabel = document.createElement('span');
+  startLabel.textContent = 'Sell Your Land';
+  startField.appendChild(startLabel);
+  const startStatus = document.createElement('div');
+  startStatus.className = 'settings-empty-note';
+  startField.appendChild(startStatus);
+  settingsSectionEl.appendChild(startField);
+
+  const listField = document.createElement('div');
+  listField.className = 'settings-field';
+  const listLabel = document.createElement('span');
+  listLabel.textContent = 'Active Auctions';
+  listField.appendChild(listLabel);
+  const auctionList = document.createElement('div');
+  auctionList.className = 'auction-list';
+  listField.appendChild(auctionList);
+  settingsSectionEl.appendChild(listField);
+
+  async function renderStartSection() {
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
+    let owned;
+    try {
+      owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check your landlet.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (owned.length === 0) {
+      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      return;
+    }
+    const myLandletId = owned[0].landletId;
+    let activeForMine;
+    try {
+      activeForMine = await fetchAuctions({ status: 'active', landletId: myLandletId });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check for an existing auction.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (activeForMine.length > 0) {
+      const row = document.createElement('div');
+      row.className = 'auction-row';
+      const info = document.createElement('div');
+      info.className = 'auction-row-info';
+      info.textContent = `Your auction is live — ${formatAuctionSummary(activeForMine[0])}`;
+      row.appendChild(info);
+      startField.appendChild(row);
+      return;
+    }
+
+    startStatus.textContent = 'A $0 starting bid gives it away free if nobody bids; any other amount keeps it yours if it goes unsold.';
+    const form = document.createElement('div');
+    form.className = 'auction-start-form';
+    const bidLabel = document.createElement('label');
+    bidLabel.textContent = 'Starting bid ($)';
+    const bidInput = document.createElement('input');
+    bidInput.type = 'number';
+    bidInput.min = '0';
+    bidInput.step = '0.01';
+    bidInput.value = '0';
+    bidLabel.appendChild(bidInput);
+    form.appendChild(bidLabel);
+    const durationLabel = document.createElement('label');
+    durationLabel.textContent = 'Duration (hours)';
+    const durationInput = document.createElement('input');
+    durationInput.type = 'number';
+    durationInput.min = '1';
+    durationInput.step = '1';
+    durationInput.value = '24';
+    durationLabel.appendChild(durationInput);
+    form.appendChild(durationLabel);
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'auction-start-btn';
+    startBtn.textContent = 'Start Auction';
+    startBtn.addEventListener('click', async () => {
+      const dollars = Number(bidInput.value);
+      const hours = Number(durationInput.value);
+      if (!Number.isFinite(dollars) || dollars < 0) {
+        startStatus.textContent = 'Starting bid must be zero or more.';
+        startStatus.classList.add('error');
+        return;
+      }
+      if (!Number.isFinite(hours) || hours < 1) {
+        startStatus.textContent = 'Duration must be at least 1 hour.';
+        startStatus.classList.add('error');
+        return;
+      }
+      startBtn.disabled = true;
+      try {
+        await startAuction(myLandletId, {
+          builderId,
+          startingBidCents: Math.round(dollars * 100),
+          durationHours: Math.round(hours),
+        });
+        await renderStartSection();
+        await renderAuctionList();
+      } catch (err) {
+        startStatus.textContent = err.message || 'Could not start the auction.';
+        startStatus.classList.add('error');
+        startBtn.disabled = false;
+      }
+    });
+    form.appendChild(startBtn);
+    startField.appendChild(form);
+  }
+
+  async function renderAuctionList() {
+    auctionList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let auctions;
+    try {
+      auctions = await fetchAuctions({ status: 'active' });
+    } catch (err) {
+      auctionList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load auctions.';
+      auctionList.appendChild(errNote);
+      return;
+    }
+    auctionList.innerHTML = '';
+    if (auctions.length === 0) {
+      auctionList.innerHTML = '<div class="settings-empty-note">No active auctions right now.</div>';
+      return;
+    }
+    for (const auction of auctions) {
+      const row = document.createElement('div');
+      row.className = 'auction-row';
+      const info = document.createElement('div');
+      info.className = 'auction-row-info';
+      info.textContent = formatAuctionSummary(auction);
+      row.appendChild(info);
+
+      // GET /auctions already resolves anything past its end time before
+      // this list is built (see resolveDueAuctions in worker/index.js) —
+      // this button exists only for the narrow gap between that moment
+      // and the *next* fetch, e.g. a second tab that loaded the list a
+      // moment before this one's own timer ran out. Anyone can trigger
+      // it; resolution is an objective time-based fact, not a seller- or
+      // bidder-specific action.
+      const isPastDue = new Date(auction.endsAt).getTime() <= Date.now();
+      if (isPastDue) {
+        const resolveBtn = document.createElement('button');
+        resolveBtn.type = 'button';
+        resolveBtn.className = 'auction-resolve-btn';
+        resolveBtn.textContent = 'Resolve Now';
+        resolveBtn.addEventListener('click', async () => {
+          resolveBtn.disabled = true;
+          try {
+            await resolveAuctionNow(auction.auctionId);
+            await renderAuctionList();
+            await renderStartSection();
+          } catch (err) {
+            alert(err.message || 'Could not resolve this auction.');
+            resolveBtn.disabled = false;
+          }
+        });
+        row.appendChild(resolveBtn);
+      } else if (auction.sellerBuilderId !== builderId) {
+        // A seller doesn't bid on their own listing — same row, just no
+        // bid form, rather than a disabled one (nothing useful to type
+        // into it).
+        const form = document.createElement('div');
+        form.className = 'auction-row-bid-form';
+        const minCents = auction.highestBidCents !== null ? auction.highestBidCents + 1 : auction.startingBidCents;
+        const bidInput = document.createElement('input');
+        bidInput.type = 'number';
+        bidInput.className = 'auction-row-bid-input';
+        bidInput.min = (minCents / 100).toFixed(2);
+        bidInput.step = '0.01';
+        bidInput.placeholder = `${formatDallers(minCents)}+`;
+        form.appendChild(bidInput);
+        const bidBtn = document.createElement('button');
+        bidBtn.type = 'button';
+        bidBtn.className = 'auction-bid-btn';
+        bidBtn.textContent = 'Place Bid';
+        bidBtn.addEventListener('click', async () => {
+          const dollars = Number(bidInput.value);
+          if (!Number.isFinite(dollars) || dollars < 0) return;
+          bidBtn.disabled = true;
+          try {
+            await placeBid(auction.auctionId, { builderId, amountCents: Math.round(dollars * 100) });
+            await renderAuctionList();
+            await renderStartSection();
+          } catch (err) {
+            alert(err.message || 'Could not place bid.');
+            bidBtn.disabled = false;
+          }
+        });
+        form.appendChild(bidBtn);
+        row.appendChild(form);
+      }
+      auctionList.appendChild(row);
+    }
+  }
+
+  renderStartSection();
+  renderAuctionList();
 }
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
