@@ -338,6 +338,37 @@ export async function markAllNotificationsRead(builderId) {
   });
 }
 
+// Friend requests (see migrations/0049_friendships.sql). Each returned
+// friendship is already shaped relative to `builderId` — otherLabel,
+// direction, otherLandlet — so the frontend never has to figure out "which
+// side of this row am I."
+export async function fetchFriendships(builderId) {
+  const { friendships } = await requestJson(`/friendships?${new URLSearchParams({ builderId }).toString()}`);
+  return friendships;
+}
+
+export async function sendFriendRequest(requesterBuilderId, recipientBuilderId) {
+  const { friendship } = await requestJson('/friendships', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ requesterBuilderId, recipientBuilderId }),
+  });
+  return friendship;
+}
+
+export async function acceptFriendRequest(friendshipId) {
+  const { friendship } = await requestJson(`/friendships/${encodeURIComponent(friendshipId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'accepted' }),
+  });
+  return friendship;
+}
+
+export async function removeFriendship(friendshipId) {
+  await requestJson(`/friendships/${encodeURIComponent(friendshipId)}`, { method: 'DELETE' });
+}
+
 // Landlet versions (see docs/API.md's "Landlet drafts"/"Landlet versions") —
 // immutable snapshots of a landlet's placed instances, separate from the
 // mutable placed_instances rows a builder is actively editing. A landlet's

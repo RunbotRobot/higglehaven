@@ -2440,3 +2440,134 @@ describe('Auctions', () => {
     expect(bid.response.status).toBe(409);
   });
 });
+
+describe('Friendships', () => {
+  async function createBuilder(label) {
+    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
+    return res.body.builder.builderId;
+  }
+
+  async function claim(landletId, builderId) {
+    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  }
+
+  it('rejects a request between a builder and themselves', async () => {
+    const solo = await createBuilder('Solo Builder');
+    const rejected = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: solo, recipientBuilderId: solo }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('rejects a request referencing a builder that does not exist', async () => {
+    const real = await createBuilder('Real Builder');
+    const rejected = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: real, recipientBuilderId: 'builder-does-not-exist' }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('sends, lists (with direction), accepts, and shows the accepted friend on both sides', async () => {
+    const alice = await createBuilder('Friendship Alice');
+    const bob = await createBuilder('Friendship Bob');
+    await createGreenbeltLandlet('friendship-bob-landlet');
+    await claim('friendship-bob-landlet', bob);
+
+    const sent = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: alice, recipientBuilderId: bob }),
+    });
+    expect(sent.response.status).toBe(201);
+    expect(sent.body.friendship).toMatchObject({
+      requesterBuilderId: alice,
+      recipientBuilderId: bob,
+      status: 'pending',
+      otherBuilderId: bob,
+      otherLabel: 'Friendship Bob',
+      direction: 'outgoing',
+    });
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    // Alice's own list shows it outgoing; Bob's shows the same row incoming.
+    const aliceList = await api(`/friendships?builderId=${alice}`);
+    expect(aliceList.body.friendships).toHaveLength(1);
+    expect(aliceList.body.friendships[0].direction).toBe('outgoing');
+    expect(aliceList.body.friendships[0].status).toBe('pending');
+
+    const bobList = await api(`/friendships?builderId=${bob}`);
+    expect(bobList.body.friendships).toHaveLength(1);
+    expect(bobList.body.friendships[0].direction).toBe('incoming');
+    expect(bobList.body.friendships[0].otherLabel).toBe('Friendship Alice');
+    // Bob hasn't claimed anything yet at this point in the test — Alice
+    // (the one being looked up from Bob's list) has no lándlet.
+    expect(bobList.body.friendships[0].otherLandlet).toBeNull();
+
+    const accepted = await api(`/friendships/${friendshipId}`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    });
+    expect(accepted.response.status).toBe(200);
+    expect(accepted.body.friendship.status).toBe('accepted');
+
+    // From Alice's side, the "approximate location" is Bob's claimed lándlet.
+    const aliceListAfter = await api(`/friendships?builderId=${alice}`);
+    expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
+    expect(aliceListAfter.body.friendships[0].otherLandlet).toMatchObject({
+      landletId: 'friendship-bob-landlet',
+    });
+  });
+
+  it('rejects a second request between the same pair in either direction', async () => {
+    const a = await createBuilder('Duplicate A');
+    const b = await createBuilder('Duplicate B');
+    await api('/friendships', { method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }) });
+
+    const sameDirection = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
+    });
+    expect(sameDirection.response.status).toBe(409);
+
+    const reverseDirection = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: b, recipientBuilderId: a }),
+    });
+    expect(reverseDirection.response.status).toBe(409);
+  });
+
+  it('lets a request be declined (deleted while pending) or an accepted friendship removed', async () => {
+    const a = await createBuilder('Decline A');
+    const b = await createBuilder('Decline B');
+    const sent = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
+    });
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    const declined = await api(`/friendships/${friendshipId}`, { method: 'DELETE' });
+    expect(declined.response.status).toBe(200);
+    expect(declined.body).toEqual({ deleted: true });
+
+    // Declining frees the pair up to request again — proves the DELETE
+    // really removed the row rather than just marking it something else.
+    const resent = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
+    });
+    expect(resent.response.status).toBe(201);
+
+    const deleteMissing = await api('/friendships/friendship-does-not-exist', { method: 'DELETE' });
+    expect(deleteMissing.response.status).toBe(404);
+
+    const patchMissing = await api('/friendships/friendship-does-not-exist', {
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    });
+    expect(patchMissing.response.status).toBe(404);
+  });
+
+  it('rejects an invalid status transition', async () => {
+    const a = await createBuilder('Invalid Status A');
+    const b = await createBuilder('Invalid Status B');
+    const sent = await api('/friendships', {
+      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
+    });
+    const rejected = await api(`/friendships/${sent.body.friendship.friendshipId}`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'pending' }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+});

@@ -277,6 +277,10 @@ async function handleApi(request, env, url) {
     return handleNotifications(request, env.DB, route, url);
   }
 
+  if (route[0] === 'friendships') {
+    return handleFriendships(request, env.DB, route, url);
+  }
+
   if (route[0] === 'bundles') {
     return handleBundles(request, env.DB, route, url);
   }
@@ -1149,6 +1153,127 @@ function notificationFromRow(row) {
     templateId: row.template_id,
     createdAt: row.created_at,
     readAt: row.read_at,
+  };
+}
+
+// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
+// requests; social map shows friends' approximate location."). One row per
+// relationship, direction preserved (requester/recipient), status flips
+// pending -> accepted in place. No ownership check on PATCH/DELETE — same
+// no-real-auth caveat as every other dev-mode identity in this file; the
+// frontend only shows Accept on the recipient's own incoming requests.
+//
+// "Social map ... approximate location" is deliberately simplified to each
+// accepted friend's owned lándlet center — this app has no live avatar
+// position tracking at all (Shop-mode camera position is never persisted),
+// so there is no real "current location" to report regardless of how this
+// endpoint is built. A builder's claimed lándlet is the one stable,
+// already-known location the backend actually has for them.
+async function handleFriendships(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const { results } = await db.prepare(`
+      SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ?
+      ORDER BY created_at DESC
+    `).bind(builderId, builderId).all();
+    const otherBuilderIds = results.map((row) =>
+      row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
+    const labelsById = await labelsByBuilderId(db, otherBuilderIds);
+    const landletsById = await ownedLandletsByBuilderId(db, otherBuilderIds);
+    return json({
+      friendships: results.map((row) => friendshipFromRow(row, builderId, labelsById, landletsById)),
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 1) {
+    const input = await readJson(request);
+    const requesterBuilderId = stringValue(input.requesterBuilderId, 'requesterBuilderId');
+    const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
+    if (requesterBuilderId === recipientBuilderId) {
+      throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
+    }
+    await assertReferenceExists(db, 'builders', 'builder_id', requesterBuilderId, 'requesterBuilderId');
+    await assertReferenceExists(db, 'builders', 'builder_id', recipientBuilderId, 'recipientBuilderId');
+    const existing = await db.prepare(`
+      SELECT 1 FROM friendships
+      WHERE (requester_builder_id = ? AND recipient_builder_id = ?)
+         OR (requester_builder_id = ? AND recipient_builder_id = ?)
+    `).bind(requesterBuilderId, recipientBuilderId, recipientBuilderId, requesterBuilderId).first();
+    if (existing) throw new HttpError('A friendship or pending request already exists between these builders', 409);
+    const friendshipId = `friendship-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)
+    `).bind(friendshipId, requesterBuilderId, recipientBuilderId).run();
+    const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+    const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
+    const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
+    return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
+  }
+
+  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    const existing = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Friendship not found' }, 404);
+    const input = await readJson(request);
+    if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
+    await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
+    const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+    const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
+    const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
+    return json({ friendship: friendshipFromRow(updated, updated.recipient_builder_id, labelsById, landletsById) });
+  }
+
+  if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Friendship not found' }, 404);
+    await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function labelsByBuilderId(db, builderIds) {
+  const uniqueIds = [...new Set(builderIds)];
+  if (uniqueIds.length === 0) return new Map();
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT builder_id, label FROM builders WHERE builder_id IN (${placeholders})`,
+  ).bind(...uniqueIds).all();
+  return new Map(results.map((row) => [row.builder_id, row.label]));
+}
+
+async function ownedLandletsByBuilderId(db, builderIds) {
+  const uniqueIds = [...new Set(builderIds)];
+  if (uniqueIds.length === 0) return new Map();
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT * FROM landlets WHERE owner_builder_id IN (${placeholders})`,
+  ).bind(...uniqueIds).all();
+  const byOwner = new Map();
+  for (const row of results) {
+    // A builder can own more than one lándlet (auctions can transfer extra
+    // ones in) — the first one found is good enough for "approximate
+    // location," not a definitive "their one true home."
+    if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
+  }
+  return byOwner;
+}
+
+function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
+  const otherBuilderId = row.requester_builder_id === viewerBuilderId
+    ? row.recipient_builder_id
+    : row.requester_builder_id;
+  const landlet = landletsById.get(otherBuilderId) ?? null;
+  return {
+    friendshipId: row.friendship_id,
+    requesterBuilderId: row.requester_builder_id,
+    recipientBuilderId: row.recipient_builder_id,
+    status: row.status,
+    createdAt: row.created_at,
+    otherBuilderId,
+    otherLabel: labelsById.get(otherBuilderId) ?? null,
+    direction: row.requester_builder_id === viewerBuilderId ? 'outgoing' : 'incoming',
+    otherLandlet: landlet ? { landletId: landlet.landletId, name: landlet.name, center: landlet.center } : null,
   };
 }
 

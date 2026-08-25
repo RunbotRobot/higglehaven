@@ -1574,6 +1574,125 @@ single `db.batch()` alongside the update — so a pure rename, price change,
 or extensibility edit creates no notifications at all, only an actual size
 change does.
 
+## Friend requests
+
+docs/SPEC.md §2: "Friend/group systems: standard friend requests; social
+map shows friends' approximate location." One `friendships` row (see
+`migrations/0049_friendships.sql`) per relationship, shared by both
+builders — direction preserved (`requesterBuilderId`/`recipientBuilderId`)
+so the frontend can tell "I sent this" from "I received this" without a
+second table, and `status` flips from `pending` to `accepted` in place
+rather than deleting and recreating the row on accept. No ownership check
+on `PATCH`/`DELETE` — same no-real-auth caveat as everywhere else in this
+file; the frontend only ever shows an Accept button on the recipient's own
+incoming requests.
+
+**"Social map ... approximate location" is deliberately simplified** to
+each accepted friend's own claimed lándlet center, not a live position —
+this app has no avatar presence tracking at all (Shop-mode camera position
+is never persisted anywhere), so there is no real "current location" to
+report regardless of how this endpoint were built. A builder's claimed
+lándlet is the one stable, already-known location the backend actually
+has for them. The frontend renders this as plain text in the Friends
+modal, not an actual graphical map widget — a real map would need its own
+renderer/camera the way the claim flyover does (a full WebGL scene), which
+isn't justified just for a small modal list. Shipping the underlying "where
+do my friends live" data first, with a graphical map as a possible later
+enhancement, follows the same "honest simplest form first" precedent as
+the scheduled-event confetti effect and its own one-shot trigger.
+
+### Friendship object
+
+```json
+{
+  "friendshipId": "friendship-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "requesterBuilderId": "builder-alice",
+  "recipientBuilderId": "builder-bob",
+  "status": "pending",
+  "createdAt": "2026-08-25T00:00:00.000Z",
+  "otherBuilderId": "builder-bob",
+  "otherLabel": "Bob",
+  "direction": "outgoing",
+  "otherLandlet": { "landletId": "starter-landlet", "name": "Starter landlet", "center": { "x": 0, "y": 0 } }
+}
+```
+
+The last four fields (`otherBuilderId`/`otherLabel`/`direction`/
+`otherLandlet`) are computed relative to whichever `builderId` the request
+was made as — the same row looks different depending on who's asking (see
+`GET` below). `otherLandlet` is `null` if that builder hasn't claimed a
+lándlet yet, and picks the first one found if they somehow own more than
+one (auctions can transfer extra ones in) — good enough for "approximate
+location," not a claim about which one is their "real" home.
+
+### `GET /api/friendships?builderId=X`
+
+Lists every friendship involving `X`, both directions, both `pending` and
+`accepted`, newest first. `builderId` is required.
+
+### `POST /api/friendships`
+
+Sends a friend request.
+
+```json
+{ "requesterBuilderId": "...", "recipientBuilderId": "..." }
+```
+
+`400` if the two IDs are the same, or if either doesn't reference an
+existing builder. `409` if a friendship or pending request already exists
+between the two builders **in either direction** — sending B→A when A→B is
+already pending doesn't create a second row; the existing one has to be
+accepted or declined first. Returns `201` with the new `pending` friendship.
+
+### `PATCH /api/friendships/:friendshipId`
+
+Accepts a request: `{ "status": "accepted" }` is the only valid body —
+`400` on anything else. `404` if the friendship doesn't exist. There is no
+"decline" status; declining a pending request or removing an accepted
+friendship are both just `DELETE`.
+
+### `DELETE /api/friendships/:friendshipId`
+
+Removes a friendship outright — covers declining a still-pending request,
+canceling one you sent, and unfriending an accepted one, all the same way.
+`404` if it doesn't exist.
+
+### Frontend wiring
+
+`#friends-btn` sits in a second row under Identity/Notices/Settings (a
+measured layout check found only ~38px of clearance between `#settings-btn`
+and `#mode-nav` on a narrow viewport — not room for a fourth pill there),
+badged with the pending-incoming count exactly like `#notifications-btn`.
+`#friends-modal` has three sections — Requests (incoming pending, Accept/
+Decline), Sent (outgoing pending, Cancel), and Friends (accepted, with the
+approximate-location text and a Remove button) — all sharing one
+`.friend-row` look with different actions per section. "+ Add Friend"
+`prompt()`s for the other builder's exact label, resolves it against the
+full builder roster (`fetchBuilders()`, case-insensitive exact match), and
+sends the request — an unmatched or ambiguous label surfaces as a status
+message rather than a dead end. The badge (like Notices' own) only
+refreshes on bootstrap and on modal close, not while a request arrives with
+the modal already open or the app otherwise idle — no live updates
+anywhere else in this app either.
+
+### Testing note
+
+`worker/index.test.js`'s "Friendships" describe block owns the full
+contract: self-request rejection, unknown-builder rejection, the send/
+list/accept lifecycle with direction and `otherLandlet` verified from both
+sides, duplicate-request rejection in either direction, decline (`DELETE`
+while pending) freeing the pair to request again, removing an accepted
+friendship, and the invalid-status-transition `400`. `e2e/friends.test.mjs`
+drives two real browser sessions (mirroring `e2e/land-auctions.test.mjs`'s
+own two-party pattern) through the actual UI: Alice sends Bob a request via
+the real "+ Add Friend" prompt, Bob sees and accepts it, both sides then
+show each other with their lándlet's location, and a separate pending
+request to a third builder is canceled from the sender's own Sent list.
+Answering the "+ Add Friend" prompt with a different name than the
+session's own identity name needed `page.removeAllListeners('dialog')` to
+swap in a one-off handler, since `helpers.mjs`'s own dialog handler answers
+every prompt in a session with one fixed string.
+
 ## Bundles
 
 A bundle is a named, persisted group of placed items a builder can stamp
@@ -2384,6 +2503,9 @@ The migrations currently create sixteen main backend tables:
   rings seam-compatible and optional parent links for derived ring chains.
 - `notifications`: builder-facing notices, currently only ever created by a
   seller's product-dimension change (see "Notifications" above).
+- `friendships`: one row per friend relationship between two builders,
+  direction preserved, status `pending`/`accepted` (see "Friend requests"
+  above).
 - `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
 - `sign_posts`: shopper-authored posts on a placed instance flagged
   `isCommunitySign` (see "Community signs" above), cascade-deleted with

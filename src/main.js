@@ -39,6 +39,10 @@ import {
   fetchNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  fetchFriendships,
+  sendFriendRequest,
+  acceptFriendRequest,
+  removeFriendship,
   fetchLandletVersions,
   saveLandletVersion,
   fetchLandletVersion,
@@ -5601,6 +5605,217 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
   }
 });
 
+// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
+// requests; social map shows friends' approximate location.") Same plain
+// pill-button-plus-badge design as Notices just above, badge counting
+// pending incoming requests rather than unread notices.
+const friendsBtn = document.getElementById('friends-btn');
+const friendsBadgeEl = document.getElementById('friends-badge');
+const friendsModalEl = document.getElementById('friends-modal');
+const friendsCloseBtn = document.getElementById('friends-close-btn');
+const friendsAddBtn = document.getElementById('friends-add-btn');
+const friendsStatusEl = document.getElementById('friends-status');
+const friendsIncomingListEl = document.getElementById('friends-incoming-list');
+const friendsIncomingEmptyEl = document.getElementById('friends-incoming-empty');
+const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
+const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
+const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
+const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+
+async function refreshFriendsBadge() {
+  if (!builderId) return;
+  try {
+    const friendships = await fetchFriendships(builderId);
+    const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
+    friendsBadgeEl.textContent = String(incoming.length);
+    friendsBadgeEl.hidden = incoming.length === 0;
+  } catch (err) {
+    console.warn('Could not refresh friends badge:', err);
+  }
+}
+
+// "Social map ... approximate location" (see worker/index.js's own comment
+// on handleFriendships for why this is simplified to a friend's claimed
+// lándlet rather than a live position) — rendered here as plain text, not
+// an actual map widget. A real map would need its own renderer/camera the
+// way the claim flyover does (a full WebGL scene, not something to spin up
+// just for a small modal list) — this ships the underlying "where do my
+// friends live" data first.
+function friendLocationText(friendship) {
+  if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
+  const { name, center } = friendship.otherLandlet;
+  return `${name} (${center.x.toFixed(0)}, ${center.y.toFixed(0)})`;
+}
+
+async function renderFriends() {
+  friendsIncomingListEl.innerHTML = '';
+  friendsOutgoingListEl.innerHTML = '';
+  friendsAcceptedListEl.innerHTML = '';
+  if (!builderId) return;
+  let friendships;
+  try {
+    friendships = await fetchFriendships(builderId);
+  } catch (err) {
+    friendsStatusEl.textContent = err.message || 'Could not load friends.';
+    friendsStatusEl.classList.add('error');
+    return;
+  }
+  const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
+  const outgoing = friendships.filter((f) => f.direction === 'outgoing' && f.status === 'pending');
+  const accepted = friendships.filter((f) => f.status === 'accepted');
+
+  friendsIncomingEmptyEl.hidden = incoming.length > 0;
+  for (const friendship of incoming) {
+    const row = document.createElement('div');
+    row.className = 'friend-row';
+    const body = document.createElement('div');
+    body.className = 'friend-row-body';
+    const label = document.createElement('div');
+    label.className = 'friend-row-label';
+    label.textContent = friendship.otherLabel;
+    body.appendChild(label);
+    row.appendChild(body);
+    const actions = document.createElement('div');
+    actions.className = 'friend-row-actions';
+    const acceptBtn = document.createElement('button');
+    acceptBtn.type = 'button';
+    acceptBtn.textContent = 'Accept';
+    acceptBtn.addEventListener('click', async () => {
+      acceptBtn.disabled = true;
+      try {
+        await acceptFriendRequest(friendship.friendshipId);
+        await renderFriends();
+        await refreshFriendsBadge();
+      } catch (err) {
+        console.warn('Could not accept friend request:', err);
+        acceptBtn.disabled = false;
+      }
+    });
+    actions.appendChild(acceptBtn);
+    const declineBtn = document.createElement('button');
+    declineBtn.type = 'button';
+    declineBtn.className = 'danger';
+    declineBtn.textContent = 'Decline';
+    declineBtn.addEventListener('click', async () => {
+      declineBtn.disabled = true;
+      try {
+        await removeFriendship(friendship.friendshipId);
+        await renderFriends();
+        await refreshFriendsBadge();
+      } catch (err) {
+        console.warn('Could not decline friend request:', err);
+        declineBtn.disabled = false;
+      }
+    });
+    actions.appendChild(declineBtn);
+    row.appendChild(actions);
+    friendsIncomingListEl.appendChild(row);
+  }
+
+  friendsOutgoingEmptyEl.hidden = outgoing.length > 0;
+  for (const friendship of outgoing) {
+    const row = document.createElement('div');
+    row.className = 'friend-row';
+    const body = document.createElement('div');
+    body.className = 'friend-row-body';
+    const label = document.createElement('div');
+    label.className = 'friend-row-label';
+    label.textContent = friendship.otherLabel;
+    body.appendChild(label);
+    row.appendChild(body);
+    const actions = document.createElement('div');
+    actions.className = 'friend-row-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'danger';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', async () => {
+      cancelBtn.disabled = true;
+      try {
+        await removeFriendship(friendship.friendshipId);
+        await renderFriends();
+      } catch (err) {
+        console.warn('Could not cancel friend request:', err);
+        cancelBtn.disabled = false;
+      }
+    });
+    actions.appendChild(cancelBtn);
+    row.appendChild(actions);
+    friendsOutgoingListEl.appendChild(row);
+  }
+
+  friendsAcceptedEmptyEl.hidden = accepted.length > 0;
+  for (const friendship of accepted) {
+    const row = document.createElement('div');
+    row.className = 'friend-row';
+    const body = document.createElement('div');
+    body.className = 'friend-row-body';
+    const label = document.createElement('div');
+    label.className = 'friend-row-label';
+    label.textContent = friendship.otherLabel;
+    body.appendChild(label);
+    const location = document.createElement('div');
+    location.className = 'friend-row-location';
+    location.textContent = friendLocationText(friendship);
+    body.appendChild(location);
+    row.appendChild(body);
+    const actions = document.createElement('div');
+    actions.className = 'friend-row-actions';
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'danger';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', async () => {
+      removeBtn.disabled = true;
+      try {
+        await removeFriendship(friendship.friendshipId);
+        await renderFriends();
+      } catch (err) {
+        console.warn('Could not remove friend:', err);
+        removeBtn.disabled = false;
+      }
+    });
+    actions.appendChild(removeBtn);
+    row.appendChild(actions);
+    friendsAcceptedListEl.appendChild(row);
+  }
+}
+
+friendsBtn.addEventListener('click', () => {
+  friendsModalEl.classList.add('visible');
+  friendsStatusEl.textContent = '';
+  friendsStatusEl.classList.remove('error');
+  renderFriends();
+});
+friendsCloseBtn.addEventListener('click', () => {
+  friendsModalEl.classList.remove('visible');
+  refreshFriendsBadge();
+});
+friendsAddBtn.addEventListener('click', async () => {
+  const label = prompt("Friend's name (must match their identity exactly):", '');
+  if (!label || !label.trim()) return;
+  friendsStatusEl.textContent = '';
+  friendsStatusEl.classList.remove('error');
+  friendsAddBtn.disabled = true;
+  try {
+    const builders = await fetchBuilders();
+    const match = builders.find((b) => b.label.toLowerCase() === label.trim().toLowerCase());
+    if (!match) {
+      friendsStatusEl.textContent = `No builder named "${label.trim()}" found.`;
+      friendsStatusEl.classList.add('error');
+      return;
+    }
+    await sendFriendRequest(builderId, match.builderId);
+    friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
+    await renderFriends();
+  } catch (err) {
+    friendsStatusEl.textContent = err.message || 'Could not send friend request.';
+    friendsStatusEl.classList.add('error');
+  } finally {
+    friendsAddBtn.disabled = false;
+  }
+});
+
 // Shop: a visitor mode reached straight from the builder-choice screen, no
 // identity needed, since visiting doesn't build or claim anything. Unlike
 // the claim flyover (a separate small canvas/renderer showing a top-down
@@ -6564,7 +6779,7 @@ function unloadShopLandletInstances(entry) {
 // leaving Shop mode (via #mode-nav's Build/Sell buttons) reloads the page
 // rather than trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'identity-btn', 'notifications-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'identity-btn', 'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
 ];
 
 async function enterShopMode() {
@@ -7219,6 +7434,7 @@ async function bootstrap() {
   updateModeNavUI();
   builderId = await ensureBuilderIdentity();
   refreshNotificationsBadge();
+  refreshFriendsBadge();
   let instances;
   try {
     currentLandletId = await resolveLandletId();
