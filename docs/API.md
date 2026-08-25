@@ -772,6 +772,9 @@ Validation notes:
 - `expansionIncrementM` and `dayCycleHours` must be greater than zero.
 - `greenbeltMinRatio` must be between `0` and `1`.
 
+`dayCycleHours` now actually drives something on the frontend — see
+"Frontend-only day-night cycle" below.
+
 ### `POST /api/world/expand`
 
 Expands the circular world boundary by exactly one configured
@@ -2255,6 +2258,78 @@ was judged riskier than the reload's brief flash. `sessionStorage`'s
 `higglehaven.startMode` carries the *next* mode across that one reload;
 it's consumed once bootstrap() reads it, so an unrelated refresh with
 nothing set always falls back to Shop.
+
+## Frontend-only day-night cycle
+
+docs/SPEC.md §1: "Day-night cycle: shared, compressed 4-hour cycle (1 hour
+each: daylight, dusk, night, dawn) — not real-world-time-per-user.
+Ensures every time zone sees the full lighting range multiple times per
+real day." Purely visual — touches no persisted state beyond the
+already-existing `dayCycleHours` world setting it reads.
+
+`src/dayNightCycle.js` is a small, deliberately dependency-free module
+(no `three`, no DOM) holding the actual math: `getDayNightState(nowMs,
+cycleHours)` divides the cycle into four equal named phases and linearly
+interpolates sky/sun/ambient color and intensity between keyframes at
+each phase boundary (plus daylight repeated at the wrap point, so the
+cycle loops smoothly back into itself rather than jumping). Driven
+directly by a real timestamp (`Date.now()` in practice) rather than any
+per-session clock — that's what makes it genuinely *shared*: every device
+computing this function at the same real moment gets the identical
+result, with nothing to synchronize server-side. Being dependency-free
+also makes it the one piece of this otherwise-untestable-by-nature
+feature that actually has automated coverage: `src/dayNightCycle.test.js`
+(picked up by widening `vitest.config.js`'s `test.include` to
+`src/**/*.test.js`, restricted to exactly this kind of dependency-free
+module — see that config's own comment on why nothing importing `three`
+or touching the DOM belongs there).
+
+`src/main.js` calls `updateDayNightLighting(now)` every `animate()` frame
+(throttled to once per `DAY_NIGHT_UPDATE_INTERVAL_MS`, 5 seconds —
+imperceptibly coarse against an hours-long cycle), applying the computed
+state to the shared `ambientLight`/`sunLight`/`scene.background` — shared
+because Build and Shop mode reuse the same scene/camera/renderer (see
+Shop mode's own doc comment), so this one call covers both. `worldDayCycleHours`
+defaults to the spec's own 4-hour figure until a one-time `fetchWorld()`
+call resolves the real configured value; `lastDayNightUpdate` starts at
+`-Infinity` specifically so the very first frame applies real lighting
+immediately rather than briefly showing the pre-cycle hardcoded defaults
+(which happen to equal the daylight keyframe exactly, so this only
+matters when the real phase isn't daylight at page-load time).
+
+Shop mode's own gradient backdrop (the wall + dome painted once via
+per-vertex colors in `enterShopMode`, both using `vertexColors: true`) is
+never repainted per-vertex for this — instead each mesh's uniform
+`material.color` (multiplied against those vertex colors by
+`vertexColors`) is retinted to the same ambient color driving every other
+lit surface, the same cheap "multiply the environment by a global tint"
+technique real-time engines commonly use for day-night. `shopWallMesh`/
+`shopDomeMesh` are both `null` until Shop mode has been entered at least
+once in the current session, so `updateDayNightLighting` guards for that.
+
+The claim-flyover map and the seller upload/product-preview scenes each
+build their own separate `THREE.Scene` with fixed lighting and are
+deliberately left alone — a preview/utility tool shouldn't randomly go
+dark at "night" while someone's using it to look at a product.
+
+### Testing note
+
+The pure phase/color math in `src/dayNightCycle.js` has full automated
+coverage (`src/dayNightCycle.test.js`) — phase boundaries, mid-phase
+interpolation, cycle wraparound, a non-default cycle length, and a
+negative-timestamp edge case. The actual live THREE.js wiring
+(`updateDayNightLighting` itself: does the real `ambientLight`/`sunLight`/
+`scene.background`/Shop backdrop actually update to match at a given
+real time?) isn't part of the automated suite, for the same reason nothing
+else time- or camera-driven in this app is (see "Frontend-only alignment
+assist" above) — but was verified manually: a temporary
+`page.addInitScript` override of `Date`/`Date.now()` (removed before
+committing, along with a temporary `window.__debugAlign` expose of the
+relevant objects) forced the page to load at several different points in
+the cycle, confirming the live scene's actual colors/intensities matched
+`getDayNightState`'s own computed values exactly at daylight, night, and
+a mid-transition instant, and that the Shop-mode wall/dome retint matched
+too.
 
 ## Frontend-only Shop-mode world boundary
 

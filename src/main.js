@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { cropGeometryFromEnd } from './meshCrop.js';
+import { getDayNightState } from './dayNightCycle.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -935,6 +936,57 @@ scene.add(ambientLight);
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
 sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
+
+// Day-night cycle (docs/SPEC.md §1, src/dayNightCycle.js) — driven by real
+// wall-clock time, not a per-session clock, so it's genuinely shared
+// across every device. worldDayCycleHours defaults to the spec's own
+// 4-hour figure until loadDayCycleHours() below resolves the world's
+// actual configured value (see "World settings"); a late-arriving fetch
+// just means the very first few seconds of a page load use the default,
+// never a visible jump once the real value lands mid-cycle-fraction.
+let worldDayCycleHours = 4;
+async function loadDayCycleHours() {
+  try {
+    const world = await fetchWorld();
+    worldDayCycleHours = world.dayCycleHours;
+  } catch {
+    // Keep the default — a failed fetch here shouldn't block bootstrap
+    // over a cosmetic feature.
+  }
+}
+loadDayCycleHours();
+
+const DAY_NIGHT_UPDATE_INTERVAL_MS = 5000; // imperceptibly coarse against an hours-long cycle, cheap on every other frame
+// -Infinity, not 0, so the very first animate() frame always applies the
+// real current lighting immediately rather than briefly showing the
+// pre-cycle hardcoded defaults above until the first 5-second tick.
+let lastDayNightUpdate = -Infinity;
+// Applied to the shared scene/lights only — used by both Build and Shop
+// mode, since they share this one scene/camera/renderer (see Shop's own
+// doc comment). The claim-flyover and seller-preview scenes each build
+// their own separate THREE.Scene with fixed lighting and are deliberately
+// left alone — a preview/utility tool shouldn't randomly go dark at
+// "night" while someone's using it.
+function updateDayNightLighting(now) {
+  if (now - lastDayNightUpdate < DAY_NIGHT_UPDATE_INTERVAL_MS) return;
+  lastDayNightUpdate = now;
+  const state = getDayNightState(Date.now(), worldDayCycleHours);
+  scene.background = new THREE.Color(state.skyColorHex);
+  sunLight.color.setHex(state.sunColorHex);
+  sunLight.intensity = state.sunIntensity;
+  ambientLight.color.setHex(state.ambientColorHex);
+  ambientLight.intensity = state.ambientIntensity;
+  // Shop's own gradient backdrop (wall + dome, see enterShopMode) is
+  // painted once via per-vertex colors, not repainted here — instead its
+  // material's uniform color (multiplied against those vertex colors,
+  // since both meshes use vertexColors: true) is retinted to the same
+  // ambient color driving every other lit surface, the same cheap
+  // "multiply the environment by a global tint" technique real-time
+  // engines use for day-night. Both are null until Shop mode has been
+  // entered at least once this session.
+  if (shopWallMesh) shopWallMesh.material.color.setHex(state.ambientColorHex);
+  if (shopDomeMesh) shopDomeMesh.material.color.setHex(state.ambientColorHex);
+}
 
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
@@ -4986,6 +5038,7 @@ function applyEdgePanWhileDraggingProduct() {
 
 function animate(now) {
   requestAnimationFrame(animate);
+  updateDayNightLighting(now);
   if (shopActive) {
     updateShopMovement(now);
   } else {
@@ -5561,6 +5614,7 @@ const SHOP_PINCH_ZOOM_SENSITIVITY = 0.05;
 
 let shopWorldRadiusM = null;
 let shopDomeMesh = null;
+let shopWallMesh = null;
 let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
 
 // Colors a geometry per-vertex along its own local "up" axis (the axis
@@ -6251,6 +6305,7 @@ async function enterShopMode() {
   wall.position.z = SHOP_WALL_HEIGHT_M / 2;
   scene.add(wall);
   shopWorldObjects.push(wall);
+  shopWallMesh = wall;
 
   // Caps the wall's open top so the world reads as fully enclosed — an
   // upper hemisphere (unit sphere, theta 0..PI/2) whose equator matches
