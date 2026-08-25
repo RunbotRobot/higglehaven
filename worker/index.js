@@ -55,6 +55,15 @@ async function getStorageUsage(bucket) {
 // — good enough for "let a few friends see what I'm building," not a
 // substitute for real auth if this ever needs individual identities.
 const ACCESS_COOKIE_NAME = 'hh_access';
+// Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) — how
+// many of the earliest landlet-claimers make up the founding cohort.
+// Deliberately a plain constant, not configurable world_settings state:
+// this is a one-time-per-world creative decision ("how big is the
+// founding hundred"), not something a builder or the running world ever
+// needs to tune live. Chosen size: a "founding hundred" is a common,
+// legible round-number convention for this kind of recognition — sized
+// for real early-adopter breadth without diluting into "everyone."
+const PIONEER_COHORT_SIZE = 100;
 
 async function computeAccessToken(passphrase) {
   const key = await crypto.subtle.importKey(
@@ -943,7 +952,13 @@ function builderFromRow(row) {
   return {
     builderId: row.builder_id,
     label: row.label,
-    isPioneer: Boolean(row.is_pioneer),
+    // pioneerRank is the founding-cohort position (1 = very first claimer);
+    // isPioneer is just a convenience boolean derived from it so the
+    // frontend doesn't need a null-check everywhere it only cares about
+    // membership, not rank (see docs/API.md's "Founding/pioneer
+    // recognition").
+    pioneerRank: row.pioneer_rank ?? null,
+    isPioneer: row.pioneer_rank !== null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1280,15 +1295,18 @@ async function handleLandlets(request, db, route, url) {
     if (result.meta.changes === 0) {
       await explainClaimConflict(db, route[1], builderId);
     } else {
-      // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0043) —
-      // granted to whichever builder's claim is the next one to land once
-      // nobody currently holds the distinction, not just at world-launch
-      // time. No-ops silently once someone already holds it.
+      // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) —
+      // this builder's first-ever successful claim earns the next
+      // sequential rank in the founding cohort, as long as fewer than
+      // PIONEER_COHORT_SIZE ranks have been handed out so far. No-ops
+      // silently past the cutoff, or if this builder already has a rank
+      // (e.g. claiming a second landlet after releasing an earlier one).
       await db.prepare(`
-        UPDATE builders SET is_pioneer = 1 WHERE builder_id = ? AND NOT EXISTS (
-          SELECT 1 FROM builders WHERE is_pioneer = 1
-        )
-      `).bind(builderId).run();
+        UPDATE builders
+        SET pioneer_rank = (SELECT COALESCE(MAX(pioneer_rank), 0) + 1 FROM builders)
+        WHERE builder_id = ? AND pioneer_rank IS NULL
+          AND (SELECT COUNT(*) FROM builders WHERE pioneer_rank IS NOT NULL) < ?
+      `).bind(builderId, PIONEER_COHORT_SIZE).run();
     }
 
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();

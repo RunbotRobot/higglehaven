@@ -1899,13 +1899,13 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
-  it('grants Pioneer to the next successful claim only when nobody currently holds it', async () => {
-    // Earlier tests in this file already claimed landlets, so a pioneer
-    // very likely already exists by this point — reset directly via the DB
-    // (not exposed over the HTTP API on purpose; this is a test-only
-    // escape hatch) so this test's own outcome is deterministic regardless
-    // of execution order.
-    await env.DB.prepare('UPDATE builders SET is_pioneer = 0').run();
+  it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
+    // Earlier tests in this file already claimed landlets, so some
+    // builders very likely already hold ranks by this point — reset
+    // directly via the DB (not exposed over the HTTP API on purpose; a
+    // test-only escape hatch) so this test's own outcome is deterministic
+    // regardless of execution order.
+    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
 
     const first = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'First Claimer' }) });
     const second = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Second Claimer' }) });
@@ -1923,10 +1923,40 @@ describe('Builders', () => {
     const firstAfter = list.body.builders.find((b) => b.builderId === first.body.builder.builderId);
     const secondAfter = list.body.builders.find((b) => b.builderId === second.body.builder.builderId);
     expect(firstAfter.isPioneer).toBe(true);
-    expect(secondAfter.isPioneer).toBe(false);
+    expect(firstAfter.pioneerRank).toBe(1);
+    expect(secondAfter.isPioneer).toBe(true);
+    expect(secondAfter.pioneerRank).toBe(2);
 
-    const { results } = await env.DB.prepare('SELECT builder_id FROM builders WHERE is_pioneer = 1').all();
-    expect(results).toHaveLength(1);
-    expect(results[0].builder_id).toBe(first.body.builder.builderId);
+    // A second claim (after releasing the first, so no rank was granted
+    // the first time around) still gets one, since it's this builder's
+    // first landing in the ranked cohort — the rule is "not yet ranked,"
+    // not "this exact claim is chronologically their first ever."
+    const third = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Third Claimer' }) });
+    await createGreenbeltLandlet('pioneer-third-landlet');
+    await api('/landlets/pioneer-third-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId: third.body.builder.builderId }),
+    });
+    const thirdList = await api('/builders');
+    const thirdAfter = thirdList.body.builders.find((b) => b.builderId === third.body.builder.builderId);
+    expect(thirdAfter.pioneerRank).toBe(3);
+  });
+
+  it('stops assigning pioneer ranks once the founding cohort is full', async () => {
+    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
+    // Fill the cohort with throwaway rows directly via the DB — cheap and
+    // exact, versus actually claiming 100 real landlets through the API.
+    const fillerValues = Array.from({ length: 100 }, (_, i) => `('builder-cohort-filler-${i}', 'Filler ${i}', ${i + 1})`).join(', ');
+    await env.DB.prepare(`INSERT INTO builders (builder_id, label, pioneer_rank) VALUES ${fillerValues}`).run();
+
+    const late = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Late Claimer' }) });
+    await createGreenbeltLandlet('pioneer-late-landlet');
+    await api('/landlets/pioneer-late-landlet/claim', {
+      method: 'POST', body: JSON.stringify({ builderId: late.body.builder.builderId }),
+    });
+
+    const list = await api('/builders');
+    const lateAfter = list.body.builders.find((b) => b.builderId === late.body.builder.builderId);
+    expect(lateAfter.isPioneer).toBe(false);
+    expect(lateAfter.pioneerRank).toBeNull();
   });
 });

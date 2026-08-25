@@ -4877,15 +4877,18 @@ async function renderIdentityList() {
     labelEl.className = 'identity-row-label';
     labelEl.textContent = identity.label;
     // Founding/pioneer recognition (docs/SPEC.md §3) — "permanent 'Pioneer'
-    // profile badge," reputational only (see migrations/0043's own
+    // profile badge," reputational only (see migrations/0044's own
     // comment). This app has no separate profile page, so the identity
     // roster row — the one place a builder's own name is actually shown —
     // is the closest fit. Sellers have no such concept; identity.isPioneer
-    // is simply undefined for them, so this never fires there.
+    // is simply undefined for them, so this never fires there. Shows the
+    // actual rank (not just membership) so it reads as more impressive the
+    // further the platform's real population grows past this fixed
+    // founding hundred — the spec's own "grows in prestige over time."
     if (identity.isPioneer) {
       const pioneerBadge = document.createElement('span');
       pioneerBadge.className = 'identity-row-pioneer-badge';
-      pioneerBadge.textContent = '🏆 Pioneer';
+      pioneerBadge.textContent = `🏆 Pioneer #${identity.pioneerRank}`;
       labelEl.appendChild(pioneerBadge);
     }
     const idEl = document.createElement('div');
