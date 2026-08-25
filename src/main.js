@@ -1427,9 +1427,6 @@ async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
-  // Product reviews (docs/API.md's "Product reviews") — same per-instance-
-  // flag reasoning as the two flags above, independent of both.
-  object.userData.isReviewable = instance.isReviewable ?? false;
   return object;
 }
 
@@ -1462,7 +1459,6 @@ function persistLayout() {
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
     isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
-    isReviewable: mesh.userData.isReviewable ?? false,
   }));
   saveInstances(instances);
 }
@@ -1487,7 +1483,6 @@ function instanceFromMesh(mesh) {
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
     isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
-    isReviewable: mesh.userData.isReviewable ?? false,
   };
 }
 
@@ -2973,6 +2968,103 @@ function renderSellerList() {
     });
 
     extensibilityPanel.appendChild(saveBtn);
+
+    // Product reviews (docs/SPEC.md §5, docs/API.md's "Product reviews") —
+    // shopper-authored, tied to this product itself rather than to any one
+    // placed instance of it, so this is the seller's own moderation view,
+    // not a Build-mode one. Collapsed by default like Extensibility above,
+    // fetched lazily on first open rather than for every row up front.
+    const reviewToggle = document.createElement('button');
+    reviewToggle.className = 'seller-extensibility-toggle seller-review-toggle';
+    reviewToggle.type = 'button';
+    reviewToggle.textContent = 'Reviews ▾';
+    details.appendChild(reviewToggle);
+
+    const reviewPanel = document.createElement('div');
+    reviewPanel.className = 'seller-review-panel';
+    reviewPanel.hidden = true;
+    details.appendChild(reviewPanel);
+
+    const reviewSummaryEl = document.createElement('div');
+    reviewSummaryEl.className = 'seller-review-summary';
+    reviewPanel.appendChild(reviewSummaryEl);
+
+    const reviewListEl = document.createElement('div');
+    reviewListEl.className = 'seller-review-list';
+    reviewPanel.appendChild(reviewListEl);
+
+    const reviewEmptyEl = document.createElement('div');
+    reviewEmptyEl.className = 'seller-review-empty';
+    reviewEmptyEl.textContent = 'No reviews yet.';
+    reviewPanel.appendChild(reviewEmptyEl);
+
+    async function renderReviews() {
+      reviewListEl.innerHTML = '';
+      reviewSummaryEl.textContent = '';
+      let reviews;
+      let averageRating;
+      try {
+        ({ reviews, averageRating } = await fetchProductReviews(template.templateId));
+      } catch (err) {
+        reviewEmptyEl.textContent = err.message || 'Could not load reviews.';
+        reviewEmptyEl.hidden = false;
+        return;
+      }
+      reviewEmptyEl.hidden = reviews.length > 0;
+      if (reviews.length > 0) {
+        const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
+        reviewSummaryEl.textContent = `${stars} ${averageRating.toFixed(1)} average (${reviews.length} review${reviews.length === 1 ? '' : 's'})`;
+      }
+      for (const review of reviews) {
+        const reviewRow = document.createElement('div');
+        reviewRow.className = 'product-review-row';
+        const body = document.createElement('div');
+        body.className = 'product-review-row-body';
+        const author = document.createElement('div');
+        author.className = 'product-review-row-author';
+        author.textContent = review.authorLabel;
+        body.appendChild(author);
+        const rating = document.createElement('div');
+        rating.className = 'product-review-row-rating';
+        rating.textContent = '★'.repeat(review.rating) + '☆'.repeat(5 - review.rating);
+        body.appendChild(rating);
+        if (review.text) {
+          const text = document.createElement('div');
+          text.textContent = review.text;
+          body.appendChild(text);
+        }
+        const time = document.createElement('div');
+        time.className = 'product-review-row-time';
+        const date = new Date(review.createdAt);
+        time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+        body.appendChild(time);
+        reviewRow.appendChild(body);
+        const deleteRowBtn = document.createElement('button');
+        deleteRowBtn.className = 'product-review-row-delete';
+        deleteRowBtn.type = 'button';
+        deleteRowBtn.textContent = '×';
+        deleteRowBtn.setAttribute('aria-label', 'Delete review');
+        deleteRowBtn.addEventListener('click', async () => {
+          deleteRowBtn.disabled = true;
+          try {
+            await deleteProductReview(template.templateId, review.reviewId);
+            await renderReviews();
+          } catch (err) {
+            console.warn('Could not delete review:', err);
+            deleteRowBtn.disabled = false;
+          }
+        });
+        reviewRow.appendChild(deleteRowBtn);
+        reviewListEl.appendChild(reviewRow);
+      }
+    }
+
+    reviewToggle.addEventListener('click', () => {
+      reviewPanel.hidden = !reviewPanel.hidden;
+      reviewToggle.textContent = `Reviews ${reviewPanel.hidden ? '▾' : '▴'}`;
+      if (!reviewPanel.hidden) renderReviews();
+    });
+
     details.appendChild(rowStatus);
     sellerListEl.appendChild(row);
   }
@@ -3542,7 +3634,6 @@ const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
-const productReviewsBtn = document.getElementById('toggle-product-reviews');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -4042,12 +4133,6 @@ function updateSelectionUI() {
   communityCalendarBtn.disabled = !singleMesh;
   communityCalendarBtn.classList.toggle('active', !!singleMesh?.userData.isCommunityCalendar);
   communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
-  // Product Reviews (docs/API.md's "Product reviews") — same reasoning and
-  // same toggle-then-manage button design as Community Sign/Calendar above,
-  // independent of both.
-  productReviewsBtn.disabled = !singleMesh;
-  productReviewsBtn.classList.toggle('active', !!singleMesh?.userData.isReviewable);
-  productReviewsBtn.textContent = singleMesh?.userData.isReviewable ? 'Product Reviews ✓ (Manage)' : 'Product Reviews';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -4461,122 +4546,6 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
   mesh.userData.isCommunityCalendar = false;
   calendarEventsModalEl.classList.remove('visible');
   calendarEventsTargetMesh = null;
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// Product Reviews (docs/SPEC.md §5, docs/API.md's "Product reviews") —
-// structurally identical to Community Sign/Calendar above (same toggle-
-// then-manage button design, same reasoning), independent of both flags.
-productReviewsBtn.addEventListener('click', async () => {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  if (mesh.userData.isReviewable) {
-    openProductReviewsModal(mesh);
-    return;
-  }
-  mesh.userData.isReviewable = true;
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// A builder's moderation view onto one instance's reviews — same shell/
-// pattern as the sign posts/calendar events modals above.
-const productReviewsModalEl = document.getElementById('product-reviews-modal');
-const productReviewsCloseBtn = document.getElementById('product-reviews-close-btn');
-const productReviewsSummaryEl = document.getElementById('product-reviews-summary');
-const productReviewsListEl = document.getElementById('product-reviews-list');
-const productReviewsEmptyEl = document.getElementById('product-reviews-empty');
-const productReviewsUnflagBtn = document.getElementById('product-reviews-unflag-btn');
-let productReviewsTargetMesh = null;
-
-function formatProductReviewTime(isoString) {
-  const date = new Date(isoString);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-function starString(rating) {
-  return '★'.repeat(rating) + '☆'.repeat(5 - rating);
-}
-
-async function renderProductReviews() {
-  productReviewsListEl.innerHTML = '';
-  productReviewsSummaryEl.textContent = '';
-  if (!productReviewsTargetMesh) return;
-  const instanceId = productReviewsTargetMesh.userData.instanceId;
-  let reviews;
-  let averageRating;
-  try {
-    ({ reviews, averageRating } = await fetchProductReviews(instanceId));
-  } catch (err) {
-    productReviewsEmptyEl.textContent = err.message || 'Could not load reviews.';
-    productReviewsEmptyEl.hidden = false;
-    return;
-  }
-  productReviewsEmptyEl.hidden = reviews.length > 0;
-  if (reviews.length > 0) {
-    productReviewsSummaryEl.textContent = `${starString(Math.round(averageRating))} ${averageRating.toFixed(1)} average (${reviews.length} review${reviews.length === 1 ? '' : 's'})`;
-  }
-  for (const review of reviews) {
-    const row = document.createElement('div');
-    row.className = 'product-review-row';
-    const body = document.createElement('div');
-    body.className = 'product-review-row-body';
-    const author = document.createElement('div');
-    author.className = 'product-review-row-author';
-    author.textContent = review.authorLabel;
-    body.appendChild(author);
-    const rating = document.createElement('div');
-    rating.className = 'product-review-row-rating';
-    rating.textContent = starString(review.rating);
-    body.appendChild(rating);
-    if (review.text) {
-      const text = document.createElement('div');
-      text.textContent = review.text;
-      body.appendChild(text);
-    }
-    const time = document.createElement('div');
-    time.className = 'product-review-row-time';
-    time.textContent = formatProductReviewTime(review.createdAt);
-    body.appendChild(time);
-    row.appendChild(body);
-    const deleteRowBtn = document.createElement('button');
-    deleteRowBtn.className = 'product-review-row-delete';
-    deleteRowBtn.type = 'button';
-    deleteRowBtn.textContent = '×';
-    deleteRowBtn.setAttribute('aria-label', 'Delete review');
-    deleteRowBtn.addEventListener('click', async () => {
-      deleteRowBtn.disabled = true;
-      try {
-        await deleteProductReview(instanceId, review.reviewId);
-        await renderProductReviews();
-      } catch (err) {
-        console.warn('Could not delete review:', err);
-        deleteRowBtn.disabled = false;
-      }
-    });
-    row.appendChild(deleteRowBtn);
-    productReviewsListEl.appendChild(row);
-  }
-}
-
-function openProductReviewsModal(mesh) {
-  productReviewsTargetMesh = mesh;
-  productReviewsModalEl.classList.add('visible');
-  renderProductReviews();
-}
-productReviewsCloseBtn.addEventListener('click', () => {
-  productReviewsModalEl.classList.remove('visible');
-  productReviewsTargetMesh = null;
-});
-productReviewsUnflagBtn.addEventListener('click', async () => {
-  if (!productReviewsTargetMesh) return;
-  const mesh = productReviewsTargetMesh;
-  mesh.userData.isReviewable = false;
-  productReviewsModalEl.classList.remove('visible');
-  productReviewsTargetMesh = null;
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
@@ -5818,9 +5787,10 @@ let nearestActiveSign = null; // whichever sign #shop-sign-hint currently target
 // Same shape/lifecycle as shopSigns above, for community-calendar instances.
 const shopCalendars = [];
 let nearestActiveCalendar = null;
-// Same shape/lifecycle as shopSigns above, for reviewable instances — a
-// {mesh, group, instanceId, reviews, sprites} entry per loaded one, with
-// `reviews` populated once (registerShopReview) rather than re-fetched.
+// Same shape/lifecycle as shopSigns above, for every placed instance's
+// reviews (no opt-in flag — see registerShopReview) — a
+// {mesh, group, templateId, reviews, sprites} entry per loaded one, with
+// `reviews` populated once rather than re-fetched.
 const shopReviews = [];
 let nearestActiveReview = null;
 
@@ -6113,7 +6083,11 @@ async function loadShopLandletInstances(entry) {
     growShopDomeIfNeeded(object);
     if (object.userData.isCommunitySign) registerShopSign(object, entry);
     if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
-    if (object.userData.isReviewable) registerShopReview(object, entry);
+    // Unlike signs/calendar above, reviews have no builder opt-in flag at
+    // all — every placed instance's underlying catalog template is
+    // reviewable by definition (see docs/API.md's "Product reviews"), so
+    // this registers unconditionally.
+    registerShopReview(object, entry);
   }
 }
 
@@ -6279,12 +6253,19 @@ function updateCalendarFade() {
   }
 }
 
-// A reviewable instance starts with no reviews loaded — fetched once, here,
-// right as it enters the world, same lifecycle as registerShopSign above.
+// Every placed instance starts with no reviews loaded — fetched once, here,
+// right as it enters the world, keyed by the instance's underlying
+// templateId (the product), not its own instanceId, since the same review
+// list is shared by every placement of that product. Each placement fetches
+// independently rather than sharing a per-template cache — a shopper
+// posting a review near one placement won't instantly update another
+// loaded instance of the same product elsewhere (an edge case rare enough,
+// and purely cosmetic enough, that a shared cache isn't worth the added
+// bookkeeping here).
 function registerShopReview(mesh, entry) {
-  const review = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, reviews: [], sprites: [] };
+  const review = { mesh, group: entry.group, templateId: mesh.userData.template.templateId, reviews: [], sprites: [] };
   shopReviews.push(review);
-  fetchProductReviews(review.instanceId).then(({ reviews }) => {
+  fetchProductReviews(review.templateId).then(({ reviews }) => {
     if (!shopReviews.includes(review)) return;
     review.reviews = reviews;
     rebuildReviewSprites(review);
@@ -6513,7 +6494,7 @@ shopReviewHintEl.addEventListener('click', async () => {
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
   shopReviewHintEl.disabled = true;
   try {
-    const posted = await createProductReview(review.instanceId, { authorLabel, rating, text: text?.trim() || undefined });
+    const posted = await createProductReview(review.templateId, { authorLabel, rating, text: text?.trim() || undefined });
     review.reviews.push(posted);
     rebuildReviewSprites(review);
   } catch (err) {

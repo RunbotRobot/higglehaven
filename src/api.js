@@ -487,16 +487,18 @@ export async function triggerCalendarEvent(instanceId, eventId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}/trigger`, { method: 'POST' });
 }
 
-// Product reviews (see migrations/0047_product_reviews.sql) — same nested-
-// under-the-instance shape as sign posts/calendar events above, for the
-// same reason. GET's response also carries averageRating/count so callers
-// don't need to recompute them from the raw list.
-export async function fetchProductReviews(instanceId) {
-  return requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews`);
+// Product reviews (see migrations/0048_product_reviews_on_template.sql) —
+// nested under the catalog *template* (the product itself), not under any
+// one placed instance of it, so the same review list is shared by every
+// placement of that product. GET's response also carries
+// averageRating/count so callers don't need to recompute them from the raw
+// list.
+export async function fetchProductReviews(templateId) {
+  return requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`);
 }
 
-export async function createProductReview(instanceId, { authorLabel, rating, text } = {}) {
-  const { review } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews`, {
+export async function createProductReview(templateId, { authorLabel, rating, text } = {}) {
+  const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ authorLabel, rating, text }),
@@ -504,8 +506,8 @@ export async function createProductReview(instanceId, { authorLabel, rating, tex
   return review;
 }
 
-export async function deleteProductReview(instanceId, reviewId) {
-  await requestJson(`/instances/${encodeURIComponent(instanceId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
+export async function deleteProductReview(templateId, reviewId) {
+  await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
 }
 
 // Land acquisition auctions (see migrations/0045_auctions.sql).

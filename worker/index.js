@@ -742,7 +742,81 @@ async function handleCatalog(request, db, route, url, models) {
     return json({ deleted: true });
   }
 
+  if (route.length >= 3 && route[2] === 'reviews') {
+    return handleProductReviews(request, db, route);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// Reviews on a catalog template (docs/SPEC.md §5's "Review incentives,"
+// docs/API.md's "Product reviews," migrations/0048) — nested under
+// /catalog/:templateId/reviews rather than a top-level /product-reviews
+// collection, same "never exists independent of its parent" reasoning as
+// sign posts/calendar events. Attached to the *template* (the product
+// itself), not to any one placed instance of it — see migrations/0048's own
+// comment for why 0047's original instance-level design was wrong. No
+// opt-in flag: every catalog template is already product-like by
+// definition, so every one is reviewable, and no ownership check on DELETE
+// (moderation) — same no-real-auth caveat as every other dev-mode identity
+// in this file.
+async function handleProductReviews(request, db, route) {
+  const templateId = route[1];
+
+  if (request.method === 'GET' && route.length === 3) {
+    const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    const { results } = await db.prepare(`
+      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at LIMIT 200
+    `).bind(templateId).all();
+    const reviews = results.map(reviewFromRow);
+    const averageRating = reviews.length === 0
+      ? null
+      : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
+    return json({ reviews, averageRating, count: reviews.length });
+  }
+
+  if (request.method === 'POST' && route.length === 3) {
+    const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    const input = await readJson(request);
+    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+    const text = input.text === undefined || input.text === null || input.text === ''
+      ? null
+      : stringValue(input.text, 'text');
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    const reviewId = `review-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text) VALUES (?, ?, ?, ?, ?)
+    `).bind(reviewId, templateId, authorLabel, rating, text).run();
+    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    return json({ review: reviewFromRow(row) }, 201);
+  }
+
+  if (request.method === 'DELETE' && route.length === 4) {
+    const reviewId = route[3];
+    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
+    if (!existing) return json({ error: 'Review not found' }, 404);
+    await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function reviewFromRow(row) {
+  return {
+    reviewId: row.review_id,
+    templateId: row.template_id,
+    authorLabel: row.author_label,
+    rating: row.rating,
+    text: row.text,
+    createdAt: row.created_at,
+  };
 }
 
 // A seller changing a product's real-world size after it's already been
@@ -2383,13 +2457,12 @@ async function handleInstances(request, db, route, url) {
         rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
         scale = excluded.scale, is_community_sign = excluded.is_community_sign,
         is_community_calendar = excluded.is_community_calendar,
-        is_reviewable = excluded.is_reviewable,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, is_reviewable)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...instanceParams(instance))));
     const stored = await getInstancesById(db, instanceIds);
@@ -2440,9 +2513,9 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, is_reviewable)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, instance.isReviewable ? 1 : 0).run();
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -2457,9 +2530,9 @@ async function handleInstances(request, db, route, url) {
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, is_reviewable = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, instance.isReviewable ? 1 : 0, route[1]).run();
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1]).run();
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
@@ -2475,10 +2548,6 @@ async function handleInstances(request, db, route, url) {
 
   if (route.length >= 3 && route[2] === 'events') {
     return handleCalendarEvents(request, db, route);
-  }
-
-  if (route.length >= 3 && route[2] === 'reviews') {
-    return handleProductReviews(request, db, route);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -2652,76 +2721,6 @@ function isoDateString(value, field) {
     throw new HttpError(`${field} must be a valid date/time string`, 400);
   }
   return new Date(text).toISOString();
-}
-
-// Reviews on a "reviewable" instance (docs/SPEC.md §5's "Review incentives,"
-// docs/API.md's "Product reviews," migrations/0047) — a third structural
-// clone of handleSignPosts/handleCalendarEvents above, same nested-under-
-// the-instance/no-ownership-check-on-delete reasoning as both. The one real
-// difference from those two is the numeric rating field, plus the averaged
-// summary GET returns alongside the raw list — useful to any UI (Build
-// mode's moderation panel, a future Shop-mode display) that wants "how is
-// this rated" without recomputing it from the full list itself.
-async function handleProductReviews(request, db, route) {
-  const instanceId = route[1];
-
-  if (request.method === 'GET' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    const { results } = await db.prepare(`
-      SELECT * FROM product_reviews WHERE instance_id = ? ORDER BY created_at LIMIT 200
-    `).bind(instanceId).all();
-    const reviews = results.map(reviewFromRow);
-    const averageRating = reviews.length === 0
-      ? null
-      : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
-    return json({ reviews, averageRating, count: reviews.length });
-  }
-
-  if (request.method === 'POST' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id, is_reviewable FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    if (!instance.is_reviewable) {
-      throw new HttpError('This placed instance is not marked as reviewable', 400);
-    }
-    const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
-    const rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-    const text = input.text === undefined || input.text === null || input.text === ''
-      ? null
-      : stringValue(input.text, 'text');
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    const reviewId = `review-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO product_reviews (review_id, instance_id, author_label, rating, text) VALUES (?, ?, ?, ?, ?)
-    `).bind(reviewId, instanceId, authorLabel, rating, text).run();
-    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
-    return json({ review: reviewFromRow(row) }, 201);
-  }
-
-  if (request.method === 'DELETE' && route.length === 4) {
-    const reviewId = route[3];
-    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND instance_id = ?').bind(reviewId, instanceId).first();
-    if (!existing) return json({ error: 'Review not found' }, 404);
-    await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
-    return json({ deleted: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-function reviewFromRow(row) {
-  return {
-    reviewId: row.review_id,
-    instanceId: row.instance_id,
-    authorLabel: row.author_label,
-    rating: row.rating,
-    text: row.text,
-    createdAt: row.created_at,
-  };
 }
 
 function routePath(pathname) {
@@ -2933,9 +2932,6 @@ function validateInstance(input, fallbackId) {
     // docs/API.md's "Community calendar" — same per-instance opt-in
     // reasoning as isCommunitySign, independent of it.
     isCommunityCalendar: input.isCommunityCalendar === true,
-    // docs/API.md's "Product reviews" — same per-instance opt-in reasoning
-    // as the two flags above, independent of both.
-    isReviewable: input.isReviewable === true,
   };
 }
 
@@ -2979,7 +2975,7 @@ function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
     instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
     JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0,
-    instance.isCommunityCalendar ? 1 : 0, instance.isReviewable ? 1 : 0];
+    instance.isCommunityCalendar ? 1 : 0];
 }
 
 function landletParams(landlet) {
@@ -3020,7 +3016,6 @@ function instanceFromRow(row) {
     scale: row.scale,
     isCommunitySign: Boolean(row.is_community_sign),
     isCommunityCalendar: Boolean(row.is_community_calendar),
-    isReviewable: Boolean(row.is_reviewable),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

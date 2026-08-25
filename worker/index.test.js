@@ -1901,174 +1901,118 @@ describe('Community calendar', () => {
 });
 
 describe('Product reviews', () => {
-  it('toggles isReviewable on a placed instance and round-trips it', async () => {
-    const created = await api('/instances', {
+  async function createTemplate(templateId) {
+    const created = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
-        instanceId: 'review-toggle-instance',
-        landletId: 'starter-landlet',
-        templateId: 'placeholder-tree',
-        x: 12,
-        y: 12,
+        templateId,
+        name: `Reviewable product ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
       }),
     });
     expect(created.response.status).toBe(201);
-    expect(created.body.instance.isReviewable).toBe(false);
+    return templateId;
+  }
 
-    const toggled = await api('/instances/review-toggle-instance', {
-      method: 'PATCH',
-      body: JSON.stringify({ isReviewable: true }),
-    });
-    expect(toggled.response.status).toBe(200);
-    expect(toggled.body.instance.isReviewable).toBe(true);
-
-    const fetched = await api('/instances/review-toggle-instance');
-    expect(fetched.body.instance.isReviewable).toBe(true);
-  });
-
-  it('is independent of isCommunitySign and isCommunityCalendar on the same instance', async () => {
-    const created = await api('/instances', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'all-three-flags-instance',
-        landletId: 'starter-landlet',
-        templateId: 'placeholder-tree',
-        x: 13,
-        y: 13,
-        isCommunitySign: true,
-        isCommunityCalendar: true,
-        isReviewable: true,
-      }),
-    });
-    expect(created.body.instance.isCommunitySign).toBe(true);
-    expect(created.body.instance.isCommunityCalendar).toBe(true);
-    expect(created.body.instance.isReviewable).toBe(true);
-
-    const unsetReviewableOnly = await api('/instances/all-three-flags-instance', {
-      method: 'PATCH',
-      body: JSON.stringify({ isReviewable: false }),
-    });
-    expect(unsetReviewableOnly.body.instance.isReviewable).toBe(false);
-    expect(unsetReviewableOnly.body.instance.isCommunitySign).toBe(true);
-    expect(unsetReviewableOnly.body.instance.isCommunityCalendar).toBe(true);
-  });
-
-  it('rejects a review on an instance not marked as reviewable', async () => {
-    await api('/instances', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'not-reviewable-instance',
-        landletId: 'starter-landlet',
-        templateId: 'placeholder-tree',
-        x: 14,
-        y: 14,
-      }),
-    });
-
-    const rejected = await api('/instances/not-reviewable-instance/reviews', {
+  it('rejects a review on a catalog template that does not exist', async () => {
+    const rejected = await api('/catalog/template-does-not-exist/reviews', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
     });
-    expect(rejected.response.status).toBe(400);
-    expect(rejected.body.error).toMatch(/not marked as reviewable/);
+    expect(rejected.response.status).toBe(404);
   });
 
-  it('creates, lists (with an average), and moderates reviews on a reviewable instance', async () => {
-    await api('/instances', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'reviewable-with-reviews',
-        landletId: 'starter-landlet',
-        templateId: 'placeholder-tree',
-        x: 15,
-        y: 15,
-        isReviewable: true,
-      }),
-    });
+  it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
+    const templateId = await createTemplate('reviewable-product');
 
-    const emptyList = await api('/instances/reviewable-with-reviews/reviews');
+    const emptyList = await api(`/catalog/${templateId}/reviews`);
     expect(emptyList.response.status).toBe(200);
     expect(emptyList.body.reviews).toEqual([]);
     expect(emptyList.body.averageRating).toBeNull();
     expect(emptyList.body.count).toBe(0);
 
-    const missingRating = await api('/instances/reviewable-with-reviews/reviews', {
+    const missingRating = await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper' }),
     });
     expect(missingRating.response.status).toBe(400);
 
     for (const badRating of [0, 6, 3.5, 'five']) {
-      const rejected = await api('/instances/reviewable-with-reviews/reviews', {
+      const rejected = await api(`/catalog/${templateId}/reviews`, {
         method: 'POST',
         body: JSON.stringify({ authorLabel: 'A Shopper', rating: badRating }),
       });
       expect(rejected.response.status).toBe(400);
     }
 
-    const tooLong = await api('/instances/reviewable-with-reviews/reviews', {
+    const tooLong = await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 4, text: 'x'.repeat(281) }),
     });
     expect(tooLong.response.status).toBe(400);
 
-    const firstReview = await api('/instances/reviewable-with-reviews/reviews', {
+    const firstReview = await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5, text: 'Lovely spot!' }),
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5, text: 'Lovely product!' }),
     });
     expect(firstReview.response.status).toBe(201);
     expect(firstReview.body.review).toMatchObject({
-      instanceId: 'reviewable-with-reviews',
+      templateId,
       authorLabel: 'A Shopper',
       rating: 5,
-      text: 'Lovely spot!',
+      text: 'Lovely product!',
     });
     expect(firstReview.body.review.reviewId).toMatch(/^review-/);
 
     // text is genuinely optional — a bare star rating is still a real review.
-    const secondReview = await api('/instances/reviewable-with-reviews/reviews', {
+    const secondReview = await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'Another Shopper', rating: 3 }),
     });
     expect(secondReview.response.status).toBe(201);
     expect(secondReview.body.review.text).toBeNull();
 
-    const listed = await api('/instances/reviewable-with-reviews/reviews');
+    const listed = await api(`/catalog/${templateId}/reviews`);
     expect(listed.body.reviews).toHaveLength(2);
     expect(listed.body.count).toBe(2);
     expect(listed.body.averageRating).toBe(4); // (5 + 3) / 2
 
-    const deleted = await api(`/instances/reviewable-with-reviews/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
+    const deleted = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
 
-    const listedAfterDelete = await api('/instances/reviewable-with-reviews/reviews');
+    const listedAfterDelete = await api(`/catalog/${templateId}/reviews`);
     expect(listedAfterDelete.body.reviews).toHaveLength(1);
     expect(listedAfterDelete.body.averageRating).toBe(5);
 
-    const deleteMissing = await api(`/instances/reviewable-with-reviews/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
+    const deleteMissing = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
     expect(deleteMissing.response.status).toBe(404);
   });
 
-  it('cascades review deletion when the instance itself is deleted', async () => {
-    await api('/instances', {
+  it('keeps reviews independent between two different catalog templates', async () => {
+    const templateA = await createTemplate('reviewable-product-a');
+    const templateB = await createTemplate('reviewable-product-b');
+    await api(`/catalog/${templateA}/reviews`, {
       method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'reviewable-to-delete',
-        landletId: 'starter-landlet',
-        templateId: 'placeholder-tree',
-        x: 16,
-        y: 16,
-        isReviewable: true,
-      }),
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
     });
-    await api('/instances/reviewable-to-delete/reviews', {
+
+    const listA = await api(`/catalog/${templateA}/reviews`);
+    const listB = await api(`/catalog/${templateB}/reviews`);
+    expect(listA.body.reviews).toHaveLength(1);
+    expect(listB.body.reviews).toEqual([]);
+  });
+
+  it('cascades review deletion when the catalog template itself is deleted', async () => {
+    const templateId = await createTemplate('reviewable-product-to-delete');
+    await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 4 }),
     });
-    await api('/instances/reviewable-to-delete', { method: 'DELETE' });
+    await api(`/catalog/${templateId}`, { method: 'DELETE' });
 
-    const afterDelete = await api('/instances/reviewable-to-delete/reviews');
+    const afterDelete = await api(`/catalog/${templateId}/reviews`);
     expect(afterDelete.response.status).toBe(404);
   });
 });
