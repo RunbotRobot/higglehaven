@@ -2709,3 +2709,120 @@ describe('Prohibited categories and digital goods', () => {
     expect(cleared.body.template.metadata.digitalGoodDisclaimer).toBeUndefined();
   });
 });
+
+// Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
+// enforced against auction bids — see worker/index.js's own long comment
+// on recomputeLandCap for why a hard block was tried and reverted (claiming
+// is mandatory to use Build mode at all, the default cap exactly equals the
+// mandatory starter lándlet's own size, and this dev-mode backend has no
+// real commerce/commission system — spec's actual PRIMARY earning path —
+// so auction sale proceeds are the only dáller source that exists; hard-
+// enforcing against that one source alone would make growing past your
+// starter lándlet structurally impossible for every builder). These tests
+// cover the formula, the ratchet, and the per-event ledger — all real and
+// correctly implemented — without asserting anything is blocked.
+describe('Land cap', () => {
+  async function createBuilder(label) {
+    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
+    return res.body.builder.builderId;
+  }
+
+  async function createGreenbeltLandletWithArea(landletId, areaM2) {
+    return api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
+    });
+  }
+
+  async function claim(landletId, builderId) {
+    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  }
+
+  async function startAuction(landletId, sellerBuilderId) {
+    return api(`/landlets/${landletId}/auction`, {
+      method: 'POST',
+      body: JSON.stringify({ builderId: sellerBuilderId, startingBidCents: 0, durationHours: 1 }),
+    });
+  }
+
+  function landCapOf(listResponse, builderId) {
+    return listResponse.body.builders.find((b) => b.builderId === builderId).landCapM2;
+  }
+
+  it('defaults every new builder to a 1000 m² land cap', async () => {
+    const builderId = await createBuilder('Land Cap Default Builder');
+    expect(landCapOf(await api('/builders'), builderId)).toBe(1000);
+  });
+
+  it('does not block a bid that would exceed the bidder\'s cap — tracking only, not enforced', async () => {
+    const seller = await createBuilder('Land Cap Seller A');
+    const bidder = await createBuilder('Land Cap Bidder A');
+    await createGreenbeltLandletWithArea('land-cap-big-landlet', 5000);
+    await claim('land-cap-big-landlet', seller);
+    const started = await startAuction('land-cap-big-landlet', seller);
+    const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 100 }),
+    });
+    expect(bid.response.status).toBe(201);
+  });
+
+  it('grows a builder\'s land cap from trailing dáller earnings, normalized per 1000 m² owned', async () => {
+    const builderId = await createBuilder('Land Cap Formula Builder');
+    // $40 of trailing earnings, normalized against zero owned (floored to
+    // the 1000 m² baseline), at 100 m² per dollar per 1000 m² owned =>
+    // +4000 m² -> candidate cap 5000.
+    await env.DB.prepare(`
+      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind('land-cap-formula-earning', builderId, 4000).run();
+    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+  });
+
+  it('ratchets — a cap increase never reverts even after the earnings that produced it age out of the trailing window', async () => {
+    const builderId = await createBuilder('Land Cap Ratchet Builder');
+    await env.DB.prepare(`
+      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind('land-cap-ratchet-earning', builderId, 4000).run();
+    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+
+    // Age the earning out of the 30-day trailing window, then force another
+    // recompute (any GET /builders does this) — the cap must NOT drop back
+    // down even though the earnings that grew it are now stale, matching
+    // docs/SPEC.md §3's "ratcheting: once increased, never decreases."
+    await env.DB.prepare(`
+      UPDATE daller_earnings_events SET created_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?
+    `).bind('land-cap-ratchet-earning').run();
+    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+  });
+
+  it('credits a real per-event earnings ledger entry when an auction actually sells', async () => {
+    const seller = await createBuilder('Land Cap Ledger Seller');
+    const bidder = await createBuilder('Land Cap Ledger Bidder');
+    await createGreenbeltLandletWithArea('land-cap-ledger-landlet', 1000);
+    await claim('land-cap-ledger-landlet', seller);
+    const started = await startAuction('land-cap-ledger-landlet', seller);
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, {
+      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 500 }),
+    });
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    await api(`/auctions/${auctionId}`); // GET resolves a due auction lazily
+
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(seller).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].amount_cents).toBe(500);
+  });
+
+  it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
+    // The claim endpoint's own NOT EXISTS guard already limits a builder to
+    // exactly one claimed lándlet at a time regardless of land cap, so a
+    // fresh builder's default 1000 m² cap claiming a 1000 m² starter
+    // lándlet is unaffected by this feature at all.
+    const builderId = await createBuilder('Land Cap Claim Builder');
+    await createGreenbeltLandletWithArea('land-cap-starter-landlet', 1000);
+    const claimed = await claim('land-cap-starter-landlet', builderId);
+    expect(claimed.response.status).toBe(200);
+    expect(claimed.body.landlet.ownerBuilderId).toBe(builderId);
+  });
+});

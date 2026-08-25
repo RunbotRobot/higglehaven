@@ -3394,12 +3394,45 @@ function renderGeneralSettingsSection() {
   settingsSectionEl.appendChild(field);
 }
 
+// Land cap (docs/SPEC.md §3, docs/API.md's "Land cap") — a builder-account
+// fact, not tied to the currently-active landlet the way Publish/Version
+// History below are, so this shows regardless of currentMode/
+// currentLandletId (as long as a builder identity has actually been
+// chosen at all this session — builderId can still be null if Settings is
+// opened from Shop mode before ever entering Build).
+async function renderLandCapField() {
+  if (!builderId) return;
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Land Cap';
+  field.appendChild(fieldLabel);
+  const status = document.createElement('div');
+  status.className = 'settings-empty-note';
+  status.textContent = 'Loading…';
+  field.appendChild(status);
+  settingsSectionEl.appendChild(field);
+  try {
+    const [builders, ownedLandlets] = await Promise.all([
+      fetchBuilders(),
+      fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 100 }),
+    ]);
+    const me = builders.find((b) => b.builderId === builderId);
+    const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
+    status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
+      'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
+  } catch (err) {
+    status.textContent = err.message || 'Could not load your land cap.';
+  }
+}
+
 // Publish + Version History (see docs/API.md's "Landlet drafts"/"Landlet
 // versions") — the one place the already-existing draft/version/activate
 // backend gets a frontend. Only meaningful while actually in Build mode on
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
 function renderBuildSettingsSection() {
+  renderLandCapField();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';

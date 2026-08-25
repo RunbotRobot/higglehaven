@@ -966,6 +966,13 @@ async function getVersion(db, landletId, versionId) {
 async function handleBuilders(request, db, route) {
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
+    // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
+    // read, rather than on a schedule — the same pattern this app uses
+    // everywhere else. Mutating each row in place with the freshly
+    // recomputed value avoids a second round-trip re-fetch.
+    await Promise.all(results.map(async (row) => {
+      row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
+    }));
     return json({ builders: results.map(builderFromRow) });
   }
 
@@ -1046,6 +1053,10 @@ function builderFromRow(row) {
     // via auction. See migrations/0045's own note on why bidding itself
     // isn't gated by having a sufficient balance yet.
     dallersBalanceCents: row.dallers_balance_cents,
+    // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
+    // area this builder may own at once, distinct from dallersBalanceCents
+    // above (which land-specific lándlets can be acquired via auction).
+    landCapM2: row.land_cap_m2,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1540,6 +1551,76 @@ async function requireAuction(db, auctionId) {
   return row;
 }
 
+// Land cap (docs/SPEC.md §3: "Grows via a formula converting trailing-30-day
+// dáller earnings per 1,000 m² owned into cap increases. Ratcheting: once
+// increased, never decreases. Conversion ratio adjusts at most once/month,
+// small increments.") The conversion ratio itself is exactly the kind of
+// number docs/SPEC.md §10's own "Lándlet hosting cost validation" open
+// item flags as "needs validation against real measured costs once live" —
+// this constant is a placeholder pending that, not a claimed-final number.
+// The "adjusts at most once/month" cadence describes an operator tuning
+// this constant over time, not something this dev-mode backend does on its
+// own — there is no mechanism here (or need for one) to change it
+// automatically.
+//
+// DELIBERATELY TRACKING-ONLY, NOT ENFORCED, for now — this was tried as a
+// hard block on auction bids and reverted after e2e testing surfaced a real
+// bootstrapping trap: claiming is mandatory to use Build mode at all
+// (resolveLandletId in src/main.js forces the claim flow for a landless
+// builder), and the default cap is exactly the starter lándlet's own size,
+// so EVERY fresh builder starts already at 100% of their cap the moment
+// they exist. Spec's own intended primary earning path is commerce
+// commissions (§5: dállers credit on a product SALE, not on selling land),
+// but this dev-mode backend has no real checkout/commerce system at all
+// (out of scope, same as real payments generally) — auction sale proceeds
+// are the ONLY dáller source actually implemented. Hard-enforcing the cap
+// against that one source alone would make growing past your starter
+// lándlet structurally impossible for every builder (nobody can ever earn
+// without first having cap headroom to acquire something to resell, and
+// nobody has headroom without having already earned) — a regression that
+// would make the auction system self-defeating, not a faithful
+// implementation of "growth is earned through demonstrated performance."
+// The formula, ratcheting, and per-event ledger are still real and
+// correctly implemented — recomputeLandCap is exposed via `landCapM2` on
+// the builder object (see docs/API.md's "Land cap") so this is visible and
+// ready to gate real acquisitions once a real commerce/commission loop
+// exists to make that gate navigable.
+const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
+const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
+const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
+
+// Recomputes what this builder's land cap SHOULD be right now, from their
+// trailing earnings window and current owned area, and ratchets
+// land_cap_m2 up to that if it's higher than what's already stored — never
+// down, even though the trailing window itself can shrink as earnings age
+// out of it. Called lazily, the same "no Cloudflare Cron Trigger anywhere
+// in this app" pattern auction resolution and scheduled calendar events
+// already use, rather than on any kind of schedule — specifically, on
+// every GET of the builder it belongs to, so landCapM2 is always current
+// by the time any caller actually reads it.
+async function recomputeLandCap(db, builderId) {
+  const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
+  if (!builder) return LAND_CAP_STARTER_M2;
+  const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const earningsRow = await db.prepare(`
+    SELECT COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+    WHERE builder_id = ? AND created_at >= ?
+  `).bind(builderId, windowStart).first();
+  const ownedRow = await db.prepare(`
+    SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
+  `).bind(builderId).first();
+  const normalizedThousands = Math.max(ownedRow.total, LAND_CAP_STARTER_M2) / 1000;
+  const trailingEarningsDollars = earningsRow.total / 100;
+  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
+  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
+  const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
+  const nextCap = Math.max(builder.land_cap_m2, candidateCap);
+  if (nextCap !== builder.land_cap_m2) {
+    await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
+  }
+  return nextCap;
+}
+
 // Sweeps every active-but-expired auction and resolves each in turn — the
 // closest this dev-mode backend gets to a real scheduled job (see
 // docs/API.md's own note on why: no Cron Trigger is wired up, so
@@ -1589,6 +1670,13 @@ async function resolveAuction(db, auction) {
       db.prepare(`
         UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?
       `).bind(highest.amount_cents, auction.seller_builder_id),
+      // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
+      // trailing-30-day earnings WINDOW, not the lifetime
+      // dallers_balance_cents total above — this per-event ledger is what
+      // makes that window computable later (see recomputeLandCap).
+      db.prepare(`
+        INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
       db.prepare(`
         UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE auction_id = ?

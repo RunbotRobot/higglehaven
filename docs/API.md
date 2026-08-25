@@ -2477,6 +2477,102 @@ pattern `e2e/bundle-sharing.test.mjs` already uses) — but deliberately
 actually be past its end time, and the shortest duration the API accepts
 is 1 hour, so waiting for a real one isn't practical in an e2e run.
 
+## Land cap
+
+docs/SPEC.md §3: "Land cap — the growth-gating mechanic (distinct from
+land acquisition, §5): Per-builder max total m², gating hosting burden.
+Grows via a formula converting trailing-30-day dáller earnings per
+1,000 m² owned into cap increases. Ratcheting: once increased, never
+decreases." Also: "Two independent constraints (do not conflate): 1. Land
+cap — how much total area, grows only via earnings formula. 2. Dáller
+balance — which specific already-claimed lands can be acquired via auction
+(§5)." This section (`migrations/0050_land_cap.sql`) had no implementation
+at all before it — `builders.land_cap_m2` (defaults to `1000`, matching the
+free starter lándlet exactly) and a per-event `daller_earnings_events`
+ledger (needed for a genuine trailing-30-day *window*, which the existing
+lifetime `dallers_balance_cents` total, migrations/0045, can't answer on
+its own).
+
+**This is deliberately tracking-only, not enforced against auction bids —
+an explicit, tested, and reverted design decision, not an oversight.** A
+hard block ("reject a bid that would push the bidder over their cap") was
+implemented and then removed after real e2e testing (not speculation)
+surfaced a genuine bootstrapping trap:
+
+- Claiming a lándlet is mandatory to use Build mode at all —
+  `resolveLandletId` in `src/main.js` forces the claim flow for any
+  builder who doesn't already own one. There is no "skip claiming" path.
+- The default cap (`1000`) exactly equals the mandatory starter lándlet's
+  own size. So every builder, the moment they exist, is already at 100% of
+  their cap.
+- docs/SPEC.md §5 makes clear the *intended primary* dáller-earning path is
+  commerce commissions — "Dállers credit instantly to builders on sale
+  completion" (of a *product*, not of land). But this dev-mode backend has
+  no real checkout/commerce system at all (out of scope, same as real
+  payments generally elsewhere in this project). Auction sale proceeds are
+  the *only* dáller source actually implemented.
+- Hard-enforcing the cap against that one lone source would make growing
+  past your starter lándlet structurally impossible for *every* builder:
+  nobody can ever earn without first having cap headroom to acquire
+  something to resell, and nobody has headroom without having already
+  earned. That's not a faithful implementation of "growth is earned
+  through demonstrated performance" (docs/SPEC.md §0) — it's a dead end
+  that would make the auction system (shipped and working) self-defeating.
+
+The formula, the ratchet, and the per-event ledger are all real and
+correctly implemented regardless — `recomputeLandCap` in `worker/index.js`
+runs lazily (the same "no Cloudflare Cron Trigger anywhere in this app"
+pattern auction resolution and scheduled calendar events already use) on
+every `GET /api/builders`, so `landCapM2` on the builder object (see
+"Builders" above) is always current. This is real, visible infrastructure
+ready to gate actual land acquisition the moment a real commerce/commission
+loop exists to make that gate navigable — not a stub.
+
+### The formula (placeholder pending real validation)
+
+```
+normalizedThousands = max(ownedAreaM2, 1000) / 1000
+trailingEarningsDollars = SUM(daller_earnings_events.amount_cents WHERE created_at >= now - 30 days) / 100
+earningsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands
+increaseM2 = floor(earningsPerThousandM2Owned * 100)
+candidateCap = 1000 + increaseM2
+landCapM2 = max(landCapM2, candidateCap)  // ratchet — never decreases
+```
+
+The `100` (m² of cap per dollar of trailing earnings per 1,000 m² owned)
+is exactly the kind of number docs/SPEC.md §10's own open item —
+"Lándlet hosting cost validation ... needs validation against real
+measured costs once live" — flags as not yet settled. This is a
+placeholder pending that, not a claimed-final ratio. Spec's own "adjusts
+at most once/month, small increments" describes an *operator* tuning this
+constant over time; there is no mechanism here (or need for one) for the
+backend to change it on its own.
+
+`daller_earnings_events` gains one row whenever `resolveAuction` credits a
+seller's `dallers_balance_cents` on a successful sale — same event, same
+amount, recorded twice for two different purposes (a lifetime running
+total vs. a queryable time-windowed ledger).
+
+### Frontend wiring
+
+Settings' Build tab shows a "Land Cap" field (`renderLandCapField` in
+`src/main.js`) above Publish/Version History — a builder-account fact, not
+tied to the currently-active landlet, so it renders whenever a builder
+identity is active regardless of `currentMode`/`currentLandletId` (unlike
+Publish, which needs an active Build-mode landlet). It shows current owned
+area (summed from `GET /api/landlets?status=claimed&ownerBuilderId=...`)
+against `landCapM2` from `GET /api/builders`.
+
+### Testing note
+
+`worker/index.test.js`'s "Land cap" describe block covers the default,
+the formula's own math, the ratchet surviving earnings aging out of the
+trailing window, the per-event ledger actually being credited on a real
+auction sale, the starter claim being unaffected, and — explicitly — that
+a bid exceeding cap is **not** rejected, confirming the tracking-only
+decision is what's actually shipped rather than a leftover TODO.
+`e2e/land-cap.test.mjs` covers the Settings display through the real UI.
+
 ## D1 schema overview
 
 The migrations currently create sixteen main backend tables:
@@ -2506,6 +2602,9 @@ The migrations currently create sixteen main backend tables:
 - `friendships`: one row per friend relationship between two builders,
   direction preserved, status `pending`/`accepted` (see "Friend requests"
   above).
+- `daller_earnings_events`: a per-event, timestamped dáller-earnings ledger
+  per builder (see "Land cap" above), distinct from the running
+  `builders.dallers_balance_cents` lifetime total.
 - `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
 - `sign_posts`: shopper-authored posts on a placed instance flagged
   `isCommunitySign` (see "Community signs" above), cascade-deleted with
