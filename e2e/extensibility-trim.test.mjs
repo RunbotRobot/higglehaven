@@ -75,7 +75,7 @@ await page.waitForTimeout(800);
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForTimeout(1500);
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: false });
-await page.waitForSelector('#identity-btn', { timeout: 10000 });
+await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(2000);
 
 const infoAfterReload = await clickUntilSelected(page, {

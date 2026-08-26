@@ -5,7 +5,7 @@
 // and "Editing a product's size" sections).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -102,6 +102,17 @@ console.log('save status (should mention notified):', saveStatus);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);
 
+// The collapsed account menu itself summarizes an unread badge as a small
+// dot (index.html's #account-menu:has(#notifications-badge:not([hidden]))
+// rule) — checkable without expanding the menu at all.
+const dotVisibleBeforeExpanding = await page.evaluate(() => {
+  const toggle = document.getElementById('account-menu-toggle');
+  const style = getComputedStyle(toggle, '::after');
+  return style.content !== 'none' && style.content !== '';
+});
+console.log('account menu toggle shows an unread dot before expanding (should be true):', dotVisibleBeforeExpanding);
+
+await openAccountMenu(page);
 const badgeVisible = await page.locator('#notifications-badge').isVisible();
 const badgeText = await page.locator('#notifications-badge').textContent();
 console.log('notifications badge after resize (should be visible, count 1):', badgeVisible, badgeText);
@@ -121,6 +132,7 @@ console.log('badge hidden after reading the only notice (should be true):', badg
 
 const pass = badgeHiddenInitially && fileStepVisible && originalX > 0 && productListed &&
   scaledProportionally && saveStatus.includes('notified') &&
+  dotVisibleBeforeExpanding &&
   badgeVisible && badgeText === '1' &&
   noticeText.includes(PRODUCT_NAME) && noticeText.toLowerCase().includes('resized') &&
   badgeHiddenAfterRead &&

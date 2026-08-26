@@ -103,13 +103,13 @@ function accessLoginPage(errorMessage) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>higglehaven</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; font: 15px/1.5 sans-serif; }
-  form { background: rgb(36 56 20 / 0.97); padding: 28px 26px; border-radius: 14px; width: 100%; max-width: 320px; box-sizing: border-box; color: #fff; }
+  html, body { margin: 0; height: 100%; background: #eef4e0; display: flex; align-items: center; justify-content: center; font: 15px/1.5 sans-serif; }
+  form { background: rgb(250 240 199 / 0.97); padding: 28px 26px; border-radius: 14px; width: 100%; max-width: 320px; box-sizing: border-box; color: #16240a; }
   h1 { margin: 0 0 6px; font-size: 20px; }
-  p { margin: 0 0 18px; font-size: 13px; color: rgb(255 255 255 / 0.7); }
-  input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid rgb(255 255 255 / 0.25); background: rgb(255 255 255 / 0.1); color: #fff; font: 15px/1.4 sans-serif; margin-bottom: 12px; }
+  p { margin: 0 0 18px; font-size: 13px; color: rgb(22 36 10 / 0.7); }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid rgb(22 36 10 / 0.25); background: rgb(22 36 10 / 0.08); color: #16240a; font: 15px/1.4 sans-serif; margin-bottom: 12px; }
   button { width: 100%; padding: 10px; border-radius: 999px; border: none; background: #6ca42e; color: #16240a; font: 15px/1.4 sans-serif; }
-  .error { color: #ffb4a8; font-size: 13px; margin: -6px 0 12px; }
+  .error { color: #b3402c; font-size: 13px; margin: -6px 0 12px; }
 </style>
 </head>
 <body>

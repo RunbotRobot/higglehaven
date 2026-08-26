@@ -772,8 +772,8 @@ Validation notes:
 - `expansionIncrementM` and `dayCycleHours` must be greater than zero.
 - `greenbeltMinRatio` must be between `0` and `1`.
 
-`dayCycleHours` now actually drives something on the frontend — see
-"Frontend-only day-night cycle" below.
+`dayCycleHours` is retained but currently unused by the frontend — see
+"Day-night cycle — removed" below.
 
 ### `POST /api/world/expand`
 
@@ -2204,8 +2204,8 @@ their whole post.
 
 Every loaded calendar's already-fetched events are checked once every
 `SCHEDULED_EVENT_CHECK_INTERVAL_MS` (10s), inside the same per-frame
-`updateShopMovement` loop signs/calendars/alignment/day-night already hook
-into (`checkScheduledCalendarEvents`). This checks local, already-cached
+`updateShopMovement` loop signs/calendars/alignment already hook into
+(`checkScheduledCalendarEvents`). This checks local, already-cached
 event data rather than re-fetching the events list — a stale local cache
 missing a brand-new event from another session is an acceptable gap for a
 purely cosmetic effect, and a network round trip per calendar every 10
@@ -2896,77 +2896,79 @@ was judged riskier than the reload's brief flash. `sessionStorage`'s
 it's consumed once bootstrap() reads it, so an unrelated refresh with
 nothing set always falls back to Shop.
 
-## Frontend-only day-night cycle
+## Frontend-only account menu
 
-docs/SPEC.md §1: "Day-night cycle: shared, compressed 4-hour cycle (1 hour
-each: daylight, dusk, night, dawn) — not real-world-time-per-user.
-Ensures every time zone sees the full lighting range multiple times per
-real day." Purely visual — touches no persisted state beyond the
-already-existing `dayCycleHours` world setting it reads.
+docs/SPEC.md §1's "Visual brand direction": "clean, minimalist, simple ...
+using expanding/collapsing menus to keep persistent on-screen chrome to a
+minimum." The Identity, Notices, Friends, and Settings buttons used to be
+four independent always-visible pills across two screen rows (top-left).
+They're now one collapsed `#account-menu-toggle` pill that expands
+`#account-menu-panel` — a small dropdown holding the same four buttons as
+plain rows — freeing an entire row of screen space in the common case
+where none of them are actually being used.
 
-`src/dayNightCycle.js` is a small, deliberately dependency-free module
-(no `three`, no DOM) holding the actual math: `getDayNightState(nowMs,
-cycleHours)` divides the cycle into four equal named phases and linearly
-interpolates sky/sun/ambient color and intensity between keyframes at
-each phase boundary (plus daylight repeated at the wrap point, so the
-cycle loops smoothly back into itself rather than jumping). Driven
-directly by a real timestamp (`Date.now()` in practice) rather than any
-per-session clock — that's what makes it genuinely *shared*: every device
-computing this function at the same real moment gets the identical
-result, with nothing to synchronize server-side. Being dependency-free
-also makes it the one piece of this otherwise-untestable-by-nature
-feature that actually has automated coverage: `src/dayNightCycle.test.js`
-(picked up by widening `vitest.config.js`'s `test.include` to
-`src/**/*.test.js`, restricted to exactly this kind of dependency-free
-module — see that config's own comment on why nothing importing `three`
-or touching the DOM belongs there).
+**The four buttons themselves are unchanged** — same IDs
+(`identity-btn`/`notifications-btn`/`friends-btn`/`settings-btn`), same
+click handlers, same modals. Only their layout changed, from independent
+`position: fixed` pills to normal-flow rows inside the panel. This matters
+for `SHOP_HIDDEN_BUILDER_UI_IDS` (main.js) — Identity/Notices/Friends are
+still hidden in Shop mode (via `style.display = 'none'` on those specific
+row elements, unchanged), while Settings and the menu toggle itself stay
+visible, since Settings is relevant regardless of mode.
 
-`src/main.js` calls `updateDayNightLighting(now)` every `animate()` frame
-(throttled to once per `DAY_NIGHT_UPDATE_INTERVAL_MS`, 5 seconds —
-imperceptibly coarse against an hours-long cycle), applying the computed
-state to the shared `ambientLight`/`sunLight`/`scene.background` — shared
-because Build and Shop mode reuse the same scene/camera/renderer (see
-Shop mode's own doc comment), so this one call covers both. `worldDayCycleHours`
-defaults to the spec's own 4-hour figure until a one-time `fetchWorld()`
-call resolves the real configured value; `lastDayNightUpdate` starts at
-`-Infinity` specifically so the very first frame applies real lighting
-immediately rather than briefly showing the pre-cycle hardcoded defaults
-(which happen to equal the daylight keyframe exactly, so this only
-matters when the real phase isn't daylight at page-load time).
-
-Shop mode's own gradient backdrop (the wall + dome painted once via
-per-vertex colors in `enterShopMode`, both using `vertexColors: true`) is
-never repainted per-vertex for this — instead each mesh's uniform
-`material.color` (multiplied against those vertex colors by
-`vertexColors`) is retinted to the same ambient color driving every other
-lit surface, the same cheap "multiply the environment by a global tint"
-technique real-time engines commonly use for day-night. `shopWallMesh`/
-`shopDomeMesh` are both `null` until Shop mode has been entered at least
-once in the current session, so `updateDayNightLighting` guards for that.
-
-The claim-flyover map and the seller upload/product-preview scenes each
-build their own separate `THREE.Scene` with fixed lighting and are
-deliberately left alone — a preview/utility tool shouldn't randomly go
-dark at "night" while someone's using it to look at a product.
+A small red dot appears on the collapsed toggle whenever either badge
+inside has an unread count — pure CSS
+(`#account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after`),
+reusing the same `:has()` technique `body:has(#catalog-picker.visible)`
+already relies on elsewhere in this file, so it needs no separate JS
+bookkeeping beyond the badge `hidden`-attribute toggles
+`refreshNotificationsBadge`/`refreshFriendsBadge` already do. The panel
+closes itself once any row inside is clicked (each opens its own modal, so
+there's no reason to leave the menu open behind it), or on any outside tap.
 
 ### Testing note
 
-The pure phase/color math in `src/dayNightCycle.js` has full automated
-coverage (`src/dayNightCycle.test.js`) — phase boundaries, mid-phase
-interpolation, cycle wraparound, a non-default cycle length, and a
-negative-timestamp edge case. The actual live THREE.js wiring
-(`updateDayNightLighting` itself: does the real `ambientLight`/`sunLight`/
-`scene.background`/Shop backdrop actually update to match at a given
-real time?) isn't part of the automated suite, for the same reason nothing
-else time- or camera-driven in this app is (see "Frontend-only alignment
-assist" above) — but was verified manually: a temporary
-`page.addInitScript` override of `Date`/`Date.now()` (removed before
-committing, along with a temporary `window.__debugAlign` expose of the
-relevant objects) forced the page to load at several different points in
-the cycle, confirming the live scene's actual colors/intensities matched
-`getDayNightState`'s own computed values exactly at daylight, night, and
-a mid-transition instant, and that the Shop-mode wall/dome retint matched
-too.
+Every e2e test that used to click `#identity-btn`/`#notifications-btn`/
+`#friends-btn`/`#settings-btn` directly now calls `openAccountMenu(page)`
+(`e2e/helpers.mjs`) first to expand the panel — Playwright's `.click()`
+requires a target to actually be visible, and a row inside a collapsed
+(`display: none`) panel isn't. Tests that only ever *waited* for
+`#identity-btn` to become visible as a "Build mode finished loading" sync
+point (never clicked it) now wait for `#account-menu-toggle` instead, which
+carries that same always-in-the-DOM-once-Build-mode-loads property.
+
+## Day-night cycle — removed (fixed bright daylight instead)
+
+docs/SPEC.md §1 originally called for a "shared, compressed 4-hour cycle
+(1 hour each: daylight, dusk, night, dawn)." **This has been removed** (not
+merely disabled) at the explicit direction of the product owner: a dark
+"night" phase read as ominous rather than the lighthearted, bright,
+whimsical feel this world is going for, and cycling through three
+different lighting conditions put an unreasonable burden on builders to
+make their space look good in all of them. The world is now fixed at
+permanent bright daylight.
+
+What used to exist: `src/dayNightCycle.js` (a small, dependency-free
+phase/color-interpolation module, with its own `src/dayNightCycle.test.js`
+coverage) and `updateDayNightLighting()` in `src/main.js`, called every
+`animate()` frame to retint `ambientLight`/`sunLight`/`scene.background`
+and the Shop-mode wall/dome backdrop against a real-wall-clock-driven
+phase. Both files are deleted; `ambientLight`/`sunLight`/`scene.background`
+are now just set once, permanently, to what used to be the cycle's own
+"daylight" keyframe values — so the lit look itself didn't change, only
+the fact that it never stops being this. The Shop-mode wall/dome tint
+(previously retinted per frame to match) needed no equivalent fix: their
+material's default (unset) color is white, identical to the daylight
+keyframe's ambient tint they were being retinted to anyway.
+
+The `world_settings.day_cycle_hours` D1 column and its `dayCycleHours`
+field on `GET/PATCH /api/world` are deliberately left in place — removing
+a column is a real migration, and an unused-but-harmless field is a far
+smaller cost than a schema change purely to tidy up after a frontend
+feature removal. Nothing reads or writes it from the frontend anymore.
+Revisiting a day-night cycle later (the removal is about the *current*
+lighthearted-brand direction, not a permanent architectural decision)
+would mean re-adding the frontend piece, not a new migration.
 
 ## Frontend-only Shop-mode world boundary
 

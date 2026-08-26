@@ -5,7 +5,7 @@
 // themselves are covered by worker/index.test.js's own "Land cap" describe
 // block, which documents in detail why this is deliberately tracking-only
 // (displayed, not enforced against auction bids) for now.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Land Cap Suite Tester';
 
@@ -14,6 +14,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
+await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');

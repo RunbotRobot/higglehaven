@@ -59,7 +59,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
 // Claims whatever landlet the claim-modal's overhead map offers first —
 // grows the world if it hasn't yet, tries a handful of candidate points
 // until one reads "Available," and confirms. Leaves the page on the
-// claimed landlet's own Build view (#identity-btn visible).
+// claimed landlet's own Build view (#account-menu-toggle visible).
 export async function claimLandlet(page) {
   await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
   await page.waitForTimeout(2000);
@@ -78,7 +78,17 @@ export async function claimLandlet(page) {
   }
   await page.click('#claim-confirm-btn');
   await page.waitForTimeout(2500);
-  await page.waitForSelector('#identity-btn', { timeout: 10000 });
+  await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
+}
+
+// Identity/Notices/Friends/Settings live inside the collapsed account menu
+// (#account-menu-toggle/#account-menu-panel in index.html) rather than as
+// independent always-visible pills — open it before clicking any of the
+// four rows inside. The panel auto-collapses again once a row is clicked
+// (see main.js), so callers don't need to close it themselves.
+export async function openAccountMenu(page) {
+  await page.click('#account-menu-toggle');
+  await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 }
 
 // Clicks down a vertical strip of screen points around (x, yStart..yEnd)

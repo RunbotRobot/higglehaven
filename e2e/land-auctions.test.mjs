@@ -11,7 +11,7 @@
 // 24-hour default), so waiting for a real one isn't practical in an e2e
 // run. That's covered instead by worker/index.test.js, which can set
 // ends_at into the past directly via the D1 test binding.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const SELLER = 'Auction Seller';
 const BIDDER = 'Auction Bidder';
@@ -25,6 +25,7 @@ const sellerPage = sellerSession.page;
 await chooseIdentity(sellerPage, { mode: 'build', label: SELLER, isNew: true });
 await claimLandlet(sellerPage);
 
+await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
@@ -56,6 +57,7 @@ const bidderPage = bidderSession.page;
 await chooseIdentity(bidderPage, { mode: 'build', label: BIDDER, isNew: true });
 await claimLandlet(bidderPage);
 
+await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
 await bidderPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await bidderPage.click('.settings-tab-btn[data-section="auctions"]');
@@ -93,6 +95,7 @@ const afterRejectedBidText = await auctionsListItems.first().textContent();
 console.log('auction after a too-low bid attempt (should still say $15.00, not $12.00):', afterRejectedBidText);
 
 // --- Back to the seller: confirm the bid shows up on their own view too. ---
+await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
@@ -106,6 +109,7 @@ console.log('seller\'s own view after the bid (should mention $15.00):', sellerS
 // the loop on the actual end-user-visible surface, not just the API.
 await sellerPage.click('#settings-close-btn');
 await sellerPage.waitForTimeout(300);
+await openAccountMenu(sellerPage);
 await sellerPage.click('#notifications-btn');
 await sellerPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
 await sellerPage.waitForTimeout(300);

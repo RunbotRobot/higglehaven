@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { cropGeometryFromEnd } from './meshCrop.js';
-import { getDayNightState } from './dayNightCycle.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -941,63 +940,20 @@ trimControls.addEventListener('dragging-changed', async (event) => {
   updateTrimLengthInput();
 });
 
+// Fixed bright daylight, always — no day-night cycle (docs/SPEC.md §1's
+// "shared, compressed 4-hour cycle" is deliberately not implemented here
+// for now: a builder shouldn't have to make their space look good in three
+// different kinds of lighting, and a dark "night" phase read as ominous
+// rather than the lighthearted, bright feel this world is going for). These
+// values are the cycle's own former "daylight" keyframe — kept exactly so
+// nothing about the lit look actually changes, only the fact that it never
+// stops being this.
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
 sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
-
-// Day-night cycle (docs/SPEC.md §1, src/dayNightCycle.js) — driven by real
-// wall-clock time, not a per-session clock, so it's genuinely shared
-// across every device. worldDayCycleHours defaults to the spec's own
-// 4-hour figure until loadDayCycleHours() below resolves the world's
-// actual configured value (see "World settings"); a late-arriving fetch
-// just means the very first few seconds of a page load use the default,
-// never a visible jump once the real value lands mid-cycle-fraction.
-let worldDayCycleHours = 4;
-async function loadDayCycleHours() {
-  try {
-    const world = await fetchWorld();
-    worldDayCycleHours = world.dayCycleHours;
-  } catch {
-    // Keep the default — a failed fetch here shouldn't block bootstrap
-    // over a cosmetic feature.
-  }
-}
-loadDayCycleHours();
-
-const DAY_NIGHT_UPDATE_INTERVAL_MS = 5000; // imperceptibly coarse against an hours-long cycle, cheap on every other frame
-// -Infinity, not 0, so the very first animate() frame always applies the
-// real current lighting immediately rather than briefly showing the
-// pre-cycle hardcoded defaults above until the first 5-second tick.
-let lastDayNightUpdate = -Infinity;
-// Applied to the shared scene/lights only — used by both Build and Shop
-// mode, since they share this one scene/camera/renderer (see Shop's own
-// doc comment). The claim-flyover and seller-preview scenes each build
-// their own separate THREE.Scene with fixed lighting and are deliberately
-// left alone — a preview/utility tool shouldn't randomly go dark at
-// "night" while someone's using it.
-function updateDayNightLighting(now) {
-  if (now - lastDayNightUpdate < DAY_NIGHT_UPDATE_INTERVAL_MS) return;
-  lastDayNightUpdate = now;
-  const state = getDayNightState(Date.now(), worldDayCycleHours);
-  scene.background = new THREE.Color(state.skyColorHex);
-  sunLight.color.setHex(state.sunColorHex);
-  sunLight.intensity = state.sunIntensity;
-  ambientLight.color.setHex(state.ambientColorHex);
-  ambientLight.intensity = state.ambientIntensity;
-  // Shop's own gradient backdrop (wall + dome, see enterShopMode) is
-  // painted once via per-vertex colors, not repainted here — instead its
-  // material's uniform color (multiplied against those vertex colors,
-  // since both meshes use vertexColors: true) is retinted to the same
-  // ambient color driving every other lit surface, the same cheap
-  // "multiply the environment by a global tint" technique real-time
-  // engines use for day-night. Both are null until Shop mode has been
-  // entered at least once this session.
-  if (shopWallMesh) shopWallMesh.material.color.setHex(state.ambientColorHex);
-  if (shopDomeMesh) shopDomeMesh.material.color.setHex(state.ambientColorHex);
-}
 
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
@@ -5583,7 +5539,6 @@ function applyEdgePanWhileDraggingProduct() {
 
 function animate(now) {
   requestAnimationFrame(animate);
-  updateDayNightLighting(now);
   if (shopActive) {
     updateShopMovement(now);
   } else {
@@ -6212,6 +6167,33 @@ async function renderFriends() {
     friendsAcceptedListEl.appendChild(row);
   }
 }
+
+// Account menu (docs/API.md's "Frontend-only account menu") — the
+// Identity/Notices/Friends/Settings buttons above are unchanged in every
+// other respect; this only adds the expand/collapse chrome around them.
+// Each row's own click handler (identityBtn/notificationsBtn/friendsBtn/
+// settingsBtn, all defined elsewhere) already opens its own modal, so the
+// only extra behavior needed here is closing the menu once a row is
+// picked, and closing it on an outside tap the way every other transient
+// popover in this app does.
+const accountMenuToggle = document.getElementById('account-menu-toggle');
+const accountMenuPanel = document.getElementById('account-menu-panel');
+accountMenuToggle.addEventListener('click', () => {
+  accountMenuPanel.classList.toggle('expanded');
+  accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
+});
+for (const row of accountMenuPanel.querySelectorAll('button')) {
+  row.addEventListener('click', () => {
+    accountMenuPanel.classList.remove('expanded');
+    accountMenuToggle.classList.remove('active');
+  });
+}
+document.addEventListener('click', (event) => {
+  if (!accountMenuPanel.classList.contains('expanded')) return;
+  if (event.target === accountMenuToggle || accountMenuPanel.contains(event.target)) return;
+  accountMenuPanel.classList.remove('expanded');
+  accountMenuToggle.classList.remove('active');
+});
 
 friendsBtn.addEventListener('click', () => {
   friendsModalEl.classList.add('visible');
@@ -7314,10 +7296,14 @@ async function enterShopMode() {
 
   // The visible world stops at the wall — no glimpse of "wild ground" that
   // isn't actually any land's own polygon. A thin overlap keeps the ground
-  // from leaving a seam right at the wall's own base.
+  // from leaving a seam right at the wall's own base. Uses the same brand
+  // green as the UI's own "active" accent (index.html's --brand-green) —
+  // this used to be a much darker forest green that read as a heavy,
+  // ominous swath across an otherwise bright scene once every visible
+  // landlet resolves against it.
   const wildGround = new THREE.Mesh(
     new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64),
-    new THREE.MeshStandardMaterial({ color: 0x2f5e1a }),
+    new THREE.MeshStandardMaterial({ color: 0x6ca42e }),
   );
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
@@ -7599,7 +7585,11 @@ async function loadLandletMap(resolve) {
 
   const radiusM = world.radiusM;
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0d1a08);
+  // Bright pale sky + soft green ground — this map used to be a near-black
+  // "radar" backdrop, which read as ominous rather than the lighthearted,
+  // bright feel the rest of the world now goes for (see the day-night
+  // removal and index.html's own brand-color comment).
+  scene.background = new THREE.Color(0x87ceeb);
   scene.add(new THREE.AmbientLight(0xffffff, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 0.7);
   sun.position.set(radiusM, -radiusM, radiusM * 2);
@@ -7607,13 +7597,13 @@ async function loadLandletMap(resolve) {
 
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(radiusM * 1.4, 64),
-    new THREE.MeshBasicMaterial({ color: 0x152510 }),
+    new THREE.MeshBasicMaterial({ color: 0xa8d98a }),
   );
   scene.add(ground);
 
   const boundary = new THREE.Mesh(
     new THREE.RingGeometry(radiusM * 0.99, radiusM * 1.01, 128),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: 0x16240a, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
   );
   boundary.position.z = 0.02;
   scene.add(boundary);
@@ -7650,8 +7640,11 @@ async function loadLandletMap(resolve) {
   // A dedicated outline per selection, built from the same polygon as the
   // plot itself (not a bounding box, which reads as a plain rectangle for
   // every non-square shape) — swapped out on each click the same way
-  // applyLandletShape() swaps the main builder scene's ground geometry.
-  const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+  // applyLandletShape() swaps the main builder scene's ground geometry. A
+  // bold yellow ring (the brand's secondary pale-yellow hue, saturated up
+  // for a "this one's selected" highlight) rather than white, which would
+  // barely register against this map's now-bright ground colors.
+  const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xf5c518 });
   let selectionOutline = null;
   let selectedMesh = null;
 

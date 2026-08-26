@@ -16,11 +16,11 @@ export default defineConfig(async () => {
     ],
     test: {
       // src/**/*.test.js is for genuinely dependency-free frontend
-      // modules only (e.g. dayNightCycle.js) — nothing importing three.js
-      // or touching the DOM belongs here, since this pool runs the
-      // workerd runtime, not a browser; that kind of frontend code stays
-      // covered by e2e/ (Playwright) or manual verification instead, per
-      // this project's established convention (see docs/API.md).
+      // modules only — nothing importing three.js or touching the DOM
+      // belongs here, since this pool runs the workerd runtime, not a
+      // browser; that kind of frontend code stays covered by e2e/
+      // (Playwright) or manual verification instead, per this project's
+      // established convention (see docs/API.md).
       include: ['worker/**/*.test.js', 'src/**/*.test.js'],
     },
   };

@@ -11,7 +11,7 @@
 // the cohort size) is covered by worker/index.test.js instead, where
 // filling 100 rows directly via the D1 binding is cheap; doing that
 // through 100 real browser-driven claims here would not be.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Pioneer Suite Tester';
 const SECOND_LABEL = 'Second Claimer';
@@ -24,6 +24,7 @@ await claimLandlet(page);
 // Reopen the identity roster (doesn't switch the active identity, just
 // re-renders the list — see #identity-btn's own doc comment in main.js)
 // and confirm this builder's row shows rank #1.
+await openAccountMenu(page);
 await page.click('#identity-btn');
 await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(500);

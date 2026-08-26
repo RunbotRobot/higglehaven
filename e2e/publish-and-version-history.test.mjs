@@ -5,7 +5,7 @@
 // frozen published snapshot, not the builder's own further live edits —
 // plus Set Live (repoint without touching the editor) and Restore to
 // Editor (replace the live draft with an older snapshot).
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Publish Suite Tester';
 
@@ -30,6 +30,7 @@ async function fetchJson(path) {
 await placeCatalogItem('Tree', 210, 400);
 
 // Publish: creates and activates a version snapshot of the current draft.
+await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
@@ -64,6 +65,7 @@ const publishedSnapshotUnaffected = publishedVersion.instances.length === 1 && p
 
 // Publish again — now both items become "live," and the first version
 // should show as no longer live with Set Live re-enabled on it.
+await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForTimeout(500);
@@ -111,7 +113,7 @@ const reentryRow = page.locator('.identity-row').filter({ hasText: LABEL });
 await reentryRow.locator('.identity-row-toggle').last().click();
 await page.waitForTimeout(300);
 await reentryRow.locator('button', { hasText: 'Build' }).last().click();
-await page.waitForSelector('#identity-btn', { timeout: 10000 });
+await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(1500);
 
 const { instances: instancesAfterRestore } = await fetchJson(`/api/instances?landletId=${myLandlet.landletId}`);

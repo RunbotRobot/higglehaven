@@ -6,42 +6,54 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>higglehaven (dev)</title>
     <style>
-      /* Shared brand colors. Space-separated RGB (no commas) so each usage
-         can pick its own alpha via rgb(var(--x-rgb) / a) — the modern
-         slash-alpha syntax requires space-separated channels; combining it
-         with the legacy comma-separated form is invalid CSS and silently
-         drops the whole declaration, which is exactly what a comma-
-         separated value here did everywhere it was used.
+      /* Shared brand colors (docs/SPEC.md §1's "Visual brand direction":
+         lighthearted, whimsical, very bright — pale green and pale yellow
+         as the primary palette, soft supporting colors, clean/minimalist).
+         Space-separated RGB (no commas) so each usage can pick its own
+         alpha via rgb(var(--x-rgb) / a) — the modern slash-alpha syntax
+         requires space-separated channels; combining it with the legacy
+         comma-separated form is invalid CSS and silently drops the whole
+         declaration, which is exactly what a comma-separated value here
+         did everywhere it was used.
 
-         Two different surfaces share this palette but read very
-         differently:
-         --pill-rgb is the small floating HUD chrome (mode-nav, the gizmo
-         buttons, Add Item, product-info, ...) — a pale, light green so it
-         reads as "this app" without going as dark/heavy as a real dialog.
-         Text on it uses --pill-text (dark, for contrast against a light
-         background) rather than white.
+         Every surface in this app — small floating HUD chrome AND large
+         text-heavy dialogs alike — now shares one light, bright system
+         (previously dialogs used a dark, heavy panel with white text; that
+         read as serious/ominous rather than the intended feel, the same
+         reasoning behind removing the day-night cycle's dark "night"
+         phase). Two pale surfaces, not one, so the palette's two named
+         colors both actually show up:
+         --pill-rgb is the small floating HUD chrome (mode-nav, gizmo
+         buttons, joystick, Add Item, product-info, ...) — pale green.
          --panel-rgb is the large, text-heavy dialogs (Upload/Seller/
-         Identity/Settings/Claim, and the Add Item catalog picker) — kept
-         at the old dark green, since a whole screen of pale green behind a
-         lot of white text would be a much bigger, glarier surface than a
-         small pill ever is. These keep plain white text, unchanged.
-         --brand-green is reserved for an *active* pill's state (e.g. the
-         Shop tab once you're in it) — deliberately more saturated than the
-         idle --pill-rgb so "selected" still reads as a step up in
-         intensity, not just a different hue. */
+         Identity/Settings/Claim/Notifications/Friends, and the Add Item
+         catalog picker) — pale yellow.
+         --ink-rgb is the one dark-green ink color used for all text/
+         borders/subtle fills on top of either pale surface (replacing what
+         used to be white-on-dark throughout every dialog).
+         --brand-green is reserved for an *active* state (e.g. the Shop tab
+         once you're in it) — more saturated than either pale surface so
+         "selected" reads as a step up in intensity, not just a different
+         hue.
+         --danger is the one accent used for destructive actions (delete/
+         refund) — a soft, friendly coral rather than a harsh dark red, in
+         keeping with "soft colors" and never fully abandoning brightness
+         even for a warning. */
       :root {
+        --ink-rgb: 22 36 10;
         --pill-rgb: 214 232 190;
-        --pill-text: #16240a;
-        --pill-text-soft: rgb(22 36 10 / 0.65);
-        --panel-rgb: 36 56 20;
+        --panel-rgb: 250 240 199;
+        --pill-text: rgb(var(--ink-rgb));
+        --pill-text-soft: rgb(var(--ink-rgb) / 0.65);
         --brand-green: #6ca42e;
+        --danger: #e2694f;
       }
       html, body {
         margin: 0;
         padding: 0;
         overflow: hidden;
         height: 100%;
-        background: #111;
+        background: #eef4e0;
       }
       #app {
         width: 100vw;
@@ -250,8 +262,8 @@
         height: 108px;
         bottom: 24px;
         border-radius: 50%;
-        background: rgb(255 255 255 / 0.12);
-        border: 2px solid rgb(255 255 255 / 0.3);
+        background: rgb(var(--ink-rgb) / 0.12);
+        border: 2px solid rgb(var(--ink-rgb) / 0.3);
         touch-action: none;
       }
       .shop-joystick-knob {
@@ -262,7 +274,7 @@
         height: 44px;
         margin: -22px 0 0 -22px;
         border-radius: 50%;
-        background: rgb(255 255 255 / 0.4);
+        background: rgb(var(--ink-rgb) / 0.4);
         pointer-events: none;
       }
       #shop-move-joystick {
@@ -292,9 +304,9 @@
         width: 52px;
         height: 40px;
         border-radius: 12px;
-        border: 1px solid rgb(255 255 255 / 0.3);
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.3);
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font-size: 16px;
         touch-action: none;
       }
@@ -315,71 +327,97 @@
         display: flex;
         gap: 8px;
       }
-      /* Sits just under the wordmark panel — that panel is pointer-events:
-         none (it's decorative branding), so this lives as its own fixed
-         element rather than fighting that to become clickable. */
-      #identity-btn {
+      /* Account menu — Identity/Notices/Friends/Settings used to be four
+         separate persistent pills across two rows. Consolidated into one
+         expanding menu (docs/SPEC.md §1's "clean, minimalist... expanding
+         menus... leave plenty of screen space open") — one small pill
+         instead of a whole cluster, expanding into a dropdown only when
+         actually needed. Sits just under the wordmark panel — that panel
+         is pointer-events: none (it's decorative branding), so this lives
+         as its own fixed element rather than fighting that to become
+         clickable.
+
+         The four original buttons keep their original IDs/click handlers
+         untouched in main.js — only their layout changed, from independent
+         fixed pills to plain rows inside this panel, so
+         SHOP_HIDDEN_BUILDER_UI_IDS's existing per-ID hiding (Identity/
+         Notices/Friends hidden in Shop mode, Settings never hidden) keeps
+         working exactly as before with no JS changes. */
+      #account-menu {
         position: fixed;
         top: 48px;
         left: 12px;
-        z-index: 10;
-        padding: 5px 12px;
+        /* Above the z-index:10 floating-HUD tier (gizmo-mode-controls,
+           product-info, ...) — the expanded panel sits low enough on
+           screen to visually overlap #gizmo-mode-controls' full-width
+           (94vw) row once a selection is active, and at a tied z-index
+           the later-in-DOM element (gizmo-mode-controls) would otherwise
+           win the stacking order and silently swallow taps meant for the
+           menu underneath (found via e2e/seller-upload-and-resize.test.mjs
+           timing out on a click that should have landed). Still below
+           #catalog-picker (16) and every real modal (20+), since a row
+           click always closes this panel before anything else can open. */
+        z-index: 15;
+      }
+      #account-menu-toggle {
+        padding: 5px 14px;
         border-radius: 999px;
         border: none;
         background: rgb(var(--pill-rgb) / 0.55);
         color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
+        position: relative;
       }
-      /* Only relevant to builders (see notifyBuildersOfDimensionChange) —
-         hidden in Shop mode alongside identity-btn (SHOP_HIDDEN_BUILDER_UI_IDS
-         in main.js). Sits between Identity and Settings. */
-      #notifications-btn {
-        position: fixed;
-        top: 48px;
-        left: 78px;
-        z-index: 10;
-        padding: 5px 12px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
+      #account-menu-toggle.active {
+        background: rgb(var(--pill-rgb) / 0.9);
+        color: var(--pill-text);
       }
-      #notifications-badge {
-        display: inline-block;
-        min-width: 15px;
-        margin-left: 5px;
-        padding: 0 4px;
-        border-radius: 999px;
+      /* A small dot on the collapsed toggle summarizing "something in here
+         needs your attention" — pure CSS (:has(), already relied on
+         elsewhere in this file for body:has(#catalog-picker.visible)), so
+         it never needs separate JS bookkeeping beyond the badge
+         hidden-attribute toggles refreshNotificationsBadge/friends already do. */
+      #account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after,
+      #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
         background: #d9483a;
-        color: #fff;
-        font-size: 10px;
-        line-height: 15px;
-        text-align: center;
       }
-      #notifications-badge[hidden] {
+      #account-menu-panel {
         display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        min-width: 150px;
+        background: rgb(var(--pill-rgb) / 0.95);
+        border-radius: 12px;
+        padding: 6px;
+        box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18);
       }
-      /* Only relevant to builders, same hiding as identity-btn/
-         notifications-btn (SHOP_HIDDEN_BUILDER_UI_IDS in main.js). A second
-         row rather than a fourth pill alongside Identity/Notices/Settings —
-         measured layout shows only ~38px of clearance between #settings-btn
-         and #mode-nav on a narrow viewport, not enough room for another
-         pill without overlapping the mode tabs. Kept narrow and left-
-         aligned (not spanning further right) so it clears #product-info,
-         which starts at x≈116 on the same narrow breakpoint. */
-      #friends-btn {
-        position: fixed;
-        top: 88px;
-        left: 12px;
-        z-index: 10;
-        padding: 5px 12px;
-        border-radius: 999px;
+      #account-menu-panel.expanded {
+        display: flex;
+      }
+      #account-menu-panel button {
+        padding: 7px 12px;
+        border-radius: 8px;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
+        background: transparent;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        text-align: left;
       }
+      #account-menu-panel button:hover {
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #notifications-badge,
       #friends-badge {
         display: inline-block;
         min-width: 15px;
@@ -392,20 +430,9 @@
         line-height: 15px;
         text-align: center;
       }
+      #notifications-badge[hidden],
       #friends-badge[hidden] {
         display: none;
-      }
-      #settings-btn {
-        position: fixed;
-        top: 48px;
-        left: 148px;
-        z-index: 10;
-        padding: 5px 12px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.55);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
       }
       /* The three peer top-level views — always reachable regardless of
          which one is currently active (including during Shop mode, unlike
@@ -610,7 +637,7 @@
         color: #16240a;
       }
       #delete-item {
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
         color: #fff;
       }
       #add-item-panel {
@@ -661,9 +688,9 @@
         margin-bottom: 8px;
         padding: 8px 10px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       #catalog-picker-grid {
@@ -678,7 +705,7 @@
       }
       #catalog-picker-empty {
         padding: 12px 4px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
         font: 13px/1.4 sans-serif;
       }
       #catalog-picker-empty[hidden] {
@@ -692,8 +719,8 @@
         padding: 6px;
         border-radius: 8px;
         border: none;
-        background: rgb(255 255 255 / 0.12);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
         font: 12px/1.3 sans-serif;
       }
       .catalog-thumb {
@@ -701,7 +728,7 @@
         height: 64px;
         object-fit: contain;
         border-radius: 6px;
-        background: rgb(255 255 255 / 0.1);
+        background: rgb(var(--ink-rgb) / 0.1);
       }
       .catalog-tile-name {
         text-align: center;
@@ -720,7 +747,7 @@
       #bundle-picker-section {
         margin-top: 10px;
         padding-top: 10px;
-        border-top: 1px solid rgb(255 255 255 / 0.15);
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
       }
       #bundle-picker-section[hidden] {
         display: none;
@@ -733,9 +760,9 @@
       .bundle-tab-btn {
         padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgb(255 255 255 / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
         font: 12px/1.4 sans-serif;
       }
       .bundle-tab-btn.active {
@@ -745,7 +772,7 @@
       }
       #bundle-picker-empty {
         padding: 8px 4px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
         font: 12px/1.4 sans-serif;
       }
       #bundle-picker-empty[hidden] {
@@ -772,8 +799,8 @@
         padding: 8px 10px;
         border-radius: 8px;
         border: none;
-        background: rgb(255 255 255 / 0.12);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
         font: 13px/1.3 sans-serif;
         text-align: left;
       }
@@ -781,7 +808,7 @@
         overflow-wrap: anywhere;
       }
       .bundle-tile-count {
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
         font-size: 11px;
       }
       .bundle-tile-delete {
@@ -790,7 +817,7 @@
         height: 28px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.12);
+        background: rgb(var(--ink-rgb) / 0.12);
         color: rgb(255 180 168 / 0.9);
         font-size: 16px;
         line-height: 1;
@@ -804,8 +831,8 @@
         height: 28px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.12);
-        color: rgb(255 255 255 / 0.85);
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: rgb(var(--ink-rgb) / 0.85);
         font-size: 16px;
         line-height: 1;
       }
@@ -818,8 +845,8 @@
         height: 28px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.12);
-        color: rgb(255 255 255 / 0.85);
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: rgb(var(--ink-rgb) / 0.85);
         font-size: 14px;
         line-height: 1;
       }
@@ -854,7 +881,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #upload-modal.visible {
@@ -869,7 +896,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -889,8 +916,8 @@
         padding: 0;
         border: none;
         border-radius: 50%;
-        background: rgb(255 255 255 / 0.12);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
         font-size: 18px;
         line-height: 1;
         display: flex;
@@ -899,7 +926,7 @@
         cursor: pointer;
       }
       .modal-close-btn:hover {
-        background: rgb(255 255 255 / 0.22);
+        background: rgb(var(--ink-rgb) / 0.22);
       }
       #upload-modal-content h2 {
         margin: 0;
@@ -910,19 +937,19 @@
         flex-direction: column;
         gap: 4px;
         font-size: 13px;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       #upload-modal-content input[type='text'] {
         padding: 8px 10px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       #upload-hint {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       /* Digital goods (docs/SPEC.md §4) — a checkbox (row layout, unlike
          the column layout every other #upload-modal-content label uses for
@@ -936,9 +963,9 @@
       #upload-digital-good-disclaimer-select {
         padding: 8px 10px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       #upload-status {
@@ -946,17 +973,17 @@
         min-height: 18px;
       }
       #upload-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       #upload-dimensions-hint {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       #upload-dimensions-preview {
         width: 100%;
         height: 170px;
         border-radius: 10px;
-        background: rgb(0 0 0 / 0.25);
+        background: rgb(var(--ink-rgb) / 0.06);
         touch-action: none;
       }
       .upload-dimension-field {
@@ -972,9 +999,9 @@
         width: 5.5em;
         padding: 6px 8px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       #upload-modal-actions {
@@ -989,8 +1016,8 @@
         font: 14px/1.4 sans-serif;
       }
       #upload-cancel-btn {
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
       }
       #upload-submit-btn {
         background: var(--brand-green);
@@ -1009,7 +1036,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #seller-modal.visible {
@@ -1024,7 +1051,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1036,7 +1063,7 @@
       }
       #seller-hint {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       #seller-list {
         display: flex;
@@ -1049,7 +1076,7 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
         transition: background-color 100ms ease;
@@ -1081,11 +1108,11 @@
       .seller-row-label {
         font-size: 15px;
         font-weight: 600;
-        color: #fff;
+        color: var(--pill-text);
       }
       .seller-row-dims {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .seller-row-actions {
         display: flex;
@@ -1096,9 +1123,9 @@
         flex-shrink: 0;
         padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgb(255 255 255 / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
         font: 12px/1.4 sans-serif;
       }
       .seller-row-action-btn.active {
@@ -1108,7 +1135,7 @@
       }
       .seller-row-action-btn.danger {
         border-color: rgb(255 120 100 / 0.5);
-        color: #ffb4a8;
+        color: #b3402c;
       }
       .seller-row-action-btn:disabled {
         opacity: 0.5;
@@ -1126,12 +1153,12 @@
         width: 100%;
         height: 170px;
         border-radius: 10px;
-        background: rgb(0 0 0 / 0.25);
+        background: rgb(var(--ink-rgb) / 0.06);
         touch-action: none;
       }
       .seller-preview-hint {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.55);
+        color: rgb(var(--ink-rgb) / 0.55);
       }
       /* Extensibility is a real but rare need (see docs/API.md) — a plain
          text-styled toggle keeps it available without competing visually
@@ -1142,7 +1169,7 @@
         padding: 2px 0;
         border: none;
         background: none;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
         font: 12px/1.4 sans-serif;
         text-decoration: underline;
         text-underline-offset: 2px;
@@ -1165,14 +1192,14 @@
         align-items: center;
         gap: 6px;
         font: 13px/1.4 sans-serif;
-        color: #fff;
+        color: var(--pill-text);
       }
       .seller-min-input {
         padding: 6px 8px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
         width: 5.5em;
       }
@@ -1196,14 +1223,14 @@
         align-items: center;
         gap: 6px;
         font: 13px/1.4 sans-serif;
-        color: #fff;
+        color: var(--pill-text);
       }
       .seller-size-input {
         padding: 6px 8px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
         width: 5.5em;
       }
@@ -1220,10 +1247,10 @@
       }
       .seller-row-status {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-row-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       .seller-size-save-btn {
         padding: 6px 14px;
@@ -1238,17 +1265,17 @@
       }
       .seller-size-status {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-size-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       /* Edit Price — same idiom/reasoning as Edit Size's own panel above,
          own classes throughout for the same "don't share a class across
          genuinely different rows/panels" reasoning. */
       .seller-row-price {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .seller-price-panel {
         display: flex;
@@ -1262,9 +1289,9 @@
       .seller-price-input {
         padding: 6px 8px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
         width: 8em;
       }
@@ -1281,17 +1308,17 @@
       }
       .seller-price-status {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-price-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       .seller-digital-good-checkbox-label {
         display: flex;
         align-items: center;
         gap: 8px;
         font: 13px/1.4 sans-serif;
-        color: #fff;
+        color: var(--pill-text);
       }
       /* Digital goods (docs/SPEC.md §4) row display + edit panel — own
          classes throughout despite being visually identical to
@@ -1300,7 +1327,7 @@
          Extensibility vs. Edit Size). */
       .seller-row-digital-good {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .seller-digital-good-panel {
         display: flex;
@@ -1314,9 +1341,9 @@
       .seller-digital-good-select {
         padding: 6px 8px;
         border-radius: 8px;
-        border: 1px solid rgb(255 255 255 / 0.25);
-        background: rgb(255 255 255 / 0.1);
-        color: #fff;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
       .seller-digital-good-save-btn {
@@ -1332,17 +1359,17 @@
       }
       .seller-digital-good-status {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-digital-good-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       /* No-returns policy (docs/SPEC.md §5) row display + edit panel — own
          classes throughout, same "don't share a class across genuinely
          different rows/panels" reasoning as Digital Good vs. Edit Size. */
       .seller-row-no-returns {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .seller-no-returns-panel {
         display: flex;
@@ -1358,7 +1385,7 @@
         align-items: center;
         gap: 8px;
         font: 13px/1.4 sans-serif;
-        color: #fff;
+        color: var(--pill-text);
       }
       .seller-no-returns-save-btn {
         padding: 6px 14px;
@@ -1373,10 +1400,10 @@
       }
       .seller-no-returns-status {
         font-size: 11px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-no-returns-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       #seller-status {
         font-size: 13px;
@@ -1391,8 +1418,8 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       /* Same modal shell as #upload-modal. */
@@ -1403,7 +1430,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #settings-modal.visible {
@@ -1418,7 +1445,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1436,9 +1463,9 @@
       .settings-tab-btn {
         padding: 6px 14px;
         border-radius: 999px;
-        border: 1px solid rgb(255 255 255 / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
         font: 13px/1.4 sans-serif;
       }
       .settings-tab-btn.active {
@@ -1457,7 +1484,7 @@
         flex-direction: column;
         gap: 6px;
         font-size: 13px;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       .settings-radio-row {
         display: flex;
@@ -1468,14 +1495,14 @@
         align-items: center;
         gap: 6px;
         font: 14px/1.4 sans-serif;
-        color: #fff;
+        color: var(--pill-text);
       }
       .settings-empty-note {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       .settings-empty-note.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       /* Publish + Version History (Settings' Build tab) — same small-pill
          look as .seller-row-action-btn, kept as its own class since it
@@ -1485,9 +1512,9 @@
         flex-shrink: 0;
         padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgb(255 255 255 / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
         font: 12px/1.4 sans-serif;
       }
       .version-action-btn:disabled {
@@ -1506,11 +1533,11 @@
         gap: 4px;
         padding: 8px 10px;
         border-radius: 8px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
       }
       .version-row-info {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       .version-row-actions {
         display: flex;
@@ -1535,11 +1562,11 @@
         gap: 6px;
         padding: 8px 10px;
         border-radius: 8px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
       }
       .auction-row-info {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       .auction-row-bid-form {
         display: flex;
@@ -1552,17 +1579,17 @@
         border-radius: 4px;
         padding: 4px 6px;
         font: 13px/1.4 sans-serif;
-        background: rgb(0 0 0 / 0.2);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
       }
       .auction-bid-btn, .auction-start-btn, .auction-resolve-btn {
         align-self: flex-start;
         flex-shrink: 0;
         padding: 5px 12px;
         border-radius: 999px;
-        border: 1px solid rgb(255 255 255 / 0.25);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: transparent;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
         font: 12px/1.4 sans-serif;
       }
       .auction-bid-btn:disabled, .auction-start-btn:disabled, .auction-resolve-btn:disabled {
@@ -1579,7 +1606,7 @@
         align-items: center;
         gap: 4px;
         font-size: 12px;
-        color: rgb(255 255 255 / 0.75);
+        color: rgb(var(--ink-rgb) / 0.75);
       }
       .auction-start-form input {
         width: 5.5em;
@@ -1587,8 +1614,8 @@
         border-radius: 4px;
         padding: 4px 6px;
         font: 13px/1.4 sans-serif;
-        background: rgb(0 0 0 / 0.2);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
       }
       #settings-modal-actions {
         display: flex;
@@ -1598,8 +1625,8 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
       /* Same modal shell as #settings-modal. */
@@ -1610,7 +1637,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #notifications-modal.visible {
@@ -1625,7 +1652,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1643,30 +1670,30 @@
       .notification-row {
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .notification-row.unread {
-        background: rgb(255 255 255 / 0.16);
+        background: rgb(var(--ink-rgb) / 0.16);
         cursor: pointer;
       }
       .notification-row-time {
         margin-top: 4px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       #notifications-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       #notifications-mark-all-btn {
         align-self: flex-start;
         padding: 6px 14px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
       #notifications-mark-all-btn:disabled {
@@ -1685,7 +1712,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #friends-modal.visible {
@@ -1700,7 +1727,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1713,7 +1740,7 @@
       #friends-modal-content h3 {
         margin: 4px 0 0;
         font-size: 13px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
@@ -1722,13 +1749,13 @@
         padding: 6px 14px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
       #friends-status {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.75);
+        color: rgb(var(--ink-rgb) / 0.75);
       }
       #friends-status.error {
         color: #ff8a80;
@@ -1745,9 +1772,9 @@
         gap: 10px;
         padding: 8px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .friend-row-body {
         min-width: 0;
@@ -1758,7 +1785,7 @@
       .friend-row-location {
         margin-top: 2px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       .friend-row-actions {
         flex-shrink: 0;
@@ -1770,15 +1797,15 @@
         border-radius: 999px;
         padding: 4px 10px;
         font-size: 12px;
-        color: #fff;
-        background: rgb(255 255 255 / 0.15);
+        color: var(--pill-text);
+        background: rgb(var(--ink-rgb) / 0.15);
       }
       .friend-row-actions button.danger {
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
       }
       #friends-incoming-empty, #friends-outgoing-empty, #friends-accepted-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* Same modal shell as #notifications-modal — a builder's moderation
          view for one specific community sign's posts (see "Community
@@ -1797,7 +1824,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #sign-posts-modal.visible {
@@ -1812,7 +1839,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1834,9 +1861,9 @@
         gap: 10px;
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .sign-post-row-body {
         min-width: 0;
@@ -1847,7 +1874,7 @@
       .sign-post-row-time {
         margin-top: 4px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .sign-post-row-delete {
         flex-shrink: 0;
@@ -1855,14 +1882,14 @@
         border-radius: 999px;
         width: 24px;
         height: 24px;
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
         color: #fff;
         font-size: 13px;
         line-height: 1;
       }
       #sign-posts-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* Un-flagging a sign lives here, inside the moderation panel, rather
          than as its own always-present toolbar button next to Community
@@ -1875,8 +1902,8 @@
         padding: 6px 14px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
       /* Same shell/reasoning as #sign-posts-modal and its rules just above
@@ -1889,7 +1916,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #calendar-events-modal.visible {
@@ -1904,7 +1931,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -1926,9 +1953,9 @@
         gap: 10px;
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .calendar-event-row-body {
         min-width: 0;
@@ -1939,7 +1966,7 @@
       .calendar-event-row-time {
         margin-top: 4px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .calendar-event-row-delete {
         flex-shrink: 0;
@@ -1947,22 +1974,22 @@
         border-radius: 999px;
         width: 24px;
         height: 24px;
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
         color: #fff;
         font-size: 13px;
         line-height: 1;
       }
       #calendar-events-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       #calendar-events-unflag-btn {
         align-self: flex-start;
         padding: 6px 14px;
         border-radius: 999px;
         border: none;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
       /* Product reviews (docs/API.md's "Product reviews") live in the
@@ -1982,7 +2009,7 @@
       }
       .seller-review-summary {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.75);
+        color: rgb(var(--ink-rgb) / 0.75);
       }
       .seller-review-list {
         display: flex;
@@ -1996,9 +2023,9 @@
         gap: 10px;
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-review-row-body {
         min-width: 0;
@@ -2012,7 +2039,7 @@
       .product-review-row-time {
         margin-top: 4px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .product-review-row-delete {
         flex-shrink: 0;
@@ -2020,14 +2047,14 @@
         border-radius: 999px;
         width: 24px;
         height: 24px;
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
         color: #fff;
         font-size: 13px;
         line-height: 1;
       }
       .seller-review-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* Simulated purchases (docs/API.md's "Simulated purchases"/"Refunds")
          — this product's own sale history, same collapsed-panel-in-
@@ -2044,7 +2071,7 @@
       }
       .seller-sales-summary {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.75);
+        color: rgb(var(--ink-rgb) / 0.75);
       }
       .seller-sales-list {
         display: flex;
@@ -2058,9 +2085,9 @@
         gap: 10px;
         padding: 10px 12px;
         border-radius: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         font-size: 13px;
-        color: rgb(255 255 255 / 0.9);
+        color: rgb(var(--ink-rgb) / 0.9);
       }
       .product-sale-row-body {
         min-width: 0;
@@ -2071,14 +2098,14 @@
       .product-sale-row-time {
         margin-top: 4px;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .product-sale-row-refund-btn {
         flex-shrink: 0;
         padding: 6px 12px;
         border-radius: 999px;
         border: none;
-        background: rgba(140, 20, 20, 0.55);
+        background: var(--danger);
         color: #fff;
         font: 12px/1.4 sans-serif;
       }
@@ -2088,11 +2115,11 @@
       .product-sale-row-refunded {
         flex-shrink: 0;
         font-size: 11px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
       }
       .seller-sales-empty {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.6);
+        color: rgb(var(--ink-rgb) / 0.6);
       }
       /* Same modal shell as #upload-modal. Shown automatically at startup
          (before bootstrap() resolves a landlet, so a builder is chosen
@@ -2110,7 +2137,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.5);
+        background: rgb(0 0 0 / 0.22);
         padding: 16px;
       }
       #identity-modal.visible {
@@ -2125,7 +2152,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -2137,7 +2164,7 @@
       }
       #identity-hint {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       #identity-list {
         display: flex;
@@ -2157,7 +2184,7 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
         transition: background-color 100ms ease;
@@ -2183,12 +2210,12 @@
       }
       .identity-row-label {
         font-size: 14px;
-        color: #fff;
+        color: var(--pill-text);
         overflow-wrap: anywhere;
       }
       .identity-row-id {
         font-size: 10px;
-        color: rgb(255 255 255 / 0.5);
+        color: rgb(var(--ink-rgb) / 0.5);
         overflow-wrap: anywhere;
       }
       .identity-row-pioneer-badge {
@@ -2212,8 +2239,8 @@
         border-radius: 999px;
         border: none;
         font: 13px/1.4 sans-serif;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
         white-space: nowrap;
       }
       .identity-row-actions .identity-choose-btn {
@@ -2223,15 +2250,15 @@
       /* A distinct destination from the identity list, not another row
          action — visiting doesn't need (or set) an active builder. */
       #shop-btn {
-        background: rgb(255 255 255 / 0.08);
-        border: 1px solid rgb(255 255 255 / 0.25);
+        background: rgb(var(--ink-rgb) / 0.08);
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
       }
       #identity-status {
         font-size: 13px;
         min-height: 18px;
       }
       #identity-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       /* Same modal shell as #upload-modal — shown at startup, before
          bootstrap() has resolved a landlet to build on, whenever this
@@ -2243,7 +2270,7 @@
         display: none;
         align-items: center;
         justify-content: center;
-        background: rgb(0 0 0 / 0.6);
+        background: rgb(0 0 0 / 0.28);
         padding: 16px;
       }
       #claim-modal.visible {
@@ -2258,7 +2285,7 @@
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
         padding: 18px;
-        color: #fff;
+        color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         display: flex;
         flex-direction: column;
@@ -2270,7 +2297,7 @@
       }
       #claim-hint {
         font-size: 12px;
-        color: rgb(255 255 255 / 0.65);
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       /* Square viewport onto the 3D world flyover (a separate Three.js
          renderer/scene from the builder view — see loadLandletMap in
@@ -2282,7 +2309,7 @@
         aspect-ratio: 1 / 1;
         border-radius: 10px;
         overflow: hidden;
-        background: rgb(0 0 0 / 0.3);
+        background: rgb(var(--ink-rgb) / 0.08);
       }
       #claim-map-canvas {
         width: 100%;
@@ -2295,7 +2322,7 @@
         flex-wrap: wrap;
         gap: 12px;
         font-size: 12px;
-        color: rgb(255 255 255 / 0.75);
+        color: rgb(var(--ink-rgb) / 0.75);
       }
       .claim-legend-item {
         display: inline-flex;
@@ -2312,20 +2339,20 @@
         background: var(--brand-green);
       }
       .claim-swatch.claimed {
-        background: rgb(255 255 255 / 0.28);
+        background: rgb(var(--ink-rgb) / 0.28);
       }
       #claim-selection-panel {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        background: rgb(255 255 255 / 0.08);
+        background: rgb(var(--ink-rgb) / 0.08);
         border-radius: 10px;
         padding: 10px 12px;
       }
       #claim-selection-name {
         font-size: 13px;
-        color: rgb(255 255 255 / 0.85);
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       #claim-confirm-btn {
         padding: 8px 16px;
@@ -2344,7 +2371,7 @@
         min-height: 18px;
       }
       #claim-status.error {
-        color: #ffb4a8;
+        color: #b3402c;
       }
       #claim-modal-actions {
         display: flex;
@@ -2357,8 +2384,8 @@
         border-radius: 999px;
         border: none;
         font: 14px/1.4 sans-serif;
-        background: rgb(255 255 255 / 0.15);
-        color: #fff;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
       }
       /* The primary next step when nothing's claimable yet — stands out
          from Refresh/skip the same way the Claim button stands out from
@@ -2390,10 +2417,15 @@
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>
-    <button id="identity-btn" type="button">Identity</button>
-    <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
-    <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
-    <button id="settings-btn" type="button">Settings</button>
+    <div id="account-menu">
+      <button id="account-menu-toggle" type="button">Menu</button>
+      <div id="account-menu-panel">
+        <button id="identity-btn" type="button">Identity</button>
+        <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
+        <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
+        <button id="settings-btn" type="button">Settings</button>
+      </div>
+    </div>
     <div id="mode-nav">
       <button class="mode-nav-btn" data-mode="shop" type="button">Shop</button>
       <button class="mode-nav-btn" data-mode="build" type="button">Build</button>

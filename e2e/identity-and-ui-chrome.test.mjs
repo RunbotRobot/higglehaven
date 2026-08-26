@@ -2,9 +2,9 @@
 // identity picker's collapse-until-tapped rows and selected-row highlight,
 // contextual Build/Sell button labels, the Cancel path back out of "Choose
 // a seller," X-close buttons on modals, the Add Item catalog picker's
-// opaque background and hint-hiding, and the pale-pill vs dark-panel color
-// split.
-import { launchPage, finish } from './helpers.mjs';
+// opaque background and hint-hiding, and the pale-green-pill vs
+// pale-yellow-panel color split.
+import { launchPage, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Chrome Suite Tester';
 
@@ -62,6 +62,7 @@ console.log('Seller modal close is an X button (should be true):', sellerCloseIs
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
 
+await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 const settingsCloseIsX = await page.locator('#settings-close-btn').evaluate((el) => el.classList.contains('modal-close-btn') && el.textContent.includes('×'));
@@ -94,7 +95,7 @@ for (const [fx, fy] of [[0.5, 0.5], [0.4, 0.4], [0.4, 0.3], [0.5, 0.3], [0.2, 0.
 }
 await page.click('#claim-confirm-btn');
 await page.waitForTimeout(2500);
-await page.waitForSelector('#identity-btn', { timeout: 10000 });
+await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 
 const hintVisibleBeforePicker = await page.locator('#product-info').isVisible();
 await page.click('#add-item-btn');
@@ -112,12 +113,16 @@ await page.waitForTimeout(300);
 const hintVisibleAfterClosingPicker = await page.locator('#product-info').isVisible();
 console.log('hint visible again after closing catalog picker (should be true):', hintVisibleAfterClosingPicker);
 
-// --- Pale-pill vs dark-panel color split (#99): the two token buckets should
-// resolve to genuinely different, non-default values, not just be unset. ---
+// --- Pale-green pill vs pale-yellow panel color split: the two token
+// buckets should resolve to genuinely different, non-default values, not
+// just be unset. Both are pale/bright now (docs/SPEC.md §1's "Visual
+// brand direction") — this used to check pale-pill-vs-dark-panel, before
+// the dialogs' own dark background was replaced for reading too heavy/
+// ominous. ---
 const pillRgb = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--pill-rgb').trim());
 const panelRgb = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--panel-rgb').trim());
 console.log('--pill-rgb (should be the pale green, "214 232 190"):', pillRgb);
-console.log('--panel-rgb (should be the dark green, "36 56 20"):', panelRgb);
+console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb);
 
 const pass = sellNavActiveImmediately && closeBtnVisible &&
   !actionsVisibleBefore && !expandedBeforeTap && actionsVisibleAfter && expandedAfterTap &&
@@ -125,6 +130,6 @@ const pass = sellNavActiveImmediately && closeBtnVisible &&
   modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellerModalOpenedAfterCancel === 0 &&
   uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
   hintVisibleBeforePicker && hintHiddenWhilePickerOpen && pickerOpaque && hintVisibleAfterClosingPicker &&
-  pillRgb === '214 232 190' && panelRgb === '36 56 20' &&
+  pillRgb === '214 232 190' && panelRgb === '250 240 199' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'identity picker + modal chrome + catalog picker UI redesign', errors });

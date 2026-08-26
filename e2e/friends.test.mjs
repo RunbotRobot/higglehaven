@@ -11,7 +11,7 @@
 // outgoing request. Duplicate-request rejection, the self-request 400, and
 // the "declined" (recipient-side DELETE) path are covered instead by
 // worker/index.test.js's own "Friendships" describe block.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
 
 const ALICE = 'Friends Suite Alice';
 const BOB = 'Friends Suite Bob';
@@ -40,6 +40,7 @@ async function fetchJson(page, path, options) {
 // launchPage's own dialog handler answers every prompt with one fixed
 // string for the session (ALICE here), so this swaps in a one-off handler
 // for the "Friend's name" prompt specifically, answering with BOB instead.
+await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 alicePage.removeAllListeners('dialog');
@@ -52,6 +53,7 @@ const aliceOutgoingCount = await alicePage.locator('#friends-outgoing-list .frie
 console.log('Alice outgoing list count right after sending (should be 1):', aliceOutgoingCount);
 
 // Bob opens Friends and sees the incoming request.
+await openAccountMenu(bobPage);
 await bobPage.click('#friends-btn');
 await bobPage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 await bobPage.waitForTimeout(500);
@@ -66,6 +68,7 @@ console.log('Bob\'s accepted row (should mention Alice and her lándlet):', bobA
 // Alice reopens Friends (the modal doesn't live-poll while already open —
 // same no-live-updates convention as Notices) and now sees Bob as accepted.
 await alicePage.click('#friends-close-btn');
+await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForTimeout(500);
 const aliceAcceptedText = await alicePage.locator('#friends-accepted-list .friend-row').first().textContent();
@@ -83,6 +86,7 @@ const carol = (await fetchJson(alicePage, '/api/builders', {
   body: JSON.stringify({ label: CAROL }),
 })).body.builder;
 
+await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 alicePage.removeAllListeners('dialog');
