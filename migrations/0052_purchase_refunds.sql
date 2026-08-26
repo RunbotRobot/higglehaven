@@ -1,0 +1,15 @@
+-- Refunds + dáller-commission clawback (docs/SPEC.md §5: "Requires a
+-- dáller-commission clawback mechanism (builder's instant commission on a
+-- returned sale is deducted, potentially creating a negative balance to
+-- settle)"). "Returns/refunds return real currency, not dállers" is about
+-- REAL commerce — not applicable here, since migrations/0051's purchases
+-- are a simulation and no real currency ever moved for the sale itself.
+-- What IS real, and needs undoing on a refund, is the commission credit:
+-- the builder's dallers_balance_cents.
+--
+-- Deliberately does NOT touch daller_earnings_events (migrations/0050) —
+-- that ledger exists only to feed land cap's trailing-earnings formula,
+-- and land cap's own ratchet ("once increased, never decreases") means a
+-- refund shouldn't claw back cap growth it already produced, only the
+-- dállers balance itself.
+ALTER TABLE purchases ADD COLUMN refunded_at TEXT;

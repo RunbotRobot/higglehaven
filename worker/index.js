@@ -3030,14 +3030,68 @@ async function finishPurchase(db, instance, template, landlet, input) {
 
 async function handlePurchases(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
-    const { results } = await db.prepare(`
-      SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
-    `).bind(builderId).all();
-    return json({ purchases: results.map(purchaseFromRow) });
+    const builderId = url.searchParams.get('builderId');
+    const templateId = url.searchParams.get('templateId');
+    // builderId lists everything hosted on that builder's own land (their
+    // "did I earn commission" view); templateId lists every sale of one
+    // product across every builder who happens to host an instance of it
+    // (the product's own seller's "did my product sell" view — see
+    // "Simulated purchases" / "Refunds" in docs/API.md). Exactly one is
+    // required; there's no "list everything" mode.
+    if (builderId) {
+      const { results } = await db.prepare(`
+        SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
+      `).bind(stringValue(builderId, 'builderId')).all();
+      return json({ purchases: results.map(purchaseFromRow) });
+    }
+    if (templateId) {
+      const { results } = await db.prepare(`
+        SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
+      `).bind(stringValue(templateId, 'templateId')).all();
+      return json({ purchases: results.map(purchaseFromRow) });
+    }
+    throw new HttpError('builderId or templateId is required', 400);
+  }
+
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
+    return handlePurchaseRefund(db, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql
+// — see its own comment for why only dallers_balance_cents is touched, not
+// daller_earnings_events/land cap). Reachable from the Seller modal's own
+// "Sales" panel on the product being refunded — a seller-initiated action
+// (standing in for a real customer-service-initiated refund, per
+// docs/SPEC.md §6's no-personal-support-contact policy), not shopper
+// self-service, since shoppers have no account here to authenticate a
+// "my purchases" view against in the first place.
+async function handlePurchaseRefund(db, purchaseId) {
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  if (purchase.refunded_at) {
+    throw new HttpError('This purchase has already been refunded', 400);
+  }
+  const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
+    throw new HttpError('This product\'s seller does not accept returns', 400);
+  }
+  const templateName = template?.name || 'A product';
+
+  await db.batch([
+    db.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
+      .bind(purchaseId),
+    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
+      .bind(purchase.builder_share_cents, purchase.builder_id),
+    notificationStatement(db, purchase.builder_id,
+      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
+  ]);
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(row) });
 }
 
 function purchaseFromRow(row) {
@@ -3055,6 +3109,7 @@ function purchaseFromRow(row) {
     builderShareCents: row.builder_share_cents,
     platformShareCents: row.platform_share_cents,
     createdAt: row.created_at,
+    refundedAt: row.refunded_at,
   };
 }
 
@@ -3236,6 +3291,18 @@ function assertValidDigitalGoodDisclaimer(metadata) {
   }
 }
 
+// "No-returns-policy respected as seller-set default" (docs/SPEC.md §5) —
+// a seller-set flag on the product itself, same single-key-in-metadata
+// simplicity as digitalGoodDisclaimer above. Absent/false means returns
+// are accepted (the spec's own default), so this key is only ever written
+// when a seller actively opts out.
+function assertValidNoReturns(metadata) {
+  if (metadata.noReturns === undefined) return;
+  if (typeof metadata.noReturns !== 'boolean') {
+    throw new HttpError('metadata.noReturns must be a boolean', 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -3257,6 +3324,7 @@ function validateTemplate(input, fallbackId) {
   JSON.stringify(template.metadata);
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata);
+  assertValidNoReturns(template.metadata);
   return template;
 }
 

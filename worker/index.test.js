@@ -2844,7 +2844,7 @@ describe('Simulated purchases', () => {
     return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
   }
 
-  async function createTemplate(templateId, { priceCents } = {}) {
+  async function createTemplate(templateId, { priceCents, metadata } = {}) {
     const created = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -2853,6 +2853,7 @@ describe('Simulated purchases', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         priceCents,
+        metadata,
       }),
     });
     expect(created.response.status).toBe(201);
@@ -2982,6 +2983,14 @@ describe('Simulated purchases', () => {
     expect(list.response.status).toBe(200);
     expect(list.body.purchases).toHaveLength(2);
     expect(list.body.purchases[0]).toMatchObject({ templateId: 'purchase-list-template', builderId: seller });
+
+    // The same history, filtered by product instead of by hosting builder —
+    // what the Seller modal's own "Sales" panel uses (a seller sees every
+    // sale of their product, regardless of which builder's lándlet hosted
+    // the instance that sold).
+    const byTemplate = await api('/purchases?templateId=purchase-list-template');
+    expect(byTemplate.response.status).toBe(200);
+    expect(byTemplate.body.purchases).toHaveLength(2);
   });
 
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
@@ -2995,5 +3004,76 @@ describe('Simulated purchases', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
     });
     expect(rejected.status).toBe(400);
+  });
+
+  it('404s refunding a purchase that does not exist', async () => {
+    const rejected = await api('/purchases/purchase-does-not-exist/refund', { method: 'POST' });
+    expect(rejected.response.status).toBe(404);
+  });
+
+  it('refunds a purchase, clawing back exactly the builder\'s commission share (not the full total)', async () => {
+    const seller = await createBuilder('Purchase Refund Seller');
+    await createGreenbeltLandletWithArea('purchase-refund-landlet', 1000);
+    await claim('purchase-refund-landlet', seller);
+    await createTemplate('purchase-refund-template', { priceCents: 10000 }); // $100
+    await placeInstance('purchase-refund-instance', 'purchase-refund-landlet', 'purchase-refund-template');
+
+    const purchased = await api('/instances/purchase-refund-instance/purchase', { method: 'POST' });
+    const { purchaseId, builderShareCents } = purchased.body.purchase;
+    expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
+
+    const before = await builderRow(seller);
+    const refunded = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
+    const after = await builderRow(seller);
+    expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
+
+    // Refunding twice is rejected — the clawback already happened once.
+    const secondRefund = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    expect(secondRefund.response.status).toBe(400);
+  });
+
+  it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
+    const seller = await createBuilder('Purchase Refund Negative Seller');
+    await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
+    await claim('purchase-refund-negative-landlet', seller);
+    await createTemplate('purchase-refund-negative-template', { priceCents: 10000 });
+    await placeInstance('purchase-refund-negative-instance', 'purchase-refund-negative-landlet', 'purchase-refund-negative-template');
+
+    const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
+    // Spend down the builder's balance below the commission they're about
+    // to have clawed back, so the refund must push it negative.
+    await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller).run();
+
+    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    const after = await builderRow(seller);
+    expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
+  });
+
+  it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
+    const seller = await createBuilder('Purchase No Returns Seller');
+    await createGreenbeltLandletWithArea('purchase-no-returns-landlet', 1000);
+    await claim('purchase-no-returns-landlet', seller);
+    await createTemplate('purchase-no-returns-template', { priceCents: 500, metadata: { noReturns: true } });
+    await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template');
+
+    const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
+    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('rejects a non-boolean metadata.noReturns', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-bad-no-returns-template',
+        name: 'Bad no-returns product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { noReturns: 'yes' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 });

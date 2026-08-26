@@ -2627,8 +2627,13 @@ being bought. Returns `201` with the created `purchase`:
 `400` if the template has no price set (`priceCents == null` — nothing to
 buy) or the instance sits on an unclaimed lándlet (no builder to credit).
 
-`GET /api/purchases?builderId=...` lists that builder's purchase history,
-most recent first (`400` without `builderId`).
+`GET /api/purchases?builderId=...` lists everything hosted on that
+builder's own land, most recent first — their "did I earn commission"
+view. `GET /api/purchases?templateId=...` lists every sale of one product
+instead, across every builder who happens to host an instance of it — a
+seller's own "did my product sell" view, used by the Seller modal's "Sales"
+panel (see "Refunds" below). Exactly one of the two is required (`400`
+without either).
 
 `instance_id`/`template_id`/`seller_id` are deliberately NOT foreign keys —
 a purchase is a permanent historical receipt, not cascade-deleted if the
@@ -2680,6 +2685,59 @@ in-world hint calls — the hint's own in-world click isn't reachable without
 real camera movement, same convention as product reviews/pricing (verified
 manually instead, via a temporary debug hook removed before commit).
 
+### Refunds
+
+docs/SPEC.md §5: "Returns/refunds return real currency, not dállers ...
+**Requires a dáller-commission clawback mechanism** (builder's instant
+commission on a returned sale is deducted, potentially creating a negative
+balance to settle)." "Returns return real currency" describes *real*
+commerce and doesn't apply here — a simulated purchase never moved real
+currency in the first place. What does need undoing is the one real
+side-effect a purchase has: the builder's commission credit.
+
+`POST /api/purchases/:purchaseId/refund` (`migrations/0052_purchase_refunds.sql`)
+marks a purchase refunded and deducts exactly `builderShareCents` (not the
+full sale total — that was never the builder's money) from
+`builders.dallers_balance_cents`. **No floor** — this can and deliberately
+does push a builder's balance negative, matching the spec's own "potentially
+creating a negative balance to settle." `404` if the purchase doesn't
+exist, `400` if it's already been refunded, `400` if the product's seller
+has opted into "no returns" (`metadata.noReturns === true`, docs/SPEC.md
+§5's "No-returns-policy respected as seller-set default" — absent/false is
+the spec's own default of accepting returns).
+
+**Deliberately does not touch `daller_earnings_events`** (migrations/0050)
+or land cap — that ledger exists only to feed land cap's trailing-earnings
+formula, and land cap's own ratchet ("once increased, never decreases")
+means a refund shouldn't claw back cap growth it already produced, only the
+dállers balance itself.
+
+**Refunding is seller-initiated, not shopper self-service** — the Seller
+modal's own per-product "Sales" panel (mirroring "Reviews" above,
+`renderSales` in `src/main.js`) lists every purchase of that product via
+`GET /api/purchases?templateId=...`, each with a "Refund" button unless
+already refunded. This stands in for a real customer-service-initiated
+refund (docs/SPEC.md §6's no-personal-support-contact policy) rather than
+letting a shopper refund their own purchase directly — this dev-mode
+identity system gives shoppers no account to authenticate a "my purchases"
+view against in the first place (the same gap that makes §5's "Review
+incentives" — a bonus credited to the *reviewer* — not yet buildable here
+either).
+
+A seller opts a product out of returns via its own row's "Edit Returns
+Policy" panel (a single `metadata.noReturns` boolean, same
+platform-controlled-key simplicity as digital goods' disclaimer) —
+`.seller-no-returns-toggle`/`.seller-no-returns-panel` in `src/main.js`.
+
+`worker/index.test.js`'s "Simulated purchases" describe block covers the
+refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
+negative-balance case, and the `templateId` listing filter.
+`e2e/purchase-refunds.test.mjs` covers the Sales panel's refund button and
+the Edit Returns Policy panel through the real UI — the no-returns
+*rejection* path isn't covered there for the same reason prohibited-content
+rejection isn't in `e2e/digital-goods.test.mjs`: a real 400 trips the
+shared `errors.length === 0` check.
+
 ## D1 schema overview
 
 The migrations currently create seventeen main backend tables:
@@ -2729,9 +2787,9 @@ The migrations currently create seventeen main backend tables:
 - `auction_bids`: bids placed on an auction, cascade-deleted with it.
 - `purchases`: a permanent receipt of each simulated "buy" of a priced
   placed instance (see "Simulated purchases" above), including its full
-  commission breakdown. `instance_id`/`template_id`/`seller_id` are
-  deliberately not foreign keys — not cascade-deleted if the thing they
-  reference is later removed.
+  commission breakdown and an optional `refunded_at` (see "Refunds" above).
+  `instance_id`/`template_id`/`seller_id` are deliberately not foreign
+  keys — not cascade-deleted if the thing they reference is later removed.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending

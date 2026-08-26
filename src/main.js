@@ -68,6 +68,8 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  fetchPurchases,
+  refundPurchase,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -2691,6 +2693,78 @@ function renderSellerList() {
       if (!digitalGoodPanel.hidden) fillDigitalGoodInputs();
     });
 
+    // No-returns policy (docs/SPEC.md §5: "No-returns-policy respected as
+    // seller-set default") — absent/false means returns are accepted (the
+    // spec's own default), so a seller only ever opts INTO no-returns, same
+    // single-boolean-in-metadata simplicity as digital goods above. Own
+    // classes throughout for the same "don't share a class across
+    // genuinely different rows/panels" reasoning as Extensibility vs. Edit
+    // Size vs. Edit Digital Good.
+    const noReturnsText = document.createElement('div');
+    noReturnsText.className = 'seller-row-no-returns';
+    const refreshNoReturnsText = () => {
+      noReturnsText.textContent = template.metadata?.noReturns ? 'Returns: not accepted' : 'Returns: accepted';
+    };
+    refreshNoReturnsText();
+    details.appendChild(noReturnsText);
+
+    const noReturnsToggle = document.createElement('button');
+    noReturnsToggle.className = 'seller-extensibility-toggle seller-no-returns-toggle';
+    noReturnsToggle.type = 'button';
+    noReturnsToggle.textContent = 'Edit Returns Policy ▾';
+    details.appendChild(noReturnsToggle);
+
+    const noReturnsPanel = document.createElement('div');
+    noReturnsPanel.className = 'seller-no-returns-panel';
+    noReturnsPanel.hidden = true;
+    details.appendChild(noReturnsPanel);
+
+    const noReturnsCheckboxLabel = document.createElement('label');
+    noReturnsCheckboxLabel.className = 'seller-no-returns-checkbox-label';
+    const noReturnsCheckbox = document.createElement('input');
+    noReturnsCheckbox.type = 'checkbox';
+    noReturnsCheckboxLabel.appendChild(noReturnsCheckbox);
+    noReturnsCheckboxLabel.appendChild(document.createTextNode('This product does not accept returns'));
+    noReturnsPanel.appendChild(noReturnsCheckboxLabel);
+
+    const noReturnsStatus = document.createElement('div');
+    noReturnsStatus.className = 'seller-no-returns-status';
+
+    const noReturnsSaveBtn = document.createElement('button');
+    noReturnsSaveBtn.className = 'seller-no-returns-save-btn';
+    noReturnsSaveBtn.type = 'button';
+    noReturnsSaveBtn.textContent = 'Save Returns Policy';
+    noReturnsSaveBtn.addEventListener('click', async () => {
+      noReturnsStatus.textContent = '';
+      noReturnsStatus.classList.remove('error');
+      const nextMetadata = { ...template.metadata };
+      if (noReturnsCheckbox.checked) {
+        nextMetadata.noReturns = true;
+      } else {
+        delete nextMetadata.noReturns;
+      }
+      noReturnsSaveBtn.disabled = true;
+      try {
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        refreshNoReturnsText();
+        noReturnsStatus.textContent = 'Saved.';
+      } catch (err) {
+        noReturnsStatus.textContent = err.message || 'Could not save.';
+        noReturnsStatus.classList.add('error');
+      } finally {
+        noReturnsSaveBtn.disabled = false;
+      }
+    });
+    noReturnsPanel.appendChild(noReturnsSaveBtn);
+    noReturnsPanel.appendChild(noReturnsStatus);
+
+    noReturnsToggle.addEventListener('click', () => {
+      noReturnsPanel.hidden = !noReturnsPanel.hidden;
+      noReturnsToggle.textContent = `Edit Returns Policy ${noReturnsPanel.hidden ? '▾' : '▴'}`;
+      if (!noReturnsPanel.hidden) noReturnsCheckbox.checked = !!template.metadata?.noReturns;
+    });
+
     // Edit Size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
     // wizard's own dimensions step (handleUploadDimensionsStep), since
@@ -3272,6 +3346,106 @@ function renderSellerList() {
       reviewPanel.hidden = !reviewPanel.hidden;
       reviewToggle.textContent = `Reviews ${reviewPanel.hidden ? '▾' : '▴'}`;
       if (!reviewPanel.hidden) renderReviews();
+    });
+
+    // Simulated purchases (docs/API.md's "Simulated purchases"/"Refunds")
+    // — this product's own sale history, across every builder who happens
+    // to host an instance of it (fetchPurchases by templateId, not
+    // builderId — see handlePurchases' own comment in worker/index.js).
+    // Refunding is seller-initiated here, standing in for a real
+    // customer-service-initiated refund (docs/SPEC.md §6's
+    // no-personal-support-contact policy) — shoppers have no account in
+    // this dev-mode identity system to authenticate a "my purchases"
+    // self-service view against in the first place.
+    const salesToggle = document.createElement('button');
+    salesToggle.className = 'seller-extensibility-toggle seller-sales-toggle';
+    salesToggle.type = 'button';
+    salesToggle.textContent = 'Sales ▾';
+    details.appendChild(salesToggle);
+
+    const salesPanel = document.createElement('div');
+    salesPanel.className = 'seller-sales-panel';
+    salesPanel.hidden = true;
+    details.appendChild(salesPanel);
+
+    const salesSummaryEl = document.createElement('div');
+    salesSummaryEl.className = 'seller-sales-summary';
+    salesPanel.appendChild(salesSummaryEl);
+
+    const salesListEl = document.createElement('div');
+    salesListEl.className = 'seller-sales-list';
+    salesPanel.appendChild(salesListEl);
+
+    const salesEmptyEl = document.createElement('div');
+    salesEmptyEl.className = 'seller-sales-empty';
+    salesEmptyEl.textContent = 'No sales yet.';
+    salesPanel.appendChild(salesEmptyEl);
+
+    async function renderSales() {
+      salesListEl.innerHTML = '';
+      salesSummaryEl.textContent = '';
+      let purchases;
+      try {
+        purchases = await fetchPurchases({ templateId: template.templateId });
+      } catch (err) {
+        salesEmptyEl.textContent = err.message || 'Could not load sales.';
+        salesEmptyEl.hidden = false;
+        return;
+      }
+      salesEmptyEl.hidden = purchases.length > 0;
+      if (purchases.length > 0) {
+        salesSummaryEl.textContent = `${purchases.length} sale${purchases.length === 1 ? '' : 's'}`;
+      }
+      for (const purchase of purchases) {
+        const saleRow = document.createElement('div');
+        saleRow.className = 'product-sale-row';
+        const body = document.createElement('div');
+        body.className = 'product-sale-row-body';
+        const summary = document.createElement('div');
+        summary.className = 'product-sale-row-summary';
+        summary.textContent = `${purchase.buyerLabel || 'Anonymous'} — ${purchase.quantity}x, ${formatPriceCents(purchase.totalCents)} total`;
+        body.appendChild(summary);
+        const commission = document.createElement('div');
+        commission.className = 'product-sale-row-commission';
+        commission.textContent = `You earned ${formatPriceCents(purchase.builderShareCents)}`;
+        body.appendChild(commission);
+        const time = document.createElement('div');
+        time.className = 'product-sale-row-time';
+        const date = new Date(purchase.createdAt);
+        time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+        body.appendChild(time);
+        saleRow.appendChild(body);
+
+        if (purchase.refundedAt) {
+          const refundedLabel = document.createElement('div');
+          refundedLabel.className = 'product-sale-row-refunded';
+          refundedLabel.textContent = 'Refunded';
+          saleRow.appendChild(refundedLabel);
+        } else {
+          const refundBtn = document.createElement('button');
+          refundBtn.className = 'product-sale-row-refund-btn';
+          refundBtn.type = 'button';
+          refundBtn.textContent = 'Refund';
+          refundBtn.addEventListener('click', async () => {
+            refundBtn.disabled = true;
+            try {
+              await refundPurchase(purchase.purchaseId);
+              await renderSales();
+            } catch (err) {
+              alert(err.message || 'Could not refund this purchase.');
+              refundBtn.disabled = false;
+            }
+          });
+          saleRow.appendChild(refundBtn);
+        }
+        salesListEl.appendChild(saleRow);
+      }
+    }
+
+    salesToggle.addEventListener('click', () => {
+      salesPanel.hidden = !salesPanel.hidden;
+      salesToggle.textContent = `Sales ${salesPanel.hidden ? '▾' : '▴'}`;
+      if (!salesPanel.hidden) renderSales();
     });
 
     details.appendChild(rowStatus);

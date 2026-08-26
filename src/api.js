@@ -597,9 +597,16 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}
   return purchase;
 }
 
-export async function fetchPurchases({ builderId } = {}) {
+export async function fetchPurchases({ builderId, templateId } = {}) {
   const params = new URLSearchParams();
   if (builderId) params.set('builderId', builderId);
+  if (templateId) params.set('templateId', templateId);
   const { purchases } = await requestJson(`/purchases?${params.toString()}`);
   return purchases;
+}
+
+// Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql).
+export async function refundPurchase(purchaseId) {
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });
+  return purchase;
 }
