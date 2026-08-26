@@ -67,6 +67,7 @@ import {
   fetchAuctions,
   placeBid,
   resolveAuctionNow,
+  purchaseInstance,
 } from './api.js';
 import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
 import { setActiveSellerId } from './sellerIdentity.js';
@@ -6105,6 +6106,7 @@ const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
+const shopBuyHintEl = document.getElementById('shop-buy-hint');
 
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
@@ -6790,6 +6792,10 @@ function updateReviewFade() {
     nearestActiveReview = nearest;
     shopReviewHintEl.classList.toggle('visible', !!nearest);
     shopProductInfoEl.classList.toggle('visible', !!nearest);
+    // Only a priced product has anything to "buy" — an unpriced one (the
+    // common case for most placeholder catalog items) shows no buy hint at
+    // all rather than one that would just 400 on click.
+    shopBuyHintEl.classList.toggle('visible', !!nearest && nearest.mesh.userData.template.priceCents != null);
     if (nearest) {
       const { name, priceCents, metadata } = nearest.mesh.userData.template;
       let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
@@ -6988,6 +6994,26 @@ shopReviewHintEl.addEventListener('click', async () => {
   }
 });
 
+shopBuyHintEl.addEventListener('click', async () => {
+  const review = nearestActiveReview;
+  if (!review) return;
+  const { name, priceCents } = review.mesh.userData.template;
+  if (priceCents == null) return;
+  const confirmed = confirm(
+    `Simulate buying "${name}" for ${formatPriceCents(priceCents)}? This is a dev-mode simulation — no real money is ever charged, but the seller's dállers balance is credited for real.`,
+  );
+  if (!confirmed) return;
+  shopBuyHintEl.disabled = true;
+  try {
+    await purchaseInstance(review.mesh.userData.instanceId);
+    alert('Purchase simulated — the seller has been credited.');
+  } catch (err) {
+    alert(err.message || 'Could not simulate this purchase.');
+  } finally {
+    shopBuyHintEl.disabled = false;
+  }
+});
+
 function disposeObject3D(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
@@ -7030,6 +7056,7 @@ function unloadShopLandletInstances(entry) {
       nearestActiveReview = null;
       shopReviewHintEl.classList.remove('visible');
       shopProductInfoEl.classList.remove('visible');
+      shopBuyHintEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise

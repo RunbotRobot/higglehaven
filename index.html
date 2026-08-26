@@ -220,6 +220,24 @@
         white-space: nowrap;
         pointer-events: none;
       }
+      /* Same treatment as #shop-sign-hint/#shop-calendar-hint/#shop-review-hint
+         above, stacked one slot higher still (above #shop-product-info, which
+         shares the same nearest-instance proximity but isn't a button). Only
+         ever shown for an instance whose template actually has a price set —
+         see updateReviewFade's own comment on why a priceless product has
+         nothing to buy. */
+      #shop-buy-hint {
+        bottom: 380px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        cursor: pointer;
+      }
       /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
          right looks (yaw/pitch) — each tracks its own pointer via
          setPointerCapture so both thumbs work at once. The knob is an
@@ -2256,6 +2274,7 @@
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
     <div id="shop-product-info" class="shop-ui"></div>
+    <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-vertical-controls" class="shop-ui">

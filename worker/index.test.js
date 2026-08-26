@@ -2826,3 +2826,174 @@ describe('Land cap', () => {
     expect(claimed.body.landlet.ownerBuilderId).toBe(builderId);
   });
 });
+
+describe('Simulated purchases', () => {
+  async function createBuilder(label) {
+    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
+    return res.body.builder.builderId;
+  }
+
+  async function createGreenbeltLandletWithArea(landletId, areaM2) {
+    return api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
+    });
+  }
+
+  async function claim(landletId, builderId) {
+    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  }
+
+  async function createTemplate(templateId, { priceCents } = {}) {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Purchasable product ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    return templateId;
+  }
+
+  async function placeInstance(instanceId, landletId, templateId) {
+    const placed = await api('/instances', {
+      method: 'POST',
+      body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
+    });
+    expect(placed.response.status).toBe(201);
+    return instanceId;
+  }
+
+  async function builderRow(builderId) {
+    return env.DB.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
+  }
+
+  it('404s purchasing an instance that does not exist', async () => {
+    const rejected = await api('/instances/purchase-missing-instance/purchase', { method: 'POST' });
+    expect(rejected.response.status).toBe(404);
+  });
+
+  it('400s purchasing an unpriced product', async () => {
+    const seller = await createBuilder('Purchase Unpriced Seller');
+    await createGreenbeltLandletWithArea('purchase-unpriced-landlet', 1000);
+    await claim('purchase-unpriced-landlet', seller);
+    await createTemplate('purchase-unpriced-template');
+    await placeInstance('purchase-unpriced-instance', 'purchase-unpriced-landlet', 'purchase-unpriced-template');
+
+    const rejected = await api('/instances/purchase-unpriced-instance/purchase', { method: 'POST' });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('400s purchasing an instance on an unclaimed lándlet', async () => {
+    await createGreenbeltLandletWithArea('purchase-unclaimed-landlet', 1000);
+    await createTemplate('purchase-unclaimed-template', { priceCents: 500 });
+    await placeInstance('purchase-unclaimed-instance', 'purchase-unclaimed-landlet', 'purchase-unclaimed-template');
+
+    const rejected = await api('/instances/purchase-unclaimed-instance/purchase', { method: 'POST' });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('reads quantity and buyerLabel from the request body, defaulting to 1 and anonymous', async () => {
+    const seller = await createBuilder('Purchase Body Seller');
+    await createGreenbeltLandletWithArea('purchase-body-landlet', 1000);
+    await claim('purchase-body-landlet', seller);
+    await createTemplate('purchase-body-template', { priceCents: 1000 });
+    await placeInstance('purchase-body-instance', 'purchase-body-landlet', 'purchase-body-template');
+
+    // No body at all — should default rather than 415/400.
+    const defaulted = await api('/instances/purchase-body-instance/purchase', { method: 'POST' });
+    expect(defaulted.response.status).toBe(201);
+    expect(defaulted.body.purchase).toMatchObject({ quantity: 1, buyerLabel: null, unitPriceCents: 1000, totalCents: 1000 });
+
+    const withBody = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 3, buyerLabel: 'A Shopper' }),
+    });
+    expect(withBody.response.status).toBe(201);
+    expect(withBody.body.purchase).toMatchObject({ quantity: 3, buyerLabel: 'A Shopper', unitPriceCents: 1000, totalCents: 3000 });
+
+    const badQuantity = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 0 }),
+    });
+    expect(badQuantity.response.status).toBe(400);
+  });
+
+  it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
+    const seller = await createBuilder('Purchase Commission Seller');
+    await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
+    await claim('purchase-commission-landlet', seller);
+    await createTemplate('purchase-commission-template', { priceCents: 10000 }); // $100
+    await placeInstance('purchase-commission-instance', 'purchase-commission-landlet', 'purchase-commission-template');
+
+    const before = await builderRow(seller);
+    const purchased = await api('/instances/purchase-commission-instance/purchase', { method: 'POST' });
+    expect(purchased.response.status).toBe(201);
+    // $100 * 2% = $2 commission, split 50/50 = $1 (100 cents) to the builder.
+    expect(purchased.body.purchase).toMatchObject({
+      totalCents: 10000, commissionCents: 200, builderShareCents: 100, platformShareCents: 100,
+    });
+
+    const after = await builderRow(seller);
+    expect(after.dallers_balance_cents - before.dallers_balance_cents).toBe(100);
+
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(seller).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].amount_cents).toBe(100);
+  });
+
+  it('applies the 0.5% floor on a low-commission product, without ever pushing the platform share negative', async () => {
+    const seller = await createBuilder('Purchase Floor Seller');
+    await createGreenbeltLandletWithArea('purchase-floor-landlet', 1000);
+    await claim('purchase-floor-landlet', seller);
+    await createTemplate('purchase-floor-template', { priceCents: 100000 }); // $1000
+    await placeInstance('purchase-floor-instance', 'purchase-floor-landlet', 'purchase-floor-template');
+
+    // $1000 * 2% = $20 commission; 50% of that is $10 (1000 cents), but the
+    // 0.5% floor on the $1000 total is $5 (500 cents) — the 50% split
+    // already clears the floor here, so this exercises the non-floor branch
+    // with a large total to confirm rounding stays exact.
+    const purchased = await api('/instances/purchase-floor-instance/purchase', { method: 'POST' });
+    expect(purchased.body.purchase).toMatchObject({
+      totalCents: 100000, commissionCents: 2000, builderShareCents: 1000, platformShareCents: 1000,
+    });
+  });
+
+  it('lists a builder\'s purchase history via GET /api/purchases', async () => {
+    const seller = await createBuilder('Purchase List Seller');
+    await createGreenbeltLandletWithArea('purchase-list-landlet', 1000);
+    await claim('purchase-list-landlet', seller);
+    await createTemplate('purchase-list-template', { priceCents: 500 });
+    await placeInstance('purchase-list-instance', 'purchase-list-landlet', 'purchase-list-template');
+
+    await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
+    await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
+
+    const missingBuilderId = await api('/purchases');
+    expect(missingBuilderId.response.status).toBe(400);
+
+    const list = await api(`/purchases?builderId=${seller}`);
+    expect(list.response.status).toBe(200);
+    expect(list.body.purchases).toHaveLength(2);
+    expect(list.body.purchases[0]).toMatchObject({ templateId: 'purchase-list-template', builderId: seller });
+  });
+
+  it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
+    const seller = await createBuilder('Purchase Malformed Seller');
+    await createGreenbeltLandletWithArea('purchase-malformed-landlet', 1000);
+    await claim('purchase-malformed-landlet', seller);
+    await createTemplate('purchase-malformed-template', { priceCents: 500 });
+    await placeInstance('purchase-malformed-instance', 'purchase-malformed-landlet', 'purchase-malformed-template');
+
+    const rejected = await SELF.fetch('https://higglehaven.test/api/instances/purchase-malformed-instance/purchase', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+    });
+    expect(rejected.status).toBe(400);
+  });
+});

@@ -583,3 +583,23 @@ export async function resolveAuctionNow(auctionId) {
   const { auction } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/resolve`, { method: 'POST' });
   return auction;
 }
+
+// Simulated purchases (see migrations/0051_purchases.sql) — a dev-mode-only
+// "buy" that never charges anything real, but does run the actual
+// commission math and credit a real builder, completing the earning loop
+// land cap (migrations/0050) is normalized against.
+export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
+  const { purchase } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ quantity, buyerLabel }),
+  });
+  return purchase;
+}
+
+export async function fetchPurchases({ builderId } = {}) {
+  const params = new URLSearchParams();
+  if (builderId) params.set('builderId', builderId);
+  const { purchases } = await requestJson(`/purchases?${params.toString()}`);
+  return purchases;
+}

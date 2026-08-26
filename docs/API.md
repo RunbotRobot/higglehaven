@@ -2573,9 +2573,116 @@ a bid exceeding cap is **not** rejected, confirming the tracking-only
 decision is what's actually shipped rather than a leftover TODO.
 `e2e/land-cap.test.mjs` covers the Settings display through the real UI.
 
+## Simulated purchases
+
+Land cap's own commentary above flags the actual gap directly: this
+dev-mode backend has no real commerce/checkout system at all, only auction
+sale proceeds as a dáller source, even though docs/SPEC.md §5's *intended
+primary* earning path is "Dállers credit instantly to builders on sale
+completion" of a *product*. This closes that gap — `POST
+/api/instances/:instanceId/purchase` (`migrations/0051_purchases.sql`) lets
+a shopper "buy" a priced, placed product.
+
+**This is a dev-mode simulation, not real commerce.** No real payment is
+ever processed and a shopper is charged nothing — this project's standing
+"no real payments/Stripe" constraint is untouched, the same way it's
+untouched by the existing simulated dállers/auction economy. What *is*
+real is the commission math: a successful purchase credits an actual
+builder's `dallers_balance_cents` and `daller_earnings_events` ledger
+(migrations/0050), so it feeds land cap's own formula for real.
+
+### Request/response
+
+```
+POST /api/instances/:instanceId/purchase
+{ "quantity": 2, "buyerLabel": "A Shopper" }   // both optional
+```
+
+Both fields are genuinely optional (unlike every other POST body in this
+API) — a missing or empty body just means "buy one, anonymously," not a
+400, since a purchase has no other required input beyond which instance is
+being bought. Returns `201` with the created `purchase`:
+
+```json
+{
+  "purchase": {
+    "purchaseId": "purchase-...",
+    "instanceId": "...",
+    "templateId": "...",
+    "builderId": "...",
+    "sellerId": "...",
+    "buyerLabel": "A Shopper",
+    "unitPriceCents": 2500,
+    "quantity": 2,
+    "totalCents": 5000,
+    "commissionCents": 100,
+    "builderShareCents": 50,
+    "platformShareCents": 50,
+    "createdAt": "..."
+  }
+}
+```
+
+`404` if the instance or its underlying catalog template doesn't exist,
+`400` if the template has no price set (`priceCents == null` — nothing to
+buy) or the instance sits on an unclaimed lándlet (no builder to credit).
+
+`GET /api/purchases?builderId=...` lists that builder's purchase history,
+most recent first (`400` without `builderId`).
+
+`instance_id`/`template_id`/`seller_id` are deliberately NOT foreign keys —
+a purchase is a permanent historical receipt, not cascade-deleted if the
+instance, template, or seller it references is later removed, the same
+"keep the record, drop the live reference" reasoning `notifications.template_id`
+already uses.
+
+### Commission math
+
+docs/SPEC.md §5's "Universal commission formula": "2% standard for
+seller-listed products," "Universal 50/50 split ... 50% higglehaven, 50%
+Builder," "0.5% floor protecting builders on low-commission affiliate
+products."
+
+```
+commissionCents = round(totalCents * 0.02)
+builderShareCents = max(round(commissionCents * 0.5), round(totalCents * 0.005))
+platformShareCents = max(commissionCents - builderShareCents, 0)
+```
+
+The floor exists to protect the *builder*, not to guarantee higglehaven's
+own take — if it pushes the builder's share above the commission itself
+(only possible at an unusually low commission rate; not reachable at this
+formula's fixed 2%/50%, but the code doesn't assume that won't change),
+the platform's own share is `0`, never negative.
+
+### Frontend wiring
+
+Shop mode's proximity-tracked nearest-instance hint column
+(`updateReviewFade` in `src/main.js`, shared with "Product reviews" and
+"Product pricing" above) gains a "Simulate Purchase" button
+(`#shop-buy-hint`), shown only when the nearest instance's template has a
+price set. Clicking it confirms the simulated charge (making the no-real-
+money nature explicit in the copy itself) before calling `purchaseInstance`
+(`src/api.js`).
+
+### Testing note
+
+`worker/index.test.js`'s "Simulated purchases" describe block covers the
+404s, the unpriced/unclaimed 400s, reading `quantity`/`buyerLabel` from the
+request body (including the anonymous-default-quantity-1 case for a missing
+body), the commission math (including the 0.5% floor edge case and
+confirming `platformShareCents` never goes negative), the real ledger/
+balance credit, the `GET /api/purchases` listing, and a malformed-JSON body
+failing cleanly rather than with a raw parse error.
+`e2e/simulated-purchases.test.mjs` exercises the same flow through the real
+Seller-modal upload UI for the priced product, then the purchase API the
+in-world hint calls — the hint's own in-world click isn't reachable without
+real camera movement, same convention as product reviews/pricing (verified
+manually instead, via a temporary debug hook removed before commit).
+
 ## D1 schema overview
 
-The migrations currently create sixteen main backend tables:
+The migrations currently create seventeen main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
@@ -2620,6 +2727,11 @@ The migrations currently create sixteen main backend tables:
 - `auctions`: land acquisition auction listings on a claimed landlet (see
   "Land acquisition auctions" above).
 - `auction_bids`: bids placed on an auction, cascade-deleted with it.
+- `purchases`: a permanent receipt of each simulated "buy" of a priced
+  placed instance (see "Simulated purchases" above), including its full
+  commission breakdown. `instance_id`/`template_id`/`seller_id` are
+  deliberately not foreign keys — not cascade-deleted if the thing they
+  reference is later removed.
 
 Land candidates persist their precomputed minimum world-circle overlap radius.
 World expansion uses its indexed value to avoid reading every distant pending

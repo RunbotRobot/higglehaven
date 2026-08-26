@@ -281,6 +281,10 @@ async function handleApi(request, env, url) {
     return handleFriendships(request, env.DB, route, url);
   }
 
+  if (route[0] === 'purchases') {
+    return handlePurchases(request, env.DB, route, url);
+  }
+
   if (route[0] === 'bundles') {
     return handleBundles(request, env.DB, route, url);
   }
@@ -2763,6 +2767,10 @@ async function handleInstances(request, db, route, url) {
     return handleCalendarEvents(request, db, route);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase') {
+    return handleInstancePurchase(request, db, route[1]);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2934,6 +2942,120 @@ function isoDateString(value, field) {
     throw new HttpError(`${field} must be a valid date/time string`, 400);
   }
   return new Date(text).toISOString();
+}
+
+// Simulated purchases (docs/SPEC.md §5's "Universal commission formula,"
+// migrations/0051) — see that migration's own comment for why this exists
+// and why it is explicitly NOT real commerce (no real payment is ever
+// processed; a shopper is charged nothing). This is the actual mechanism
+// that credits a builder's dállers balance and land-cap-feeding earnings
+// ledger when a shopper "buys" a product placed on their lándlet — the one
+// concrete dáller-earning path docs/SPEC.md §5 treats as PRIMARY (auction
+// sale proceeds, migrations/0045, are the only other one this backend
+// implements).
+const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
+const PURCHASE_BUILDER_SPLIT = 0.5; // "Universal 50/50 split"
+const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
+
+async function handleInstancePurchase(request, db, instanceId) {
+  const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+  if (!instance) return json({ error: 'Instance not found' }, 404);
+  const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
+  if (!template) return json({ error: 'Catalog template not found' }, 404);
+  if (template.price_cents == null) {
+    throw new HttpError('This product has no price set and cannot be purchased', 400);
+  }
+  const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
+  if (!landlet?.owner_builder_id) {
+    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400);
+  }
+
+  // quantity/buyerLabel are both genuinely optional, and this endpoint has
+  // no other required fields, so a missing or empty body is just "buy one,
+  // anonymously" rather than an error — read it directly instead of through
+  // the shared readJson (which rejects a missing content-type/body).
+  let input = {};
+  const contentType = request.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const text = await request.text();
+    if (text) {
+      try {
+        input = JSON.parse(text);
+      } catch {
+        throw new HttpError('Request body is not valid JSON', 400);
+      }
+    }
+  }
+  return finishPurchase(db, instance, template, landlet, input);
+}
+
+async function finishPurchase(db, instance, template, landlet, input) {
+  const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
+  const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
+
+  const unitPriceCents = template.price_cents;
+  const totalCents = unitPriceCents * quantity;
+  const commissionCents = Math.round(totalCents * PURCHASE_COMMISSION_RATE);
+  const builderShareCents = Math.max(
+    Math.round(commissionCents * PURCHASE_BUILDER_SPLIT),
+    Math.round(totalCents * PURCHASE_BUILDER_FLOOR_RATE),
+  );
+  // The floor exists to protect the BUILDER, not to guarantee higglehaven's
+  // own take — if it pushes the builder's share above the commission
+  // itself (only possible on an unusually low commission rate), the
+  // platform's own share is 0, never negative.
+  const platformShareCents = Math.max(commissionCents - builderShareCents, 0);
+
+  const purchaseId = `purchase-${crypto.randomUUID()}`;
+  const builderId = landlet.owner_builder_id;
+  await db.batch([
+    db.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents),
+    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+      .bind(builderShareCents, builderId),
+    db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+      .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+    notificationStatement(db, builderId,
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+  ]);
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(row) }, 201);
+}
+
+async function handlePurchases(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const { results } = await db.prepare(`
+      SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
+    `).bind(builderId).all();
+    return json({ purchases: results.map(purchaseFromRow) });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function purchaseFromRow(row) {
+  return {
+    purchaseId: row.purchase_id,
+    instanceId: row.instance_id,
+    templateId: row.template_id,
+    builderId: row.builder_id,
+    sellerId: row.seller_id,
+    buyerLabel: row.buyer_label,
+    unitPriceCents: row.unit_price_cents,
+    quantity: row.quantity,
+    totalCents: row.total_cents,
+    commissionCents: row.commission_cents,
+    builderShareCents: row.builder_share_cents,
+    platformShareCents: row.platform_share_cents,
+    createdAt: row.created_at,
+  };
 }
 
 function routePath(pathname) {
