@@ -789,6 +789,22 @@ async function handleProductReviews(request, db, route) {
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const input = await readJson(request);
     const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    // Standard practice on real marketplaces — a review is only credible
+    // coming from someone who actually bought the thing. There's no real
+    // account system here to check "did this person buy it" against, so
+    // this matches the same free-text label a purchase's own optional
+    // buyerLabel already uses (see migrations/0051_purchases.sql) —
+    // case-insensitive, same convention as the catalog search's own name
+    // matching. An anonymous purchase (buyerLabel left blank) can't back
+    // a review under anyone's name; the shopper needs to have used the
+    // same label both times, exactly like this dev-mode identity system's
+    // "no accounts, just labels" already means everywhere else it's used.
+    const purchase = await db.prepare(
+      'SELECT 1 FROM purchases WHERE template_id = ? AND buyer_label = ? COLLATE NOCASE LIMIT 1',
+    ).bind(templateId, authorLabel).first();
+    if (!purchase) {
+      throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);
+    }
     const rating = Number(input.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       throw new HttpError('rating must be an integer from 1 to 5', 400);

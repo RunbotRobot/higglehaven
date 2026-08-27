@@ -4,7 +4,10 @@
 // all (every template is reviewable by definition). Moderation therefore
 // lives in the Seller modal's own per-product row (a collapsed "Reviews"
 // panel, same idiom as that row's existing Extensibility panel), not in
-// Build mode. Posting a review is exercised directly via the API here (the
+// Build mode. Reviews are gated on a real purchase under the same name
+// first (standard marketplace practice) — this test "buys" the product via
+// the API before posting each review, same as a real reviewer would need
+// to. Posting a review is exercised directly via the API here (the
 // in-world Shop-mode "Rate this Product" hint isn't reachable without real
 // camera movement — see docs/API.md's own testing note for this feature);
 // this test covers the Seller modal's display/moderation of reviews and
@@ -30,6 +33,7 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
+await page.fill('#upload-price', '10');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
 await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
@@ -48,6 +52,28 @@ async function fetchJson(pathAndQuery, options) {
 const { templates } = (await fetchJson('/api/catalog?limit=100')).body;
 const template = templates.find((t) => t.name === PRODUCT_NAME);
 console.log('uploaded product found in catalog:', !!template);
+
+// A review requires a real purchase under the same name first (standard
+// marketplace practice — see worker/index.js's own comment on the reviews
+// POST handler) — place an instance of the product on the already-claimed
+// landlet, then "buy" it once per reviewer via the same API the in-world
+// "Simulate Purchase" hint calls, before posting each review.
+const { builders } = (await fetchJson('/api/builders')).body;
+const me = builders.find((b) => b.label === LABEL);
+const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${me.builderId}&limit=100`)).body;
+const instanceId = 'suite-reviewable-instance';
+await fetchJson('/api/instances', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ instanceId, landletId: landlets[0].landletId, templateId: template.templateId, x: 0, y: 0 }),
+});
+for (const buyerLabel of ['A Shopper', 'Another Shopper']) {
+  await fetchJson(`/api/instances/${instanceId}/purchase`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ buyerLabel }),
+  });
+}
 
 // Reviews attach to the product with no opt-in needed — post directly via
 // the API the in-world "Rate this Product" hint calls (createProductReview

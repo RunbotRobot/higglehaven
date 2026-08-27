@@ -1915,6 +1915,25 @@ describe('Product reviews', () => {
     return templateId;
   }
 
+  // Standard marketplace practice: only someone who actually bought the
+  // product can review it (see worker/index.js's own comment on the POST
+  // handler). There's no real account system to check purchase history
+  // against, so eligibility is matched the same way a purchase's own
+  // buyerLabel already is elsewhere — a case-insensitive free-text label.
+  // instance_id/seller_id have no FK constraints (migrations/0051's own
+  // "permanent receipt, not tied to a live reference" design), so this can
+  // insert directly without a real placed instance — only builder_id needs
+  // a real row to satisfy its FK.
+  async function createPurchase(templateId, buyerLabel) {
+    const builder = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Purchaser for ${templateId}` }) })).body.builder;
+    await env.DB.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, buyer_label,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
+      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5)
+    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel).run();
+  }
+
   it('rejects a review on a catalog template that does not exist', async () => {
     const rejected = await api('/catalog/template-does-not-exist/reviews', {
       method: 'POST',
@@ -1923,8 +1942,39 @@ describe('Product reviews', () => {
     expect(rejected.response.status).toBe(404);
   });
 
+  it('rejects a review from a shopper who never purchased the product', async () => {
+    const templateId = await createTemplate('review-gate-unpurchased');
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Never Bought It', rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('rejects a review backed only by an anonymous (blank buyerLabel) purchase', async () => {
+    const templateId = await createTemplate('review-gate-anonymous-purchase');
+    await createPurchase(templateId, null);
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Someone', rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('accepts a review whose authorLabel matches a real purchase\'s buyerLabel, case-insensitively', async () => {
+    const templateId = await createTemplate('review-gate-matching-purchase');
+    await createPurchase(templateId, 'A Shopper');
+    const accepted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'a shopper', rating: 5 }),
+    });
+    expect(accepted.response.status).toBe(201);
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
+    await createPurchase(templateId, 'A Shopper');
+    await createPurchase(templateId, 'Another Shopper');
 
     const emptyList = await api(`/catalog/${templateId}/reviews`);
     expect(emptyList.response.status).toBe(200);
@@ -1993,6 +2043,7 @@ describe('Product reviews', () => {
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
+    await createPurchase(templateA, 'A Shopper');
     await api(`/catalog/${templateA}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
@@ -2006,6 +2057,7 @@ describe('Product reviews', () => {
 
   it('cascades review deletion when the catalog template itself is deleted', async () => {
     const templateId = await createTemplate('reviewable-product-to-delete');
+    await createPurchase(templateId, 'A Shopper');
     await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 4 }),

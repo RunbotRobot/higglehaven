@@ -1575,8 +1575,18 @@ function deleteInstance(mesh, { sync = true } = {}) {
 }
 
 const productInfoEl = document.getElementById('product-info');
-const HINT_TEXT = 'Tap a product to inspect it';
-productInfoEl.textContent = HINT_TEXT;
+// No longer defaults to an idle "Tap a product to inspect it" hint — that
+// was permanent on-screen real estate spent stating the obvious. The pill
+// itself is still exactly as useful for everything it was already showing
+// (a selected item's name, Measure's readouts, Copy/Save Bundle
+// confirmations, ...) — it just now hides completely (native `hidden`,
+// which `#product-info`'s own CSS never overrides) rather than falling
+// back to a permanent placeholder when there's nothing to say.
+function setProductInfo(text) {
+  productInfoEl.textContent = text;
+  productInfoEl.hidden = !text;
+}
+productInfoEl.hidden = true;
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
 // template as a grid of thumbnails with the name below each, rather than a
@@ -4231,6 +4241,7 @@ function setGizmoMode(mode) {
 // third point — this is a quick one-shot ruler, not a running total.
 let measureMode = false;
 let measurePointA = null;
+let measurePointB = null;
 
 const MEASURE_COLOR = 0xffee33;
 const measureMarkerGeometry = new THREE.SphereGeometry(0.06, 12, 12);
@@ -4243,6 +4254,22 @@ measureMarkerA.renderOrder = 999;
 measureMarkerB.renderOrder = 999;
 scene.add(measureMarkerA, measureMarkerB);
 
+// Invisible, larger companion spheres co-located with each visible marker —
+// a raycast against the marker's own true 0.06m-radius geometry is a
+// precise-tap-only target, unforgiving for grabbing it back on a touchscreen
+// once it's already placed. These exist purely as a bigger hit-test
+// surface (see hitTestMeasureMarkerAt below); kept in perfect sync with
+// their visible counterpart's position/visibility rather than parented to
+// it, since a Group would be one more thing to keep synced with undo/scene
+// teardown for no real benefit here.
+const measureMarkerHitGeometry = new THREE.SphereGeometry(0.18, 8, 8);
+const measureMarkerHitMaterial = new THREE.MeshBasicMaterial({ visible: false });
+const measureMarkerAHit = new THREE.Mesh(measureMarkerHitGeometry, measureMarkerHitMaterial);
+const measureMarkerBHit = new THREE.Mesh(measureMarkerHitGeometry, measureMarkerHitMaterial);
+measureMarkerAHit.visible = false;
+measureMarkerBHit.visible = false;
+scene.add(measureMarkerAHit, measureMarkerBHit);
+
 const measureLineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
 const measureLineMaterial = new THREE.LineDashedMaterial({ color: MEASURE_COLOR, dashSize: 0.15, gapSize: 0.08, depthTest: false });
 const measureLine = new THREE.Line(measureLineGeometry, measureLineMaterial);
@@ -4252,15 +4279,33 @@ scene.add(measureLine);
 
 function clearMeasurement() {
   measurePointA = null;
+  measurePointB = null;
   measureMarkerA.visible = false;
   measureMarkerB.visible = false;
+  measureMarkerAHit.visible = false;
+  measureMarkerBHit.visible = false;
   measureLine.visible = false;
 }
 
+// The current reading, recomputed identically whether the second point was
+// just placed or an already-placed endpoint was just dragged somewhere new.
+function updateMeasureResultText() {
+  const dx = Math.abs(measurePointB.x - measurePointA.x);
+  const dy = Math.abs(measurePointB.y - measurePointA.y);
+  const dz = Math.abs(measurePointB.z - measurePointA.z);
+  const distance = measurePointA.distanceTo(measurePointB);
+  setProductInfo(
+    `${formatLength(distance)} — Δx ${formatLength(dx)}, Δy ${formatLength(dy)}, Δz ${formatLength(dz)} (drag either point, or tap elsewhere to start over)`);
+}
+
 function updateMeasureInfo() {
-  productInfoEl.textContent = measurePointA
-    ? 'Measure: tap a second point.'
-    : 'Measure: tap a point to start.';
+  if (measurePointA && measurePointB) {
+    updateMeasureResultText();
+  } else {
+    setProductInfo(measurePointA
+      ? 'Measure: tap a second point.'
+      : 'Measure: tap a point to start.');
+  }
 }
 
 // The same "a placed item's own surface wins over bare ground beneath it"
@@ -4277,31 +4322,128 @@ function resolveMeasurePoint() {
   return null;
 }
 
+// Which endpoint (if either) sits under the raycaster right now — checked
+// against the larger invisible hit spheres, not the visible markers
+// themselves (see their own comment). Only ever tested against whichever
+// endpoints are actually placed.
+function hitTestMeasureMarkerAt(event) {
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const targets = [];
+  if (measureMarkerAHit.visible) targets.push(measureMarkerAHit);
+  if (measureMarkerBHit.visible) targets.push(measureMarkerBHit);
+  const hit = raycaster.intersectObjects(targets)[0];
+  if (!hit) return null;
+  return hit.object === measureMarkerAHit ? 'A' : 'B';
+}
+
 function handleMeasureClick() {
   const point = resolveMeasurePoint();
   if (!point) return;
+  if (measurePointA && measurePointB) {
+    // A tap anywhere else once a measurement is already complete starts a
+    // fresh one — this point becomes the new point A. Dragging an existing
+    // endpoint (see the pointerdown/pointermove handlers below) is the
+    // separate, more common way to adjust a measurement without losing it.
+    clearMeasurement();
+  }
   if (!measurePointA) {
     measurePointA = point.clone();
     measureMarkerA.position.copy(measurePointA);
+    measureMarkerAHit.position.copy(measurePointA);
     measureMarkerA.visible = true;
+    measureMarkerAHit.visible = true;
     measureMarkerB.visible = false;
+    measureMarkerBHit.visible = false;
     measureLine.visible = false;
     updateMeasureInfo();
     return;
   }
-  measureMarkerB.position.copy(point);
+  measurePointB = point.clone();
+  measureMarkerB.position.copy(measurePointB);
+  measureMarkerBHit.position.copy(measurePointB);
   measureMarkerB.visible = true;
-  measureLineGeometry.setFromPoints([measurePointA, point]);
+  measureMarkerBHit.visible = true;
+  measureLineGeometry.setFromPoints([measurePointA, measurePointB]);
   measureLine.computeLineDistances();
   measureLine.visible = true;
-  const dx = Math.abs(point.x - measurePointA.x);
-  const dy = Math.abs(point.y - measurePointA.y);
-  const dz = Math.abs(point.z - measurePointA.z);
-  const distance = measurePointA.distanceTo(point);
-  productInfoEl.textContent =
-    `${formatLength(distance)} — Δx ${formatLength(dx)}, Δy ${formatLength(dy)}, Δz ${formatLength(dz)} (tap to start a new measurement)`;
-  measurePointA = null; // next tap begins a fresh measurement, per the message above
+  updateMeasureResultText();
 }
+
+// Dragging an already-placed endpoint to adjust a measurement without
+// starting over — the same free-form "point anywhere on ground or a
+// product" resolution as placing it originally (resolveMeasurePoint), just
+// driven by pointermove instead of a single click. Not wired through
+// OrbitControls/TransformControls at all (a measurement isn't a scene
+// object with its own undo/persistence story, just a local visual aid),
+// so this is a small dedicated pointerdown/move/up sequence — the same
+// shape as the free-look pointer tracking above, but scoped to Measure
+// mode and to a hit on one of the two endpoint hitboxes specifically.
+let draggingMeasureMarker = null; // 'A' | 'B' | null
+let measureMarkerWasDragged = false;
+
+// Registered on window with capture, not as a plain listener on
+// renderer.domElement — OrbitControls attaches its own pointerdown handler
+// directly to that same element (in its constructor, long before this
+// code runs), and two listeners on one element always fire in
+// *registration* order regardless of capture/bubble (that distinction only
+// applies between an element and its ancestors). Only a capture-phase
+// listener on an ancestor is guaranteed to see the event, and be able to
+// act on it (disabling controls, stopping propagation), before
+// OrbitControls' own listener does — the same ordering problem, and the
+// same fix, as the free-look wheel listener above.
+window.addEventListener('pointerdown', (event) => {
+  if (!measureMode) return;
+  // Reset before the hit test, not after — a plain tap elsewhere (placing
+  // a fresh point, not grabbing an endpoint) still needs a clean flag for
+  // its own upcoming 'click', and it wouldn't get one if this stayed
+  // gated behind "only when a marker is actually hit": a big enough drag
+  // on an endpoint never fires a native 'click' at all (see the 'click'
+  // handler's own guard for why this flag exists in the first place), so
+  // the only guaranteed next opportunity to clear it is the very next
+  // pointerdown, whatever gesture that turns out to be.
+  measureMarkerWasDragged = false;
+  const hit = hitTestMeasureMarkerAt(event);
+  if (!hit) return;
+  draggingMeasureMarker = hit;
+  // Grabbing an endpoint is not a camera gesture — without this, the same
+  // one-finger drag that's repositioning the marker would simultaneously
+  // free-look (or orbit) the camera underneath it via OrbitControls' own
+  // handling of this identical pointerdown/move sequence. stopPropagation
+  // here keeps every other pointerdown-driven thing (OrbitControls, the
+  // free-look gesture counter, multi-select's swipe tracker) from ever
+  // seeing this press at all, not just this one's worth of camera motion.
+  controls.enabled = false;
+  event.stopPropagation();
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!draggingMeasureMarker) return;
+  event.stopPropagation();
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const point = resolveMeasurePoint();
+  if (!point) return;
+  measureMarkerWasDragged = true;
+  if (draggingMeasureMarker === 'A') {
+    measurePointA = point.clone();
+    measureMarkerA.position.copy(measurePointA);
+    measureMarkerAHit.position.copy(measurePointA);
+  } else {
+    measurePointB = point.clone();
+    measureMarkerB.position.copy(measurePointB);
+    measureMarkerBHit.position.copy(measurePointB);
+  }
+  if (measurePointA && measurePointB) {
+    measureLineGeometry.setFromPoints([measurePointA, measurePointB]);
+    measureLine.computeLineDistances();
+    updateMeasureResultText();
+  }
+});
+function endMeasureMarkerDrag() {
+  if (!draggingMeasureMarker) return;
+  draggingMeasureMarker = null;
+  controls.enabled = true;
+}
+window.addEventListener('pointerup', endMeasureMarkerDrag);
+window.addEventListener('pointercancel', endMeasureMarkerDrag);
 
 // Multi-Select and Move/Rotate are sibling tools that can't both be active
 // (see updateSelectionUI's multiSelectMode branch) — pressing either gizmo
@@ -4323,6 +4465,14 @@ function exitMeasureMode() {
   measureMode = false;
   measureBtn.classList.remove('active');
   clearMeasurement();
+  // Defensive, not expected in normal single-pointer use (releasing a drag
+  // always fires pointerup first, which already restores this via
+  // endMeasureMarkerDrag) — but leaving controls disabled if this were
+  // ever reached mid-drag would strand the camera with no way to move it.
+  if (draggingMeasureMarker) {
+    draggingMeasureMarker = null;
+    controls.enabled = true;
+  }
   updateSelectionUI();
 }
 modeMoveBtn.addEventListener('click', () => {
@@ -4486,7 +4636,7 @@ function updateSelectionUI() {
   }
   const count = selectedMeshes.size;
   if (count === 0) {
-    productInfoEl.textContent = HINT_TEXT;
+    setProductInfo('');
     modeControlsEl.classList.remove('visible');
     trimLengthControlEl.classList.remove('visible');
     translateControls.detach();
@@ -4494,7 +4644,7 @@ function updateSelectionUI() {
     trimControls.detach();
     return;
   }
-  productInfoEl.textContent = count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`;
+  setProductInfo(count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`);
   modeControlsEl.classList.add('visible');
   // Rotate has no group form (rotating several items around a shared pivot
   // while also spinning each one's own orientation is a much harder problem
@@ -4675,7 +4825,7 @@ function copySelection() {
   // the camera while navigating to a spot to paste.
   exitMultiSelectMode();
   const count = meshes.length;
-  productInfoEl.textContent = `Copied ${count} item${count === 1 ? '' : 's'}`;
+  setProductInfo(`Copied ${count} item${count === 1 ? '' : 's'}`);
   // The status text above is easy to miss since it's well away from the
   // button itself — a brief press flash (see .pressed in index.html) gives
   // feedback right where the tap happened, the same way a physical button's
@@ -4709,11 +4859,11 @@ saveBundleBtn.addEventListener('click', async () => {
     if (shared) communityBundles.unshift(bundle);
     renderBundlePicker();
     const count = meshes.length;
-    productInfoEl.textContent = `Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`;
+    setProductInfo(`Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`);
     setTimeout(updateSelectionUI, 1200);
   } catch (err) {
     console.error('Could not save bundle:', err);
-    productInfoEl.textContent = err.message || 'Could not save bundle.';
+    setProductInfo(err.message || 'Could not save bundle.');
   } finally {
     saveBundleBtn.disabled = false;
   }
@@ -4962,7 +5112,7 @@ function enterPlacementMode(pending, statusText) {
   translateControls.detach();
   rotateControls.detach();
   pendingPlacement = pending;
-  productInfoEl.textContent = statusText;
+  setProductInfo(statusText);
   addItemBtn.textContent = '✕ Cancel';
 }
 
@@ -5112,6 +5262,15 @@ renderer.domElement.addEventListener('click', (event) => {
   raycaster.setFromCamera(ndcFromEvent(event), camera);
 
   if (measureMode) {
+    // A drag that grabbed and moved an endpoint (see the pointerdown/
+    // pointermove handlers above) can still land under CLICK_DRAG_THRESHOLD_PX
+    // and fire this native 'click' too — without this guard it would be
+    // read as "place a new point right here," undoing the drag that had
+    // just finished.
+    if (measureMarkerWasDragged) {
+      measureMarkerWasDragged = false;
+      return;
+    }
     handleMeasureClick();
     return;
   }
@@ -5289,12 +5448,29 @@ const ROTATE_STATE = 0;
 const TOUCH_ROTATE_STATE = 3;
 let pendingGestureCheck = false;
 let activePointerCount = 0;
+// Declared here (rather than right next to the 'change' listener that
+// mostly uses it below) so this pointerdown handler and the wheel listener
+// further down can both reach it — both are genuinely new, unambiguous
+// gestures, and need to clear any free-look left sticking around from a
+// previous rotate's still-damping tail (see the 'change' listener's own
+// comment on why it doesn't clear itself on release) before it wrongly
+// hijacks them into pinning the camera in place.
+let freeLookActive = false;
+const freeLookAnchorPosition = new THREE.Vector3();
 renderer.domElement.addEventListener('pointerdown', () => {
   activePointerCount++;
+  freeLookActive = false;
   if (activePointerCount === 1) {
     pendingGestureCheck = true;
   }
 });
+// Wheel-driven dolly never fires a pointerdown, so it needs its own
+// explicit clear — registered on window with capture so it reliably runs
+// before OrbitControls' own wheel listener (attached directly to
+// renderer.domElement in its constructor): two listeners on the very same
+// element fire in registration order regardless of capture/bubble, so
+// only an ancestor's capture-phase listener is guaranteed to go first.
+window.addEventListener('wheel', () => { freeLookActive = false; }, { capture: true, passive: true });
 window.addEventListener('pointerup', () => {
   activePointerCount = Math.max(0, activePointerCount - 1);
   // A tap-to-select that never moved enough to count as a rotate (see the
@@ -5334,11 +5510,36 @@ function updateTargetTween(now) {
   if (t >= 1) targetTween.active = false;
 }
 
+// Free-look with nothing selected — two earlier raycasting-based stand-in
+// pivots were each tried and reverted: both picked a point that rarely
+// matched wherever controls.target already was, producing a visible jump
+// right as the rotate began. This instead reuses OrbitControls itself
+// (rather than a second, parallel camera controller like Shop mode's) but
+// continuously cancels out the one part of its behavior that felt wrong:
+// with nothing selected, a "rotate" orbits camera.position around a
+// stale, arbitrary target, so a builder ends up circling some point that
+// isn't where they're looking. Every 'change' event during such a drag
+// restores camera.position to exactly where it was when the drag began,
+// and instead moves the (otherwise invisible) target to stay a fixed
+// distance directly ahead of that anchored position — mathematically,
+// "look only" is just "orbit around a phantom point that tracks the
+// camera" rather than a fixed world point. The net feel matches Shop
+// mode's own look controls (position never moves, only facing direction
+// changes) while staying inside OrbitControls' existing rotate/pan/dolly
+// machinery rather than replacing it outright. freeLookActive/
+// freeLookAnchorPosition themselves are declared up near
+// pendingGestureCheck, not here, since the pointerdown/wheel listeners
+// there need to reach them too.
 controls.addEventListener('change', () => {
   if (pendingGestureCheck) {
     const isRotate = controls.state === ROTATE_STATE || controls.state === TOUCH_ROTATE_STATE;
     if (!isRotate) {
       pendingGestureCheck = false;
+      // A pan or dolly starting right on the heels of a previous free-look
+      // drag's damping tail (see below for why freeLookActive outlives the
+      // drag itself) is a genuinely different gesture — don't keep pinning
+      // position against it.
+      freeLookActive = false;
     } else {
       // A tap that's about to *select* a different product also starts out
       // looking exactly like a one-finger rotate to OrbitControls (touch
@@ -5355,23 +5556,34 @@ controls.addEventListener('change', () => {
         : 0;
       if (moved > CLICK_DRAG_THRESHOLD_PX) {
         pendingGestureCheck = false;
-        // With nothing selected there's nothing to recenter onto — two
-        // earlier attempts at guessing a stand-in pivot (raycasting from the
-        // gesture's start point, then from the screen's center) each fixed
-        // one complaint but introduced another: a visible jump right as the
-        // rotate began, since whatever the raycast hit rarely matched
-        // wherever controls.target already was. Orbiting around the
-        // existing target — the same target panning already set, unchanged
-        // by rotating — is what a plain rotate is expected to feel like:
-        // no shift at all.
         const pivot = getSelectionPivot();
-        if (pivot) beginTargetTween(pivot);
+        if (pivot) {
+          freeLookActive = false;
+          beginTargetTween(pivot);
+        } else {
+          freeLookActive = true;
+          freeLookAnchorPosition.copy(camera.position);
+        }
       }
     }
   }
 
+  // Deliberately NOT reset on pointerup/pointercancel the way
+  // pendingGestureCheck is — enableDamping means OrbitControls keeps
+  // dispatching "change" events for a few frames after release as the
+  // rotation coasts to a stop, and those damped frames need the exact same
+  // position-pinning or the tail end of every free-look drag would yank
+  // back to a stale-target orbit for its last few frames. It only turns
+  // off above, once a genuinely different gesture (pan/dolly, or a rotate
+  // that lands on a real selection) is confirmed.
+  if (freeLookActive) {
+    camera.getWorldDirection(cameraDirection);
+    camera.position.copy(freeLookAnchorPosition);
+    controls.target.copy(freeLookAnchorPosition).addScaledVector(cameraDirection, lastKnownDistance || 1);
+  }
+
   const newDistance = camera.position.distanceTo(controls.target);
-  if (selectedMeshes.size === 0) {
+  if (selectedMeshes.size === 0 && !freeLookActive) {
     const dollyDelta = lastKnownDistance - newDistance;
     if (Math.abs(dollyDelta) > 1e-6) {
       camera.getWorldDirection(cameraDirection);
@@ -7369,7 +7581,14 @@ async function enterShopMode() {
   setShopFov(camera.fov); // re-clamp in case a previous Shop session left it zoomed
   shopLastFrameTime = null;
   shopLastProximityCheck = 0;
+  // Not just clearing the text — an empty .visible pill still shows its
+  // own padding/background as a small blank rectangle, which sat directly
+  // on top of the wordmark (both anchored at the same top:10/left:12 spot)
+  // once the world finished loading. Hiding it outright once there's
+  // nothing left to say is the actual fix; the "Loading the world…"/error
+  // paths above re-add .visible themselves whenever there's real text.
   shopStatusEl.textContent = '';
+  shopStatusEl.classList.remove('visible');
   shopActive = true;
 }
 

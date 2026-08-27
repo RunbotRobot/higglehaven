@@ -500,12 +500,12 @@
         pointer-events: none;
         z-index: 10;
       }
-      /* Whatever this hint currently says (the default "tap to inspect"
-         prompt, a selected item's name, ...) is stale and redundant once
-         the catalog picker is open — the builder is choosing a product to
-         place, not looking at the world. Pure CSS so it stays correct
-         regardless of which of catalog-picker's several close paths (pick
-         a tile, re-tap Add Item, tap elsewhere, paste, ...) fires. */
+      /* Whatever this hint currently says (a selected item's name, a
+         Measure readout, ...) is stale and redundant once the catalog
+         picker is open — the builder is choosing a product to place, not
+         looking at the world. Pure CSS so it stays correct regardless of
+         which of catalog-picker's several close paths (pick a tile,
+         re-tap Add Item, tap elsewhere, paste, ...) fires. */
       body:has(#catalog-picker.visible) #product-info {
         display: none;
       }
@@ -547,8 +547,9 @@
          controls row that follows it) drop below both corner panels
          instead — and below the Identity/Settings/#mode-nav row (top: 48px,
          itself roughly 27px tall) that sits between them and the top edge,
-         so a long centered hint ("Tap a product to inspect it") clears all
-         three rows rather than just the first. Placed after the rules it
+         so a long centered hint (Measure's own delta readout is the
+         longest one) clears all three rows rather than just the first.
+         Placed after the rules it
          overrides, not inside the wordmark-shrink media query above, so the
          cascade's source-order tiebreak doesn't let the unconditional base
          rule win. */

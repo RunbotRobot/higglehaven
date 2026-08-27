@@ -2035,6 +2035,22 @@ concept anywhere in this app to credit a bonus to — only builders ever hold
 dállers, and only for their own commission earnings. This covers the
 reviewable-content half only.
 
+**Purchase-gated (standard marketplace practice):** only a shopper who has
+actually bought the product can review it. There's no real account system
+here to check purchase history against, so eligibility is matched the same
+free-text-label way a purchase's own optional `buyerLabel` already is
+elsewhere (migrations/0051_purchases.sql) — `POST .../reviews` requires a
+real row in `purchases` for this `template_id` whose `buyer_label` matches
+the review's `authorLabel`, case-insensitively (`400` otherwise). An
+anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
+back a review under anyone's name — the shopper needs to have used the
+same label both times, the same "no accounts, just labels" constraint this
+identity system carries everywhere else it's used. Any purchase counts,
+refunded or not, and one purchase can back any number of reviews (there's
+no pairing/consumption between a specific purchase and a specific review) —
+this is a simple "did you ever buy it" gate, not a stricter one-review-
+per-purchase policy.
+
 **Corrected design (this section originally attached reviews to a
 builder-flagged placed instance, cloning the community sign/calendar
 pattern — see `migrations/0048_product_reviews_on_template.sql` for the
@@ -2060,8 +2076,8 @@ events, with one addition: `rating`, a required integer from 1 to 5 (`400`
 outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
-doesn't exist, but otherwise no additional check — again, no opt-in flag to
-satisfy.
+doesn't exist. `POST` additionally requires a matching purchase (see the
+purchase-gating paragraph above) — `400` without one.
 
 ```json
 POST /api/catalog/:templateId/reviews
@@ -2122,20 +2138,29 @@ text was left), stacked the same way sign posts/calendar events are.
 `worker/index.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
 rating bounds, optional text, averaged summary, moderation delete,
-independence between two different templates' review lists, and cascade
-delete when the template itself is deleted — including the `404` for
+independence between two different templates' review lists, cascade delete
+when the template itself is deleted, and the purchase gate itself — no
+purchase, an anonymous-only purchase, and a real matching purchase
+including the case-insensitive label match — including the `404` for
 posting to a template that doesn't exist). `e2e/product-reviews.test.mjs`
-uploads a real seller-owned product (same flow as
-`e2e/flooring.test.mjs`), posts reviews directly via the API, and confirms
-the Seller modal's own "Reviews" row panel displays and moderates them
-correctly. The in-world Shop-mode "Rate this Product" hint isn't reachable
-without real camera movement (same limitation as signs/calendar), so its
-visibility and the actual on-screen star-rating sprite rendering were
-verified manually instead, using a temporary `window.__debugReviews` hook
-(removed before committing, confirmed via `grep`) to reposition the camera
-and screenshot the sprite close-up — including confirming a plain,
-un-flagged placed instance is reviewable with no builder action needed at
-all.
+uploads a real seller-owned priced product (same flow as
+`e2e/flooring.test.mjs`), "buys" it via the same API the in-world
+"Simulate Purchase" hint calls (once per reviewer label, satisfying the
+gate), posts reviews directly via the API, and confirms the Seller modal's
+own "Reviews" row panel displays and moderates them correctly. The in-world
+Shop-mode "Rate this Product" hint isn't reachable without real camera
+movement (same limitation as signs/calendar), so its visibility and the
+actual on-screen star-rating sprite rendering were verified manually
+instead, using a temporary `window.__debugReviews` hook (removed before
+committing, confirmed via `grep`) to reposition the camera and screenshot
+the sprite close-up — including confirming a plain, un-flagged placed
+instance is reviewable with no builder action needed at all. The purchase
+gate's own rejection path (a shopper who hasn't bought the product tapping
+"Rate this Product") isn't covered in the e2e suite for the same reason
+prohibited-content/no-returns rejections aren't — a real 400 trips the
+shared `errors.length === 0` check — and instead relies on the frontend's
+existing generic `catch (err) { alert(err.message) }` around every review
+submission, which needed no new code to surface this specific rejection.
 
 ## Scheduled calendar events + creative-tool trigger
 
@@ -3166,6 +3191,78 @@ flooring instance by tapping directly on the tree's own screen position
 confirm its z lands at the thin ground thickness rather than stacked on
 the tree.
 
+## Frontend-only camera navigation (free-look with nothing selected)
+
+Build mode's camera is an `OrbitControls` instance orbiting `controls.target`.
+With a product selected, a one-finger rotate re-centers `target` onto that
+product's own position right as the rotate begins (`getSelectionPivot`/
+`beginTargetTween`) — rotating then orbits at the real distance to that
+product, and reads as "look around the thing I'm inspecting." With
+*nothing* selected, there's no product to recenter onto, and orbiting
+around whatever `target` was last left at (wherever panning or an earlier
+selection put it — an essentially arbitrary point) felt difficult and
+disorienting: the whole scene visibly swings around a point that isn't
+where the builder is actually looking.
+
+**Two earlier fixes were tried and reverted**, both raycasting a stand-in
+pivot for this case (once from the gesture's start point, once from the
+screen's center) — each fixed the disorientation but introduced a new
+problem: the raycast target rarely matched wherever `target` already was,
+so the very start of a rotate visibly jumped the camera. The current fix
+takes a different approach entirely, matching the request that produced
+it: make a one-finger drag with nothing selected feel like Shop mode's own
+look controls (camera position never moves, only facing direction
+changes) — but by continuously canceling out the relevant part of
+OrbitControls' own behavior, rather than replacing OrbitControls with a
+second, parallel camera controller the way Shop mode has one.
+
+Mechanically: every `controls` `'change'` event fired during such a drag
+restores `camera.position` to exactly where it was when the drag began
+(`freeLookAnchorPosition`), and moves the otherwise-invisible `target` to
+sit a fixed distance directly ahead of that anchored position along the
+camera's (just-rotated) facing direction. Orbiting around a point defined
+as "wherever is `lastKnownDistance` ahead of the camera" is, mathematically,
+indistinguishable from a pure look-in-place rotation — OrbitControls is
+still the one moving things, just around a target that tracks the camera
+instead of a fixed world point. This needed to stay *sticky* through
+`enableDamping`'s post-release coast-down (`freeLookActive` is deliberately
+not cleared on `pointerup`/`pointercancel`, only once a genuinely different
+gesture — a pan/dolly, or a rotate that lands on a real selection — is
+confirmed), otherwise the last few damped frames of every free-look drag
+would snap back to orbiting the stale target for an instant right at the
+end. A stray wheel-driven dolly or a fresh touch gesture starting during
+that coast-down both explicitly clear `freeLookActive` first (a
+`window`-level `capture: true` listener for wheel, since it never fires a
+`pointerdown`; the ordinary `pointerdown` counter for touch/mouse) so
+neither gets wrongly pinned in place by a flag left over from the previous
+drag. Panning and dolly-as-fly-forward (see below) are untouched by any of
+this — only the rotate gesture's behavior changes.
+
+With nothing selected, scrolling/pinching is a *dolly* converted into a
+*truck*: `controls.target` is continuously redefined as "wherever is
+`dollyDelta` ahead of the camera" too, so zooming in never gets stuck
+approaching a fixed focus point — it's flying forward, the same as a
+walk/fly-camera tool elsewhere. This existing behavior (`MAX_FLY_TARGET_DISTANCE_M`-
+clamped so it can't fly the target arbitrarily far from the landlet) is
+unchanged by the free-look fix; the two are mutually exclusive per event
+(`!freeLookActive` guards it) since they only ever apply to genuinely
+different gestures.
+
+### Testing note
+
+Not covered by the automated e2e suite — real camera drag gestures aren't
+simulated anywhere in this project (see "Frontend-only alignment assist"
+above for the same limitation). Verified manually: a temporary
+`page.evaluate` + synthetic `pointerdown`/`pointermove`/`pointerup`
+dispatch sequence (no lasting `window.__debug*` hook needed, since
+`camera`/`controls` are reachable for inspection without one) confirmed
+`camera.position` stays fixed to within floating-point noise across a
+multi-step rotate with nothing selected, while `camera.quaternion` visibly
+changes; that selecting a product mid-session still recenters and orbits
+it normally afterward; and that a wheel-zoom immediately following a
+free-look drag flies forward/backward rather than snapping the camera back
+to the drag's anchor position.
+
 ## Frontend-only Measure
 
 A one-shot ruler for a question none of the placement tools answer on their
@@ -3180,10 +3277,9 @@ state at all — purely a frontend visual aid, nothing it does is ever sent
 to the server.
 
 While it's on, a tap sets a ruler point instead of selecting anything: the
-first tap places point A, the second places point B and shows the result,
-and a third starts an entirely new measurement rather than adding a third
-point. Each tap resolves to a 3D point via the same "a placed item's own
-surface wins over the bare ground beneath it" raycast `handlePlacementClick`
+first tap places point A, the second places point B and shows the result.
+Each tap resolves to a 3D point via the same "a placed item's own surface
+wins over the bare ground beneath it" raycast `handlePlacementClick`
 already uses for tap-to-place (see `resolveMeasurePoint`) — so a point can
 land precisely on, say, the top face of a stacked course, not only ever on
 the ground plane underneath everything. Two small spheres mark the picked
@@ -3191,17 +3287,65 @@ points and a dashed line joins them (`measureMarkerA`/`measureMarkerB`/
 `measureLine`) for a few seconds of visual confirmation of what was
 actually measured, not just its number.
 
+**Either endpoint can be dragged afterward** to adjust a measurement
+without starting over — grabbing and moving point A or B re-resolves a new
+3D point under the finger on every `pointermove` (the same
+`resolveMeasurePoint` raycast) and live-updates the marker, the line, and
+the result text. This is a small dedicated `pointerdown`/`pointermove`/
+`pointerup` sequence (`draggingMeasureMarker`/`measureMarkerAHit`/
+`measureMarkerBHit` in `src/main.js`), not routed through
+OrbitControls/TransformControls at all — a measurement has no undo/
+persistence story, so it doesn't need either's machinery, just
+`controls.enabled = false` for the drag's duration so a one-finger drag
+on an endpoint doesn't simultaneously rotate/free-look the camera
+underneath it (see "Frontend-only camera navigation" below for what a
+plain one-finger drag does instead). Each visible marker has a larger,
+invisible companion sphere (`measureMarkerAHit`/`...BHit`, radius 0.18m
+vs. the visible marker's own 0.06m) that's actually raycast against for
+grabbing it back — a precise hit against the small visible sphere alone
+would be an unreasonably exacting target on a touchscreen. The
+`pointerdown` hit-test is registered on `window` with `capture: true`
+rather than directly on the canvas, for the same event-ordering reason
+"Frontend-only camera navigation" below registers its own wheel listener
+that way: OrbitControls attaches its own `pointerdown` handler to the
+canvas in its constructor, long before this code runs, and two listeners
+on the same element always fire in *registration* order regardless of
+capture/bubble — only a capture-phase listener on an ancestor is
+guaranteed to see (and act on) the event first. A native `click` can still
+fire after a small enough drag despite this; `measureMarkerWasDragged`
+suppresses that click from also being read as "place a new point here."
+
+A tap anywhere else once a measurement is already complete (both A and B
+placed) starts an entirely fresh one, exactly as before — this only
+applies once dragging isn't the more natural way to adjust it.
+
 The result — straight-line distance, plus its X/Y/Z breakdown — is shown in
 `#product-info` (which Measure repurposes for its own status text the whole
 time it's on; `updateSelectionUI`'s own `measureMode` branch leaves that
 element alone while hiding the gizmo row, the same "selection persists,
 UI just steps out of the way" hand-off Multi-Select already gets), each
 length formatted through the existing `formatLength`/Units machinery so it
-reads in whichever of meters or feet Settings has picked. The X/Y/Z
-breakdown matters because two taps meant to land exactly one above the
-other rarely do in practice — reading Δz directly means a slightly
-off-center second tap still measures the intended height correctly instead
-of forcing a re-measurement.
+reads in whichever of meters or feet Settings has picked, and recomputed
+identically (`updateMeasureResultText`) whether the second point was just
+placed or an existing endpoint was just dragged. The X/Y/Z breakdown
+matters because two taps meant to land exactly one above the other rarely
+do in practice — reading Δz directly means a slightly off-center second
+tap still measures the intended height correctly instead of forcing a
+re-measurement.
+
+### Testing note
+
+No automated coverage — this is exactly the kind of real-camera/real-touch-
+gesture behavior nothing else time- or camera-driven in this app has
+automated coverage for either (see "Frontend-only alignment assist" above).
+Verified manually: a temporary `window.__debugVerify` hook exposing
+`measurePointA`/`measurePointB`/the marker meshes/`controls` (removed
+before committing, confirmed via `grep`) confirmed dragging endpoint A
+moves only that point (B stays put), `controls.enabled` is `false` for the
+duration of the drag and back to `true` immediately after release, the
+result text reflects the new position once the drag ends, and both
+endpoints survive the drag's trailing `click` (i.e. it doesn't get read as
+"place a new point" and clear the measurement).
 
 ## Frontend-only settings (Units)
 
