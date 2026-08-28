@@ -67,6 +67,248 @@ Response:
 }
 ```
 
+## Authentication
+
+Real accounts (docs/SPEC.md's login system, resolved: email + password —
+the mainstream-standard baseline, chosen over a magic-link-only or
+OAuth-only flow because it's the most universally familiar to a general
+audience and needs no third-party app registration to work). This is the
+first genuinely unforgeable identity concept in this app — see
+`migrations/0053_users_auth.sql` for the full schema rationale.
+
+**Deliberately scoped:** this lands as new, isolated infrastructure —
+`users`/`sessions`/`email_verification_tokens`/`password_reset_tokens` —
+that doesn't yet touch `builders`/`sellers`. Linking a builder/seller
+profile to a real logged-in account, and retiring the free-text dev-mode
+identity picker described in "Builders"/"Sellers" below, is deliberate
+follow-up work, not part of this. Until that lands, the two systems exist
+side by side: a real account proves who you are; a builder/seller profile
+is still a separate, unauthenticated roster row anyone can edit.
+
+**Password storage:** PBKDF2-SHA256 via the Workers runtime's own Web
+Crypto (`hashPassword`/`verifyPassword` in `worker/index.js`) — no
+external dependency and no WASM build needed, unlike bcrypt/scrypt, which
+aren't natively available in this runtime. Stored as a self-describing
+`pbkdf2$<iterations>$<saltHex>$<hashHex>` string so the iteration count
+can be raised later for newly-set passwords without invalidating or
+needing to migrate passwords hashed under an older count. Password rules
+follow NIST 800-63B's current guidance: a reasonable minimum length (8
+characters) rather than forced complexity rules, which tend to push people
+toward predictable substitutions instead of real entropy.
+
+**Sessions:** a signed-nothing, opaque 256-bit random token, handed to the
+browser as an `HttpOnly`, `SameSite=Lax` cookie (`hh_session`) — the exact
+same cookie-attribute reasoning `ACCESS_PASSPHRASE`'s private-preview gate
+above already uses, including `Secure` being added only when the request
+is HTTPS (never on plain-http local dev). Only a SHA-256 hash of the token
+is ever stored server-side (`sessions.token_hash`), the same
+defense-in-depth reasoning applied to passwords: a leaked/dumped D1
+snapshot alone shouldn't be enough to hijack a live session, only a leaked
+*cookie* should be. One row per logged-in device/browser, not one row per
+user — logging out on a phone doesn't sign a laptop out too, and "sign out
+everywhere" (used on password reset) is just a `DELETE FROM sessions WHERE
+user_id = ?`. No separate CSRF token is used: every mutating endpoint here
+is `POST`, and `SameSite=Lax` cookies are already withheld by every modern
+browser from cross-site `POST`/`fetch`/form-submit requests, which is the
+actual CSRF threat model for a cookie-authenticated API.
+
+**Brute-force defense:** `users.failed_login_attempts`/`locked_until`,
+checked and updated on every login attempt — no Durable Object or external
+rate-limiter needed. Five consecutive failures locks the account for 15
+minutes (`423 Locked`); a successful login resets the counter. Deliberately
+symmetric with password reset: resetting a password also clears the
+lockout, since proving control of the email is a stronger signal than
+whatever guessing produced the lockout.
+
+**Email delivery:** [Resend](https://resend.com)'s REST API, via
+`sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
+and a free tier generous enough for this stage. Configure it with:
+
+```sh
+npx wrangler secret put RESEND_API_KEY
+```
+
+(a Worker secret, never committed — the same pattern `ACCESS_PASSPHRASE`
+already uses.) Optionally also set a `from` address via the `EMAIL_FROM`
+variable (defaults to `higglehaven <no-reply@higglehaven.com>`) — Resend
+requires the domain in that address to be verified in your Resend account,
+so this needs to match whatever domain you've actually verified there.
+
+**Building an absolute link (`APP_BASE_URL`):** the verify-email/
+password-reset links these emails carry need a real, absolute base URL —
+and neither `new URL(request.url).origin` nor the raw `Host` header can be
+trusted for this, confirmed by hand: `wrangler dev --local` fully
+simulates this project's configured custom-domain `routes`
+(`wrangler.jsonc`), rewriting both to `higglehaven.com` even for a request
+that actually arrived at `localhost:8787`, so there's no way to recover
+"what host did this really arrive at" from inside the Worker in local dev.
+`appBaseUrl(env)` in `worker/index.js` sidesteps this entirely: an
+optional `APP_BASE_URL` var/secret overrides the default; left unset, it
+falls back to this app's one real production address
+(`https://higglehaven.com`, matching `routes`). Local dev sets
+`APP_BASE_URL=http://localhost:8787` in `.dev.vars` (gitignored,
+wrangler's standard mechanism for exactly this kind of local-only
+override — see that file for the actual local value) so links built
+during local testing are actually reachable.
+
+**Dev-mode fallback:** whenever `RESEND_API_KEY` isn't configured — true
+for local dev and the entire automated test suite, neither of which ever
+sets it — `sendEmail` quietly returns `false` instead of making a network
+call, and the affected endpoints fall back to returning the verification/
+reset link directly in the API response (`devVerifyUrl`/`devResetUrl`)
+instead of emailing it. This is the same "dev-mode" spirit already used
+throughout this codebase, and it's what keeps the entire signup → verify →
+login → reset flow fully testable without a real email provider.
+
+### `POST /api/auth/signup`
+
+```json
+{ "email": "ada@example.com", "password": "correct horse battery staple", "displayName": "Ada" }
+```
+
+`email` is normalized (trimmed, lowercased) and validated against a
+deliberately permissive pattern — "does this look roughly like an email,"
+not a full RFC-5322 parser, since the only real validation of an address
+is actually receiving mail at it, which email verification already does.
+`409` if that email is already registered (revealing a duplicate email
+here is common, accepted practice — unlike the password-reset-request
+endpoint below, which deliberately stays silent about whether an account
+exists). `password` must be 8–200 characters. `displayName` is optional
+and unvalidated beyond being a non-empty string.
+
+Creates the account, logs it in immediately (sets the `hh_session`
+cookie — no separate login step needed right after signup), and kicks off
+email verification:
+
+```json
+{
+  "user": { "userId": "user-...", "email": "ada@example.com", "displayName": "Ada", "emailVerified": false, "createdAt": "...", "updatedAt": "..." },
+  "verificationEmailSent": true
+}
+```
+
+`verificationEmailSent` is `false` (with a `devVerifyUrl` field added
+instead) whenever the dev-mode fallback above kicks in.
+
+### `POST /api/auth/login`
+
+```json
+{ "email": "ada@example.com", "password": "correct horse battery staple" }
+```
+
+`401` with an identical, generic "Invalid email or password" message
+whether the email doesn't exist or the password is wrong — telling the two
+apart would let an attacker enumerate which emails have accounts here.
+`423` if the account is currently locked out (see "Brute-force defense"
+above). On success, sets a fresh `hh_session` cookie (a genuinely new
+session, not a reused one) and returns `{ "user": { ... } }`, same shape as
+signup's response.
+
+### `POST /api/auth/logout`
+
+No body. Deletes the current session (if any) and clears the cookie.
+Always `200 { "loggedOut": true }`, even with no session present —
+idempotent by design.
+
+### `GET /api/auth/me`
+
+Deliberately always `200`, never a `401` — even with no cookie or an
+expired/unknown one, which returns `{ "user": null }` rather than an
+error. This is the frontend's own "is anyone logged in" check, called
+unconditionally on every page load; a 4xx status here would log a
+browser-level "Failed to load resource" console message for the
+overwhelmingly common "nobody's logged in yet" case — not something
+application code can suppress, and something every automated test's
+shared console-error collector would then read as a real page error, on
+every single page load, regardless of whether the test has anything to do
+with auth. (This bit us for real — see this section's own Testing note.)
+Returns `{ "user": { ... } }` once actually logged in.
+
+### `POST /api/auth/verify-email`
+
+```json
+{ "token": "..." }
+```
+
+The token from a verification email's link (or `devVerifyUrl` in dev
+mode). `400` if it's invalid, already consumed, or past its 24-hour
+expiry. On success, sets `email_verified_at` and returns
+`{ "verified": true }`. Tokens are single-use — stored hashed
+(`email_verification_tokens.token_hash`), the same reasoning as sessions
+above, and marked consumed rather than deleted so a replay attempt is
+still detectable as "already used" rather than silently "not found."
+
+### `POST /api/auth/request-password-reset`
+
+```json
+{ "email": "ada@example.com" }
+```
+
+Always `200 { "requested": true }`, regardless of whether that email has
+an account — this is the classic account-enumeration vector, so unlike
+signup it stays deliberately generic. A real account gets a reset email
+(or, in dev mode, the response gains a `devResetUrl` field carrying the
+link directly — this is the one place the generic response quietly
+differs, but only in dev mode, and only in a way an attacker could already
+infer from "this dev/test deployment has no email provider configured,"
+not from anything about the specific email address).
+
+### `POST /api/auth/reset-password`
+
+```json
+{ "token": "...", "newPassword": "a brand new password" }
+```
+
+The token from a reset email's link (or `devResetUrl`). `400` if invalid,
+already consumed, or past its 1-hour expiry (shorter than email
+verification's 24 hours, since a leaked reset link is higher-stakes).
+`newPassword` follows the same 8–200 character rule as signup. On success:
+updates the password, clears any lockout, marks the token consumed, and —
+deliberately — deletes every existing session for that account, signing
+out every device. If the reset was prompted by a compromised password, an
+attacker riding an existing session loses it too.
+
+### `POST /api/auth/resend-verification`
+
+No body — requires a valid session cookie (`401` without one). `400` if
+the account is already verified. Otherwise issues a brand-new verification
+token (the original one, if the first email never arrived, is left alone
+and still valid — resending never invalidates it) and returns the same
+`{ "verificationEmailSent": ..., "devVerifyUrl"?: ... }` shape signup does.
+
+### Testing note
+
+`worker/index.test.js`'s "Authentication" describe block owns the full
+contract: signup/login/logout, session-cookie behavior (a fresh session
+per login, logging out one device leaving others intact), duplicate-email
+and malformed-input rejection, case-insensitive email matching, identical
+wrong-password/unknown-email responses, the five-attempt lockout, the full
+email-verification lifecycle (valid/invalid/reused token), resending
+verification (requires a session, a no-op once already verified, doesn't
+invalidate the original token), and the full password-reset lifecycle
+(valid/invalid/reused token, old sessions invalidated, old password
+rejected afterward). All of it runs against the
+dev-mode fallback (no `RESEND_API_KEY` in the test environment) — the
+actual Resend network call itself is the one part of this that can't be
+exercised by the automated suite, since that would require a real API key
+and would depend on an external service being reachable during `npm test`.
+
+Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
+link → logout → login and forgot-password → reset link → reset → old-
+password-rejected loops, driven through `#account-auth-btn`/`#auth-modal`
+exactly the way a real visitor would. This is also where a real, easy-to-
+miss regression first surfaced: `GET /api/auth/me` originally returned
+`401` for "nobody's logged in," which is called unconditionally on every
+page load — every one of the 20 e2e test files failed at once the first
+time this shipped, not because anything they actually check broke, but
+because Chrome logs a "Failed to load resource" console message for any
+non-2xx fetch response, and every test file's shared console-error
+collector (`e2e/helpers.mjs`) reads that as a real page error regardless
+of which test it is. Fixed by making `/auth/me` always `200` (see its own
+section above) — a good example of why "does this add a new page-load-time
+network call" is worth asking before adding one, quite apart from whatever
+that call's own status code conventionally "should" be.
+
 ## Builders
 
 A shared, cross-device roster of builder identities. Still not real

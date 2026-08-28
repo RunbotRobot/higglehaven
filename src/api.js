@@ -13,6 +13,76 @@ async function requestJson(path, options) {
   return response.json();
 }
 
+// Real accounts (see docs/API.md's "Authentication"). Every call here
+// relies on fetch's own default `credentials: 'same-origin'` behavior to
+// carry the hh_session cookie — no explicit credentials option needed
+// since the frontend and API are always same-origin.
+// Returns the full response body, not just `user` — verificationEmailSent/
+// devVerifyUrl (see docs/API.md's "Authentication") matter to the signup
+// UI too, unlike logIn below where nothing but the user is ever relevant.
+export async function signUp({ email, password, displayName }) {
+  return requestJson('/auth/signup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password, ...(displayName ? { displayName } : {}) }),
+  });
+}
+
+export async function logIn({ email, password }) {
+  const { user } = await requestJson('/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  return user;
+}
+
+export async function logOut() {
+  await requestJson('/auth/logout', { method: 'POST' });
+}
+
+// GET /auth/me always returns 200 with `user: null` when nobody's logged
+// in (see handleMe's own comment on why) — called unconditionally on every
+// page load, so a 4xx here for the common "nobody's logged in" case would
+// mean every visitor's very first request logs a browser-level console
+// error. The try/catch is only for a genuine network failure.
+export async function fetchCurrentUser() {
+  try {
+    const { user } = await requestJson('/auth/me');
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+export async function requestPasswordReset(email) {
+  return requestJson('/auth/request-password-reset', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(token, newPassword) {
+  await requestJson('/auth/reset-password', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token, newPassword }),
+  });
+}
+
+export async function verifyEmail(token) {
+  await requestJson('/auth/verify-email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function resendVerificationEmail() {
+  return requestJson('/auth/resend-verification', { method: 'POST' });
+}
+
 // Paginated server-side (100 per request, same as instances/landlets) —
 // pages through everything rather than silently keeping only the first
 // 100 templates once the catalog grows past that.

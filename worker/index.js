@@ -265,6 +265,10 @@ async function handleApi(request, env, url) {
     return json({ ok: true, service: 'higglehaven-api' });
   }
 
+  if (route[0] === 'auth') {
+    return handleAuth(request, env, env.DB, route, url);
+  }
+
   if (route[0] === 'builders') {
     return handleBuilders(request, env.DB, route);
   }
@@ -1807,6 +1811,417 @@ async function requireSeller(db, sellerId) {
   const row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
   if (!row) throw new HttpError('Seller not found', 404);
   return row;
+}
+
+// Real accounts (migrations/0053_users_auth.sql) — the first genuinely
+// unforgeable identity in this app; see that migration's own comment for
+// why builders/sellers stay untouched for now. Everything below is scoped
+// to this one concern: prove an email is real, prove a password is
+// correct, and hand back a session cookie — nothing here yet links a user
+// to a builder/seller profile, that's deliberate follow-up work.
+
+const SESSION_COOKIE_NAME = 'hh_session';
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
+const FAILED_LOGIN_LOCK_THRESHOLD = 5;
+const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
+
+function bytesToHex(bytes) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+// A random, high-entropy (256-bit) opaque value — used both for session
+// tokens (the raw value a browser's cookie carries) and for email-
+// verification/password-reset tokens (the raw value a link's query string
+// carries). Only ever stored server-side as a SHA-256 hash (see sha256Hex
+// below and each table's own token_hash column) — see
+// migrations/0053_users_auth.sql for why.
+function generateToken() {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return bytesToHex(new Uint8Array(digest));
+}
+
+// Self-describing `pbkdf2$<iterations>$<saltHex>$<hashHex>` format (see
+// the migration's own comment) computed via the Workers runtime's native
+// Web Crypto PBKDF2 support — no dependency, no WASM build needed the way
+// bcrypt/scrypt would require here.
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERATIONS }, key, 256,
+  );
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(bits))}`;
+}
+
+async function verifyPassword(password, stored) {
+  const parts = typeof stored === 'string' ? stored.split('$') : [];
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
+  const [, iterationsText, saltHex, hashHex] = parts;
+  const iterations = Number(iterationsText);
+  if (!Number.isInteger(iterations) || iterations <= 0) return false;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations }, key, 256,
+  );
+  return timingSafeEqual(bytesToHex(new Uint8Array(bits)), hashHex);
+}
+
+function normalizeEmail(value) {
+  return stringValue(value, 'email').toLowerCase();
+}
+
+// Deliberately permissive — "does this look roughly like an email" rather
+// than a fully RFC-5322-correct pattern (famously not worth chasing; the
+// only real validation of an email address is actually receiving mail at
+// it, which email verification below already does).
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function emailValue(value) {
+  const email = normalizeEmail(value);
+  if (!EMAIL_PATTERN.test(email)) throw new HttpError('email is not a valid email address', 400);
+  return email;
+}
+
+function passwordValue(value) {
+  if (typeof value !== 'string') throw new HttpError('password is required', 400);
+  // NIST 800-63B's current guidance: a reasonable minimum length beats
+  // forced complexity rules (mandatory symbols/digits push people toward
+  // predictable substitutions, not real entropy). No upper bound close to
+  // 200 chars would ever be reached by a real password; it exists only to
+  // reject an absurd input before it reaches PBKDF2.
+  if (value.length < 8) throw new HttpError('password must be at least 8 characters', 400);
+  if (value.length > 200) throw new HttpError('password must be at most 200 characters', 400);
+  return value;
+}
+
+function userFromRow(row) {
+  return {
+    userId: row.user_id,
+    email: row.email,
+    displayName: row.display_name,
+    emailVerified: row.email_verified_at !== null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function createSession(db, userId) {
+  const token = generateToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+    .bind(tokenHash, userId, expiresAt).run();
+  return token;
+}
+
+// Mirrors checkAccessGate's own cookie-attribute reasoning above (HttpOnly
+// so frontend JS can never read the session token even via XSS; SameSite=
+// Lax rather than a separate CSRF token, since every mutating endpoint
+// here is POST and Lax cookies are already withheld from cross-site
+// POST/fetch/form-submit by every modern browser; Secure omitted only for
+// plain-http local dev).
+function sessionCookieHeader(url, token, maxAgeSeconds) {
+  const attrs = [`${SESSION_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
+  if (url.protocol === 'https:') attrs.push('Secure');
+  return attrs.join('; ');
+}
+
+function clearSessionCookieHeader(url) {
+  return sessionCookieHeader(url, '', 0);
+}
+
+// Neither `new URL(request.url).origin` nor the raw `Host` header can be
+// trusted here — confirmed by hand: curling
+// `http://localhost:8787/api/auth/signup`, even with an explicit `-H
+// "Host: something-else"` override, still came back with a `devVerifyUrl`
+// pointing at `higglehaven.com`. `wrangler dev --local` fully simulates
+// this project's configured custom-domain `routes` (wrangler.jsonc),
+// rewriting both the effective request URL *and* the Host header the
+// Worker sees to match production before the Worker code ever runs — so
+// there is no way to recover "what host did this request really arrive
+// at" from inside the Worker in local dev. An explicit, configured base
+// URL sidesteps the whole problem instead of fighting it: `APP_BASE_URL`
+// is an optional Worker var/secret (never committed) that overrides the
+// default; unset, it falls back to this app's one real production
+// address, matching wrangler.jsonc's own `routes`. Local dev sets
+// `APP_BASE_URL=http://localhost:8787` in `.dev.vars` (gitignored,
+// wrangler's standard mechanism for exactly this kind of local-only
+// override) so links built here are actually reachable while testing.
+function appBaseUrl(env) {
+  return env.APP_BASE_URL || 'https://higglehaven.com';
+}
+
+async function currentUser(request, db) {
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  const tokenHash = await sha256Hex(token);
+  const row = await db.prepare(`
+    SELECT users.* FROM sessions
+    JOIN users ON users.user_id = sessions.user_id
+    WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  `).bind(tokenHash).first();
+  return row || null;
+}
+
+async function requireCurrentUser(request, db) {
+  const user = await currentUser(request, db);
+  if (!user) throw new HttpError('Not authenticated', 401);
+  return user;
+}
+
+// Resend's REST API (https://resend.com/docs/api-reference/emails/send-email)
+// — chosen for a simple, well-documented API and a free tier generous
+// enough for this stage. Returns quietly (no email actually sent) whenever
+// env.RESEND_API_KEY isn't configured (a Worker secret, set via
+// `wrangler secret put RESEND_API_KEY`, never committed — same pattern
+// ACCESS_PASSPHRASE above already uses), so local dev and the automated
+// test suite — neither of which ever configures it — never attempt a real
+// network call. Callers fall back to returning the raw verify/reset link
+// directly in the API response in that case (see handleSignup/
+// handleRequestPasswordReset), the same "dev-mode" spirit already used
+// throughout this codebase, so the whole flow stays fully testable
+// without a real email provider.
+async function sendEmail(env, { to, subject, html, text }) {
+  if (!env.RESEND_API_KEY) return false;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ from: env.EMAIL_FROM || 'higglehaven <no-reply@higglehaven.com>', to: [to], subject, html, text }),
+  });
+  if (!response.ok) {
+    console.error('Resend send failed', response.status, await response.text().catch(() => ''));
+    return false;
+  }
+  return true;
+}
+
+async function handleAuth(request, env, db, route, url) {
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
+    return handleRequestPasswordReset(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'reset-password') return handleResetPassword(request, db);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'resend-verification') {
+    return handleResendVerification(request, env, db);
+  }
+  return json({ error: 'Not found' }, 404);
+}
+
+async function handleSignup(request, env, db, url) {
+  const input = await readJson(request);
+  const email = emailValue(input.email);
+  const password = passwordValue(input.password);
+  const displayName = input.displayName !== undefined && input.displayName !== null
+    ? stringValue(input.displayName, 'displayName')
+    : null;
+
+  const existing = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
+  if (existing) throw new HttpError('Email is already registered', 409);
+
+  const userId = `user-${crypto.randomUUID()}`;
+  const passwordHash = await hashPassword(password);
+  await db.prepare('INSERT INTO users (user_id, email, password_hash, display_name) VALUES (?, ?, ?, ?)')
+    .bind(userId, email, passwordHash, displayName).run();
+
+  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
+  const sessionToken = await createSession(db, userId);
+  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
+
+  return json({
+    user: userFromRow(row),
+    verificationEmailSent: emailSent,
+    ...(devVerifyUrl ? { devVerifyUrl } : {}),
+  }, 201, { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) });
+}
+
+async function issueEmailVerification(env, db, userId, email) {
+  const token = generateToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString();
+  await db.prepare('INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+    .bind(tokenHash, userId, expiresAt).run();
+  const verifyUrl = `${appBaseUrl(env)}/?verifyEmail=${token}`;
+  const emailSent = await sendEmail(env, {
+    to: email,
+    subject: 'Verify your higglehaven email',
+    html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
+    text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
+  });
+  return { emailSent, devVerifyUrl: emailSent ? null : verifyUrl };
+}
+
+async function handleResendVerification(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.email_verified_at !== null) throw new HttpError('Email is already verified', 400);
+  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
+  return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
+}
+
+async function handleLogin(request, db, url) {
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const password = typeof input.password === 'string' ? input.password : '';
+
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  // Same generic message whether the email doesn't exist or the password
+  // is wrong — telling the two apart lets an attacker enumerate which
+  // emails have accounts here.
+  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
+  if (!row) throw invalidCredentials();
+
+  if (row.locked_until && row.locked_until > new Date().toISOString()) {
+    throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
+  }
+
+  const valid = await verifyPassword(password, row.password_hash);
+  if (!valid) {
+    const attempts = row.failed_login_attempts + 1;
+    const lockedUntil = attempts >= FAILED_LOGIN_LOCK_THRESHOLD
+      ? new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString()
+      : null;
+    await db.prepare(`
+      UPDATE users SET failed_login_attempts = ?, locked_until = ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(attempts, lockedUntil, row.user_id).run();
+    throw invalidCredentials();
+  }
+
+  await db.prepare(`
+    UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(row.user_id).run();
+
+  const sessionToken = await createSession(db, row.user_id);
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  return json(
+    { user: userFromRow(updated) },
+    200,
+    { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) },
+  );
+}
+
+async function handleLogout(request, db, url) {
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (token) {
+    const tokenHash = await sha256Hex(token);
+    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
+  }
+  return json({ loggedOut: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// Deliberately always 200, even with no session — a 401 here would be more
+// conventionally RESTful, but this endpoint gets called unconditionally on
+// every single page load (see the frontend's own bootstrap) specifically
+// to answer "is anyone logged in right now," and the overwhelmingly common
+// case for most visitors is "no." A 4xx response logs a "Failed to load
+// resource" message straight from the browser's own network stack — not
+// something application code can suppress — which every e2e test's shared
+// console-error collector (see e2e/helpers.mjs) then reads as a real page
+// error, on every single test, whether or not it has anything to do with
+// auth. requireCurrentUser (a real 401) is still exactly right for actual
+// protected actions like resend-verification below, just not for this
+// passive status check.
+async function handleMe(request, db) {
+  const user = await currentUser(request, db);
+  return json({ user: user ? userFromRow(user) : null });
+}
+
+async function handleVerifyEmail(request, db) {
+  const input = await readJson(request);
+  const token = stringValue(input.token, 'token');
+  const tokenHash = await sha256Hex(token);
+  const row = await db.prepare(`
+    SELECT * FROM email_verification_tokens
+    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  `).bind(tokenHash).first();
+  if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
+
+  await db.batch([
+    db.prepare("UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
+    db.prepare(`
+      UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(row.user_id),
+  ]);
+  return json({ verified: true });
+}
+
+async function handleRequestPasswordReset(request, env, db) {
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+
+  // Always the same response regardless of whether the account exists —
+  // unlike signup (which does reveal a duplicate email, common and
+  // accepted practice), this specific endpoint is the classic account-
+  // enumeration vector, so it stays generic on purpose.
+  let devResetUrl = null;
+  if (row) {
+    const token = generateToken();
+    const tokenHash = await sha256Hex(token);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+    await db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+      .bind(tokenHash, row.user_id, expiresAt).run();
+    const resetUrl = `${appBaseUrl(env)}/?resetPassword=${token}`;
+    const emailSent = await sendEmail(env, {
+      to: email,
+      subject: 'Reset your higglehaven password',
+      html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
+      text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
+    });
+    if (!emailSent) devResetUrl = resetUrl;
+  }
+  return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
+}
+
+async function handleResetPassword(request, db) {
+  const input = await readJson(request);
+  const token = stringValue(input.token, 'token');
+  const newPassword = passwordValue(input.newPassword);
+  const tokenHash = await sha256Hex(token);
+
+  const row = await db.prepare(`
+    SELECT * FROM password_reset_tokens
+    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  `).bind(tokenHash).first();
+  if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
+
+  const passwordHash = await hashPassword(newPassword);
+  await db.batch([
+    db.prepare("UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
+    db.prepare(`
+      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(passwordHash, row.user_id),
+    // Resetting a password signs every device out — standard practice, and
+    // the right call if the reset was prompted by a compromised password:
+    // an attacker who was riding an existing session loses it too.
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id),
+  ]);
+  return json({ reset: true });
 }
 
 async function handleLandlets(request, db, route, url) {
@@ -3758,8 +4173,9 @@ function decodeCatalogPriceCursor(value) {
   }
 }
 
-function json(payload, status = 200) {
-  return new Response(JSON.stringify(payload, null, 2), { status, headers: JSON_HEADERS });
+function json(payload, status = 200, extraHeaders) {
+  const headers = extraHeaders ? { ...JSON_HEADERS, ...extraHeaders } : JSON_HEADERS;
+  return new Response(JSON.stringify(payload, null, 2), { status, headers });
 }
 
 class HttpError extends Error {

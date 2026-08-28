@@ -6,6 +6,14 @@ import { cropGeometryFromEnd } from './meshCrop.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
+  signUp,
+  logIn,
+  logOut,
+  fetchCurrentUser,
+  requestPasswordReset,
+  resetPassword,
+  verifyEmail,
+  resendVerificationEmail,
   fetchCatalog,
   fetchInstances,
   createInstanceRemote,
@@ -6406,6 +6414,243 @@ document.addEventListener('click', (event) => {
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
 });
+
+// Real login (docs/API.md's "Authentication") — deliberately independent
+// of the dev-mode builder/seller identity picker just above (identityBtn/
+// sellerIdentityBtn): a real account doesn't yet drive which builder/
+// seller profile is active, only proves who's logged in. See
+// migrations/0053_users_auth.sql's own comment for why linking the two is
+// separate follow-up work.
+let currentAuthUser = null;
+let pendingResetToken = null;
+const accountAuthBtn = document.getElementById('account-auth-btn');
+const authModalEl = document.getElementById('auth-modal');
+const authModalTitle = document.getElementById('auth-modal-title');
+const authCloseBtn = document.getElementById('auth-close-btn');
+const authLoggedOutEl = document.getElementById('auth-logged-out');
+const authLoggedInEl = document.getElementById('auth-logged-in');
+const authTabBtns = [...document.querySelectorAll('.auth-tab-btn')];
+const authForms = {
+  login: document.getElementById('auth-login-form'),
+  signup: document.getElementById('auth-signup-form'),
+  forgot: document.getElementById('auth-forgot-form'),
+  reset: document.getElementById('auth-reset-form'),
+};
+const authStatusEl = document.getElementById('auth-status');
+const authAccountEmailEl = document.getElementById('auth-account-email');
+const authAccountVerifiedEl = document.getElementById('auth-account-verified');
+const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
+const authLogoutBtn = document.getElementById('auth-logout-btn');
+
+function setAuthStatus(text, type) {
+  authStatusEl.textContent = text || '';
+  authStatusEl.classList.toggle('error', type === 'error');
+  authStatusEl.classList.toggle('success', type === 'success');
+}
+
+const AUTH_VIEW_TITLES = {
+  login: 'Log In',
+  signup: 'Sign Up',
+  forgot: 'Reset Password',
+  reset: 'Reset Password',
+};
+
+// 'reset' is deliberately not one of the tab-switchable views (no
+// .auth-tab-btn targets it) — it's only ever entered programmatically, via
+// a password-reset email link (see the DOMContentLoaded handler below),
+// never something a user taps into on their own.
+function showAuthView(view) {
+  for (const [name, form] of Object.entries(authForms)) form.hidden = name !== view;
+  for (const btn of authTabBtns) btn.classList.toggle('active', btn.dataset.authView === view);
+  authModalTitle.textContent = AUTH_VIEW_TITLES[view];
+  setAuthStatus('');
+}
+
+function refreshAccountAuthUI() {
+  if (currentAuthUser) {
+    accountAuthBtn.textContent = currentAuthUser.displayName || currentAuthUser.email;
+    authLoggedOutEl.hidden = true;
+    authLoggedInEl.hidden = false;
+    authModalTitle.textContent = 'Account';
+    authAccountEmailEl.textContent = currentAuthUser.email;
+    authAccountVerifiedEl.textContent = currentAuthUser.emailVerified ? '✓ Email verified' : 'Email not verified yet';
+    authAccountVerifiedEl.classList.toggle('verified', currentAuthUser.emailVerified);
+    authResendVerifyBtn.hidden = currentAuthUser.emailVerified;
+  } else {
+    accountAuthBtn.textContent = 'Log In';
+    authLoggedOutEl.hidden = false;
+    authLoggedInEl.hidden = true;
+  }
+}
+
+function openAuthModal(view = 'login') {
+  if (!currentAuthUser) showAuthView(view);
+  setAuthStatus('');
+  authModalEl.classList.add('visible');
+}
+
+function closeAuthModal() {
+  authModalEl.classList.remove('visible');
+}
+
+async function refreshCurrentUser() {
+  currentAuthUser = await fetchCurrentUser();
+  refreshAccountAuthUI();
+  return currentAuthUser;
+}
+
+accountAuthBtn.addEventListener('click', () => openAuthModal('login'));
+authCloseBtn.addEventListener('click', closeAuthModal);
+for (const btn of authTabBtns) {
+  btn.addEventListener('click', () => showAuthView(btn.dataset.authView));
+}
+document.getElementById('auth-forgot-btn').addEventListener('click', () => showAuthView('forgot'));
+document.getElementById('auth-forgot-back-btn').addEventListener('click', () => showAuthView('login'));
+
+authForms.login.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const email = document.getElementById('auth-login-email').value;
+  const password = document.getElementById('auth-login-password').value;
+  setAuthStatus('');
+  try {
+    currentAuthUser = await logIn({ email, password });
+    refreshAccountAuthUI();
+    closeAuthModal();
+    authForms.login.reset();
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not log in.', 'error');
+  }
+});
+
+authForms.signup.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const email = document.getElementById('auth-signup-email').value;
+  const password = document.getElementById('auth-signup-password').value;
+  const displayName = document.getElementById('auth-signup-name').value.trim();
+  setAuthStatus('');
+  try {
+    const result = await signUp({ email, password, displayName: displayName || undefined });
+    currentAuthUser = result.user;
+    refreshAccountAuthUI();
+    authForms.signup.reset();
+    // devVerifyUrl only ever appears when no real email provider is
+    // configured (see sendEmail's own comment) — surfacing it here is what
+    // keeps this whole flow testable/usable in that dev-mode case, exactly
+    // the way the backend's own dev-mode fallback is meant to be used.
+    if (result.devVerifyUrl) {
+      setAuthStatus(`Account created! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else {
+      closeAuthModal();
+    }
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not sign up.', 'error');
+  }
+});
+
+authForms.forgot.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const email = document.getElementById('auth-forgot-email').value;
+  setAuthStatus('');
+  try {
+    const result = await requestPasswordReset(email);
+    authForms.forgot.reset();
+    setAuthStatus(
+      result.devResetUrl
+        ? `If that email has an account, a reset link was sent. (dev mode: ${result.devResetUrl})`
+        : 'If that email has an account, a reset link was sent.',
+      'success',
+    );
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not request a password reset.', 'error');
+  }
+});
+
+authForms.reset.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const newPassword = document.getElementById('auth-reset-password').value;
+  setAuthStatus('');
+  try {
+    await resetPassword(pendingResetToken, newPassword);
+    pendingResetToken = null;
+    authForms.reset.reset();
+    // Order matters: showAuthView clears #auth-status itself (a plain view
+    // switch shouldn't carry over a stale message from whatever view came
+    // before it), so the real success message has to be set after it, not
+    // before.
+    showAuthView('login');
+    setAuthStatus('Password reset! You can log in with your new password now.', 'success');
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not reset the password.', 'error');
+  }
+});
+
+authResendVerifyBtn.addEventListener('click', async () => {
+  setAuthStatus('');
+  try {
+    const result = await resendVerificationEmail();
+    setAuthStatus(
+      result.devVerifyUrl
+        ? `Verification email sent. (dev mode: ${result.devVerifyUrl})`
+        : 'Verification email sent.',
+      'success',
+    );
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not resend the verification email.', 'error');
+  }
+});
+
+authLogoutBtn.addEventListener('click', async () => {
+  try {
+    await logOut();
+  } catch {
+    // Best-effort — the cookie is cleared client-side visibility regardless
+    // once currentAuthUser is nulled out below, even if the network call
+    // itself failed.
+  }
+  currentAuthUser = null;
+  refreshAccountAuthUI();
+  closeAuthModal();
+});
+
+// A verify-email or reset-password link (see issueEmailVerification/
+// handleRequestPasswordReset in worker/index.js) lands back on this same
+// page with a query param carrying the token — handled once, up front,
+// then stripped from the URL so a page refresh doesn't replay it.
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const verifyToken = params.get('verifyEmail');
+  const resetToken = params.get('resetPassword');
+  if (!verifyToken && !resetToken) {
+    await refreshCurrentUser();
+    return;
+  }
+
+  history.replaceState(null, '', location.pathname);
+  await refreshCurrentUser();
+
+  if (verifyToken) {
+    try {
+      await verifyEmail(verifyToken);
+      await refreshCurrentUser();
+      openAuthModal('login');
+      setAuthStatus('Email verified!', 'success');
+    } catch (err) {
+      openAuthModal('login');
+      setAuthStatus(err.message || 'That verification link is invalid or has expired.', 'error');
+    }
+  } else if (resetToken) {
+    pendingResetToken = resetToken;
+    // Forced to the logged-out form view even if this browser happens to
+    // have an active session — resetting a password is about whichever
+    // account the token itself identifies, not necessarily the one
+    // currently logged in here, so it should never be hidden behind
+    // refreshAccountAuthUI's "you're logged in" panel.
+    authLoggedOutEl.hidden = false;
+    authLoggedInEl.hidden = true;
+    authModalEl.classList.add('visible');
+    showAuthView('reset');
+  }
+})();
 
 friendsBtn.addEventListener('click', () => {
   friendsModalEl.classList.add('visible');

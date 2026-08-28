@@ -1639,6 +1639,143 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
+      /* Real login (docs/API.md's "Authentication") — same modal shell as
+         #settings-modal/#identity-modal, higher z-index than both so it can
+         be reached (and, on a verify/reset email link, opened automatically)
+         from anywhere, including on top of the identity picker. */
+      #auth-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #auth-modal.visible {
+        display: flex;
+      }
+      #auth-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #auth-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #auth-tabs {
+        display: flex;
+        gap: 6px;
+      }
+      .auth-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* [hidden] and .auth-form are equal-specificity selectors, and an
+         author stylesheet's rule always wins over the UA stylesheet's own
+         [hidden]{display:none} regardless of source order — without this,
+         .auth-form's own `display: flex` silently overrides `hidden`,
+         showing all four forms stacked at once instead of just the active
+         one (caught via manual screenshot verification, not by anything
+         checking hidden's underlying DOM attribute rather than the
+         rendered layout). */
+      .auth-form[hidden] {
+        display: none;
+      }
+      .auth-form label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #auth-modal-content input[type='email'],
+      #auth-modal-content input[type='password'],
+      #auth-modal-content input[type='text'] {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      .auth-form > button[type='submit'] {
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 14px/1.4 sans-serif;
+      }
+      .auth-link-btn {
+        align-self: flex-start;
+        background: none;
+        border: none;
+        padding: 0;
+        color: rgb(var(--ink-rgb) / 0.65);
+        font: 12px/1.4 sans-serif;
+        text-decoration: underline;
+      }
+      .auth-hint {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      #auth-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #auth-status.error {
+        color: #b3402c;
+      }
+      #auth-status.success {
+        color: #3f7a1f;
+      }
+      #auth-account-email {
+        font-size: 15px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      #auth-account-verified {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      #auth-account-verified.verified {
+        color: #3f7a1f;
+      }
+      #auth-logged-in {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* Same [hidden]-vs-equal-or-higher-specificity-author-rule problem
+         .auth-form[hidden] fixes above — an ID selector's specificity beats
+         [hidden]'s just as much as a class selector tied. */
+      #auth-logged-in[hidden] {
+        display: none;
+      }
+      #auth-resend-verify-btn,
+      #auth-logout-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
       /* Same modal shell as #settings-modal. */
       #notifications-modal {
         position: fixed;
@@ -2430,6 +2567,7 @@
     <div id="account-menu">
       <button id="account-menu-toggle" type="button">Menu</button>
       <div id="account-menu-panel">
+        <button id="account-auth-btn" type="button">Log In</button>
         <button id="identity-btn" type="button">Identity</button>
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
@@ -2627,6 +2765,55 @@
           <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
         </div>
         <div id="settings-section"></div>
+      </div>
+    </div>
+    <div id="auth-modal">
+      <div id="auth-modal-content">
+        <button id="auth-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="auth-modal-title">Log in</h2>
+
+        <div id="auth-logged-out">
+          <div id="auth-tabs">
+            <button class="settings-tab-btn auth-tab-btn active" type="button" data-auth-view="login">Log In</button>
+            <button class="settings-tab-btn auth-tab-btn" type="button" data-auth-view="signup">Sign Up</button>
+          </div>
+
+          <form id="auth-login-form" class="auth-form">
+            <label>Email<input type="email" id="auth-login-email" required autocomplete="email" /></label>
+            <label>Password<input type="password" id="auth-login-password" required autocomplete="current-password" /></label>
+            <button type="submit">Log In</button>
+            <button type="button" id="auth-forgot-btn" class="auth-link-btn">Forgot password?</button>
+          </form>
+
+          <form id="auth-signup-form" class="auth-form" hidden>
+            <label>Display name (optional)<input type="text" id="auth-signup-name" autocomplete="nickname" /></label>
+            <label>Email<input type="email" id="auth-signup-email" required autocomplete="email" /></label>
+            <label>Password (8+ characters)<input type="password" id="auth-signup-password" required autocomplete="new-password" minlength="8" /></label>
+            <button type="submit">Sign Up</button>
+          </form>
+
+          <form id="auth-forgot-form" class="auth-form" hidden>
+            <div class="auth-hint">Enter your email and we'll send a password reset link.</div>
+            <label>Email<input type="email" id="auth-forgot-email" required autocomplete="email" /></label>
+            <button type="submit">Send Reset Link</button>
+            <button type="button" id="auth-forgot-back-btn" class="auth-link-btn">Back to Log In</button>
+          </form>
+
+          <form id="auth-reset-form" class="auth-form" hidden>
+            <div class="auth-hint">Choose a new password.</div>
+            <label>New password (8+ characters)<input type="password" id="auth-reset-password" required autocomplete="new-password" minlength="8" /></label>
+            <button type="submit">Reset Password</button>
+          </form>
+        </div>
+
+        <div id="auth-logged-in" hidden>
+          <div id="auth-account-email"></div>
+          <div id="auth-account-verified"></div>
+          <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
+          <button id="auth-logout-btn" type="button">Log Out</button>
+        </div>
+
+        <div id="auth-status"></div>
       </div>
     </div>
     <div id="identity-modal">

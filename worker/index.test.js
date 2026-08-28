@@ -3129,3 +3129,224 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(400);
   });
 });
+
+describe('Authentication', () => {
+  function extractSessionCookie(response) {
+    const setCookie = response.headers.get('set-cookie');
+    if (!setCookie) return null;
+    const match = setCookie.match(/hh_session=([^;]+)/);
+    return match ? match[1] : null;
+  }
+
+  function withSession(token, options = {}) {
+    return { ...options, headers: { ...options.headers, cookie: `hh_session=${token}` } };
+  }
+
+  async function signup(email, password, extra = {}) {
+    return api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...extra }) });
+  }
+
+  it('signs up, logs in, and logs out with a real session cookie', async () => {
+    const email = `auth-basic-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'correct horse battery staple');
+    expect(signedUp.response.status).toBe(201);
+    expect(signedUp.body.user).toMatchObject({ email, emailVerified: false });
+    expect(signedUp.body.user.userId).toMatch(/^user-/);
+    // Test env never configures RESEND_API_KEY (see sendEmail's own
+    // comment), so verification falls back to returning the link directly
+    // rather than emailing it — this is what makes the flow testable here.
+    expect(signedUp.body.verificationEmailSent).toBe(false);
+    expect(signedUp.body.devVerifyUrl).toMatch(/\/\?verifyEmail=[0-9a-f]{64}$/);
+    const signupSessionToken = extractSessionCookie(signedUp.response);
+    expect(signupSessionToken).toBeTruthy();
+
+    // Signup itself logs you in — no separate login needed to use /me.
+    const meAfterSignup = await api('/auth/me', withSession(signupSessionToken));
+    expect(meAfterSignup.response.status).toBe(200);
+    expect(meAfterSignup.body.user.email).toBe(email);
+
+    const loggedIn = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'correct horse battery staple' }),
+    });
+    expect(loggedIn.response.status).toBe(200);
+    const loginSessionToken = extractSessionCookie(loggedIn.response);
+    expect(loginSessionToken).toBeTruthy();
+    expect(loginSessionToken).not.toBe(signupSessionToken); // a genuinely new session, not a reused one
+
+    const loggedOut = await api('/auth/logout', withSession(loginSessionToken, { method: 'POST' }));
+    expect(loggedOut.response.status).toBe(200);
+    expect(loggedOut.body).toEqual({ loggedOut: true });
+
+    // 200 + null, not a 401 — see handleMe's own comment on why "nobody's
+    // logged in" is treated as ordinary, expected state for this endpoint.
+    const meAfterLogout = await api('/auth/me', withSession(loginSessionToken));
+    expect(meAfterLogout.response.status).toBe(200);
+    expect(meAfterLogout.body.user).toBeNull();
+
+    // The signup session is untouched — logging out one device doesn't
+    // sign out others (migrations/0053's own comment on why sessions are
+    // per-device rows, not a single column on users).
+    const meStillSignedUp = await api('/auth/me', withSession(signupSessionToken));
+    expect(meStillSignedUp.response.status).toBe(200);
+  });
+
+  it('/auth/me without a session cookie is 200 with a null user, not a 401', async () => {
+    const response = await api('/auth/me');
+    expect(response.response.status).toBe(200);
+    expect(response.body.user).toBeNull();
+  });
+
+  it('rejects signup with an already-registered email, case-insensitively', async () => {
+    const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'first password here');
+    const dupe = await signup(email.toUpperCase(), 'second password here');
+    expect(dupe.response.status).toBe(409);
+  });
+
+  it('rejects signup with a malformed email or too-short password', async () => {
+    const badEmail = await signup('not-an-email', 'a fine long password');
+    expect(badEmail.response.status).toBe(400);
+
+    const shortPassword = await signup(`auth-short-${crypto.randomUUID()}@example.com`, 'short1');
+    expect(shortPassword.response.status).toBe(400);
+  });
+
+  it('normalizes email casing between signup and login', async () => {
+    const email = `Auth-Case-${crypto.randomUUID()}@Example.com`;
+    await signup(email, 'a fine long password');
+    const loggedIn = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.toLowerCase(), password: 'a fine long password' }),
+    });
+    expect(loggedIn.response.status).toBe(200);
+  });
+
+  it('rejects login with the wrong password or an unknown email, identically', async () => {
+    const email = `auth-wrongpw-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'the real password');
+
+    const wrongPassword = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'not the real password' }),
+    });
+    const unknownEmail = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: `auth-nobody-${crypto.randomUUID()}@example.com`, password: 'anything' }),
+    });
+    expect(wrongPassword.response.status).toBe(401);
+    expect(unknownEmail.response.status).toBe(401);
+    // Same message either way — telling the two apart would let an
+    // attacker enumerate which emails have accounts.
+    expect(wrongPassword.body.error).toBe(unknownEmail.body.error);
+  });
+
+  it('locks the account after repeated failed logins, even with the correct password', async () => {
+    const email = `auth-lockout-${crypto.randomUUID()}@example.com`;
+    const password = 'the real correct password';
+    await signup(email, password);
+
+    for (let i = 0; i < 5; i++) {
+      const attempt = await api('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password: 'wrong every time' }),
+      });
+      expect(attempt.response.status).toBe(401);
+    }
+
+    const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    expect(lockedOut.response.status).toBe(423);
+  });
+
+  it('verifies email with a valid token, and rejects an invalid or reused one', async () => {
+    const email = `auth-verify-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const token = new URL(signedUp.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
+
+    const badToken = await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: 'not-a-real-token' }) });
+    expect(badToken.response.status).toBe(400);
+
+    const verified = await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
+    expect(verified.response.status).toBe(200);
+    expect(verified.body).toEqual({ verified: true });
+
+    const sessionToken = extractSessionCookie(signedUp.response);
+    const me = await api('/auth/me', withSession(sessionToken));
+    expect(me.body.user.emailVerified).toBe(true);
+
+    const reused = await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) });
+    expect(reused.response.status).toBe(400);
+  });
+
+  it('resets a forgotten password via a real token, and signs out every existing session', async () => {
+    const email = `auth-reset-${crypto.randomUUID()}@example.com`;
+    const oldPassword = 'the original password';
+    const newPassword = 'a brand new password';
+    const signedUp = await signup(email, oldPassword);
+    const oldSessionToken = extractSessionCookie(signedUp.response);
+
+    const requested = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    expect(requested.response.status).toBe(200);
+    expect(requested.body.requested).toBe(true);
+    const token = new URL(requested.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+
+    const badToken = await api('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: 'not-a-real-token', newPassword }),
+    });
+    expect(badToken.response.status).toBe(400);
+
+    const reset = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) });
+    expect(reset.response.status).toBe(200);
+    expect(reset.body).toEqual({ reset: true });
+
+    // The pre-reset session no longer works — resetting a password signs
+    // every device out (see handleResetPassword's own comment).
+    const meWithOldSession = await api('/auth/me', withSession(oldSessionToken));
+    expect(meWithOldSession.response.status).toBe(200);
+    expect(meWithOldSession.body.user).toBeNull();
+
+    const loginWithOldPassword = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password: oldPassword }) });
+    expect(loginWithOldPassword.response.status).toBe(401);
+
+    const loginWithNewPassword = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password: newPassword }) });
+    expect(loginWithNewPassword.response.status).toBe(200);
+
+    // The token itself is single-use.
+    const reusedToken = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'yet another password' }) });
+    expect(reusedToken.response.status).toBe(400);
+  });
+
+  it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {
+    const requested = await api('/auth/request-password-reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: `auth-nobody-reset-${crypto.randomUUID()}@example.com` }),
+    });
+    expect(requested.response.status).toBe(200);
+    expect(requested.body).toEqual({ requested: true });
+    expect(requested.body.devResetUrl).toBeUndefined();
+  });
+
+  it('resends a verification email for the logged-in user, with a fresh token', async () => {
+    const email = `auth-resend-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const firstToken = new URL(signedUp.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
+    const sessionToken = extractSessionCookie(signedUp.response);
+
+    const unauthenticated = await api('/auth/resend-verification', { method: 'POST' });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const resent = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+    expect(resent.response.status).toBe(200);
+    const secondToken = new URL(resent.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
+    expect(secondToken).not.toBe(firstToken);
+
+    // The original token still works — resending issues an additional
+    // valid token rather than invalidating the first one.
+    const verifiedWithFirst = await api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: firstToken }) });
+    expect(verifiedWithFirst.response.status).toBe(200);
+
+    const alreadyVerified = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+    expect(alreadyVerified.response.status).toBe(400);
+  });
+});
