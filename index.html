@@ -60,10 +60,19 @@
         height: 100vh;
         display: block;
       }
+      /* Was bottom-left, which put it directly under Shop mode's
+         horizontally-centered #shop-hint pill — at the 420px-wide mobile
+         viewport this app targets, that hint's full "Left stick to walk —
+         right stick to look — hold up/down to fly" text overflows past
+         center far enough to sit right on top of this. Top-right, just
+         under #undo-redo-panel/#mode-nav (top: 10px/48px, together ~65px
+         tall), is clear in every mode/modal checked (Shop, Build with an
+         item selected, Sell's seller-picker modal, Settings). */
       #build-info {
         position: fixed;
-        bottom: 8px;
-        left: 8px;
+        top: 82px;
+        right: 8px;
+        text-align: right;
         color: rgba(255, 255, 255, 0.75);
         font: 12px/1.4 monospace;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
