@@ -326,12 +326,59 @@ load-order-dependent bug that a fresh-every-page-load flow (no persisted
 session to race against) would never surface — caught only because a real
 e2e reload-into-Build scenario exercises the actual race window.
 
+## Authorization model
+
+Real accounts (above) only prove *who you are* — a session cookie. Every
+mutating endpoint below that acts on a builder's or seller's own data goes
+one step further: it derives "who is performing this action" from that
+session, and never trusts a client-supplied `builderId`/`sellerId` for that
+purpose, even though most endpoints still accept and return those ids
+(they're real, stable identifiers — just not something a caller can claim
+to be).
+
+Two shapes of check recur throughout this document:
+
+- **Acting-identity fields are session-derived, not request-supplied.**
+  Anywhere an endpoint used to read a `builderId`/`sellerId`/
+  `requesterBuilderId` out of the request body to mean "as whom," it now
+  ignores that field (or never accepted one in the first place) and uses
+  `requireSessionBuilder`/`requireSessionSeller` internally instead — the
+  caller's own linked builder/seller profile, resolved from the session
+  cookie, get-or-created on first use exactly like `GET /builders/me` /
+  `GET /sellers/me` do. A field that references *someone else* (e.g. a
+  friend request's `recipientBuilderId`, or a landlet's `templateId`) is
+  not affected — those stay ordinary request fields, since naming a target
+  isn't a claim of identity.
+- **Existing-resource ownership is checked against the session, not
+  re-assignable.** Anywhere an endpoint mutates or deletes a resource that
+  already has an owner (a landlet, a catalog template with a seller, a
+  bundle, a notification, a placed instance via the landlet it sits on),
+  the caller must be that owner's own session — a `403` results otherwise.
+  Ownership itself can never be reassigned through a generic update either
+  (a landlet's `ownerBuilderId`, a template's `sellerId` are force-
+  preserved regardless of what the request body sends); transferring
+  ownership only ever happens through the specific flows built for it
+  (claim, auction resolution).
+
+A resource with **no** owner yet (an unclaimed/generating landlet, a
+catalog template created with no `sellerId`) stays open to unauthenticated
+requests for the handful of admin/world-gen/system-tooling paths that only
+ever operate on those — see each endpoint's own note below for whether it
+applies. World generation itself (`/api/world`, `/api/land-candidates*`,
+`/api/land-candidate-rings*`) is unauthenticated entirely — there is no
+`role`/admin concept on `users` yet to gate it with, which is a known,
+deliberate gap rather than an oversight.
+
+Every endpoint section below notes its own specific rule inline; this
+section is just the shared vocabulary for reading those notes.
+
 ## Builders
 
-A shared, cross-device roster of builder profiles. The roster's own CRUD
-endpoints below are unchanged and still have no ownership check on them
-(anyone can list, create, rename, or delete any row by ID) — what changed
-is how a builder profile gets attached to *you*: `migrations/0054_link_builders_sellers_to_users.sql`
+A shared, cross-device roster of builder profiles. `GET`/`POST` below stay
+open to anyone (listing the roster or creating a fresh, unlinked row isn't
+an impersonation risk), but renaming or deleting an existing builder now
+requires a session logged in as that builder (`403` otherwise — see
+"Authorization model" above). `migrations/0054_link_builders_sellers_to_users.sql`
 adds a `user_id` column, and **every account is automatically given a
 linked builder profile at signup** (docs/SPEC.md §3: "every user is
 automatically a builder — no separate account types"), with its `label`
@@ -410,11 +457,13 @@ Request body:
 ### `PATCH /api/builders/:builderId`
 
 Renames a builder. `label` is required. Returns `404` if the builder
-doesn't exist.
+doesn't exist, `403` if it isn't your own (see "Authorization model"
+above) — requires a session logged in as this builder.
 
 ### `DELETE /api/builders/:builderId`
 
-Deletes a builder. Whatever claimed landlet it currently owns is released
+Requires a session logged in as this builder (`403` otherwise). Deletes a
+builder. Whatever claimed landlet it currently owns is released
 back to `greenbelt` — status, owner, and active version all reset, and its
 placed instances and version history are deleted — rather than left
 claimed by a builder that no longer exists. The landlet's own shape
@@ -526,8 +575,9 @@ this section's own opening paragraph for why.
 ## Sellers
 
 A genuinely separate roster from builders — `catalog_templates.seller_id`
-references these, not a builder's ID. Same shape as Builders above
-(shared, cross-device roster, unauthenticated CRUD-by-ID), but a builder
+references these, not a builder's ID. Same shape as Builders above (shared,
+cross-device roster, `GET`/`POST` open to anyone, rename/delete gated to a
+session logged in as that seller), but a builder
 and a seller are independent identities: uploading a product needs a
 seller identity chosen, quite apart from whichever builder identity (if
 any) is active. The one deliberate asymmetry from Builders:
@@ -585,11 +635,13 @@ already taken.
 ### `PATCH /api/sellers/:sellerId`
 
 Renames a seller. `label` is required. Returns `404` if the seller
-doesn't exist.
+doesn't exist, `403` if it isn't your own — requires a session logged in
+as this seller.
 
 ### `DELETE /api/sellers/:sellerId`
 
-Deletes a seller. Unlike deleting a builder, there's no owned-land release
+Requires a session logged in as this seller (`403` otherwise). Deletes a
+seller. Unlike deleting a builder, there's no owned-land release
 to do — a seller owns no land — so any of its existing catalog templates
 just keep their `seller_id` pointing at an ID no longer in the roster, the
 same as a template that already has a `null` `seller_id` for an unclaimed
@@ -709,17 +761,24 @@ request return `400`, while any database conflict returns `409` and rolls back
 the entire batch. Responses return persisted templates in request order. `POST`
 is create-only and returns `201`. `PUT` atomically replaces existing IDs and
 creates missing IDs, returning `200`; it supports idempotently synchronizing a
-bounded catalog batch. Both modes avoid one D1 request per product.
+bounded catalog batch. Both modes avoid one D1 request per product. Any
+template in the batch that has (or already has, for a `PUT` that touches an
+existing row) a non-null `sellerId` requires a session logged in as that
+seller — `403` if any one of them isn't yours.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
-`409` with the entire D1 batch rolled back. Success returns `deletedTemplateIds`
-in request order.
+`409` with the entire D1 batch rolled back. Every template being deleted that
+has a non-null `sellerId` requires a session logged in as that seller (`403`
+otherwise). Success returns `deletedTemplateIds` in request order.
 
 ### `POST /api/catalog`
 
 Creates a catalog template. `templateId` is optional; if omitted, the Worker
-generates one.
+generates one. If `sellerId` is set, requires a session logged in as that
+seller (`403` otherwise) — a template with no `sellerId` stays open to
+unauthenticated creation (a system/placeholder template with no seller to
+attribute it to).
 
 Request body:
 
@@ -758,13 +817,17 @@ must be a non-negative integer.
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
 
-Updates a catalog template. The current implementation merges request fields
-with the existing template before validation — but only at the top level:
-`metadata` is a single field, so sending it replaces the whole object rather
-than deep-merging into it. A caller that wants to change one key inside
-`metadata` (the Seller modal's extensibility edit, say) needs to read the
-existing `metadata` first and send the whole merged object back — see
-"Extensible products (crop)" above.
+If the existing template has a non-null `sellerId`, requires a session
+logged in as that seller (`403` otherwise). Updates a catalog template. The
+current implementation merges request fields with the existing template
+before validation — but only at the top level: `metadata` is a single
+field, so sending it replaces the whole object rather than deep-merging
+into it. A caller that wants to change one key inside `metadata` (the
+Seller modal's extensibility edit, say) needs to read the existing
+`metadata` first and send the whole merged object back — see "Extensible
+products (crop)" above. A request-body `sellerId` is ignored — this
+endpoint never reassigns a template to a different seller, the same way
+`PUT /api/landlets/:id` never reassigns `ownerBuilderId`.
 
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
@@ -772,8 +835,10 @@ see "Notifications" below.
 
 ### `DELETE /api/catalog/:templateId`
 
-Deletes a catalog template. D1 foreign-key behavior may reject deletion while
-placed instances still reference the template.
+If the template has a non-null `sellerId`, requires a session logged in as
+that seller (`403` otherwise). Deletes a catalog template. D1 foreign-key
+behavior may reject deletion while placed instances still reference the
+template.
 
 Response:
 
@@ -1461,17 +1526,15 @@ Validation notes:
 
 ### `POST /api/landlets/:landletId/claim`
 
-Claims an available greenbelt landlet for a builder. This is the preferred way
-to perform the initial ownership transition instead of changing `status` and
-`ownerBuilderId` independently with the generic update endpoint.
-
-Request:
-
-```json
-{
-  "builderId": "dev-builder-001"
-}
-```
+Requires a session (`401` without one). Claims an available greenbelt landlet
+for the calling account's own builder profile — no body needed at all;
+`builderId` is derived entirely from the session, never from a
+client-supplied field (see "Authorization model" above), since claiming "as"
+a builderId the caller merely typed in would let anyone claim land on
+another builder's behalf just from their publicly-visible ID. This is the
+preferred way to perform the initial ownership transition instead of
+changing `status` and `ownerBuilderId` independently with the generic update
+endpoint.
 
 The claim is a conditional database update: the landlet must still have
 `status: "greenbelt"`, must have no owner, and the builder must not already own
@@ -1482,7 +1545,7 @@ dev tooling.
 
 Returns the newly claimed landlet. Errors are:
 
-- `400` when `builderId` is absent or invalid.
+- `401` when nobody is logged in.
 - `404` when the landlet does not exist.
 - `409` when the landlet is unavailable or the builder already owns a claimed
   landlet.
@@ -1502,13 +1565,25 @@ endpoint for a landlet that is neither generating nor already complete returns
 ### `PUT /api/landlets/:landletId`
 ### `PATCH /api/landlets/:landletId`
 
-Updates a landlet. The current implementation merges request fields with the
-existing landlet before validation.
+Once a landlet has an owner, requires a session logged in as that owner
+(`403` otherwise) — an unowned (greenbelt/generating) landlet stays open to
+unauthenticated requests, since this generic endpoint's real usage is
+admin/world-gen tooling, not the player-facing claim/build flow. Updates a
+landlet. The current implementation merges request fields with the existing
+landlet before validation, except `ownerBuilderId`: that field is always
+force-preserved at its existing value regardless of what the request body
+sends, the same way `PUT /api/catalog/:templateId` never reassigns
+`sellerId` — reassigning ownership only happens through claim or auction
+resolution.
 
 ### `DELETE /api/landlets/:landletId`
 
-Deletes a landlet. Current D1 foreign-key behavior cascades to placed instances
-for that landlet.
+Once a landlet has an owner, this always fails with `409` — this raw delete
+has no cascade cleanup for placed instances/version history (unlike
+`DELETE /api/builders/:builderId`'s careful release path), so even the true
+owner using it would corrupt data; release land via deleting the builder or
+losing an auction instead. Deletes an unowned landlet outright, with no
+session required (see the note on `PUT`/`PATCH` above for why).
 
 Response:
 
@@ -1565,7 +1640,10 @@ Returns all mutable draft instances for the landlet.
 
 ### `PUT /api/landlets/:landletId/draft`
 
-Atomically replaces the complete mutable draft. The request body is:
+Requires a session logged in as the landlet's owner (`403` otherwise) —
+there's no `builderId` field on this endpoint to spoof in the first place,
+so ownership is resolved through the landlet itself. Atomically replaces
+the complete mutable draft. The request body is:
 
 ```json
 {
@@ -1636,6 +1714,7 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 
 ### `POST /api/landlets/:landletId/versions`
 
+Requires a session logged in as the landlet's owner (`403` otherwise).
 Saves the landlet's current placed instances as a new immutable snapshot.
 `name` and `metadata` are optional; omitted names default to `Version N`.
 
@@ -1660,6 +1739,7 @@ deletions in the mutable draft do not alter this array.
 
 ### `POST /api/landlets/:landletId/versions/:versionId/activate`
 
+Requires a session logged in as the landlet's owner (`403` otherwise).
 Moves the landlet's active-version pointer to an existing snapshot belonging to
 that landlet. This endpoint does not overwrite the builder's current draft.
 The response includes both the updated landlet and selected version metadata.
@@ -1761,7 +1841,13 @@ Fetches one placed instance.
 ### `PUT /api/instances/batch`
 ### `DELETE /api/instances/batch`
 
-Atomically writes between 1 and 100 placed instances. The request body wraps
+Atomically writes between 1 and 100 placed instances. Requires a session,
+and every landlet touched — each instance's target `landletId`, plus (for
+`PUT`) any existing instance's current `landletId`, since it can move an
+instance between landlets — must belong to the calling session's builder
+(`403` otherwise). Instances have no `builderId` field of their own to
+check; ownership is always resolved through the landlet they sit on, the
+same as every other instance endpoint below. The request body wraps
 normal instance-create objects under `instances`. Instance IDs must be unique
 within the request, and every referenced catalog template and landlet is
 validated with bounded set queries before insertion. `POST` is create-only and
@@ -1774,12 +1860,15 @@ Returned instances are read back from D1, so database-managed `createdAt` and
 
 `DELETE` accepts 1–100 unique IDs under `instanceIds`. Every ID is preflighted
 before deletion; a missing ID returns `404` and leaves the entire batch
-unchanged. Success returns `deletedInstanceIds` in request order.
+unchanged. Requires a session, and every one of the deleted instances'
+`landletId`s must belong to the calling session's builder (`403` otherwise).
+Success returns `deletedInstanceIds` in request order.
 
 ### `POST /api/instances`
 
-Creates a placed instance. `instanceId`/`id` is optional; if omitted, the Worker
-generates one. `landletId` defaults to `starter-landlet`.
+Requires a session logged in as the target landlet's owner (`403`
+otherwise). Creates a placed instance. `instanceId`/`id` is optional; if
+omitted, the Worker generates one. `landletId` defaults to `starter-landlet`.
 The response is read back from D1 and includes database-managed timestamps.
 
 Request body:
@@ -1808,12 +1897,15 @@ must be finite numbers.
 ### `PUT /api/instances/:instanceId`
 ### `PATCH /api/instances/:instanceId`
 
-Updates a placed instance. The current implementation merges request fields
-with the existing instance before validation.
+Requires a session logged in as the owner of the instance's current
+landlet, and (if the update moves it) its new target landlet too (`403`
+otherwise). Updates a placed instance. The current implementation merges
+request fields with the existing instance before validation.
 
 ### `DELETE /api/instances/:instanceId`
 
-Deletes a placed instance.
+Requires a session logged in as the owner of the instance's landlet (`403`
+otherwise). Deletes a placed instance.
 
 Response:
 
@@ -1853,21 +1945,27 @@ stays meaningful without a live template to point back at.
 
 ### `GET /api/notifications`
 
-Lists a builder's notifications, newest first, capped at 100. `builderId` is
-a required query parameter. `unreadOnly=true` narrows the list to
+Requires a session. Lists the calling account's own notifications, newest
+first, capped at 100. `builderId` is an optional query parameter — omitted,
+it defaults to the session's own builder; if present, it must equal the
+session's own builder ID (`403` otherwise — this was a spoofable
+"whose notifications" field before session-based authorization, see
+"Authorization model" above). `unreadOnly=true` narrows the list to
 `readAt IS NULL` server-side — the same call backs both the unread badge
 count (`unreadOnly=true`) and the full history list (omitted) in the
 frontend's Notices panel.
 
 ### `PATCH /api/notifications/:notificationId`
 
-Marks one notification read. Request body: `{ "read": true }`. Returns
-`404` if the notification doesn't exist.
+Requires a session logged in as the notification's own builder (`403`
+otherwise). Marks one notification read. Request body: `{ "read": true }`.
+Returns `404` if the notification doesn't exist.
 
 ### `POST /api/notifications/mark-all-read`
 
-Marks every one of a builder's unread notifications read at once. Request
-body: `{ "builderId": "..." }`.
+Requires a session. Marks every one of the calling account's own unread
+notifications read at once. No body — `builderId` is derived from the
+session, never a client-supplied field.
 
 ### How a notification gets created
 
@@ -1889,10 +1987,9 @@ map shows friends' approximate location." One `friendships` row (see
 builders — direction preserved (`requesterBuilderId`/`recipientBuilderId`)
 so the frontend can tell "I sent this" from "I received this" without a
 second table, and `status` flips from `pending` to `accepted` in place
-rather than deleting and recreating the row on accept. No ownership check
-on `PATCH`/`DELETE` — same no-real-auth caveat as everywhere else in this
-file; the frontend only ever shows an Accept button on the recipient's own
-incoming requests.
+rather than deleting and recreating the row on accept. `PATCH` (accept) is
+gated to the recipient's own session, and `DELETE` to either party's — see
+each endpoint's own note below.
 
 **"Social map ... approximate location" is deliberately simplified** to
 each accepted friend's own claimed lándlet center, not a live position —
@@ -1934,35 +2031,47 @@ location," not a claim about which one is their "real" home.
 
 ### `GET /api/friendships?builderId=X`
 
-Lists every friendship involving `X`, both directions, both `pending` and
-`accepted`, newest first. `builderId` is required.
+Requires a session. Lists every friendship involving `X`, both directions,
+both `pending` and `accepted`, newest first. `builderId` is optional —
+omitted, it defaults to the session's own builder; if present, it must
+equal the session's own builder ID (`403` otherwise).
 
 ### `POST /api/friendships`
 
-Sends a friend request.
+Requires a session. Sends a friend request as the calling account's own
+builder — `requesterBuilderId` is never read from the request body (a
+spoofable "who's sending this" field before session-based authorization);
+`recipientBuilderId` stays a genuine request field, since naming a target
+isn't a claim of identity.
 
 ```json
-{ "requesterBuilderId": "...", "recipientBuilderId": "..." }
+{ "recipientBuilderId": "..." }
 ```
 
-`400` if the two IDs are the same, or if either doesn't reference an
-existing builder. `409` if a friendship or pending request already exists
-between the two builders **in either direction** — sending B→A when A→B is
-already pending doesn't create a second row; the existing one has to be
-accepted or declined first. Returns `201` with the new `pending` friendship.
+`400` if `recipientBuilderId` is the caller's own builder, or doesn't
+reference an existing builder. `409` if a friendship or pending request
+already exists between the two builders **in either direction** — sending
+B→A when A→B is already pending doesn't create a second row; the existing
+one has to be accepted or declined first. Returns `201` with the new
+`pending` friendship.
 
 ### `PATCH /api/friendships/:friendshipId`
 
-Accepts a request: `{ "status": "accepted" }` is the only valid body —
-`400` on anything else. `404` if the friendship doesn't exist. There is no
+Requires a session logged in as the friendship's `recipientBuilderId`
+(`403` otherwise — only the recipient can accept a request; the requester
+accepting their own would skip the other side's consent entirely). Accepts
+a request: `{ "status": "accepted" }` is the only valid body — `400` on
+anything else. `404` if the friendship doesn't exist. There is no
 "decline" status; declining a pending request or removing an accepted
 friendship are both just `DELETE`.
 
 ### `DELETE /api/friendships/:friendshipId`
 
-Removes a friendship outright — covers declining a still-pending request,
-canceling one you sent, and unfriending an accepted one, all the same way.
-`404` if it doesn't exist.
+Requires a session logged in as either the `requesterBuilderId` or the
+`recipientBuilderId` on this friendship (`403` otherwise). Removes a
+friendship outright — covers declining a still-pending request, canceling
+one you sent, and unfriending an accepted one, all the same way. `404` if
+it doesn't exist.
 
 ### Frontend wiring
 
@@ -2011,10 +2120,9 @@ see docs/SPEC.md §3's "group items to move together"). Private by default;
 tab" — see `migrations/0040_bundle_sharing.sql`. A shared bundle is still
 owned by whoever created it: `shared` only controls whether *other*
 builders can see and place it, never whether they can rename/reshare/delete
-it. The backend enforces no ownership check at all on `PATCH`/`DELETE` (the
-same no-real-auth caveat as every dev-mode identity in this file) — the
-frontend is the only thing hiding those controls on a bundle you don't own
-(see "Frontend wiring" below).
+it: `GET`/`POST`/`PATCH`/`DELETE` are all gated to the calling session's
+own builder (see "Authorization model" above) — sharing never transfers
+ownership.
 
 ### Bundle object
 
@@ -2046,18 +2154,23 @@ loading a bundle needs no translation before it can be placed.
 
 Two independent listings, not one filtered by both:
 
-- `?builderId=X` — that builder's own bundles, newest first, capped at 100
+- `?builderId=X` (or no query at all) — requires a session; `X` must equal
+  the session's own builder ID if present (`403` otherwise), and defaults
+  to it if omitted. That builder's own bundles, newest first, capped at 100
   (shared or not — a builder's own shared bundles keep showing here too,
   they just *additionally* surface in the community listing below).
 - `?shared=true` — the community tab: every builder's shared bundles,
-  newest first, capped at 100. `builderId` is ignored/not required here.
+  newest first, capped at 100, no session required. `builderId` is
+  ignored/not required here.
 
 Exactly one of the two query parameters is expected per call; there's no
 mode that combines "this builder's bundles, restricted to shared ones."
 
 ### `POST /api/bundles`
 
-Creates a bundle. Request body: `{ "builderId", "name", "items", "shared"? }`.
+Requires a session. Creates a bundle owned by the calling account's own
+builder — `builderId` is derived from the session, never a client-supplied
+field. Request body: `{ "name", "items", "shared"? }`.
 `shared` defaults to `false` (private) if omitted or not literally `true`.
 Each item's `templateId` must reference an existing catalog template
 (checked in one batched query, same pattern as the instance batch
@@ -2069,15 +2182,17 @@ are genuinely sign-constrained.
 
 ### `PATCH /api/bundles/:bundleId`
 
-Updates `name` and/or `shared` — both optional and independent; omitting
-one leaves it at its current value rather than requiring the full object
-back — the frontend's Rename button only ever sends `{ name }`. There's no
-way to edit a saved bundle's `items` — the frontend has no
+Requires a session logged in as the bundle's own builder (`403`
+otherwise). Updates `name` and/or `shared` — both optional and independent;
+omitting one leaves it at its current value rather than requiring the full
+object back — the frontend's Rename button only ever sends `{ name }`.
+There's no way to edit a saved bundle's `items` — the frontend has no
 UI for that; delete and re-save from a fresh selection instead.
 
 ### `DELETE /api/bundles/:bundleId`
 
-Deletes a bundle. Response: `{ "deleted": true }`. Returns `404` if it
+Requires a session logged in as the bundle's own builder (`403`
+otherwise). Deletes a bundle. Response: `{ "deleted": true }`. Returns `404` if it
 doesn't exist.
 
 ### Frontend wiring
@@ -2153,14 +2268,16 @@ visible at all. `404` if the instance doesn't exist.
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
 Moderation — "Builder controls the sign's physical form and moderates."
-`404` if the post doesn't exist (or belongs to a different instance).
-Deleting the sign instance itself cascades to every post on it
-(`ON DELETE CASCADE`, migrations/0041) — no orphaned posts left behind.
+Requires a session logged in as the owner of the sign's own hosting
+landlet (`403` otherwise) — not the post's author, since `authorLabel` is
+free text with no account behind it. `404` if the post doesn't exist (or
+belongs to a different instance). Deleting the sign instance itself
+cascades to every post on it (`ON DELETE CASCADE`, migrations/0041) — no
+orphaned posts left behind.
 
-No ownership check on any of these three — same no-real-auth caveat as
-`handleBundles`' own note above; the frontend's Manage Posts panel (below)
-is the only thing hiding the delete control from a builder who doesn't own
-the sign's landlet.
+`GET`/`POST` above stay open to any shopper — posting to a community sign
+is exactly the shopper-facing feature this exists for, and `authorLabel`
+is plain free text, not an authenticated identity.
 
 ### Frontend wiring — Build mode
 
@@ -2667,13 +2784,15 @@ full course.
 
 ### `POST /api/landlets/:landletId/auction`
 
-Starts a voluntary auction. Body: `{ "builderId", "startingBidCents"?,
+Requires a session (`401` without one). Starts a voluntary auction as the
+calling account's own builder — `builderId` is derived from the session,
+never a client-supplied field. Body: `{ "startingBidCents"?,
 "durationHours"? }`. `startingBidCents` defaults to `0`; `durationHours`
 defaults to `24` (docs/SPEC.md §5's own default), capped at `8760` (one
 year) as a sanity bound against a malformed request, not a spec
-requirement. `400` unless `builderId` is the landlet's current owner and
-the landlet is `claimed`. `409` if that landlet already has an active
-auction — one at a time per landlet.
+requirement. `400` unless the calling builder is the landlet's current
+owner and the landlet is `claimed`. `409` if that landlet already has an
+active auction — one at a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather
@@ -2700,7 +2819,9 @@ capped at 200. `404` if the auction doesn't exist.
 
 ### `POST /api/auctions/:auctionId/bids`
 
-Places a bid. Body: `{ "builderId", "amountCents" }`. Resolves the
+Requires a session (`401` without one). Places a bid as the calling
+account's own builder — `builderId` is derived from the session, never a
+client-supplied field. Body: `{ "amountCents" }`. Resolves the
 auction first if it's due, then `409` if it's not (or is no longer)
 `active`. `400` if the bidder is the seller, or if `amountCents` is below
 the minimum acceptable amount:
@@ -2959,13 +3080,16 @@ being bought. Returns `201` with the created `purchase`:
 `400` if the template has no price set (`priceCents == null` — nothing to
 buy) or the instance sits on an unclaimed lándlet (no builder to credit).
 
-`GET /api/purchases?builderId=...` lists everything hosted on that
-builder's own land, most recent first — their "did I earn commission"
-view. `GET /api/purchases?templateId=...` lists every sale of one product
+`GET /api/purchases?builderId=...` requires a session logged in as that
+builder (`403` otherwise); lists everything hosted on that builder's own
+land, most recent first — their "did I earn commission" view.
+`GET /api/purchases?templateId=...` lists every sale of one product
 instead, across every builder who happens to host an instance of it — a
 seller's own "did my product sell" view, used by the Seller modal's "Sales"
-panel (see "Refunds" below). Exactly one of the two is required (`400`
-without either).
+panel (see "Refunds" below). If the template has a `sellerId`, this
+requires a session logged in as that seller (`403` otherwise) — a
+seller-less template stays open to unauthenticated reads. Exactly one of
+the two query params is required (`400` without either).
 
 `instance_id`/`template_id`/`seller_id` are deliberately NOT foreign keys —
 a purchase is a permanent historical receipt, not cascade-deleted if the
@@ -3028,7 +3152,10 @@ currency in the first place. What does need undoing is the one real
 side-effect a purchase has: the builder's commission credit.
 
 `POST /api/purchases/:purchaseId/refund` (`migrations/0052_purchase_refunds.sql`)
-marks a purchase refunded and deducts exactly `builderShareCents` (not the
+requires a session logged in as the purchase's own `sellerId`, if it has
+one (`403` otherwise — a purchase of a seller-less template stays open,
+matching the same rule as the `GET` above). Marks a purchase refunded and
+deducts exactly `builderShareCents` (not the
 full sale total — that was never the builder's money) from
 `builders.dallers_balance_cents`. **No floor** — this can and deliberately
 does push a builder's balance negative, matching the spec's own "potentially

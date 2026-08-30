@@ -1851,7 +1851,7 @@ function renderBundlePicker() {
           // — simplest to just re-fetch both rather than hand-patch
           // communityBundles for an add/remove that only affects this one
           // tab's membership.
-          [myBundles, communityBundles] = await Promise.all([fetchBundles(builderId), fetchSharedBundles()]);
+          [myBundles, communityBundles] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           renderBundlePicker();
         } catch (err) {
           console.warn('Could not update bundle sharing:', err);
@@ -3882,7 +3882,6 @@ async function renderAuctionsSettingsSection() {
       startBtn.disabled = true;
       try {
         await startAuction(myLandletId, {
-          builderId,
           startingBidCents: Math.round(dollars * 100),
           durationHours: Math.round(hours),
         });
@@ -3972,7 +3971,7 @@ async function renderAuctionsSettingsSection() {
           if (!Number.isFinite(dollars) || dollars < 0) return;
           bidBtn.disabled = true;
           try {
-            await placeBid(auction.auctionId, { builderId, amountCents: Math.round(dollars * 100) });
+            await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
             await renderAuctionList();
             await renderStartSection();
           } catch (err) {
@@ -4853,7 +4852,7 @@ saveBundleBtn.addEventListener('click', async () => {
   const shared = confirm('Share this bundle to the Community tab so any builder can use it too?');
   saveBundleBtn.disabled = true;
   try {
-    const bundle = await createBundle({ builderId, name: name.trim(), items: relativeItemsForMeshes(meshes), shared });
+    const bundle = await createBundle({ name: name.trim(), items: relativeItemsForMeshes(meshes), shared });
     myBundles.unshift(bundle);
     if (shared) communityBundles.unshift(bundle);
     renderBundlePicker();
@@ -5881,7 +5880,7 @@ const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-
 async function refreshNotificationsBadge() {
   if (!builderId) return;
   try {
-    const unread = await fetchNotifications(builderId, { unreadOnly: true });
+    const unread = await fetchNotifications({ unreadOnly: true });
     notificationsBadgeEl.textContent = String(unread.length);
     notificationsBadgeEl.hidden = unread.length === 0;
   } catch (err) {
@@ -5899,7 +5898,7 @@ async function renderNotifications() {
   if (!builderId) return;
   let notifications;
   try {
-    notifications = await fetchNotifications(builderId);
+    notifications = await fetchNotifications();
   } catch (err) {
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
     notificationsEmptyEl.hidden = false;
@@ -5947,7 +5946,7 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
   if (!builderId) return;
   notificationsMarkAllBtn.disabled = true;
   try {
-    await markAllNotificationsRead(builderId);
+    await markAllNotificationsRead();
     await renderNotifications();
     await refreshNotificationsBadge();
   } catch (err) {
@@ -5977,7 +5976,7 @@ const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty')
 async function refreshFriendsBadge() {
   if (!builderId) return;
   try {
-    const friendships = await fetchFriendships(builderId);
+    const friendships = await fetchFriendships();
     const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
     friendsBadgeEl.textContent = String(incoming.length);
     friendsBadgeEl.hidden = incoming.length === 0;
@@ -6006,7 +6005,7 @@ async function renderFriends() {
   if (!builderId) return;
   let friendships;
   try {
-    friendships = await fetchFriendships(builderId);
+    friendships = await fetchFriendships();
   } catch (err) {
     friendsStatusEl.textContent = err.message || 'Could not load friends.';
     friendsStatusEl.classList.add('error');
@@ -6474,7 +6473,7 @@ friendsAddBtn.addEventListener('click', async () => {
       friendsStatusEl.classList.add('error');
       return;
     }
-    await sendFriendRequest(builderId, match.builderId);
+    await sendFriendRequest(match.builderId);
     friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
     await renderFriends();
   } catch (err) {
@@ -7970,7 +7969,7 @@ async function claimSelectedLandlet(landlet, resolve) {
   claimStatusEl.textContent = `Claiming ${landlet.name}…`;
   claimStatusEl.classList.remove('error');
   try {
-    const claimed = await claimLandlet(landlet.landletId, builderId);
+    const claimed = await claimLandlet(landlet.landletId);
     disposeClaimFlyover();
     claimModalEl.classList.remove('visible');
     resolve(claimed.landletId);
@@ -8137,7 +8136,7 @@ async function bootstrap() {
   try {
     currentLandletId = await resolveLandletId();
     const [catalog, remoteInstances, landletRecord, bundles, shared] = await Promise.all([
-      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(builderId), fetchSharedBundles(),
+      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;

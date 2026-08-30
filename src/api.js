@@ -241,11 +241,11 @@ export async function fetchAllLandlets() {
   }
 }
 
-export async function claimLandlet(landletId, builderId) {
+// builderId is never sent — the server derives "who's claiming" from the
+// session cookie, never from a client-supplied field.
+export async function claimLandlet(landletId) {
   const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/claim`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId }),
   });
   return landlet;
 }
@@ -402,8 +402,10 @@ export async function deleteCatalogTemplate(templateId) {
 // dimensions. unreadOnly narrows the list server-side rather than filtering
 // client-side, since the same call is used both for the unread badge count
 // and (without the flag) the full history list.
-export async function fetchNotifications(builderId, { unreadOnly = false } = {}) {
-  const query = new URLSearchParams({ builderId });
+// No builderId param — the server derives "whose notifications" from the
+// session cookie, never from a client-supplied field.
+export async function fetchNotifications({ unreadOnly = false } = {}) {
+  const query = new URLSearchParams();
   if (unreadOnly) query.set('unreadOnly', 'true');
   const { notifications } = await requestJson(`/notifications?${query.toString()}`);
   return notifications;
@@ -418,28 +420,29 @@ export async function markNotificationRead(notificationId) {
   return notification;
 }
 
-export async function markAllNotificationsRead(builderId) {
-  await requestJson('/notifications/mark-all-read', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId }),
-  });
+export async function markAllNotificationsRead() {
+  await requestJson('/notifications/mark-all-read', { method: 'POST' });
 }
 
 // Friend requests (see migrations/0049_friendships.sql). Each returned
 // friendship is already shaped relative to `builderId` — otherLabel,
 // direction, otherLandlet — so the frontend never has to figure out "which
 // side of this row am I."
-export async function fetchFriendships(builderId) {
-  const { friendships } = await requestJson(`/friendships?${new URLSearchParams({ builderId }).toString()}`);
+// No builderId param — the server derives "whose friendships" from the
+// session cookie, never from a client-supplied field.
+export async function fetchFriendships() {
+  const { friendships } = await requestJson('/friendships');
   return friendships;
 }
 
-export async function sendFriendRequest(requesterBuilderId, recipientBuilderId) {
+// requesterBuilderId is never sent — the server derives "who's requesting"
+// from the session cookie. recipientBuilderId is a genuine reference (who
+// the request targets), not a claim of identity, so it stays.
+export async function sendFriendRequest(recipientBuilderId) {
   const { friendship } = await requestJson('/friendships', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ requesterBuilderId, recipientBuilderId }),
+    body: JSON.stringify({ recipientBuilderId }),
   });
   return friendship;
 }
@@ -518,16 +521,18 @@ export async function replaceLandletDraft(landletId, { instances, versionName, v
 // already consumes for an ordinary Paste, so a fetched bundle's `items` can
 // be handed straight to enterPlacementMode({ type: 'clipboard', items })
 // with no translation. Private to the owning builder.
-export async function fetchBundles(builderId) {
-  const { bundles } = await requestJson(`/bundles?${new URLSearchParams({ builderId })}`);
+// No builderId param — the server derives "whose bundles" from the session
+// cookie, never from a client-supplied field.
+export async function fetchBundles() {
+  const { bundles } = await requestJson('/bundles');
   return bundles;
 }
 
-export async function createBundle({ builderId, name, items, shared }) {
+export async function createBundle({ name, items, shared }) {
   const { bundle } = await requestJson('/bundles', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId, name, items, shared }),
+    body: JSON.stringify({ name, items, shared }),
   });
   return bundle;
 }
@@ -629,12 +634,14 @@ export async function deleteProductReview(templateId, reviewId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
 }
 
-// Land acquisition auctions (see migrations/0045_auctions.sql).
-export async function startAuction(landletId, { builderId, startingBidCents, durationHours } = {}) {
+// Land acquisition auctions (see migrations/0045_auctions.sql). builderId is
+// never sent — the server derives "who's starting this auction" from the
+// session cookie (and requires it to be the landlet's current owner).
+export async function startAuction(landletId, { startingBidCents, durationHours } = {}) {
   const { auction } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/auction`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId, startingBidCents, durationHours }),
+    body: JSON.stringify({ startingBidCents, durationHours }),
   });
   return auction;
 }
@@ -658,11 +665,13 @@ export async function fetchAuctionBids(auctionId) {
   return bids;
 }
 
-export async function placeBid(auctionId, { builderId, amountCents }) {
+// builderId is never sent — the server derives "who's bidding" from the
+// session cookie, never from a client-supplied field.
+export async function placeBid(auctionId, { amountCents }) {
   const { bid } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId, amountCents }),
+    body: JSON.stringify({ amountCents }),
   });
   return bid;
 }

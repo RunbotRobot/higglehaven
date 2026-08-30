@@ -1,8 +1,10 @@
 // A shared bundle should be visible (and placeable) by a completely
 // different builder in the Community tab, but that other builder should
-// never see delete/share controls on a bundle they don't own — the backend
-// does no ownership check on PATCH/DELETE (see handleBundles' own comment
-// in worker/index.js), so this is the one place that's actually enforced.
+// never see delete/share controls on a bundle they don't own. The backend
+// itself now also enforces this (PATCH/DELETE require session-authenticated
+// ownership — see handleBundles' own comment in worker/index.js); this test
+// covers the frontend hiding those controls in the first place, since a
+// builder should never even be offered a button that would 403.
 // Two independent browser pages stand in for two different real users,
 // rather than juggling a mid-test identity switch on one page.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';

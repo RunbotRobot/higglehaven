@@ -105,8 +105,14 @@ await alicePage.waitForFunction(
 const aliceOutgoingToCarolAfterCancel = await alicePage.locator('#friends-outgoing-list .friend-row').filter({ hasText: CAROL }).count();
 console.log('Alice\'s outgoing list no longer includes Carol after canceling (should be 0):', aliceOutgoingToCarolAfterCancel);
 
-const carolFriendshipsAfterCancel = (await fetchJson(alicePage, `/api/friendships?builderId=${carol.builderId}`)).body.friendships;
-console.log('Carol has no friendships server-side after the cancel (should be 0):', carolFriendshipsAfterCancel.length);
+// Querying another builder's friendships by id now requires being that
+// builder's own logged-in session (see handleFriendships's own comment) —
+// Carol is just a lightweight, unlinked builder row with no session of her
+// own, so this checks the same fact from Alice's own (permitted) list
+// instead: no friendship record involving Carol survives the cancel.
+const aliceFriendshipsAfterCancel = (await fetchJson(alicePage, '/api/friendships')).body.friendships;
+const carolFriendshipsAfterCancel = aliceFriendshipsAfterCancel.filter((f) => f.otherBuilderId === carol.builderId);
+console.log('Alice has no friendship record with Carol after the cancel (should be 0):', carolFriendshipsAfterCancel.length);
 
 const pass = aliceOutgoingCount === 1 &&
   bobIncomingText.includes(ALICE) &&

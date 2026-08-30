@@ -538,10 +538,15 @@ async function handleCatalog(request, db, route, url, models) {
     if (new Set(templateIds).size !== templateIds.length) throw new HttpError('templateIds must be unique', 400);
     const placeholders = templateIds.map(() => '?').join(', ');
     const existing = await db.prepare(`
-      SELECT template_id FROM catalog_templates WHERE template_id IN (${placeholders})
+      SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${placeholders})
     `).bind(...templateIds).all();
     if (existing.results.length !== templateIds.length) {
       throw new HttpError('Every templateId must reference an existing catalog template', 404);
+    }
+    const ownerSellerIds = new Set(existing.results.map((row) => row.seller_id).filter(Boolean));
+    if (ownerSellerIds.size > 0) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
     }
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
@@ -563,6 +568,15 @@ async function handleCatalog(request, db, route, url, models) {
     const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
+    const existingOwnerRows = await db.prepare(`
+      SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
+    `).bind(...ids).all();
+    const sellerIdsToCheck = new Set(sellerIds);
+    for (const row of existingOwnerRows.results) if (row.seller_id) sellerIdsToCheck.add(row.seller_id);
+    if (sellerIdsToCheck.size > 0) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      for (const sellerId of sellerIdsToCheck) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+    }
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
         name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
@@ -718,7 +732,11 @@ async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const template = validateTemplate(input, crypto.randomUUID());
-    if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
+    if (template.sellerId) {
+      await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(template.sellerId, sessionSeller.seller_id, 'Not your seller profile');
+    }
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
@@ -731,8 +749,16 @@ async function handleCatalog(request, db, route, url, models) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
+    if (existing.seller_id) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    }
     const input = await readJson(request);
-    const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1] }, route[1]);
+    // sellerId is forced back to its existing value (it wins the spread since
+    // it's listed last) — reassigning a template's seller isn't a feature
+    // this endpoint supports, same as landlets never letting PUT change
+    // ownerBuilderId.
+    const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
     if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
@@ -750,6 +776,12 @@ async function handleCatalog(request, db, route, url, models) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Catalog template not found' }, 404);
+    if (existing.seller_id) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    }
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -917,7 +949,9 @@ async function handleLandletVersions(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
-    await requireLandlet(db, landletId);
+    const landlet = await requireLandlet(db, landletId);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const input = await readJson(request);
     const versionId = crypto.randomUUID();
     const name = input.name === undefined ? null : stringValue(input.name, 'name');
@@ -956,15 +990,17 @@ async function handleLandletVersions(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 5 && route[4] === 'activate') {
-    await requireLandlet(db, landletId);
+    const landlet = await requireLandlet(db, landletId);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const version = await getVersion(db, landletId, route[3]);
     if (!version) return json({ error: 'Landlet version not found' }, 404);
     await db.prepare(`
       UPDATE landlets SET active_version_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ?
     `).bind(route[3], landletId).run();
-    const landlet = await requireLandlet(db, landletId);
-    return json({ landlet: landletFromRow(landlet), version });
+    const updatedLandlet = await requireLandlet(db, landletId);
+    return json({ landlet: landletFromRow(updatedLandlet), version });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -974,6 +1010,15 @@ async function requireLandlet(db, landletId) {
   const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!row) throw new HttpError('Landlet not found', 404);
   return row;
+}
+
+// Instances (below) have no builderId field of their own to spoof or check —
+// their only identity is which landlet they sit on — so every mutation there
+// resolves ownership through this instead of assertOwner directly.
+async function requireOwnedLandlet(db, landletId, builderId) {
+  const landlet = await requireLandlet(db, landletId);
+  assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
+  return landlet;
 }
 
 async function getVersion(db, landletId, versionId) {
@@ -1011,11 +1056,16 @@ async function handleBuilders(request, db, route) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const label = stringValue(input.label, 'label');
-    // Server-generated by default so two devices creating a builder at the
-    // same moment can never collide — a caller-supplied ID is only for the
-    // one-time migration of a device's pre-existing local identity list
-    // onto this shared roster, preserving the exact ID any landlet it
-    // already claimed is tagged with.
+    // Unauthenticated on purpose, unlike everything else in this handler
+    // below — this only ever creates a brand-new, unlinked (user_id NULL)
+    // row, never touches anyone else's identity or data, so there's
+    // nothing to spoof (see the ownership-audit comment on
+    // requireSessionBuilder above for why every *other* mutation here
+    // needed locking down but this one didn't). Kept mainly for direct
+    // API/test use — the frontend provisions a real, linked profile via
+    // signup + GET /builders/me instead (see "Authentication"/"Builders"
+    // in docs/API.md). `builderId` is optional; if omitted, the Worker
+    // generates one.
     const builderId = input.builderId !== undefined
       ? stringValue(input.builderId, 'builderId')
       : `builder-${crypto.randomUUID()}`;
@@ -1026,6 +1076,8 @@ async function handleBuilders(request, db, route) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     await requireBuilder(db, route[1]);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
     const input = await readJson(request);
     const label = stringValue(input.label, 'label');
     await db.prepare(`
@@ -1037,6 +1089,8 @@ async function handleBuilders(request, db, route) {
 
   if (request.method === 'DELETE' && route.length === 2) {
     await requireBuilder(db, route[1]);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not
@@ -1108,8 +1162,7 @@ async function requireBuilder(db, builderId) {
 // primary way a builder profile comes to exist, so this should really
 // only ever hit the "already exists" path in practice. 401 with no
 // session (requireCurrentUser); never a 404 either way.
-async function handleMyBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
+async function getOrCreateBuilderForUser(db, user) {
   let row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
   if (!row) {
     const builderId = `builder-${crypto.randomUUID()}`;
@@ -1117,8 +1170,32 @@ async function handleMyBuilder(request, db) {
       .bind(builderId, user.display_name || user.email.split('@')[0], user.user_id).run();
     row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   }
+  return row;
+}
+
+async function handleMyBuilder(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const row = await getOrCreateBuilderForUser(db, user);
   row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
   return json({ builder: builderFromRow(row) });
+}
+
+// The authorization workhorse for every builder-owned mutation below:
+// resolves *your own* builder profile from the session (never a
+// client-supplied builderId — that field is exactly what let anyone act
+// as anyone else before this pass, see the audit that prompted it) so a
+// handler can compare it against whatever it's about to modify.
+async function requireSessionBuilder(request, db) {
+  const user = await requireCurrentUser(request, db);
+  return getOrCreateBuilderForUser(db, user);
+}
+
+// Thrown wherever an existing row's own owner column doesn't match the
+// session's resolved builder/seller id — the shared shape for every
+// "is this actually yours" check from here on, so each call site reads as
+// one line instead of re-deriving the same if/throw every time.
+function assertOwner(actualOwnerId, sessionOwnerId, message) {
+  if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
 }
 
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
@@ -1139,6 +1216,8 @@ async function handleSellers(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    // Unauthenticated on purpose — same reasoning as POST /api/builders
+    // above: a brand-new, unlinked row, nothing to spoof.
     const input = await readJson(request);
     const label = stringValue(input.label, 'label');
     const sellerId = input.sellerId !== undefined
@@ -1151,6 +1230,8 @@ async function handleSellers(request, db, route) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     await requireSeller(db, route[1]);
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
     const input = await readJson(request);
     const label = stringValue(input.label, 'label');
     await db.prepare(`
@@ -1162,6 +1243,8 @@ async function handleSellers(request, db, route) {
 
   if (request.method === 'DELETE' && route.length === 2) {
     await requireSeller(db, route[1]);
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
     await db.prepare('DELETE FROM sellers WHERE seller_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -1176,7 +1259,10 @@ async function handleSellers(request, db, route) {
 // "wait, when did that change?"
 async function handleNotifications(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderIdParam = url.searchParams.get('builderId');
+    const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
+    assertOwner(builderId, sessionBuilder.builder_id, 'Not your notifications');
     const unreadOnlyParam = url.searchParams.get('unreadOnly');
     const conditions = ['builder_id = ?'];
     const bindings = [builderId];
@@ -1190,6 +1276,8 @@ async function handleNotifications(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Notification not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your notification');
     const input = await readJson(request);
     if (input.read === true) {
       await db.prepare(`
@@ -1201,8 +1289,10 @@ async function handleNotifications(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'mark-all-read') {
-    const input = await readJson(request);
-    const builderId = stringValue(input.builderId, 'builderId');
+    // builderId always comes from the session now, never the request body —
+    // marking someone else's notifications read isn't a feature.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderId = sessionBuilder.builder_id;
     await db.prepare(`
       UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE builder_id = ? AND read_at IS NULL
@@ -1239,7 +1329,10 @@ function notificationFromRow(row) {
 // already-known location the backend actually has for them.
 async function handleFriendships(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
-    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderIdParam = url.searchParams.get('builderId');
+    const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
+    assertOwner(builderId, sessionBuilder.builder_id, 'Not your friendships');
     const { results } = await db.prepare(`
       SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ?
       ORDER BY created_at DESC
@@ -1255,7 +1348,12 @@ async function handleFriendships(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const requesterBuilderId = stringValue(input.requesterBuilderId, 'requesterBuilderId');
+    // requesterBuilderId always comes from the session now, never the
+    // request body — sending a friend request "as" someone else isn't a
+    // feature. recipientBuilderId stays client-supplied: it's a reference to
+    // who the request targets, not a claim of identity.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const requesterBuilderId = sessionBuilder.builder_id;
     const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
     if (requesterBuilderId === recipientBuilderId) {
       throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
@@ -1281,6 +1379,10 @@ async function handleFriendships(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Friendship not found' }, 404);
+    // Only the recipient can accept a request — the requester accepting
+    // their own request would skip the other side's consent entirely.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
     await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
@@ -1293,6 +1395,13 @@ async function handleFriendships(request, db, route, url) {
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Friendship not found' }, 404);
+    // Either side of the friendship can end it (or decline/cancel a pending
+    // request) — not just the one who happened to send it.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (sessionBuilder.builder_id !== existing.requester_builder_id
+      && sessionBuilder.builder_id !== existing.recipient_builder_id) {
+      throw new HttpError('Not your friendship', 403);
+    }
     await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -1355,10 +1464,8 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 //
 // `shared` (see migrations/0040_bundle_sharing.sql) only controls
 // visibility — a shared bundle is still owned by whoever created it, and
-// this endpoint does no ownership check on PATCH/DELETE (same no-real-auth
-// caveat as every other dev-mode identity in this file). The frontend is
-// the only thing enforcing "only your own bundles show a delete/share
-// button" (see renderBundleTiles in src/main.js).
+// stays editable/deletable only by its own builder (session-checked below)
+// even once shared; sharing never transfers ownership.
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     // Two independent listings, not one filtered by both: `shared=true` is
@@ -1372,7 +1479,10 @@ async function handleBundles(request, db, route, url) {
       `).all();
       return json({ bundles: results.map(bundleFromRow) });
     }
-    const builderId = stringValue(url.searchParams.get('builderId'), 'builderId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderIdParam = url.searchParams.get('builderId');
+    const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
+    assertOwner(builderId, sessionBuilder.builder_id, 'Not your bundles');
     const { results } = await db.prepare(`
       SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
     `).bind(builderId).all();
@@ -1381,11 +1491,13 @@ async function handleBundles(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const builderId = stringValue(input.builderId, 'builderId');
+    // builderId always comes from the session now, never the request body —
+    // saving a bundle "as" someone else isn't a feature.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderId = sessionBuilder.builder_id;
     const name = stringValue(input.name, 'name');
     const items = validateBundleItems(input.items);
     const shared = input.shared === true;
-    await assertReferenceExists(db, 'builders', 'builder_id', builderId, 'builderId');
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
     const bundleId = `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
@@ -1398,6 +1510,8 @@ async function handleBundles(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Bundle not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
     // also resend the current shared flag, and vice versa.
@@ -1413,6 +1527,8 @@ async function handleBundles(request, db, route, url) {
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Bundle not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     await db.prepare('DELETE FROM bundles WHERE bundle_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -1468,7 +1584,10 @@ async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
   const landlet = await requireLandlet(db, landletId);
   const input = await readJson(request);
-  const builderId = stringValue(input.builderId, 'builderId');
+  // builderId always comes from the session now, never the request body —
+  // starting an auction "as" someone else isn't a feature.
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  const builderId = sessionBuilder.builder_id;
   if (landlet.status !== 'claimed' || landlet.owner_builder_id !== builderId) {
     throw new HttpError('Only the current owner of a claimed landlet can start an auction on it', 400);
   }
@@ -1576,11 +1695,13 @@ async function handleAuctionBids(request, db, route) {
       throw new HttpError('This auction has already ended', 409);
     }
     const input = await readJson(request);
-    const builderId = stringValue(input.builderId, 'builderId');
+    // builderId always comes from the session now, never the request body —
+    // bidding "as" someone else isn't a feature.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderId = sessionBuilder.builder_id;
     if (builderId === resolved.seller_builder_id) {
       throw new HttpError('The seller cannot bid on their own auction', 400);
     }
-    await requireBuilder(db, builderId);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
     const highest = await db.prepare(`
       SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
@@ -1850,8 +1971,7 @@ async function requireSeller(db, sellerId) {
 // profile comes to exist — selling stays deliberately opt-in/lazy (see
 // migrations/0054's own comment), not auto-created at signup the way a
 // builder profile is.
-async function handleMySeller(request, db) {
-  const user = await requireCurrentUser(request, db);
+async function getOrCreateSellerForUser(db, user) {
   let row = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
   if (!row) {
     const sellerId = `seller-${crypto.randomUUID()}`;
@@ -1859,15 +1979,27 @@ async function handleMySeller(request, db) {
       .bind(sellerId, user.display_name || user.email.split('@')[0], user.user_id).run();
     row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
   }
+  return row;
+}
+
+async function handleMySeller(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const row = await getOrCreateSellerForUser(db, user);
   return json({ seller: sellerFromRow(row) });
 }
 
+// Same reasoning as requireSessionBuilder above, for seller-owned mutations.
+async function requireSessionSeller(request, db) {
+  const user = await requireCurrentUser(request, db);
+  return getOrCreateSellerForUser(db, user);
+}
+
 // Real accounts (migrations/0053_users_auth.sql) — the first genuinely
-// unforgeable identity in this app; see that migration's own comment for
-// why builders/sellers stay untouched for now. Everything below is scoped
-// to this one concern: prove an email is real, prove a password is
-// correct, and hand back a session cookie — nothing here yet links a user
-// to a builder/seller profile, that's deliberate follow-up work.
+// unforgeable identity in this app. Everything below is scoped to this
+// one concern: prove an email is real, prove a password is correct, and
+// hand back a session cookie. requireSessionBuilder/requireSessionSeller
+// above (and every ownership check built on them throughout this file)
+// are what actually put that unforgeable identity to work.
 
 const SESSION_COOKIE_NAME = 'hh_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -2364,8 +2496,13 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'claim') {
-    const input = await readJson(request);
-    const builderId = stringValue(input.builderId, 'builderId');
+    // builderId always comes from the session now, never the request body
+    // — claiming "as" a builderId the caller merely typed in was exactly
+    // the open vector this whole pass exists to close (any of the
+    // publicly-visible ids from GET /builders could otherwise claim land
+    // on that builder's behalf without them ever logging in).
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const builderId = sessionBuilder.builder_id;
     const result = await db.prepare(`
       UPDATE landlets
       SET status = 'claimed', owner_builder_id = ?,
@@ -2416,8 +2553,26 @@ async function handleLandlets(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Landlet not found' }, 404);
+    // Unowned (greenbelt/generating) landlets stay unauthenticated —
+    // this is world-generation/admin housekeeping (status transitions,
+    // polygon/metadata fixes), the same "no builder ownership concept
+    // applies yet" territory as POST /api/landlets itself and the
+    // land-candidates/world endpoints. An *owned* landlet is a different
+    // story: only its own builder may touch it, and — regardless of who's
+    // asking — ownership itself can never change through this endpoint.
+    // A full PUT/PATCH that could freely set `ownerBuilderId` was a real
+    // "claim any landlet, bypass every invariant POST .../claim enforces"
+    // vector with no login required at all; ownership transfer only ever
+    // happens through that dedicated, invariant-checked endpoint now.
+    if (existing.owner_builder_id !== null) {
+      const sessionBuilder = await requireSessionBuilder(request, db);
+      assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    }
     const input = await readJson(request);
-    const landlet = validateLandlet({ ...landletFromRow(existing), ...input, landletId: route[1] }, route[1]);
+    const landlet = validateLandlet(
+      { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
+      route[1],
+    );
     await db.prepare(`
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
@@ -2435,6 +2590,18 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Landlet not found' }, 404);
+    // Blocked outright once owned, for anyone — this raw DELETE has no
+    // cascade for the owner's placed_instances/landlet_versions the way
+    // DELETE /api/builders/:id's own release path does, so it would leave
+    // orphaned rows behind even for the genuine owner. Releasing owned
+    // land already has real paths (deleting the builder; eventually an
+    // inactivity/auction reclaim) — this endpoint stays for admin/test
+    // cleanup of unowned (greenbelt/generating) rows only.
+    if (existing.owner_builder_id !== null) {
+      throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
+    }
     await db.prepare('DELETE FROM landlets WHERE landlet_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -2463,7 +2630,7 @@ async function handleLiveLandlet(db, landletId) {
 }
 
 async function handleLandletDraft(request, db, landletId) {
-  await requireLandlet(db, landletId);
+  const landlet = await requireLandlet(db, landletId);
 
   if (request.method === 'GET') {
     const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
@@ -2471,6 +2638,13 @@ async function handleLandletDraft(request, db, landletId) {
   }
 
   if (request.method === 'PUT') {
+    // No builderId field exists on this endpoint to spoof (it never took
+    // one) — before this check it was a fully open, no-identity-at-all
+    // destructive replace of any landlet's entire live draft. The check
+    // has to be "does the target landlet's own owner match the session,"
+    // there's nothing else to compare against.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const input = await readJson(request);
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
     if (input.instances.length > 250) throw new HttpError('instances must contain at most 250 items', 400);
@@ -3130,10 +3304,14 @@ async function handleInstances(request, db, route, url) {
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
     const placeholders = instanceIds.map(() => '?').join(', ');
     const { results } = await db.prepare(`
-      SELECT instance_id FROM placed_instances WHERE instance_id IN (${placeholders})
+      SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
     `).bind(...instanceIds).all();
     if (results.length !== instanceIds.length) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
+    }
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    for (const landletId of new Set(results.map((row) => row.landlet_id))) {
+      await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
     }
     await db.batch(instanceIds.map((instanceId) => db.prepare(
       'DELETE FROM placed_instances WHERE instance_id = ?',
@@ -3154,6 +3332,13 @@ async function handleInstances(request, db, route, url) {
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     await assertCropWithinTemplateBounds(db, instances);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const existingInstances = await getInstancesById(db, instanceIds);
+    const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
+    for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
+    for (const landletId of landletIdsToCheck) {
+      await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+    }
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(instance_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, template_id = excluded.template_id,
@@ -3216,6 +3401,8 @@ async function handleInstances(request, db, route, url) {
     const instance = validateInstance(input, crypto.randomUUID());
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
@@ -3232,6 +3419,11 @@ async function handleInstances(request, db, route, url) {
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
+    if (instance.landletId !== existing.landlet_id) {
+      await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
+    }
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
       UPDATE placed_instances
@@ -3243,6 +3435,10 @@ async function handleInstances(request, db, route, url) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Instance not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -3265,11 +3461,10 @@ async function handleInstances(request, db, route, url) {
 // Posts on a "community sign" instance (docs/SPEC.md §6, migrations/0041) —
 // nested under /instances/:id/posts rather than a top-level /sign-posts
 // collection since a post never exists independent of the sign it's on,
-// the same reasoning /landlets/:id/versions already follows. No ownership
-// check on DELETE (moderation) — same no-real-auth caveat as every other
-// dev-mode identity in this file (see handleBundles' own note); the
-// frontend only shows a delete control to the sign's own landlet's
-// builder.
+// the same reasoning /landlets/:id/versions already follows. POST itself
+// stays open to any shopper (authorLabel is free text, no account backs
+// it) but DELETE (moderation) is gated to the sign's own hosting landlet's
+// owner — see that branch's own comment.
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
 
@@ -3304,6 +3499,13 @@ async function handleSignPosts(request, db, route) {
     const postId = route[3];
     const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
     if (!existing) return json({ error: 'Post not found' }, 404);
+    // Moderation is gated to the sign's own hosting landlet's owner, not the
+    // post's author (there's no author account to check against anyway —
+    // authorLabel is free text) — matches "the frontend only shows a delete
+    // control to the sign's own landlet's builder."
+    const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
     return json({ deleted: true });
   }
@@ -3324,10 +3526,10 @@ function signPostFromRow(row) {
 // Events on a "community calendar" instance (docs/SPEC.md §6,
 // migrations/0042) — structurally identical to handleSignPosts above
 // (nested under /instances/:id/events for the same "never exists
-// independent of its instance" reasoning, same no-ownership-check
-// moderation caveat), deliberately kept as its own separate function and
-// table rather than a shared "board" abstraction over both — see
-// migrations/0042's own comment on why.
+// independent of its instance" reasoning, same moderation-gated-to-the-
+// hosting-landlet's-owner DELETE), deliberately kept as its own separate
+// function and table rather than a shared "board" abstraction over both —
+// see migrations/0042's own comment on why.
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -3369,6 +3571,11 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = route[3];
     const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
     if (!existing) return json({ error: 'Event not found' }, 404);
+    // Same moderation gate as sign posts above — the calendar's own hosting
+    // landlet's owner, not the event's free-text author.
+    const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
     return json({ deleted: true });
   }
@@ -3527,22 +3734,32 @@ async function handlePurchases(request, db, route, url) {
     // "Simulated purchases" / "Refunds" in docs/API.md). Exactly one is
     // required; there's no "list everything" mode.
     if (builderId) {
+      const id = stringValue(builderId, 'builderId');
+      const sessionBuilder = await requireSessionBuilder(request, db);
+      assertOwner(id, sessionBuilder.builder_id, 'Not your purchases');
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
-      `).bind(stringValue(builderId, 'builderId')).all();
+      `).bind(id).all();
       return json({ purchases: results.map(purchaseFromRow) });
     }
     if (templateId) {
+      const id = stringValue(templateId, 'templateId');
+      const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(id).first();
+      if (!template) throw new HttpError('Catalog template not found', 404);
+      if (template.seller_id) {
+        const sessionSeller = await requireSessionSeller(request, db);
+        assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your product');
+      }
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
-      `).bind(stringValue(templateId, 'templateId')).all();
+      `).bind(id).all();
       return json({ purchases: results.map(purchaseFromRow) });
     }
     throw new HttpError('builderId or templateId is required', 400);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
-    return handlePurchaseRefund(db, route[1]);
+    return handlePurchaseRefund(request, db, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -3556,9 +3773,13 @@ async function handlePurchases(request, db, route, url) {
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
 // self-service, since shoppers have no account here to authenticate a
 // "my purchases" view against in the first place.
-async function handlePurchaseRefund(db, purchaseId) {
+async function handlePurchaseRefund(request, db, purchaseId) {
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  if (purchase.seller_id) {
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
   }

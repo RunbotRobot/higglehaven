@@ -14,6 +14,56 @@ async function api(path, options = {}) {
   return { response, body: await response.json() };
 }
 
+function extractSessionCookie(response) {
+  const setCookie = response.headers.get('set-cookie');
+  if (!setCookie) return null;
+  const match = setCookie.match(/hh_session=([^;]+)/);
+  return match ? match[1] : null;
+}
+
+function withSession(token, options = {}) {
+  return { ...options, headers: { ...options.headers, cookie: `hh_session=${token}` } };
+}
+
+async function signup(email, password, extra = {}) {
+  return api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...extra }) });
+}
+
+// Signs up a fresh account and returns its auto-provisioned builder profile
+// along with a `session()` helper for attaching that account's cookie to
+// any request — the standard way tests act "as" a particular builder now
+// that builderId can no longer be passed in directly.
+async function signupBuilder(label) {
+  const email = `${label}-${crypto.randomUUID()}@example.com`;
+  const signedUp = await signup(email, 'a fine long password here', { displayName: label });
+  const sessionToken = extractSessionCookie(signedUp.response);
+  const me = await api('/builders/me', withSession(sessionToken));
+  return {
+    email,
+    sessionToken,
+    builderId: me.body.builder.builderId,
+    builder: me.body.builder,
+    session: (options) => withSession(sessionToken, options),
+  };
+}
+
+// Same idea for sellers. A seller profile is lazily created per user
+// independent of the builder one, so this can layer on top of a fresh
+// signup rather than needing its own account-creation path.
+async function signupSeller(label) {
+  const email = `${label}-${crypto.randomUUID()}@example.com`;
+  const signedUp = await signup(email, 'a fine long password here', { displayName: label });
+  const sessionToken = extractSessionCookie(signedUp.response);
+  const me = await api('/sellers/me', withSession(sessionToken));
+  return {
+    email,
+    sessionToken,
+    sellerId: me.body.seller.sellerId,
+    seller: me.body.seller,
+    session: (options) => withSession(sessionToken, options),
+  };
+}
+
 async function createGreenbeltLandlet(landletId) {
   return api('/landlets', {
     method: 'POST',
@@ -247,15 +297,15 @@ describe('Worker API', () => {
   });
 
   it('filters and cursor-paginates catalog templates in stable name order', async () => {
-    for (const sellerId of ['seller-a', 'seller-b']) {
-      await api('/sellers', { method: 'POST', body: JSON.stringify({ label: sellerId, sellerId }) });
-    }
+    const sellerA = await signupSeller('catalog-page-seller-a');
+    const sellerB = await signupSeller('catalog-page-seller-b');
+    const sellersById = { [sellerA.sellerId]: sellerA, [sellerB.sellerId]: sellerB };
     for (const [templateId, name, subcategory, sellerId, priceCents, color, dimensions] of [
-      ['catalog-page-b', 'Catalog same name', 'seating', 'seller-b', 200, '#123456', { width: 1, depth: 1, height: 1 }],
-      ['catalog-page-a', 'Catalog same name', 'seating', 'seller-a', 100, '#123456', { width: 1, depth: 1, height: 1 }],
-      ['catalog-page-c', 'Catalog trailing name', 'lighting', 'seller-a', 300, '#abcdef', { width: 3, depth: 2, height: 4 }],
+      ['catalog-page-b', 'Catalog same name', 'seating', sellerB.sellerId, 200, '#123456', { width: 1, depth: 1, height: 1 }],
+      ['catalog-page-a', 'Catalog same name', 'seating', sellerA.sellerId, 100, '#123456', { width: 1, depth: 1, height: 1 }],
+      ['catalog-page-c', 'Catalog trailing name', 'lighting', sellerA.sellerId, 300, '#abcdef', { width: 3, depth: 2, height: 4 }],
     ]) {
-      const created = await api('/catalog', {
+      const created = await api('/catalog', sellersById[sellerId].session({
         method: 'POST',
         body: JSON.stringify({
           templateId,
@@ -267,7 +317,7 @@ describe('Worker API', () => {
           color,
           dimensions,
         }),
-      });
+      }));
       expect(created.response.status).toBe(201);
     }
 
@@ -288,7 +338,7 @@ describe('Worker API', () => {
     expect(subcategory.body.templates.map((template) => template.templateId)).toEqual([
       'catalog-page-a', 'catalog-page-b',
     ]);
-    const seller = await api('/catalog?category=pagination-test&sellerId=seller-a');
+    const seller = await api(`/catalog?category=pagination-test&sellerId=${sellerA.sellerId}`);
     expect(seller.response.status).toBe(200);
     expect(seller.body.templates.map((template) => template.templateId)).toEqual([
       'catalog-page-a', 'catalog-page-c',
@@ -381,7 +431,12 @@ describe('Worker API', () => {
       body: JSON.stringify({
         templates: [
           { templateId: 'catalog-batch-rolled-back', name: 'Rollback', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
-          { templateId: 'placeholder-chair', name: 'Conflict', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+          // Reuses 'catalog-batch-a', an unowned template created above, so
+          // the conflict here is a plain primary-key collision rather than
+          // tripping the seller-ownership check (that's covered separately
+          // by seller-scoped tests, and seed templates all have a fixed
+          // 'dev-seller' owner no real session can ever authenticate as).
+          { templateId: 'catalog-batch-a', name: 'Conflict', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
         ],
       }),
     });
@@ -404,21 +459,42 @@ describe('Worker API', () => {
       dimensions: { width: 2, depth: 2, height: 2 },
     });
 
-    const reference = await api('/instances', {
+    // An unowned template (rather than a seed 'placeholder-*' one, whose
+    // fixed 'dev-seller' owner no real session can authenticate as) referenced
+    // by a placed instance, so the DELETE below conflicts on the reference
+    // rather than on ownership. Placing the instance itself now needs a real
+    // owned landlet + session, so a fresh one is created just for this.
+    const referencedTemplate = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
-        instanceId: 'catalog-batch-delete-reference', landletId: 'starter-landlet',
-        templateId: 'placeholder-chair', x: 0, y: 0,
+        templateId: 'catalog-batch-referenced', name: 'Catalog batch referenced',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
       }),
     });
+    expect(referencedTemplate.response.status).toBe(201);
+    const referenceBuilder = await signupBuilder('catalog-batch-reference-builder');
+    await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
+        status: 'claimed', ownerBuilderId: referenceBuilder.builderId,
+      }),
+    });
+    const reference = await api('/instances', referenceBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'catalog-batch-delete-reference', landletId: 'catalog-batch-reference-landlet',
+        templateId: 'catalog-batch-referenced', x: 0, y: 0,
+      }),
+    }));
     expect(reference.response.status).toBe(201);
     const deleteConflict = await api('/catalog/batch', {
       method: 'DELETE',
-      body: JSON.stringify({ templateIds: ['catalog-batch-b', 'placeholder-chair'] }),
+      body: JSON.stringify({ templateIds: ['catalog-batch-b', 'catalog-batch-referenced'] }),
     });
     expect(deleteConflict.response.status).toBe(409);
     expect((await api('/catalog/catalog-batch-b')).response.status).toBe(200);
-    expect((await api('/instances/catalog-batch-delete-reference', { method: 'DELETE' })).response.status).toBe(200);
+    expect((await api('/instances/catalog-batch-delete-reference', referenceBuilder.session({ method: 'DELETE' }))).response.status).toBe(200);
     const deleted = await api('/catalog/batch', {
       method: 'DELETE',
       body: JSON.stringify({ templateIds: ['catalog-batch-b', 'catalog-batch-c'] }),
@@ -443,12 +519,20 @@ describe('Worker API', () => {
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
+    // Owned directly at creation (POST /landlets still accepts ownerBuilderId
+    // unauthenticated — it's admin/test tooling, see that route's own
+    // comment) rather than going through the full claim flow, so the
+    // instance placements below can authenticate as its real owner.
+    const pageBuilder = await signupBuilder('instance-page-builder');
     await api('/landlets', {
       method: 'POST',
-      body: JSON.stringify({ landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4 }),
+      body: JSON.stringify({
+        landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
+        status: 'claimed', ownerBuilderId: pageBuilder.builderId,
+      }),
     });
     for (const instanceId of ['instance-page-b', 'instance-page-a']) {
-      const created = await api('/instances', {
+      const created = await api('/instances', pageBuilder.session({
         method: 'POST',
         body: JSON.stringify({
           instanceId,
@@ -457,7 +541,7 @@ describe('Worker API', () => {
           x: 0,
           y: 0,
         }),
-      });
+      }));
       expect(created.response.status).toBe(201);
       expect(created.body.instance.createdAt).toBeTruthy();
       expect(created.body.instance.updatedAt).toBeTruthy();
@@ -496,27 +580,30 @@ describe('Worker API', () => {
   });
 
   it('atomically creates bounded instance batches', async () => {
+    const batchBuilder = await signupBuilder('instance-batch-builder');
     await createGreenbeltLandlet('instance-batch-landlet');
-    const created = await api('/instances/batch', {
+    const claimed = await api('/landlets/instance-batch-landlet/claim', batchBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+    const created = await api('/instances/batch', batchBuilder.session({
       method: 'POST',
       body: JSON.stringify({ instances: [
         { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 1, y: 2 },
         { instanceId: 'instance-batch-b', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 3, y: 4 },
       ] }),
-    });
+    }));
     expect(created.response.status).toBe(201);
     expect(created.body.instances.map((instance) => instance.instanceId)).toEqual([
       'instance-batch-a', 'instance-batch-b',
     ]);
     expect(created.body.instances.every((instance) => instance.createdAt && instance.updatedAt)).toBe(true);
 
-    const replaced = await api('/instances/batch', {
+    const replaced = await api('/instances/batch', batchBuilder.session({
       method: 'PUT',
       body: JSON.stringify({ instances: [
         { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 10, y: 20 },
         { instanceId: 'instance-batch-c', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 5, y: 6 },
       ] }),
-    });
+    }));
     expect(replaced.response.status).toBe(200);
     expect(replaced.body.instances.every((instance) => instance.createdAt && instance.updatedAt)).toBe(true);
     expect((await api('/instances/instance-batch-a')).body.instance).toMatchObject({
@@ -524,63 +611,63 @@ describe('Worker API', () => {
     });
     expect((await api('/instances/instance-batch-c')).response.status).toBe(200);
 
-    const missingReference = await api('/instances/batch', {
+    const missingReference = await api('/instances/batch', batchBuilder.session({
       method: 'PUT',
       body: JSON.stringify({ instances: [
         { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 99, y: 99 },
         { instanceId: 'instance-batch-never-inserted', landletId: 'instance-batch-landlet', templateId: 'missing-template', x: 0, y: 0 },
       ] }),
-    });
+    }));
     expect(missingReference.response.status).toBe(400);
     expect((await api('/instances/instance-batch-never-inserted')).response.status).toBe(404);
     expect((await api('/instances/instance-batch-a')).body.instance.x).toBe(10);
 
-    const conflict = await api('/instances/batch', {
+    const conflict = await api('/instances/batch', batchBuilder.session({
       method: 'POST',
       body: JSON.stringify({ instances: [
         { instanceId: 'instance-batch-new', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
         { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
       ] }),
-    });
+    }));
     expect(conflict.response.status).toBe(409);
     expect((await api('/instances/instance-batch-new')).response.status).toBe(404);
-    expect((await api('/instances/batch', {
+    expect((await api('/instances/batch', batchBuilder.session({
       method: 'POST', body: JSON.stringify({ instances: [] }),
-    })).response.status).toBe(400);
-    expect((await api('/instances/batch', {
+    }))).response.status).toBe(400);
+    expect((await api('/instances/batch', batchBuilder.session({
       method: 'POST',
       body: JSON.stringify({ instances: Array.from({ length: 101 }, (_, index) => ({
         instanceId: `too-many-${index}`, templateId: 'placeholder-chair', x: 0, y: 0,
       })) }),
-    })).response.status).toBe(400);
-    expect((await api('/instances/batch', {
+    }))).response.status).toBe(400);
+    expect((await api('/instances/batch', batchBuilder.session({
       method: 'POST',
       body: JSON.stringify({ instances: [
         { instanceId: 'duplicate-batch-id', templateId: 'placeholder-chair', x: 0, y: 0 },
         { instanceId: 'duplicate-batch-id', templateId: 'placeholder-tree', x: 0, y: 0 },
       ] }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
 
-    const missingDelete = await api('/instances/batch', {
+    const missingDelete = await api('/instances/batch', batchBuilder.session({
       method: 'DELETE',
       body: JSON.stringify({ instanceIds: ['instance-batch-a', 'missing-instance'] }),
-    });
+    }));
     expect(missingDelete.response.status).toBe(404);
     expect((await api('/instances/instance-batch-a')).response.status).toBe(200);
-    const removed = await api('/instances/batch', {
+    const removed = await api('/instances/batch', batchBuilder.session({
       method: 'DELETE',
       body: JSON.stringify({ instanceIds: ['instance-batch-b', 'instance-batch-c'] }),
-    });
+    }));
     expect(removed.response.status).toBe(200);
     expect(removed.body.deletedInstanceIds).toEqual(['instance-batch-b', 'instance-batch-c']);
     expect((await api('/instances/instance-batch-b')).response.status).toBe(404);
     expect((await api('/instances/instance-batch-c')).response.status).toBe(404);
-    expect((await api('/instances/batch', {
+    expect((await api('/instances/batch', batchBuilder.session({
       method: 'DELETE', body: JSON.stringify({ instanceIds: ['instance-batch-a', 'instance-batch-a'] }),
-    })).response.status).toBe(400);
-    expect((await api('/instances/batch', {
+    }))).response.status).toBe(400);
+    expect((await api('/instances/batch', batchBuilder.session({
       method: 'DELETE', body: JSON.stringify({ instanceIds: [] }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
     expect((await api('/instances/batch', {
       method: 'DELETE', body: JSON.stringify({ instanceIds: Array.from({ length: 101 }, (_, index) => `delete-${index}`) }),
     })).response.status).toBe(400);
@@ -590,16 +677,14 @@ describe('Worker API', () => {
     const created = await createGreenbeltLandlet('claimable-landlet');
     expect(created.response.status).toBe(201);
 
-    const claimed = await api('/landlets/claimable-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'builder-one' }),
-    });
+    const builder = await signupBuilder('claimable-landlet-builder');
+    const claimed = await api('/landlets/claimable-landlet/claim', builder.session({ method: 'POST' }));
 
     expect(claimed.response.status).toBe(200);
     expect(claimed.body.landlet).toMatchObject({
       landletId: 'claimable-landlet',
       status: 'claimed',
-      ownerBuilderId: 'builder-one',
+      ownerBuilderId: builder.builderId,
     });
     expect(claimed.body.landlet.claimableAt).not.toBeNull();
   });
@@ -607,48 +692,36 @@ describe('Worker API', () => {
   it('rejects a second starter claim by the same builder', async () => {
     await createGreenbeltLandlet('first-landlet');
     await createGreenbeltLandlet('second-landlet');
+    const builder = await signupBuilder('single-landlet-builder');
 
-    const first = await api('/landlets/first-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'single-landlet-builder' }),
-    });
+    const first = await api('/landlets/first-landlet/claim', builder.session({ method: 'POST' }));
     expect(first.response.status).toBe(200);
 
-    const second = await api('/landlets/second-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'single-landlet-builder' }),
-    });
+    const second = await api('/landlets/second-landlet/claim', builder.session({ method: 'POST' }));
     expect(second.response.status).toBe(409);
     expect(second.body).toEqual({ error: 'Builder already owns a claimed landlet' });
   });
 
   it('rejects unavailable, missing, and malformed claims', async () => {
     await createGreenbeltLandlet('contested-landlet');
-    await api('/landlets/contested-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'winning-builder' }),
-    });
+    const winningBuilder = await signupBuilder('winning-builder');
+    const otherBuilder = await signupBuilder('other-builder');
+    await api('/landlets/contested-landlet/claim', winningBuilder.session({ method: 'POST' }));
 
-    const unavailable = await api('/landlets/contested-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'other-builder' }),
-    });
+    const unavailable = await api('/landlets/contested-landlet/claim', otherBuilder.session({ method: 'POST' }));
     expect(unavailable.response.status).toBe(409);
     expect(unavailable.body).toEqual({ error: 'Landlet is not available to claim' });
 
-    const missing = await api('/landlets/does-not-exist/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'other-builder' }),
-    });
+    const missing = await api('/landlets/does-not-exist/claim', otherBuilder.session({ method: 'POST' }));
     expect(missing.response.status).toBe(404);
     expect(missing.body).toEqual({ error: 'Landlet not found' });
 
-    const malformed = await api('/landlets/contested-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    expect(malformed.response.status).toBe(400);
-    expect(malformed.body).toEqual({ error: 'builderId is required' });
+    // builderId is no longer a client-suppliable field at all — claiming
+    // always acts as whoever is logged in — so the "malformed claim" case
+    // this sub-test used to cover (a missing builderId in the body) no
+    // longer exists. What replaces it: claiming with no session at all.
+    const unauthenticated = await api('/landlets/contested-landlet/claim', { method: 'POST' });
+    expect(unauthenticated.response.status).toBe(401);
   });
 
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
@@ -691,12 +764,16 @@ describe('Worker API', () => {
   });
 
   it('atomically replaces a landlet draft', async () => {
+    const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', {
       method: 'POST',
-      body: JSON.stringify({ landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000 }),
+      body: JSON.stringify({
+        landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: draftBuilder.builderId,
+      }),
     });
 
-    const replaced = await api('/landlets/draft-landlet/draft', {
+    const replaced = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
       body: JSON.stringify({
         versionName: 'Initial furnished draft',
@@ -705,7 +782,7 @@ describe('Worker API', () => {
           { instanceId: 'draft-chair', templateId: 'placeholder-chair', x: 3, y: 4, z: 0, rotationZ: 0.5 },
         ],
       }),
-    });
+    }));
     expect(replaced.response.status).toBe(200);
     expect(replaced.body.instances).toHaveLength(2);
     expect(replaced.body.instances.map((instance) => instance.instanceId).sort()).toEqual(['draft-chair', 'draft-tree']);
@@ -716,21 +793,21 @@ describe('Worker API', () => {
       instanceCount: 2,
     });
 
-    const failed = await api('/landlets/draft-landlet/draft', {
+    const failed = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
       body: JSON.stringify({
         instances: [
           { instanceId: 'broken-instance', templateId: 'missing-template', x: 0, y: 0 },
         ],
       }),
-    });
+    }));
     expect(failed.response.status).toBe(409);
 
     const preserved = await api('/landlets/draft-landlet/draft');
     expect(preserved.response.status).toBe(200);
     expect(preserved.body.instances.map((instance) => instance.instanceId).sort()).toEqual(['draft-chair', 'draft-tree']);
 
-    const duplicates = await api('/landlets/draft-landlet/draft', {
+    const duplicates = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
       body: JSON.stringify({
         instances: [
@@ -738,14 +815,14 @@ describe('Worker API', () => {
           { instanceId: 'same-id', templateId: 'placeholder-chair', x: 1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(duplicates.response.status).toBe(400);
     expect(duplicates.body).toEqual({ error: 'instanceId values must be unique' });
 
-    const cleared = await api('/landlets/draft-landlet/draft', {
+    const cleared = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
       body: JSON.stringify({ instances: [] }),
-    });
+    }));
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.instances).toEqual([]);
     expect(cleared.body.version).toMatchObject({
@@ -773,33 +850,47 @@ describe('Worker API', () => {
   });
 
   it('saves immutable landlet versions and activates a selected snapshot', async () => {
-    const instance = await api('/instances', {
+    // A dedicated owned landlet rather than 'starter-landlet' itself — the
+    // mosaic/world-gen test later in this file relies on starter-landlet
+    // staying unclaimed until it runs, so version/activate calls (which now
+    // require session-authenticated ownership) go against a landlet made
+    // just for this test instead.
+    const versionBuilder = await signupBuilder('versioned-landlet-builder');
+    await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: versionBuilder.builderId,
+      }),
+    });
+
+    const instance = await api('/instances', versionBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'versioned-tree',
-        landletId: 'starter-landlet',
+        landletId: 'versioned-landlet',
         templateId: 'placeholder-tree',
         x: 3,
         y: 4,
         z: 0,
         rotationZ: 0.5,
       }),
-    });
+    }));
     expect(instance.response.status).toBe(201);
 
-    const saved = await api('/landlets/starter-landlet/versions', {
+    const saved = await api('/landlets/versioned-landlet/versions', versionBuilder.session({
       method: 'POST',
       body: JSON.stringify({ name: 'Tree by the entrance' }),
-    });
+    }));
     expect(saved.response.status).toBe(201);
     expect(saved.body.version).toMatchObject({
-      landletId: 'starter-landlet',
+      landletId: 'versioned-landlet',
       versionNumber: 1,
       name: 'Tree by the entrance',
       instanceCount: 1,
     });
 
-    const unpublished = await api('/landlets/starter-landlet/live');
+    const unpublished = await api('/landlets/versioned-landlet/live');
     expect(unpublished.response.status).toBe(200);
     expect(unpublished.body).toMatchObject({
       published: false,
@@ -807,13 +898,13 @@ describe('Worker API', () => {
       instances: [],
     });
 
-    await api('/instances/versioned-tree', {
+    await api('/instances/versioned-tree', versionBuilder.session({
       method: 'PATCH',
       body: JSON.stringify({ x: 99 }),
-    });
+    }));
 
     const versionId = saved.body.version.versionId;
-    const snapshot = await api(`/landlets/starter-landlet/versions/${versionId}`);
+    const snapshot = await api(`/landlets/versioned-landlet/versions/${versionId}`);
     expect(snapshot.response.status).toBe(200);
     expect(snapshot.body.version.instances).toHaveLength(1);
     expect(snapshot.body.version.instances[0]).toMatchObject({
@@ -824,13 +915,13 @@ describe('Worker API', () => {
       rotationZ: 0.5,
     });
 
-    const activated = await api(`/landlets/starter-landlet/versions/${versionId}/activate`, {
+    const activated = await api(`/landlets/versioned-landlet/versions/${versionId}/activate`, versionBuilder.session({
       method: 'POST',
-    });
+    }));
     expect(activated.response.status).toBe(200);
     expect(activated.body.landlet.activeVersionId).toBe(versionId);
 
-    const live = await api('/landlets/starter-landlet/live');
+    const live = await api('/landlets/versioned-landlet/live');
     expect(live.response.status).toBe(200);
     expect(live.body.published).toBe(true);
     expect(live.body.version).toMatchObject({
@@ -845,27 +936,31 @@ describe('Worker API', () => {
       y: 4,
     });
 
-    const versions = await api('/landlets/starter-landlet/versions');
+    const versions = await api('/landlets/versioned-landlet/versions');
     expect(versions.response.status).toBe(200);
     expect(versions.body.versions).toHaveLength(1);
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
+    const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
     await api('/landlets', {
       method: 'POST',
-      body: JSON.stringify({ landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000 }),
+      body: JSON.stringify({
+        landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: concurrentBuilder.builderId,
+      }),
     });
 
     const saves = await Promise.all([
-      api('/landlets/concurrent-versions/versions', {
+      api('/landlets/concurrent-versions/versions', concurrentBuilder.session({
         method: 'POST',
         body: JSON.stringify({}),
-      }),
-      api('/landlets/concurrent-versions/versions', {
+      })),
+      api('/landlets/concurrent-versions/versions', concurrentBuilder.session({
         method: 'POST',
         body: JSON.stringify({}),
-      }),
+      })),
     ]);
 
     expect(saves.every(({ response }) => response.status === 201)).toBe(true);
@@ -1181,13 +1276,11 @@ describe('Worker API', () => {
     expect(starter.body.landlet.ownerBuilderId).toBeNull();
     expect(starter.body.landlet.claimableAt).not.toBeNull();
 
-    const starterClaim = await api('/landlets/starter-landlet/claim', {
-      method: 'POST',
-      body: JSON.stringify({ builderId: 'center-plot-builder' }),
-    });
+    const centerPlotBuilder = await signupBuilder('center-plot-builder');
+    const starterClaim = await api('/landlets/starter-landlet/claim', centerPlotBuilder.session({ method: 'POST' }));
     expect(starterClaim.response.status).toBe(200);
     expect(starterClaim.body.landlet).toMatchObject({
-      landletId: 'starter-landlet', status: 'claimed', ownerBuilderId: 'center-plot-builder',
+      landletId: 'starter-landlet', status: 'claimed', ownerBuilderId: centerPlotBuilder.builderId,
     });
 
     const duplicate = await api('/land-candidates/generate-mosaic', {
@@ -1540,24 +1633,42 @@ describe('Worker API', () => {
 });
 
 describe('Community signs', () => {
+  // A single claimed landlet, shared by every test below, to host the
+  // instances they place — placing/toggling/deleting an instance now
+  // requires session-authenticated ownership of the landlet it sits on
+  // (see requireOwnedLandlet's own comment), so every mutation here goes
+  // through this landlet's owning builder's session. Posting to (but not
+  // moderating) a sign stays unauthenticated by design, so those calls are
+  // left as plain, session-less requests.
+  let signsLandlet;
+  let signsBuilder;
+
+  beforeAll(async () => {
+    signsBuilder = await signupBuilder('community-signs-builder');
+    await createGreenbeltLandlet('community-signs-landlet');
+    const claimed = await api('/landlets/community-signs-landlet/claim', signsBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+    signsLandlet = 'community-signs-landlet';
+  });
+
   it('toggles isCommunitySign on a placed instance and round-trips it', async () => {
-    const created = await api('/instances', {
+    const created = await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'sign-toggle-instance',
-        landletId: 'starter-landlet',
+        landletId: signsLandlet,
         templateId: 'placeholder-tree',
         x: 1,
         y: 1,
       }),
-    });
+    }));
     expect(created.response.status).toBe(201);
     expect(created.body.instance.isCommunitySign).toBe(false);
 
-    const toggled = await api('/instances/sign-toggle-instance', {
+    const toggled = await api('/instances/sign-toggle-instance', signsBuilder.session({
       method: 'PATCH',
       body: JSON.stringify({ isCommunitySign: true }),
-    });
+    }));
     expect(toggled.response.status).toBe(200);
     expect(toggled.body.instance.isCommunitySign).toBe(true);
 
@@ -1566,16 +1677,16 @@ describe('Community signs', () => {
   });
 
   it('rejects a post on an instance not marked as a community sign', async () => {
-    await api('/instances', {
+    await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'not-a-sign-instance',
-        landletId: 'starter-landlet',
+        landletId: signsLandlet,
         templateId: 'placeholder-tree',
         x: 2,
         y: 2,
       }),
-    });
+    }));
 
     const rejected = await api('/instances/not-a-sign-instance/posts', {
       method: 'POST',
@@ -1586,17 +1697,17 @@ describe('Community signs', () => {
   });
 
   it('creates, lists, and moderates posts on a community sign', async () => {
-    await api('/instances', {
+    await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'sign-with-posts',
-        landletId: 'starter-landlet',
+        landletId: signsLandlet,
         templateId: 'placeholder-tree',
         x: 3,
         y: 3,
         isCommunitySign: true,
       }),
-    });
+    }));
 
     const emptyList = await api('/instances/sign-with-posts/posts');
     expect(emptyList.response.status).toBe(200);
@@ -1630,34 +1741,38 @@ describe('Community signs', () => {
     expect(listed.body.posts).toHaveLength(1);
     expect(listed.body.posts[0].postId).toBe(posted.body.post.postId);
 
-    const deleted = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
+    // Moderation (DELETE) is gated to the sign's hosting landlet's owner.
+    const unauthenticatedDelete = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
+    expect(unauthenticatedDelete.response.status).toBe(401);
+
+    const deleted = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
 
     const listedAfterDelete = await api('/instances/sign-with-posts/posts');
     expect(listedAfterDelete.body.posts).toEqual([]);
 
-    const deleteMissing = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
+    const deleteMissing = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({ method: 'DELETE' }));
     expect(deleteMissing.response.status).toBe(404);
   });
 
   it('cascades post deletion when the sign instance itself is deleted', async () => {
-    await api('/instances', {
+    await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'sign-to-delete',
-        landletId: 'starter-landlet',
+        landletId: signsLandlet,
         templateId: 'placeholder-tree',
         x: 4,
         y: 4,
         isCommunitySign: true,
       }),
-    });
+    }));
     await api('/instances/sign-to-delete/posts', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Nice place' }),
     });
-    await api('/instances/sign-to-delete', { method: 'DELETE' });
+    await api('/instances/sign-to-delete', signsBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
     expect(afterDelete.response.status).toBe(404);
@@ -1665,24 +1780,39 @@ describe('Community signs', () => {
 });
 
 describe('Community calendar', () => {
+  // Same reasoning as the Community signs describe block above: one shared
+  // claimed landlet + its owning builder's session for every instance
+  // mutation, since placing/toggling/deleting an instance now requires
+  // session-authenticated landlet ownership.
+  let calendarLandlet;
+  let calendarBuilder;
+
+  beforeAll(async () => {
+    calendarBuilder = await signupBuilder('community-calendar-builder');
+    await createGreenbeltLandlet('community-calendar-landlet');
+    const claimed = await api('/landlets/community-calendar-landlet/claim', calendarBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+    calendarLandlet = 'community-calendar-landlet';
+  });
+
   it('toggles isCommunityCalendar on a placed instance and round-trips it', async () => {
-    const created = await api('/instances', {
+    const created = await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-toggle-instance',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 5,
         y: 5,
       }),
-    });
+    }));
     expect(created.response.status).toBe(201);
     expect(created.body.instance.isCommunityCalendar).toBe(false);
 
-    const toggled = await api('/instances/calendar-toggle-instance', {
+    const toggled = await api('/instances/calendar-toggle-instance', calendarBuilder.session({
       method: 'PATCH',
       body: JSON.stringify({ isCommunityCalendar: true }),
-    });
+    }));
     expect(toggled.response.status).toBe(200);
     expect(toggled.body.instance.isCommunityCalendar).toBe(true);
 
@@ -1691,40 +1821,40 @@ describe('Community calendar', () => {
   });
 
   it('is independent of isCommunitySign on the same instance', async () => {
-    const created = await api('/instances', {
+    const created = await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'both-flags-instance',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 6,
         y: 6,
         isCommunitySign: true,
         isCommunityCalendar: true,
       }),
-    });
+    }));
     expect(created.body.instance.isCommunitySign).toBe(true);
     expect(created.body.instance.isCommunityCalendar).toBe(true);
 
-    const unsetSignOnly = await api('/instances/both-flags-instance', {
+    const unsetSignOnly = await api('/instances/both-flags-instance', calendarBuilder.session({
       method: 'PATCH',
       body: JSON.stringify({ isCommunitySign: false }),
-    });
+    }));
     expect(unsetSignOnly.body.instance.isCommunitySign).toBe(false);
     expect(unsetSignOnly.body.instance.isCommunityCalendar).toBe(true);
   });
 
   it('rejects an event on an instance not marked as a community calendar', async () => {
-    await api('/instances', {
+    await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'not-a-calendar-instance',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 7,
         y: 7,
       }),
-    });
+    }));
 
     const rejected = await api('/instances/not-a-calendar-instance/events', {
       method: 'POST',
@@ -1735,17 +1865,17 @@ describe('Community calendar', () => {
   });
 
   it('creates, lists, and moderates events on a community calendar', async () => {
-    await api('/instances', {
+    await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-with-events',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 8,
         y: 8,
         isCommunityCalendar: true,
       }),
-    });
+    }));
 
     const emptyList = await api('/instances/calendar-with-events/events');
     expect(emptyList.response.status).toBe(200);
@@ -1779,51 +1909,55 @@ describe('Community calendar', () => {
     expect(listed.body.events).toHaveLength(1);
     expect(listed.body.events[0].eventId).toBe(posted.body.event.eventId);
 
-    const deleted = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, { method: 'DELETE' });
+    // Moderation (DELETE) is gated to the calendar's hosting landlet's owner.
+    const unauthenticatedDelete = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, { method: 'DELETE' });
+    expect(unauthenticatedDelete.response.status).toBe(401);
+
+    const deleted = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, calendarBuilder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
 
     const listedAfterDelete = await api('/instances/calendar-with-events/events');
     expect(listedAfterDelete.body.events).toEqual([]);
 
-    const deleteMissing = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, { method: 'DELETE' });
+    const deleteMissing = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, calendarBuilder.session({ method: 'DELETE' }));
     expect(deleteMissing.response.status).toBe(404);
   });
 
   it('cascades event deletion when the calendar instance itself is deleted', async () => {
-    await api('/instances', {
+    await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-to-delete',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 9,
         y: 9,
         isCommunityCalendar: true,
       }),
-    });
+    }));
     await api('/instances/calendar-to-delete/events', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Builder', text: 'Market day' }),
     });
-    await api('/instances/calendar-to-delete', { method: 'DELETE' });
+    await api('/instances/calendar-to-delete', calendarBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/calendar-to-delete/events');
     expect(afterDelete.response.status).toBe(404);
   });
 
   it('accepts an optional scheduledAt and validates it', async () => {
-    await api('/instances', {
+    await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-scheduled-instance',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 10,
         y: 10,
         isCommunityCalendar: true,
       }),
-    });
+    }));
 
     const plain = await api('/instances/calendar-scheduled-instance/events', {
       method: 'POST',
@@ -1848,17 +1982,17 @@ describe('Community calendar', () => {
   });
 
   it('only triggers the creative-tool effect once it is actually due, and only once ever', async () => {
-    await api('/instances', {
+    await api('/instances', calendarBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-trigger-instance',
-        landletId: 'starter-landlet',
+        landletId: calendarLandlet,
         templateId: 'placeholder-tree',
         x: 11,
         y: 11,
         isCommunityCalendar: true,
       }),
-    });
+    }));
 
     const future = await api('/instances/calendar-trigger-instance/events', {
       method: 'POST',
@@ -2093,38 +2227,45 @@ describe('Builders', () => {
       expect.arrayContaining([created.body.builder.builderId, 'builder-explicit-1']),
     );
 
-    const renamed = await api(`/builders/${created.body.builder.builderId}`, {
+    // Renaming requires a real session now — 'created' above is an
+    // unlinked builder (no user account backs it), so there's no session
+    // that could ever own it. A freshly signed-up builder exercises the
+    // actual rename path instead.
+    const renamer = await signupBuilder('rename-builder');
+    const renamed = await api(`/builders/${renamer.builderId}`, renamer.session({
       method: 'PATCH', body: JSON.stringify({ label: 'Ada Lovelace' }),
-    });
+    }));
     expect(renamed.response.status).toBe(200);
     expect(renamed.body.builder.label).toBe('Ada Lovelace');
 
-    const renameMissing = await api('/builders/builder-does-not-exist', {
-      method: 'PATCH', body: JSON.stringify({ label: 'x' }),
+    const unauthenticatedRename = await api(`/builders/${renamer.builderId}`, {
+      method: 'PATCH', body: JSON.stringify({ label: 'Someone else' }),
     });
+    expect(unauthenticatedRename.response.status).toBe(401);
+
+    const renameMissing = await api('/builders/builder-does-not-exist', renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'x' }),
+    }));
     expect(renameMissing.response.status).toBe(404);
   });
 
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
-    const builder = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Temp' }) });
-    const builderId = builder.body.builder.builderId;
+    const builder = await signupBuilder('release-test-builder');
 
     await createGreenbeltLandlet('release-test-landlet');
-    const claimed = await api('/landlets/release-test-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId }),
-    });
+    const claimed = await api('/landlets/release-test-landlet/claim', builder.session({ method: 'POST' }));
     expect(claimed.response.status).toBe(200);
     const originalPolygon = claimed.body.landlet.polygon;
 
-    await api('/instances', {
+    await api('/instances', builder.session({
       method: 'POST',
       body: JSON.stringify({ landletId: 'release-test-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
-    });
-    await api('/landlets/release-test-landlet/versions', {
+    }));
+    await api('/landlets/release-test-landlet/versions', builder.session({
       method: 'POST', body: JSON.stringify({ name: 'A build worth keeping' }),
-    });
+    }));
 
-    const deleted = await api(`/builders/${builderId}`, { method: 'DELETE' });
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body.releasedLandletIds).toEqual(['release-test-landlet']);
 
@@ -2139,18 +2280,17 @@ describe('Builders', () => {
     const versions = await api('/landlets/release-test-landlet/versions');
     expect(versions.body.versions).toEqual([]);
 
-    const gone = await api(`/builders/${builderId}`);
+    const gone = await api(`/builders/${builder.builderId}`);
     expect(gone.response.status).toBe(404);
 
-    const reclaimed = await api('/landlets/release-test-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId: 'builder-someone-else' }),
-    });
+    const someoneElse = await signupBuilder('release-test-reclaimer');
+    const reclaimed = await api('/landlets/release-test-landlet/claim', someoneElse.session({ method: 'POST' }));
     expect(reclaimed.response.status).toBe(200);
   });
 
   it('deleting a builder who owns nothing just removes them', async () => {
-    const builder = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owns nothing' }) });
-    const deleted = await api(`/builders/${builder.body.builder.builderId}`, { method: 'DELETE' });
+    const builder = await signupBuilder('owns-nothing-builder');
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
@@ -2163,21 +2303,17 @@ describe('Builders', () => {
     // regardless of execution order.
     await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
 
-    const first = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'First Claimer' }) });
-    const second = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Second Claimer' }) });
+    const first = await signupBuilder('first-claimer');
+    const second = await signupBuilder('second-claimer');
     await createGreenbeltLandlet('pioneer-first-landlet');
     await createGreenbeltLandlet('pioneer-second-landlet');
 
-    await api('/landlets/pioneer-first-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId: first.body.builder.builderId }),
-    });
-    await api('/landlets/pioneer-second-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId: second.body.builder.builderId }),
-    });
+    await api('/landlets/pioneer-first-landlet/claim', first.session({ method: 'POST' }));
+    await api('/landlets/pioneer-second-landlet/claim', second.session({ method: 'POST' }));
 
     const list = await api('/builders');
-    const firstAfter = list.body.builders.find((b) => b.builderId === first.body.builder.builderId);
-    const secondAfter = list.body.builders.find((b) => b.builderId === second.body.builder.builderId);
+    const firstAfter = list.body.builders.find((b) => b.builderId === first.builderId);
+    const secondAfter = list.body.builders.find((b) => b.builderId === second.builderId);
     expect(firstAfter.isPioneer).toBe(true);
     expect(firstAfter.pioneerRank).toBe(1);
     expect(secondAfter.isPioneer).toBe(true);
@@ -2187,13 +2323,11 @@ describe('Builders', () => {
     // the first time around) still gets one, since it's this builder's
     // first landing in the ranked cohort — the rule is "not yet ranked,"
     // not "this exact claim is chronologically their first ever."
-    const third = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Third Claimer' }) });
+    const third = await signupBuilder('third-claimer');
     await createGreenbeltLandlet('pioneer-third-landlet');
-    await api('/landlets/pioneer-third-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId: third.body.builder.builderId }),
-    });
+    await api('/landlets/pioneer-third-landlet/claim', third.session({ method: 'POST' }));
     const thirdList = await api('/builders');
-    const thirdAfter = thirdList.body.builders.find((b) => b.builderId === third.body.builder.builderId);
+    const thirdAfter = thirdList.body.builders.find((b) => b.builderId === third.builderId);
     expect(thirdAfter.pioneerRank).toBe(3);
   });
 
@@ -2204,72 +2338,58 @@ describe('Builders', () => {
     const fillerValues = Array.from({ length: 100 }, (_, i) => `('builder-cohort-filler-${i}', 'Filler ${i}', ${i + 1})`).join(', ');
     await env.DB.prepare(`INSERT INTO builders (builder_id, label, pioneer_rank) VALUES ${fillerValues}`).run();
 
-    const late = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Late Claimer' }) });
+    const late = await signupBuilder('late-claimer');
     await createGreenbeltLandlet('pioneer-late-landlet');
-    await api('/landlets/pioneer-late-landlet/claim', {
-      method: 'POST', body: JSON.stringify({ builderId: late.body.builder.builderId }),
-    });
+    const lateClaim = await api('/landlets/pioneer-late-landlet/claim', late.session({ method: 'POST' }));
+    expect(lateClaim.response.status).toBe(200);
 
     const list = await api('/builders');
-    const lateAfter = list.body.builders.find((b) => b.builderId === late.body.builder.builderId);
+    const lateAfter = list.body.builders.find((b) => b.builderId === late.builderId);
     expect(lateAfter.isPioneer).toBe(false);
     expect(lateAfter.pioneerRank).toBeNull();
   });
 });
 
 describe('Auctions', () => {
-  async function createBuilder(label) {
-    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
-    return res.body.builder.builderId;
-  }
-
-  async function claim(landletId, builderId) {
-    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
   it('only lets the current owner start an auction on their own claimed landlet', async () => {
-    const owner = await createBuilder('Auction Owner');
-    const stranger = await createBuilder('Auction Stranger');
+    const owner = await signupBuilder('auction-owner');
+    const stranger = await signupBuilder('auction-stranger');
     await createGreenbeltLandlet('auction-ownership-landlet');
     await claim('auction-ownership-landlet', owner);
 
-    const byStranger = await api('/landlets/auction-ownership-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: stranger }),
-    });
+    const byStranger = await api('/landlets/auction-ownership-landlet/auction', stranger.session({ method: 'POST', body: JSON.stringify({}) }));
     expect(byStranger.response.status).toBe(400);
 
-    const onUnclaimed = await api('/landlets/does-not-exist/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner }),
-    });
+    const onUnclaimed = await api('/landlets/does-not-exist/auction', owner.session({ method: 'POST', body: JSON.stringify({}) }));
     expect(onUnclaimed.response.status).toBe(404);
 
-    const started = await api('/landlets/auction-ownership-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner }),
-    });
+    const started = await api('/landlets/auction-ownership-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) }));
     expect(started.response.status).toBe(201);
     expect(started.body.auction).toMatchObject({
       landletId: 'auction-ownership-landlet',
-      sellerBuilderId: owner,
+      sellerBuilderId: owner.builderId,
       startingBidCents: 0,
       status: 'active',
       highestBidCents: null,
       bidCount: 0,
     });
 
-    const secondAttempt = await api('/landlets/auction-ownership-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner }),
-    });
+    const secondAttempt = await api('/landlets/auction-ownership-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) }));
     expect(secondAttempt.response.status).toBe(409);
   });
 
   it('accepts a custom starting bid and duration', async () => {
-    const owner = await createBuilder('Custom Auction Owner');
+    const owner = await signupBuilder('custom-auction-owner');
     await createGreenbeltLandlet('auction-custom-landlet');
     await claim('auction-custom-landlet', owner);
 
-    const started = await api('/landlets/auction-custom-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 500, durationHours: 1 }),
-    });
+    const started = await api('/landlets/auction-custom-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 500, durationHours: 1 }),
+    }));
     expect(started.response.status).toBe(201);
     expect(started.body.auction.startingBidCents).toBe(500);
     const endsAt = new Date(started.body.auction.endsAt).getTime();
@@ -2279,39 +2399,39 @@ describe('Auctions', () => {
   });
 
   it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
-    const owner = await createBuilder('Bid Rules Owner');
-    const bidderA = await createBuilder('Bidder A');
-    const bidderB = await createBuilder('Bidder B');
+    const owner = await signupBuilder('bid-rules-owner');
+    const bidderA = await signupBuilder('bidder-a');
+    const bidderB = await signupBuilder('bidder-b');
     await createGreenbeltLandlet('auction-bid-rules-landlet');
     await claim('auction-bid-rules-landlet', owner);
-    const started = await api('/landlets/auction-bid-rules-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 1000 }),
-    });
+    const started = await api('/landlets/auction-bid-rules-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 1000 }),
+    }));
     const auctionId = started.body.auction.auctionId;
 
-    const sellerBid = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: owner, amountCents: 2000 }),
-    });
+    const sellerBid = await api(`/auctions/${auctionId}/bids`, owner.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 2000 }),
+    }));
     expect(sellerBid.response.status).toBe(400);
 
-    const tooLow = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 500 }),
-    });
+    const tooLow = await api(`/auctions/${auctionId}/bids`, bidderA.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
     expect(tooLow.response.status).toBe(400);
 
-    const firstBid = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 1000 }),
-    });
+    const firstBid = await api(`/auctions/${auctionId}/bids`, bidderA.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
     expect(firstBid.response.status).toBe(201);
 
-    const notHigherEnough = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1000 }),
-    });
+    const notHigherEnough = await api(`/auctions/${auctionId}/bids`, bidderB.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
     expect(notHigherEnough.response.status).toBe(400);
 
-    const secondBid = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1500 }),
-    });
+    const secondBid = await api(`/auctions/${auctionId}/bids`, bidderB.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
     expect(secondBid.response.status).toBe(201);
 
     const fetched = await api(`/auctions/${auctionId}`);
@@ -2323,21 +2443,21 @@ describe('Auctions', () => {
   });
 
   it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
-    const owner = await createBuilder('Resolve Winner Owner');
-    const bidder = await createBuilder('Resolve Winner Bidder');
+    const owner = await signupBuilder('resolve-winner-owner');
+    const bidder = await signupBuilder('resolve-winner-bidder');
     await createGreenbeltLandlet('auction-resolve-win-landlet');
     await claim('auction-resolve-win-landlet', owner);
-    await api('/instances', {
+    await api('/instances', owner.session({
       method: 'POST',
       body: JSON.stringify({ landletId: 'auction-resolve-win-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
-    });
-    const started = await api('/landlets/auction-resolve-win-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0 }),
-    });
+    }));
+    const started = await api('/landlets/auction-resolve-win-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
     const auctionId = started.body.auction.auctionId;
-    await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 2500 }),
-    });
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 2500 }),
+    }));
 
     // Force it into the past directly via the DB, the same test-only
     // escape hatch used elsewhere in this file, rather than waiting a real
@@ -2350,7 +2470,7 @@ describe('Auctions', () => {
     expect(resolved.body.auction.winningBidId).not.toBeNull();
 
     const landlet = await api('/landlets/auction-resolve-win-landlet');
-    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder);
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
     expect(landlet.body.landlet.status).toBe('claimed');
     expect(landlet.body.landlet.activeVersionId).toBeNull();
 
@@ -2358,12 +2478,12 @@ describe('Auctions', () => {
     expect(instances.body.instances).toEqual([]);
 
     const builders = await api('/builders');
-    const sellerAfter = builders.body.builders.find((b) => b.builderId === owner);
+    const sellerAfter = builders.body.builders.find((b) => b.builderId === owner.builderId);
     expect(sellerAfter.dallersBalanceCents).toBe(2500);
 
-    const sellerNotices = await api(`/notifications?builderId=${owner}`);
+    const sellerNotices = await api('/notifications', owner.session());
     expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $25.00'))).toBe(true);
-    const bidderNotices = await api(`/notifications?builderId=${bidder}`);
+    const bidderNotices = await api('/notifications', bidder.session());
     expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
 
     // Resolving again is a harmless no-op, not an error — it just returns
@@ -2375,23 +2495,23 @@ describe('Auctions', () => {
   });
 
   it('rejects resolving an auction that is not due yet', async () => {
-    const owner = await createBuilder('Not Due Owner');
+    const owner = await signupBuilder('not-due-owner');
     await createGreenbeltLandlet('auction-not-due-landlet');
     await claim('auction-not-due-landlet', owner);
-    const started = await api('/landlets/auction-not-due-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, durationHours: 24 }),
-    });
+    const started = await api('/landlets/auction-not-due-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ durationHours: 24 }),
+    }));
     const notDue = await api(`/auctions/${started.body.auction.auctionId}/resolve`, { method: 'POST' });
     expect(notDue.response.status).toBe(409);
   });
 
   it('releases an unsold $0-starting-bid auction to greenbelt', async () => {
-    const owner = await createBuilder('Relinquish Owner');
+    const owner = await signupBuilder('relinquish-owner');
     await createGreenbeltLandlet('auction-relinquish-landlet');
     await claim('auction-relinquish-landlet', owner);
-    const started = await api('/landlets/auction-relinquish-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
-    });
+    const started = await api('/landlets/auction-relinquish-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
     const auctionId = started.body.auction.auctionId;
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
 
@@ -2404,17 +2524,17 @@ describe('Auctions', () => {
     expect(landlet.body.landlet.status).toBe('greenbelt');
     expect(landlet.body.landlet.ownerBuilderId).toBeNull();
 
-    const notices = await api(`/notifications?builderId=${owner}`);
+    const notices = await api('/notifications', owner.session());
     expect(notices.body.notifications.some((n) => n.message.includes('released to greenbelt'))).toBe(true);
   });
 
   it('keeps an unsold reserved (>$0 starting bid) auction with its seller', async () => {
-    const owner = await createBuilder('Reserved Owner');
+    const owner = await signupBuilder('reserved-owner');
     await createGreenbeltLandlet('auction-reserved-landlet');
     await claim('auction-reserved-landlet', owner);
-    const started = await api('/landlets/auction-reserved-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 5000, durationHours: 1 }),
-    });
+    const started = await api('/landlets/auction-reserved-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 5000, durationHours: 1 }),
+    }));
     const auctionId = started.body.auction.auctionId;
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
 
@@ -2423,48 +2543,48 @@ describe('Auctions', () => {
 
     const landlet = await api('/landlets/auction-reserved-landlet');
     expect(landlet.body.landlet.status).toBe('claimed');
-    expect(landlet.body.landlet.ownerBuilderId).toBe(owner);
+    expect(landlet.body.landlet.ownerBuilderId).toBe(owner.builderId);
 
-    const notices = await api(`/notifications?builderId=${owner}`);
+    const notices = await api('/notifications', owner.session());
     expect(notices.body.notifications.some((n) => n.message.includes('you keep the land'))).toBe(true);
   });
 
   it('notifies the seller of each new bid and the previous highest bidder of being outbid', async () => {
-    const owner = await createBuilder('Bid Notice Owner');
-    const bidderA = await createBuilder('Bid Notice Bidder A');
-    const bidderB = await createBuilder('Bid Notice Bidder B');
+    const owner = await signupBuilder('bid-notice-owner');
+    const bidderA = await signupBuilder('bid-notice-bidder-a');
+    const bidderB = await signupBuilder('bid-notice-bidder-b');
     await createGreenbeltLandlet('auction-bid-notice-landlet');
     await claim('auction-bid-notice-landlet', owner);
-    const started = await api('/landlets/auction-bid-notice-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 1000 }),
-    });
+    const started = await api('/landlets/auction-bid-notice-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 1000 }),
+    }));
     const auctionId = started.body.auction.auctionId;
 
-    await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderA, amountCents: 1000 }),
-    });
-    const ownerAfterFirstBid = await api(`/notifications?builderId=${owner}`);
+    await api(`/auctions/${auctionId}/bids`, bidderA.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    const ownerAfterFirstBid = await api('/notifications', owner.session());
     expect(ownerAfterFirstBid.body.notifications.some((n) => n.message.includes('New bid of $10.00'))).toBe(true);
     // No previous bidder to outbid yet.
-    const bidderAAfterFirstBid = await api(`/notifications?builderId=${bidderA}`);
+    const bidderAAfterFirstBid = await api('/notifications', bidderA.session());
     expect(bidderAAfterFirstBid.body.notifications).toHaveLength(0);
 
-    await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidderB, amountCents: 1500 }),
-    });
-    const ownerAfterSecondBid = await api(`/notifications?builderId=${owner}`);
+    await api(`/auctions/${auctionId}/bids`, bidderB.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    const ownerAfterSecondBid = await api('/notifications', owner.session());
     expect(ownerAfterSecondBid.body.notifications.filter((n) => n.message.includes('New bid'))).toHaveLength(2);
-    const bidderANotified = await api(`/notifications?builderId=${bidderA}`);
+    const bidderANotified = await api('/notifications', bidderA.session());
     expect(bidderANotified.body.notifications.some((n) => n.message.includes('outbid') && n.message.includes('$15.00'))).toBe(true);
   });
 
   it('auto-resolves an expired auction when the list endpoint is read, without an explicit resolve call', async () => {
-    const owner = await createBuilder('Auto Resolve Owner');
+    const owner = await signupBuilder('auto-resolve-owner');
     await createGreenbeltLandlet('auction-auto-resolve-landlet');
     await claim('auction-auto-resolve-landlet', owner);
-    const started = await api('/landlets/auction-auto-resolve-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
-    });
+    const started = await api('/landlets/auction-auto-resolve-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
     const auctionId = started.body.auction.auctionId;
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
 
@@ -2476,91 +2596,92 @@ describe('Auctions', () => {
   });
 
   it('rejects bids on an auction that has already ended', async () => {
-    const owner = await createBuilder('Ended Bid Owner');
-    const bidder = await createBuilder('Ended Bid Bidder');
+    const owner = await signupBuilder('ended-bid-owner');
+    const bidder = await signupBuilder('ended-bid-bidder');
     await createGreenbeltLandlet('auction-ended-bid-landlet');
     await claim('auction-ended-bid-landlet', owner);
-    const started = await api('/landlets/auction-ended-bid-landlet/auction', {
-      method: 'POST', body: JSON.stringify({ builderId: owner, startingBidCents: 0, durationHours: 1 }),
-    });
+    const started = await api('/landlets/auction-ended-bid-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
     const auctionId = started.body.auction.auctionId;
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
 
-    const bid = await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 100 }),
-    });
+    const bid = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
     expect(bid.response.status).toBe(409);
   });
 });
 
 describe('Friendships', () => {
-  async function createBuilder(label) {
-    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
-    return res.body.builder.builderId;
-  }
-
-  async function claim(landletId, builderId) {
-    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
   it('rejects a request between a builder and themselves', async () => {
-    const solo = await createBuilder('Solo Builder');
-    const rejected = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: solo, recipientBuilderId: solo }),
-    });
+    const solo = await signupBuilder('friendship-solo');
+    const rejected = await api('/friendships', solo.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: solo.builderId }),
+    }));
     expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a request referencing a builder that does not exist', async () => {
-    const real = await createBuilder('Real Builder');
-    const rejected = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: real, recipientBuilderId: 'builder-does-not-exist' }),
-    });
+    const real = await signupBuilder('friendship-real');
+    const rejected = await api('/friendships', real.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: 'builder-does-not-exist' }),
+    }));
     expect(rejected.response.status).toBe(400);
   });
 
   it('sends, lists (with direction), accepts, and shows the accepted friend on both sides', async () => {
-    const alice = await createBuilder('Friendship Alice');
-    const bob = await createBuilder('Friendship Bob');
+    const alice = await signupBuilder('friendship-alice');
+    const bob = await signupBuilder('friendship-bob');
     await createGreenbeltLandlet('friendship-bob-landlet');
     await claim('friendship-bob-landlet', bob);
 
-    const sent = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: alice, recipientBuilderId: bob }),
-    });
+    const sent = await api('/friendships', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId }),
+    }));
     expect(sent.response.status).toBe(201);
     expect(sent.body.friendship).toMatchObject({
-      requesterBuilderId: alice,
-      recipientBuilderId: bob,
+      requesterBuilderId: alice.builderId,
+      recipientBuilderId: bob.builderId,
       status: 'pending',
-      otherBuilderId: bob,
-      otherLabel: 'Friendship Bob',
+      otherBuilderId: bob.builderId,
+      otherLabel: 'friendship-bob',
       direction: 'outgoing',
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
-    const aliceList = await api(`/friendships?builderId=${alice}`);
+    const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
     expect(aliceList.body.friendships[0].direction).toBe('outgoing');
     expect(aliceList.body.friendships[0].status).toBe('pending');
 
-    const bobList = await api(`/friendships?builderId=${bob}`);
+    const bobList = await api('/friendships', bob.session());
     expect(bobList.body.friendships).toHaveLength(1);
     expect(bobList.body.friendships[0].direction).toBe('incoming');
-    expect(bobList.body.friendships[0].otherLabel).toBe('Friendship Alice');
+    expect(bobList.body.friendships[0].otherLabel).toBe('friendship-alice');
     // Bob hasn't claimed anything yet at this point in the test — Alice
     // (the one being looked up from Bob's list) has no lándlet.
     expect(bobList.body.friendships[0].otherLandlet).toBeNull();
 
-    const accepted = await api(`/friendships/${friendshipId}`, {
+    // Only the recipient (Bob) can accept.
+    const acceptedByRequester = await api(`/friendships/${friendshipId}`, alice.session({
       method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
-    });
+    }));
+    expect(acceptedByRequester.response.status).toBe(403);
+
+    const accepted = await api(`/friendships/${friendshipId}`, bob.session({
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    }));
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
 
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
-    const aliceListAfter = await api(`/friendships?builderId=${alice}`);
+    const aliceListAfter = await api('/friendships', alice.session());
     expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
     expect(aliceListAfter.body.friendships[0].otherLandlet).toMatchObject({
       landletId: 'friendship-bob-landlet',
@@ -2568,40 +2689,44 @@ describe('Friendships', () => {
   });
 
   it('rejects a second request between the same pair in either direction', async () => {
-    const a = await createBuilder('Duplicate A');
-    const b = await createBuilder('Duplicate B');
-    await api('/friendships', { method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }) });
+    const a = await signupBuilder('friendship-duplicate-a');
+    const b = await signupBuilder('friendship-duplicate-b');
+    await api('/friendships', a.session({ method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }) }));
 
-    const sameDirection = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
-    });
+    const sameDirection = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
     expect(sameDirection.response.status).toBe(409);
 
-    const reverseDirection = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: b, recipientBuilderId: a }),
-    });
+    const reverseDirection = await api('/friendships', b.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: a.builderId }),
+    }));
     expect(reverseDirection.response.status).toBe(409);
   });
 
   it('lets a request be declined (deleted while pending) or an accepted friendship removed', async () => {
-    const a = await createBuilder('Decline A');
-    const b = await createBuilder('Decline B');
-    const sent = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
-    });
+    const a = await signupBuilder('friendship-decline-a');
+    const b = await signupBuilder('friendship-decline-b');
+    const sent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
     const friendshipId = sent.body.friendship.friendshipId;
 
-    const declined = await api(`/friendships/${friendshipId}`, { method: 'DELETE' });
+    // Either party can decline/cancel a pending request — exercise the
+    // recipient's side here since the requester's is covered by "resent".
+    const declined = await api(`/friendships/${friendshipId}`, b.session({ method: 'DELETE' }));
     expect(declined.response.status).toBe(200);
     expect(declined.body).toEqual({ deleted: true });
 
     // Declining frees the pair up to request again — proves the DELETE
     // really removed the row rather than just marking it something else.
-    const resent = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
-    });
+    const resent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
     expect(resent.response.status).toBe(201);
 
+    // The lookup for a nonexistent friendship 404s before any ownership
+    // check, so these stay unauthenticated on purpose.
     const deleteMissing = await api('/friendships/friendship-does-not-exist', { method: 'DELETE' });
     expect(deleteMissing.response.status).toBe(404);
 
@@ -2612,14 +2737,16 @@ describe('Friendships', () => {
   });
 
   it('rejects an invalid status transition', async () => {
-    const a = await createBuilder('Invalid Status A');
-    const b = await createBuilder('Invalid Status B');
-    const sent = await api('/friendships', {
-      method: 'POST', body: JSON.stringify({ requesterBuilderId: a, recipientBuilderId: b }),
-    });
-    const rejected = await api(`/friendships/${sent.body.friendship.friendshipId}`, {
+    const a = await signupBuilder('friendship-invalid-status-a');
+    const b = await signupBuilder('friendship-invalid-status-b');
+    const sent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
+    // Must be the recipient to get past the ownership check to the status
+    // validation this test is actually about.
+    const rejected = await api(`/friendships/${sent.body.friendship.friendshipId}`, b.session({
       method: 'PATCH', body: JSON.stringify({ status: 'pending' }),
-    });
+    }));
     expect(rejected.response.status).toBe(400);
   });
 });
@@ -2786,15 +2913,15 @@ describe('Land cap', () => {
     });
   }
 
-  async function claim(landletId, builderId) {
-    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
-  async function startAuction(landletId, sellerBuilderId) {
-    return api(`/landlets/${landletId}/auction`, {
+  async function startAuction(landletId, seller) {
+    return api(`/landlets/${landletId}/auction`, seller.session({
       method: 'POST',
-      body: JSON.stringify({ builderId: sellerBuilderId, startingBidCents: 0, durationHours: 1 }),
-    });
+      body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
   }
 
   function landCapOf(listResponse, builderId) {
@@ -2807,14 +2934,14 @@ describe('Land cap', () => {
   });
 
   it('does not block a bid that would exceed the bidder\'s cap — tracking only, not enforced', async () => {
-    const seller = await createBuilder('Land Cap Seller A');
-    const bidder = await createBuilder('Land Cap Bidder A');
+    const seller = await signupBuilder('land-cap-seller-a');
+    const bidder = await signupBuilder('land-cap-bidder-a');
     await createGreenbeltLandletWithArea('land-cap-big-landlet', 5000);
     await claim('land-cap-big-landlet', seller);
     const started = await startAuction('land-cap-big-landlet', seller);
-    const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 100 }),
-    });
+    const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
     expect(bid.response.status).toBe(201);
   });
 
@@ -2847,21 +2974,21 @@ describe('Land cap', () => {
   });
 
   it('credits a real per-event earnings ledger entry when an auction actually sells', async () => {
-    const seller = await createBuilder('Land Cap Ledger Seller');
-    const bidder = await createBuilder('Land Cap Ledger Bidder');
+    const seller = await signupBuilder('land-cap-ledger-seller');
+    const bidder = await signupBuilder('land-cap-ledger-bidder');
     await createGreenbeltLandletWithArea('land-cap-ledger-landlet', 1000);
     await claim('land-cap-ledger-landlet', seller);
     const started = await startAuction('land-cap-ledger-landlet', seller);
     const auctionId = started.body.auction.auctionId;
-    await api(`/auctions/${auctionId}/bids`, {
-      method: 'POST', body: JSON.stringify({ builderId: bidder, amountCents: 500 }),
-    });
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
     await api(`/auctions/${auctionId}`); // GET resolves a due auction lazily
 
     const { results } = await env.DB.prepare(
       'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
-    ).bind(seller).all();
+    ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(500);
   });
@@ -2871,20 +2998,15 @@ describe('Land cap', () => {
     // exactly one claimed lándlet at a time regardless of land cap, so a
     // fresh builder's default 1000 m² cap claiming a 1000 m² starter
     // lándlet is unaffected by this feature at all.
-    const builderId = await createBuilder('Land Cap Claim Builder');
+    const builder = await signupBuilder('land-cap-claim-builder');
     await createGreenbeltLandletWithArea('land-cap-starter-landlet', 1000);
-    const claimed = await claim('land-cap-starter-landlet', builderId);
+    const claimed = await claim('land-cap-starter-landlet', builder);
     expect(claimed.response.status).toBe(200);
-    expect(claimed.body.landlet.ownerBuilderId).toBe(builderId);
+    expect(claimed.body.landlet.ownerBuilderId).toBe(builder.builderId);
   });
 });
 
 describe('Simulated purchases', () => {
-  async function createBuilder(label) {
-    const res = await api('/builders', { method: 'POST', body: JSON.stringify({ label }) });
-    return res.body.builder.builderId;
-  }
-
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
     return api('/landlets', {
       method: 'POST',
@@ -2892,8 +3014,8 @@ describe('Simulated purchases', () => {
     });
   }
 
-  async function claim(landletId, builderId) {
-    return api(`/landlets/${landletId}/claim`, { method: 'POST', body: JSON.stringify({ builderId }) });
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
   async function createTemplate(templateId, { priceCents, metadata } = {}) {
@@ -2912,11 +3034,16 @@ describe('Simulated purchases', () => {
     return templateId;
   }
 
-  async function placeInstance(instanceId, landletId, templateId) {
-    const placed = await api('/instances', {
+  // Placing the instance requires the hosting landlet's owning builder's
+  // session now (see requireOwnedLandlet) — the purchase/refund endpoints
+  // being tested here stay unauthenticated themselves (no shopper account
+  // exists, and these templates never set a sellerId), so only this setup
+  // step needs a session.
+  async function placeInstance(instanceId, landletId, templateId, builder) {
+    const placed = await api('/instances', builder.session({
       method: 'POST',
       body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
-    });
+    }));
     expect(placed.response.status).toBe(201);
     return instanceId;
   }
@@ -2931,11 +3058,11 @@ describe('Simulated purchases', () => {
   });
 
   it('400s purchasing an unpriced product', async () => {
-    const seller = await createBuilder('Purchase Unpriced Seller');
+    const seller = await signupBuilder('purchase-unpriced-seller');
     await createGreenbeltLandletWithArea('purchase-unpriced-landlet', 1000);
     await claim('purchase-unpriced-landlet', seller);
     await createTemplate('purchase-unpriced-template');
-    await placeInstance('purchase-unpriced-instance', 'purchase-unpriced-landlet', 'purchase-unpriced-template');
+    await placeInstance('purchase-unpriced-instance', 'purchase-unpriced-landlet', 'purchase-unpriced-template', seller);
 
     const rejected = await api('/instances/purchase-unpriced-instance/purchase', { method: 'POST' });
     expect(rejected.response.status).toBe(400);
@@ -2944,18 +3071,26 @@ describe('Simulated purchases', () => {
   it('400s purchasing an instance on an unclaimed lándlet', async () => {
     await createGreenbeltLandletWithArea('purchase-unclaimed-landlet', 1000);
     await createTemplate('purchase-unclaimed-template', { priceCents: 500 });
-    await placeInstance('purchase-unclaimed-instance', 'purchase-unclaimed-landlet', 'purchase-unclaimed-template');
+    // Placing an instance through the API now always requires owning the
+    // landlet it sits on — impossible here on purpose, since this test
+    // needs the instance to sit on a genuinely *unclaimed* landlet. Insert
+    // the row directly, the same test-only escape hatch used elsewhere in
+    // this file for state the HTTP API can no longer produce directly.
+    await env.DB.prepare(`
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, scale)
+      VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 1)
+    `).bind('purchase-unclaimed-instance', 'purchase-unclaimed-landlet', 'purchase-unclaimed-template').run();
 
     const rejected = await api('/instances/purchase-unclaimed-instance/purchase', { method: 'POST' });
     expect(rejected.response.status).toBe(400);
   });
 
   it('reads quantity and buyerLabel from the request body, defaulting to 1 and anonymous', async () => {
-    const seller = await createBuilder('Purchase Body Seller');
+    const seller = await signupBuilder('purchase-body-seller');
     await createGreenbeltLandletWithArea('purchase-body-landlet', 1000);
     await claim('purchase-body-landlet', seller);
     await createTemplate('purchase-body-template', { priceCents: 1000 });
-    await placeInstance('purchase-body-instance', 'purchase-body-landlet', 'purchase-body-template');
+    await placeInstance('purchase-body-instance', 'purchase-body-landlet', 'purchase-body-template', seller);
 
     // No body at all — should default rather than 415/400.
     const defaulted = await api('/instances/purchase-body-instance/purchase', { method: 'POST' });
@@ -2977,13 +3112,13 @@ describe('Simulated purchases', () => {
   });
 
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
-    const seller = await createBuilder('Purchase Commission Seller');
+    const seller = await signupBuilder('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
     await claim('purchase-commission-landlet', seller);
     await createTemplate('purchase-commission-template', { priceCents: 10000 }); // $100
-    await placeInstance('purchase-commission-instance', 'purchase-commission-landlet', 'purchase-commission-template');
+    await placeInstance('purchase-commission-instance', 'purchase-commission-landlet', 'purchase-commission-template', seller);
 
-    const before = await builderRow(seller);
+    const before = await builderRow(seller.builderId);
     const purchased = await api('/instances/purchase-commission-instance/purchase', { method: 'POST' });
     expect(purchased.response.status).toBe(201);
     // $100 * 2% = $2 commission, split 50/50 = $1 (100 cents) to the builder.
@@ -2991,22 +3126,22 @@ describe('Simulated purchases', () => {
       totalCents: 10000, commissionCents: 200, builderShareCents: 100, platformShareCents: 100,
     });
 
-    const after = await builderRow(seller);
+    const after = await builderRow(seller.builderId);
     expect(after.dallers_balance_cents - before.dallers_balance_cents).toBe(100);
 
     const { results } = await env.DB.prepare(
       'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
-    ).bind(seller).all();
+    ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(100);
   });
 
   it('applies the 0.5% floor on a low-commission product, without ever pushing the platform share negative', async () => {
-    const seller = await createBuilder('Purchase Floor Seller');
+    const seller = await signupBuilder('purchase-floor-seller');
     await createGreenbeltLandletWithArea('purchase-floor-landlet', 1000);
     await claim('purchase-floor-landlet', seller);
     await createTemplate('purchase-floor-template', { priceCents: 100000 }); // $1000
-    await placeInstance('purchase-floor-instance', 'purchase-floor-landlet', 'purchase-floor-template');
+    await placeInstance('purchase-floor-instance', 'purchase-floor-landlet', 'purchase-floor-template', seller);
 
     // $1000 * 2% = $20 commission; 50% of that is $10 (1000 cents), but the
     // 0.5% floor on the $1000 total is $5 (500 cents) — the 50% split
@@ -3019,11 +3154,11 @@ describe('Simulated purchases', () => {
   });
 
   it('lists a builder\'s purchase history via GET /api/purchases', async () => {
-    const seller = await createBuilder('Purchase List Seller');
+    const seller = await signupBuilder('purchase-list-seller');
     await createGreenbeltLandletWithArea('purchase-list-landlet', 1000);
     await claim('purchase-list-landlet', seller);
     await createTemplate('purchase-list-template', { priceCents: 500 });
-    await placeInstance('purchase-list-instance', 'purchase-list-landlet', 'purchase-list-template');
+    await placeInstance('purchase-list-instance', 'purchase-list-landlet', 'purchase-list-template', seller);
 
     await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
     await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
@@ -3031,10 +3166,13 @@ describe('Simulated purchases', () => {
     const missingBuilderId = await api('/purchases');
     expect(missingBuilderId.response.status).toBe(400);
 
-    const list = await api(`/purchases?builderId=${seller}`);
+    const unauthenticatedList = await api(`/purchases?builderId=${seller.builderId}`);
+    expect(unauthenticatedList.response.status).toBe(401);
+
+    const list = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
     expect(list.response.status).toBe(200);
     expect(list.body.purchases).toHaveLength(2);
-    expect(list.body.purchases[0]).toMatchObject({ templateId: 'purchase-list-template', builderId: seller });
+    expect(list.body.purchases[0]).toMatchObject({ templateId: 'purchase-list-template', builderId: seller.builderId });
 
     // The same history, filtered by product instead of by hosting builder —
     // what the Seller modal's own "Sales" panel uses (a seller sees every
@@ -3046,11 +3184,11 @@ describe('Simulated purchases', () => {
   });
 
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
-    const seller = await createBuilder('Purchase Malformed Seller');
+    const seller = await signupBuilder('purchase-malformed-seller');
     await createGreenbeltLandletWithArea('purchase-malformed-landlet', 1000);
     await claim('purchase-malformed-landlet', seller);
     await createTemplate('purchase-malformed-template', { priceCents: 500 });
-    await placeInstance('purchase-malformed-instance', 'purchase-malformed-landlet', 'purchase-malformed-template');
+    await placeInstance('purchase-malformed-instance', 'purchase-malformed-landlet', 'purchase-malformed-template', seller);
 
     const rejected = await SELF.fetch('https://higglehaven.test/api/instances/purchase-malformed-instance/purchase', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
@@ -3064,21 +3202,21 @@ describe('Simulated purchases', () => {
   });
 
   it('refunds a purchase, clawing back exactly the builder\'s commission share (not the full total)', async () => {
-    const seller = await createBuilder('Purchase Refund Seller');
+    const seller = await signupBuilder('purchase-refund-seller');
     await createGreenbeltLandletWithArea('purchase-refund-landlet', 1000);
     await claim('purchase-refund-landlet', seller);
     await createTemplate('purchase-refund-template', { priceCents: 10000 }); // $100
-    await placeInstance('purchase-refund-instance', 'purchase-refund-landlet', 'purchase-refund-template');
+    await placeInstance('purchase-refund-instance', 'purchase-refund-landlet', 'purchase-refund-template', seller);
 
     const purchased = await api('/instances/purchase-refund-instance/purchase', { method: 'POST' });
     const { purchaseId, builderShareCents } = purchased.body.purchase;
     expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
 
-    const before = await builderRow(seller);
+    const before = await builderRow(seller.builderId);
     const refunded = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
-    const after = await builderRow(seller);
+    const after = await builderRow(seller.builderId);
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
@@ -3087,28 +3225,28 @@ describe('Simulated purchases', () => {
   });
 
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
-    const seller = await createBuilder('Purchase Refund Negative Seller');
+    const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
     await claim('purchase-refund-negative-landlet', seller);
     await createTemplate('purchase-refund-negative-template', { priceCents: 10000 });
-    await placeInstance('purchase-refund-negative-instance', 'purchase-refund-negative-landlet', 'purchase-refund-negative-template');
+    await placeInstance('purchase-refund-negative-instance', 'purchase-refund-negative-landlet', 'purchase-refund-negative-template', seller);
 
     const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
     // Spend down the builder's balance below the commission they're about
     // to have clawed back, so the refund must push it negative.
-    await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller).run();
+    await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
     await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
-    const after = await builderRow(seller);
+    const after = await builderRow(seller.builderId);
     expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
 
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
-    const seller = await createBuilder('Purchase No Returns Seller');
+    const seller = await signupBuilder('purchase-no-returns-seller');
     await createGreenbeltLandletWithArea('purchase-no-returns-landlet', 1000);
     await claim('purchase-no-returns-landlet', seller);
     await createTemplate('purchase-no-returns-template', { priceCents: 500, metadata: { noReturns: true } });
-    await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template');
+    await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template', seller);
 
     const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
     const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
@@ -3131,21 +3269,6 @@ describe('Simulated purchases', () => {
 });
 
 describe('Authentication', () => {
-  function extractSessionCookie(response) {
-    const setCookie = response.headers.get('set-cookie');
-    if (!setCookie) return null;
-    const match = setCookie.match(/hh_session=([^;]+)/);
-    return match ? match[1] : null;
-  }
-
-  function withSession(token, options = {}) {
-    return { ...options, headers: { ...options.headers, cookie: `hh_session=${token}` } };
-  }
-
-  async function signup(email, password, extra = {}) {
-    return api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...extra }) });
-  }
-
   it('signs up, logs in, and logs out with a real session cookie', async () => {
     const email = `auth-basic-${crypto.randomUUID()}@example.com`;
     const signedUp = await signup(email, 'correct horse battery staple');

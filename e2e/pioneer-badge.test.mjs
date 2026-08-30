@@ -39,28 +39,37 @@ await page.waitForTimeout(300);
 // UI which the first claimLandlet() call above already exercises), should
 // also become a pioneer — rank #2, not excluded — demonstrating the wider
 // founding cohort rather than a single "first ever" winner.
-const secondBuilderId = await page.evaluate(async (label) => {
-  const res = await fetch('/api/builders', {
+//
+// Claiming now derives "who's acting" from a real session cookie rather
+// than a client-supplied builderId (see worker/index.js's own comment on
+// requireSessionBuilder) — this second identity needs its own real signup
+// + login, not just a raw builders-table row. A separate browser context
+// (rather than reusing `page`) keeps its session cookie from clobbering
+// the first claimer's, which the account-panel check above still needs.
+const secondContext = await browser.newContext();
+const secondPage = await secondContext.newPage();
+await secondPage.goto(page.url());
+const secondBuilderId = await secondPage.evaluate(async (label) => {
+  const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+  await fetch('/api/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label }),
+    body: JSON.stringify({ email, password: 'e2e-test-password-123', displayName: label }),
   });
-  return (await res.json()).builder.builderId;
+  const me = await fetch('/api/builders/me');
+  return (await me.json()).builder.builderId;
 }, SECOND_LABEL);
-await page.evaluate(async () => {
+await secondPage.evaluate(async () => {
   await fetch('/api/landlets', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ landletId: 'second-claimer-landlet', name: 'Second', areaM2: 1000, status: 'greenbelt' }),
   });
 });
-await page.evaluate(async (builderId) => {
-  await fetch('/api/landlets/second-claimer-landlet/claim', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ builderId }),
-  });
-}, secondBuilderId);
+await secondPage.evaluate(async () => {
+  await fetch('/api/landlets/second-claimer-landlet/claim', { method: 'POST' });
+});
+await secondContext.close();
 
 const { builders } = await page.evaluate(async () => (await fetch('/api/builders')).json());
 const firstBuilder = builders.find((b) => b.label === LABEL);
