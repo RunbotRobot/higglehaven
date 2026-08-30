@@ -364,13 +364,40 @@ A resource with **no** owner yet (an unclaimed/generating landlet, a
 catalog template created with no `sellerId`) stays open to unauthenticated
 requests for the handful of admin/world-gen/system-tooling paths that only
 ever operate on those — see each endpoint's own note below for whether it
-applies. World generation itself (`/api/world`, `/api/land-candidates*`,
-`/api/land-candidate-rings*`) is unauthenticated entirely — there is no
-`role`/admin concept on `users` yet to gate it with, which is a known,
-deliberate gap rather than an oversight.
+applies.
+
+A third case, alongside "session-derived" and "existing-owner": a small
+set of world-generation *tooling* endpoints — manual `/api/world` settings
+edits, and all of `/api/land-candidates*`/`/api/land-candidate-rings*` —
+require a real **admin** account (`users.is_admin`, see "Admin role"
+below), not just any logged-in session. These are troubleshooting/manual
+operations; the day-to-day mechanism that actually keeps land claimable
+(expanding the world, generating new rings) now runs automatically on a
+schedule — see "Automatic world growth" under "World settings" below —
+rather than through any HTTP request a session could gate at all.
 
 Every endpoint section below notes its own specific rule inline; this
 section is just the shared vocabulary for reading those notes.
+
+### Admin role
+
+`migrations/0055_admin_role.sql` adds `users.is_admin`. There is no
+self-service way to become one — no signup checkbox, no promotion via any
+other endpoint — only:
+
+### `POST /api/auth/admin-bootstrap`
+
+Requires a session (`401` without one). Request body: `{ "secret" }`.
+`404` if the Worker secret `ADMIN_BOOTSTRAP_SECRET` isn't configured in
+this environment at all (local dev's `.dev.vars`, or `wrangler secret put`
+in production — never committed, same pattern `ACCESS_PASSPHRASE`/
+`RESEND_API_KEY` already use). `403` if `secret` doesn't match it exactly.
+On success, promotes the calling account to admin and returns
+`{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
+who currently holds the secret can promote themselves (or, by sharing it
+briefly, someone else) at any time; there's deliberately no "first admin
+only" ratchet. Revoking admin status has no endpoint either — rare enough
+to do directly against the database.
 
 ## Builders
 
@@ -1090,6 +1117,31 @@ World settings hold the dev-only singleton state needed to start modeling the
 expanding circular world. This is not procedural world generation yet; it is the
 small API surface that stores the values future generation code will consume.
 
+### Automatic world growth
+
+The world now grows itself. `worker/index.js`'s `scheduled()` export runs on
+a Cloudflare Cron Trigger (`wrangler.jsonc`'s `triggers.crons`, every 10
+minutes) and calls `autoGrowWorldIfNeeded`, which checks the same condition
+`POST /api/world/expand` gates on — the greenbelt-to-total ratio dropping
+below `greenbeltMinRatio` — and if so, expands the world to enclose any
+already-generating land, or (if nothing greenbelt exists at all) generates
+and completes a fresh ring of land at the current boundary. It's a second
+caller of the same internal primitives the manual endpoints below use
+(`expandWorldOnce`, `generateLandletRingCandidates`,
+`completeRingGenerationInternal`), not a replacement for them — those stay
+available, admin-gated, for manual troubleshooting.
+
+Before this existed, growing the world was a *player*-triggered action: the
+claim flow's own "Grow the world" button called these same endpoints
+whenever nothing was claimable. That was always a stated dev-mode stand-in
+("a real deployment would want this driven by an actual world-building
+process") — this is that real process. No request, no session, nothing to
+authenticate: `scheduled()` runs as the trusted server itself, so none of
+the session/admin gates below apply to it. A Cron Trigger doesn't fire
+inside a plain local `wrangler dev` process, which is why the e2e suite
+carries its own stand-in (`growWorldAsAdmin` in `e2e/helpers.mjs`) that logs
+in as an admin and drives the manual endpoints directly instead.
+
 ### World object
 
 ```json
@@ -1120,8 +1172,10 @@ Fetches the singleton world settings object and aggregate landlet status counts.
 ### `PUT /api/world`
 ### `PATCH /api/world`
 
-Updates world settings. The current implementation merges request fields with
-the existing world settings before validation.
+Requires a session logged in as an admin (`403` otherwise — see "Admin
+role" under "Authorization model" above). Updates world settings. The
+current implementation merges request fields with the existing world
+settings before validation.
 
 Request body example:
 
@@ -1149,7 +1203,10 @@ Validation notes:
 
 ### `POST /api/world/expand`
 
-Expands the circular world boundary by exactly one configured
+Requires a session logged in as an admin (`403` otherwise). This is the
+manual/troubleshooting path now — see "Automatic world growth" above for
+the mechanism that calls it (well, its internals) day to day. Expands the
+circular world boundary by exactly one configured
 `expansionIncrementM` when the current greenbelt-to-total-landlet ratio is below
 `greenbeltMinRatio`. If the reserve is already at or above the threshold, the
 endpoint returns `409` and does not change the radius.
@@ -1189,6 +1246,12 @@ this expansion, so generation workers do not need to poll every ring member.
 Land candidates are lightweight records for planned puzzle pieces outside the
 current world boundary. They avoid creating full landlet records before those
 pieces are needed.
+
+Every mutating endpoint below requires a session logged in as an admin
+(`403` otherwise) — see "Admin role" under "Authorization model" above.
+`generate-ring` specifically is also called internally (bypassing HTTP
+entirely, so no session applies) by the automatic world-growth job — see
+"Automatic world growth" under "World settings" above.
 
 ### `POST /api/land-candidates/generate-mosaic`
 
@@ -1320,7 +1383,10 @@ prefix instead of editing or removing one member of a reserved band.
 
 ### `POST /api/land-candidate-rings/:ringId/generation-complete`
 
-Marks every materialized landlet in a generated ring complete with one bounded
+Requires a session logged in as an admin (`403` otherwise) — also called
+internally, bypassing HTTP, by the automatic world-growth job (see
+"Automatic world growth" under "World settings" above). Marks every
+materialized landlet in a generated ring complete with one bounded
 D1 update. All candidates in the ring must already be materialized; otherwise
 the endpoint returns `409` without changing any landlet. The operation is
 idempotent, preserving existing `generatedAt` timestamps on retry. Completed
