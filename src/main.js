@@ -30,10 +30,6 @@ import {
   fetchLandlet,
   claimLandlet,
   fetchWorld,
-  expandWorld,
-  generateLandRing,
-  fetchLandCandidateRing,
-  completeRingGeneration,
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
@@ -7664,7 +7660,6 @@ const claimMapCanvas = document.getElementById('claim-map-canvas');
 const claimStatusEl = document.getElementById('claim-status');
 const claimRefreshBtn = document.getElementById('claim-refresh-btn');
 const claimBackBtn = document.getElementById('claim-back-btn');
-const claimGrowBtn = document.getElementById('claim-grow-btn');
 const claimSelectionNameEl = document.getElementById('claim-selection-name');
 const claimConfirmBtn = document.getElementById('claim-confirm-btn');
 
@@ -7673,7 +7668,6 @@ function runClaimFlow() {
     claimModalEl.classList.add('visible');
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
-    claimGrowBtn.onclick = () => growTheWorld(resolve);
     // A reload rather than trying to unwind this modal in place — the
     // same clean-slate escape hatch #mode-nav's own Shop/Build switching
     // uses, and for the same reason: there's nothing built yet here to
@@ -7796,7 +7790,6 @@ const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888 };
 async function loadLandletMap(resolve) {
   claimStatusEl.textContent = 'Loading the world…';
   claimStatusEl.classList.remove('error');
-  claimGrowBtn.style.display = 'none';
   claimSelectionNameEl.textContent = 'No plot selected';
   claimConfirmBtn.disabled = true;
   claimConfirmBtn.onclick = null;
@@ -7958,10 +7951,13 @@ async function loadLandletMap(resolve) {
   };
   animate();
 
+  // The world now grows itself on a schedule (see worker/index.js's
+  // scheduled() export) rather than needing a player to trigger it by
+  // hand — this can only actually show right after a fresh deployment, in
+  // the brief window before the first automatic growth cycle runs.
   claimStatusEl.textContent = anyAvailable
     ? ''
-    : "No landlets are ready to claim yet — the world hasn't grown enough.";
-  claimGrowBtn.style.display = anyAvailable ? 'none' : '';
+    : 'No landlets are ready to claim yet — check back again shortly.';
 }
 
 async function claimSelectedLandlet(landlet, resolve) {
@@ -7980,108 +7976,6 @@ async function claimSelectedLandlet(landlet, resolve) {
     claimStatusEl.classList.add('error');
     loadLandletMap(resolve);
   }
-}
-
-// Dev-only bootstrap for when nothing is claimable right now. Two cases,
-// tried in order:
-//
-// 1. Land already exists just outside the current boundary — e.g. an
-//    organic mosaic's outer cells that didn't fully fit inside the world
-//    radius at generation time (see worker/index.js's generate-mosaic
-//    handler) — but hasn't been expanded into yet. Expanding first can
-//    make it claimable without generating anything new at all.
-// 2. Genuinely nothing is queued anywhere. Generate one gap-free ring of
-//    wedge-shaped candidates touching the *current* boundary, complete
-//    its generation, then expand until it's enclosed and promotes to
-//    greenbelt.
-//
-// Every ring gets a prefix derived from the world radius it was generated
-// at (radius only ever grows, so this is naturally unique per call) rather
-// than a single fixed prefix — the old fixed-prefix version could only
-// ever generate one ring for the lifetime of the world; every later click
-// just silently re-fetched that same, already-fully-grown ring and did
-// nothing. A real deployment would want this driven by an actual
-// world-building process rather than a builder's own browser session —
-// see the message to Codex about this.
-const GROW_WORLD_MAX_EXPANSIONS = 20;
-
-async function expandToEncloseGenerating() {
-  for (let i = 0; i < GROW_WORLD_MAX_EXPANSIONS; i++) {
-    const generating = await fetchLandlets({ status: 'generating', limit: 1 });
-    if (generating.length === 0) return; // nothing waiting to be enclosed
-    try {
-      await expandWorld();
-    } catch {
-      return; // ratio gate refused — greenbelt supply is already healthy
-    }
-  }
-}
-
-async function generateRingAtBoundary() {
-  let world = await fetchWorld();
-  // The world's radius_m is a pacing/UI boundary, not a guarantee that
-  // nothing extends past it — an organic mosaic's outer cells can reach
-  // beyond it well before an expansion catches up (see the comment atop
-  // this section). generate-ring's own conflict check catches that (it
-  // scans every existing candidate's radial band, not just ones inside the
-  // current boundary) and 409s with a distinct message, so probe outward by
-  // an expansion increment each time that specific conflict is hit, rather
-  // than starting exactly at the current boundary and hoping it's clear.
-  let innerRadiusM = world.radiusM;
-  let ring = null;
-  for (let attempt = 0; attempt < GROW_WORLD_MAX_EXPANSIONS && !ring; attempt++) {
-    const prefix = `dev-ring-${Math.round(innerRadiusM)}`;
-    try {
-      const result = await generateLandRing({ prefix, count: 12, innerRadiusM });
-      ring = { ringId: prefix, outerRadiusM: result.outerRadiusM };
-    } catch (err) {
-      if (err.message === 'Land candidate already exists') {
-        // This exact radius was already tried (e.g. a retry after a
-        // transient failure) — reuse that reservation instead of failing.
-        const existing = await fetchLandCandidateRing(prefix);
-        ring = { ringId: existing.ringId, outerRadiusM: existing.outerRadiusM };
-      } else if (err.message === 'Generated ring would overlap existing land candidates') {
-        innerRadiusM += world.expansionIncrementM;
-      } else {
-        throw err;
-      }
-    }
-  }
-  if (!ring) throw new Error("Couldn't find clear room to generate a new ring.");
-
-  try {
-    await completeRingGeneration(ring.ringId);
-  } catch {
-    // Not every member has materialized yet (can happen if the ring was
-    // left over from a previous, interrupted attempt) — expand toward its
-    // outer edge and retry once.
-    for (let i = 0; i < GROW_WORLD_MAX_EXPANSIONS && world.radiusM < ring.outerRadiusM; i++) {
-      world = await expandWorld();
-    }
-    await completeRingGeneration(ring.ringId);
-  }
-
-  for (let i = 0; i < GROW_WORLD_MAX_EXPANSIONS && world.radiusM < ring.outerRadiusM; i++) {
-    world = await expandWorld();
-  }
-}
-
-async function growTheWorld(resolve) {
-  claimGrowBtn.disabled = true;
-  claimStatusEl.textContent = 'Growing the world…';
-  claimStatusEl.classList.remove('error');
-  try {
-    await expandToEncloseGenerating();
-    const stillNoneAvailable = (await fetchLandlets({ status: 'greenbelt', limit: 1 })).length === 0;
-    if (stillNoneAvailable) await generateRingAtBoundary();
-  } catch (err) {
-    claimStatusEl.textContent = err.message || 'Could not grow the world.';
-    claimStatusEl.classList.add('error');
-    claimGrowBtn.disabled = false;
-    return;
-  }
-  claimGrowBtn.disabled = false;
-  loadLandletMap(resolve);
 }
 
 // Loads the real catalog + instance list from the backend API, falling

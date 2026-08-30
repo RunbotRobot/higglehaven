@@ -2389,16 +2389,6 @@
         background: rgb(var(--ink-rgb) / 0.15);
         color: var(--pill-text);
       }
-      /* The primary next step when nothing's claimable yet — stands out
-         from Refresh/skip the same way the Claim button stands out from
-         everything else in the selection panel. */
-      #claim-grow-btn {
-        background: var(--brand-green);
-        color: #16240a;
-      }
-      #claim-grow-btn:disabled {
-        opacity: 0.5;
-      }
     </style>
   </head>
   <body>
@@ -2686,7 +2676,6 @@
         </div>
         <div id="claim-status"></div>
         <div id="claim-modal-actions">
-          <button id="claim-grow-btn" type="button" style="display: none">Grow the world</button>
           <button id="claim-refresh-btn" type="button">Refresh</button>
         </div>
       </div>
