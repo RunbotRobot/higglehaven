@@ -1,5 +1,8 @@
-import { applyD1Migrations, env, SELF } from 'cloudflare:test';
+import {
+  applyD1Migrations, createExecutionContext, createScheduledController, env, SELF, waitOnExecutionContext,
+} from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
+import worker from './index.js';
 
 // Shared across every test that needs to act as an admin (world/land-
 // candidate tooling — see requireAdmin in worker/index.js) — one admin
@@ -1657,6 +1660,78 @@ describe('Worker API', () => {
       error: 'Greenbelt reserve is at or above the expansion threshold',
     });
   });
+
+  // The scheduled() export (see wrangler.jsonc's triggers.crons) is what
+  // actually keeps the world growing now — the old player-triggered "Grow
+  // the world" button is gone. Invoked directly against the worker module
+  // rather than through SELF (which only exposes fetch()), matching
+  // Cloudflare's own documented pattern for testing scheduled handlers.
+  it('scheduled() is a no-op once the greenbelt reserve already meets its minimum ratio', async () => {
+    // The previous test leaves greenbelt_min_ratio set to exactly the
+    // world's current ratio (see its own last PATCH) — already "healthy"
+    // by definition, so nothing here should change.
+    const before = await api('/world');
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+    const after = await api('/world');
+    expect(after.body.world.radiusM).toBe(before.body.world.radiusM);
+  });
+
+  it('scheduled() automatically expands the world to enclose due land when the greenbelt reserve is low', async () => {
+    const worldBefore = (await api('/world')).body.world;
+    // Placed just past the current boundary, comfortably within one
+    // expansion increment — same recipe as "expands the world by one
+    // increment" above, just enclosed by the automatic grower instead of
+    // a manual /world/expand call.
+    const candidateId = 'auto-grow-candidate';
+    const created = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: candidateId,
+        name: 'Auto grow candidate',
+        areaM2: 4,
+        center: { x: worldBefore.radiusM + worldBefore.expansionIncrementM / 2, y: 0 },
+        status: 'generating',
+        polygon: [
+          { x: -1, y: -1 },
+          { x: 1, y: -1 },
+          { x: 1, y: 1 },
+          { x: -1, y: 1 },
+        ],
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    const completed = await api(`/landlets/${candidateId}/generation-complete`, { method: 'POST' });
+    expect(completed.response.status).toBe(200);
+    expect(completed.body.landlet.status).toBe('generating'); // not enclosed yet
+
+    // A ratio of 1 can never actually be satisfied (it would require every
+    // landlet in the table to be greenbelt), so this guarantees
+    // worldNeedsGrowth sees "needs growth" regardless of whatever other
+    // tests in this file have left lying around.
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 1 WHERE world_id = 'default-world'`,
+    ).run();
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    const promoted = await api(`/landlets/${candidateId}`);
+    expect(promoted.body.landlet.status).toBe('greenbelt');
+    expect(promoted.body.landlet.claimableAt).not.toBeNull();
+    const worldAfter = (await api('/world')).body.world;
+    expect(worldAfter.radiusM).toBeGreaterThan(worldBefore.radiusM);
+
+    // Restore a sane ratio so no later test in this file sees a world
+    // that thinks it always needs to grow.
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
+    ).run();
+  }, 15000);
 });
 
 describe('Community signs', () => {

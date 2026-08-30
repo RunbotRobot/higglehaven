@@ -3399,8 +3399,14 @@ async function autoGrowWorldIfNeeded(db) {
   // mirroring the old expandToEncloseGenerating.
   for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
     if (!(await worldNeedsGrowth(db))) break;
-    const stillGenerating = await db.prepare(`SELECT 1 FROM landlets WHERE status = 'generating' LIMIT 1`).first();
-    if (!stillGenerating) break;
+    // Matches expandWorldOnce's own enclosure criteria exactly — a
+    // 'generating' landlet with no generated_at yet isn't eligible to be
+    // enclosed no matter how far the radius grows, so it shouldn't keep
+    // this loop spinning either.
+    const enclosable = await db.prepare(
+      `SELECT 1 FROM landlets WHERE status = 'generating' AND generated_at IS NOT NULL LIMIT 1`,
+    ).first();
+    if (!enclosable) break;
     await expandWorldOnce(db);
   }
 
