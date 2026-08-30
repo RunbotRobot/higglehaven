@@ -200,6 +200,21 @@ export default {
 
     return env.ASSETS.fetch(request);
   },
+
+  // Cloudflare Cron Trigger (wrangler.jsonc's triggers.crons) — the actual
+  // mechanism keeping the world's greenbelt reserve stocked (see
+  // autoGrowWorldIfNeeded's own comment for why this replaced a player-
+  // triggered "Grow the world" button). No request, no session, nothing to
+  // authenticate — this runs as the trusted server itself, on a schedule,
+  // so requireAdmin/requireSessionBuilder never apply here. Failures are
+  // logged, not thrown: there's no request to return an error to, and a
+  // missed cycle just means the next scheduled run tries again.
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return;
+    ctx.waitUntil(autoGrowWorldIfNeeded(env.DB).catch((error) => {
+      console.error('autoGrowWorldIfNeeded failed', error);
+    }));
+  },
 };
 
 async function handleUploadedAsset(request, env) {
@@ -2882,46 +2897,10 @@ async function handleLandCandidates(request, db, route, url) {
     } else if (distribution === 'power-law') {
       plots = powerLawPlots(count, prefix);
     }
-    if (innerRadiusM < settings.radius_m) {
-      throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
-    }
-    const generated = generateLandletRing({ prefix, count, innerRadiusM, startAngleRad, plots });
-    const radialConflict = await db.prepare(`
-      SELECT landlet_id FROM landlet_candidates
-      WHERE min_world_radius_m < ? - 0.0000001
-        AND (max_world_radius_m IS NULL OR max_world_radius_m > ? + 0.0000001)
-      LIMIT 1
-    `).bind(generated.outerRadiusM, innerRadiusM).first();
-    if (radialConflict) {
-      throw new HttpError('Generated ring would overlap existing land candidates', 409);
-    }
-    const landlets = generated.landlets.map((candidate) =>
-      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
-    const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
-    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
-    await db.batch([
-      db.prepare(`
-        INSERT INTO land_candidate_rings
-          (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
-           boundary_signature, adjacent_to_ring_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        prefix, innerRadiusM, generated.outerRadiusM, count, distribution, startAngleRad,
-        generated.boundarySignature, adjacentToRingId,
-      ),
-      ...rows.map((row) => candidateInsertStatement(db, row)),
-      ...candidateMaterializationStatements(db, overlapping),
-    ]);
-    const storedCandidates = await db.prepare(`
-      SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY created_at, landlet_id
-    `).bind(prefix).all();
-    return json({
-      candidates: storedCandidates.results.map(candidateFromRow),
-      materializedLandletIds: overlapping.map((row) => row.landlet_id),
-      readyForGenerationCompletion: overlapping.length === rows.length,
-      innerRadiusM,
-      outerRadiusM: generated.outerRadiusM,
-    }, 201);
+    const result = await generateLandletRingCandidates(db, {
+      prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId,
+    });
+    return json(result, 201);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -3116,47 +3095,56 @@ async function handleLandCandidateRings(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     await requireAdmin(request, db);
-    const ringRow = await db.prepare(`
-      SELECT * FROM land_candidate_rings WHERE ring_id = ?
-    `).bind(route[1]).first();
-    if (!ringRow) throw new HttpError('Land candidate ring not found', 404);
-
-    const membership = await db.prepare(`
-      SELECT COUNT(*) AS candidate_count,
-        SUM(CASE WHEN materialized_at IS NOT NULL THEN 1 ELSE 0 END) AS materialized_count
-      FROM landlet_candidates WHERE ring_id = ?
-    `).bind(route[1]).first();
-    if (membership.candidate_count !== ringRow.candidate_count
-      || membership.materialized_count !== ringRow.candidate_count) {
-      throw new HttpError('All ring candidates must be materialized before generation can complete', 409);
-    }
-
-    const settings = await getWorldSettings(db);
-    await db.prepare(`
-      UPDATE landlets
-      SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          status = CASE WHEN max_world_radius_m <= ? THEN 'greenbelt' ELSE status END,
-          claimable_at = CASE
-            WHEN max_world_radius_m <= ? THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            ELSE claimable_at
-          END,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
-        AND status = 'generating'
-    `).bind(settings.radius_m, settings.radius_m, route[1]).run();
-    const completed = await db.prepare(`
-      SELECT landlets.* FROM landlets
-      JOIN landlet_candidates USING (landlet_id)
-      WHERE landlet_candidates.ring_id = ? ORDER BY landlets.created_at, landlets.landlet_id
-    `).bind(route[1]).all();
-    const updatedRing = await getLandCandidateRingWithLifecycle(db, route[1]);
-    return json({
-      ring: landCandidateRingFromRow(updatedRing),
-      landlets: completed.results.map(landletFromRow),
-    });
+    const result = await completeRingGenerationInternal(db, route[1]);
+    return json(result);
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// Split out of the generation-complete HTTP handler above for the same
+// reason generateLandletRingCandidates was — autoGrowWorldIfNeeded (below)
+// needs to complete a ring it just generated itself, with no HTTP request
+// to gate.
+async function completeRingGenerationInternal(db, ringId) {
+  const ringRow = await db.prepare(`
+    SELECT * FROM land_candidate_rings WHERE ring_id = ?
+  `).bind(ringId).first();
+  if (!ringRow) throw new HttpError('Land candidate ring not found', 404);
+
+  const membership = await db.prepare(`
+    SELECT COUNT(*) AS candidate_count,
+      SUM(CASE WHEN materialized_at IS NOT NULL THEN 1 ELSE 0 END) AS materialized_count
+    FROM landlet_candidates WHERE ring_id = ?
+  `).bind(ringId).first();
+  if (membership.candidate_count !== ringRow.candidate_count
+    || membership.materialized_count !== ringRow.candidate_count) {
+    throw new HttpError('All ring candidates must be materialized before generation can complete', 409);
+  }
+
+  const settings = await getWorldSettings(db);
+  await db.prepare(`
+    UPDATE landlets
+    SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        status = CASE WHEN max_world_radius_m <= ? THEN 'greenbelt' ELSE status END,
+        claimable_at = CASE
+          WHEN max_world_radius_m <= ? THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+          ELSE claimable_at
+        END,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
+      AND status = 'generating'
+  `).bind(settings.radius_m, settings.radius_m, ringId).run();
+  const completed = await db.prepare(`
+    SELECT landlets.* FROM landlets
+    JOIN landlet_candidates USING (landlet_id)
+    WHERE landlet_candidates.ring_id = ? ORDER BY landlets.created_at, landlets.landlet_id
+  `).bind(ringId).all();
+  const updatedRing = await getLandCandidateRingWithLifecycle(db, ringId);
+  return {
+    ring: landCandidateRingFromRow(updatedRing),
+    landlets: completed.results.map(landletFromRow),
+  };
 }
 
 async function getLandCandidateRingWithLifecycle(db, ringId) {
@@ -3201,6 +3189,57 @@ function candidateInsertStatement(db, row) {
   );
 }
 
+// The actual generation + persistence half of POST /land-candidates/
+// generate-ring, split out so autoGrowWorldIfNeeded (below) can generate a
+// ring itself without going through an HTTP request — the caller is
+// expected to have already resolved/validated prefix/count/innerRadiusM/
+// startAngleRad/distribution/plots/adjacentToRingId (the HTTP handler does
+// this for a real request; autoGrowWorldIfNeeded's own caller constructs
+// them directly, always with adjacentToRingId null).
+async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId }) {
+  const settings = await getWorldSettings(db);
+  if (innerRadiusM < settings.radius_m) {
+    throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
+  }
+  const generated = generateLandletRing({ prefix, count, innerRadiusM, startAngleRad, plots });
+  const radialConflict = await db.prepare(`
+    SELECT landlet_id FROM landlet_candidates
+    WHERE min_world_radius_m < ? - 0.0000001
+      AND (max_world_radius_m IS NULL OR max_world_radius_m > ? + 0.0000001)
+    LIMIT 1
+  `).bind(generated.outerRadiusM, innerRadiusM).first();
+  if (radialConflict) {
+    throw new HttpError('Generated ring would overlap existing land candidates', 409);
+  }
+  const landlets = generated.landlets.map((candidate) =>
+    validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
+  const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
+  const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
+  await db.batch([
+    db.prepare(`
+      INSERT INTO land_candidate_rings
+        (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
+         boundary_signature, adjacent_to_ring_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      prefix, innerRadiusM, generated.outerRadiusM, count, distribution, startAngleRad,
+      generated.boundarySignature, adjacentToRingId,
+    ),
+    ...rows.map((row) => candidateInsertStatement(db, row)),
+    ...candidateMaterializationStatements(db, overlapping),
+  ]);
+  const storedCandidates = await db.prepare(`
+    SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY created_at, landlet_id
+  `).bind(prefix).all();
+  return {
+    candidates: storedCandidates.results.map(candidateFromRow),
+    materializedLandletIds: overlapping.map((row) => row.landlet_id),
+    readyForGenerationCompletion: overlapping.length === rows.length,
+    innerRadiusM,
+    outerRadiusM: generated.outerRadiusM,
+  };
+}
+
 async function handleWorld(request, db, route) {
   if (request.method === 'GET' && route.length === 1) {
     const settings = await getWorldSettings(db);
@@ -3217,63 +3256,8 @@ async function handleWorld(request, db, route) {
     if (greenbeltRatio >= settings.greenbelt_min_ratio) {
       throw new HttpError('Greenbelt reserve is at or above the expansion threshold', 409);
     }
-
-    const previousRadiusM = settings.radius_m;
-    const newRadiusM = previousRadiusM + settings.expansion_increment_m;
-    const { results } = await db.prepare(`
-      SELECT * FROM landlets
-      WHERE status = 'generating' AND generated_at IS NOT NULL
-        AND (max_world_radius_m IS NULL OR max_world_radius_m <= ?)
-    `).bind(newRadiusM).all();
-    const enclosed = results.filter((row) => landletMaxWorldRadius(row) <= newRadiusM);
-    const pending = await db.prepare(`
-      SELECT * FROM landlet_candidates
-      WHERE materialized_at IS NULL AND min_world_radius_m <= ?
-    `).bind(newRadiusM).all();
-    const overlapping = pending.results.filter((row) => landletMinWorldRadius(row) <= newRadiusM);
-    await db.batch([
-      db.prepare(`
-        UPDATE world_settings
-        SET radius_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE world_id = 'default-world'
-      `).bind(newRadiusM),
-      ...enclosed.map((row) => db.prepare(`
-        UPDATE landlets
-        SET status = 'greenbelt', claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ? AND status = 'generating'
-      `).bind(row.landlet_id)),
-      ...candidateMaterializationStatements(db, overlapping),
-    ]);
-    const touchedRingIds = [...new Set(overlapping.map((row) => row.ring_id).filter(Boolean))];
-    let readyRingIds = [];
-    if (touchedRingIds.length > 0) {
-      const placeholders = touchedRingIds.map(() => '?').join(', ');
-      const ready = await db.prepare(`
-        SELECT candidate.ring_id FROM landlet_candidates AS candidate
-        JOIN land_candidate_rings AS ring ON ring.ring_id = candidate.ring_id
-        WHERE candidate.ring_id IN (${placeholders})
-        GROUP BY candidate.ring_id, ring.candidate_count
-        HAVING COUNT(*) = ring.candidate_count
-          AND SUM(CASE WHEN candidate.materialized_at IS NOT NULL THEN 1 ELSE 0 END) = ring.candidate_count
-        ORDER BY candidate.ring_id
-      `).bind(...touchedRingIds).all();
-      readyRingIds = ready.results.map((row) => row.ring_id);
-    }
-
-    const updated = await getWorldSettings(db);
-    const countsAfter = await getLandletCounts(db);
-    return json({
-      world: worldFromRow(updated, countsAfter),
-      expansion: {
-        previousRadiusM,
-        newRadiusM,
-        incrementM: settings.expansion_increment_m,
-        promotedLandletIds: enclosed.map((row) => row.landlet_id),
-        startedGeneratingLandletIds: overlapping.map((row) => row.landlet_id),
-        readyRingIds,
-      },
-    });
+    const result = await expandWorldOnce(db);
+    return json(result);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
@@ -3309,6 +3293,181 @@ async function getLandletCounts(db) {
       SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating
     FROM landlets
   `).first();
+}
+
+// The actual radius-bump + promotion half of POST /world/expand, split out
+// so autoGrowWorldIfNeeded (below) can expand the world itself without
+// going through an HTTP request or its ratio-gate 409 — the caller decides
+// whether expanding is warranted (the HTTP handler checks once up front;
+// the auto-grow loop below checks on every iteration).
+async function expandWorldOnce(db) {
+  const settings = await getWorldSettings(db);
+  const previousRadiusM = settings.radius_m;
+  const newRadiusM = previousRadiusM + settings.expansion_increment_m;
+  const { results } = await db.prepare(`
+    SELECT * FROM landlets
+    WHERE status = 'generating' AND generated_at IS NOT NULL
+      AND (max_world_radius_m IS NULL OR max_world_radius_m <= ?)
+  `).bind(newRadiusM).all();
+  const enclosed = results.filter((row) => landletMaxWorldRadius(row) <= newRadiusM);
+  const pending = await db.prepare(`
+    SELECT * FROM landlet_candidates
+    WHERE materialized_at IS NULL AND min_world_radius_m <= ?
+  `).bind(newRadiusM).all();
+  const overlapping = pending.results.filter((row) => landletMinWorldRadius(row) <= newRadiusM);
+  await db.batch([
+    db.prepare(`
+      UPDATE world_settings
+      SET radius_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE world_id = 'default-world'
+    `).bind(newRadiusM),
+    ...enclosed.map((row) => db.prepare(`
+      UPDATE landlets
+      SET status = 'greenbelt', claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ? AND status = 'generating'
+    `).bind(row.landlet_id)),
+    ...candidateMaterializationStatements(db, overlapping),
+  ]);
+  const touchedRingIds = [...new Set(overlapping.map((row) => row.ring_id).filter(Boolean))];
+  let readyRingIds = [];
+  if (touchedRingIds.length > 0) {
+    const placeholders = touchedRingIds.map(() => '?').join(', ');
+    const ready = await db.prepare(`
+      SELECT candidate.ring_id FROM landlet_candidates AS candidate
+      JOIN land_candidate_rings AS ring ON ring.ring_id = candidate.ring_id
+      WHERE candidate.ring_id IN (${placeholders})
+      GROUP BY candidate.ring_id, ring.candidate_count
+      HAVING COUNT(*) = ring.candidate_count
+        AND SUM(CASE WHEN candidate.materialized_at IS NOT NULL THEN 1 ELSE 0 END) = ring.candidate_count
+      ORDER BY candidate.ring_id
+    `).bind(...touchedRingIds).all();
+    readyRingIds = ready.results.map((row) => row.ring_id);
+  }
+
+  const updated = await getWorldSettings(db);
+  const countsAfter = await getLandletCounts(db);
+  return {
+    world: worldFromRow(updated, countsAfter),
+    expansion: {
+      previousRadiusM,
+      newRadiusM,
+      incrementM: settings.expansion_increment_m,
+      promotedLandletIds: enclosed.map((row) => row.landlet_id),
+      startedGeneratingLandletIds: overlapping.map((row) => row.landlet_id),
+      readyRingIds,
+    },
+  };
+}
+
+// Automatic world growth — see the default export's scheduled() near the
+// top of this file and wrangler.jsonc's triggers.crons. Before this
+// existed, "grow the world" was a player-triggered action (the claim
+// modal's own "Grow the world" button, now retired — see git history):
+// any logged-in builder's browser would expand the world and/or generate a
+// fresh ring whenever nothing was claimable. That was always a dev-mode
+// stand-in ("a real deployment would want this driven by an actual
+// world-building process rather than a builder's own browser session," per
+// that button's own removed comment) — this *is* that real process,
+// running on a schedule instead of a click, checking exactly the same
+// condition `POST /world/expand` already gates on: the greenbelt ratio
+// dropping below `world_settings.greenbelt_min_ratio`. The manual
+// /world/expand, /land-candidates/generate-ring, /generate-mosaic, and
+// generation-complete endpoints all still exist, admin-gated, for
+// troubleshooting — this function is a second caller of the same
+// generation/expansion primitives (expandWorldOnce, generateLandletRing-
+// Candidates, completeRingGenerationInternal), not a replacement for them.
+const WORLD_GROWTH_MAX_STEPS = 20;
+// Matches the old player-triggered generateRingAtBoundary's own ring size
+// — no reason for the automatic version to generate a differently-shaped
+// world than the one already tuned by hand.
+const AUTO_RING_CANDIDATE_COUNT = 12;
+
+async function worldNeedsGrowth(db) {
+  const settings = await getWorldSettings(db);
+  const counts = await getLandletCounts(db);
+  const total = counts.total || 0;
+  const ratio = total === 0 ? 0 : (counts.greenbelt || 0) / total;
+  return ratio < settings.greenbelt_min_ratio;
+}
+
+async function autoGrowWorldIfNeeded(db) {
+  if (!(await worldNeedsGrowth(db))) return { grew: false };
+
+  // Phase 1: expand to enclose anything already generating and due — the
+  // cheapest way to surface more greenbelt, since it needs no new content,
+  // mirroring the old expandToEncloseGenerating.
+  for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
+    if (!(await worldNeedsGrowth(db))) break;
+    const stillGenerating = await db.prepare(`SELECT 1 FROM landlets WHERE status = 'generating' LIMIT 1`).first();
+    if (!stillGenerating) break;
+    await expandWorldOnce(db);
+  }
+
+  // Phase 2: still nothing greenbelt at all? Nothing pending is left to
+  // enclose — generate a fresh ring of land at the current boundary,
+  // mirroring the old generateRingAtBoundary.
+  if (await worldNeedsGrowth(db)) {
+    const anyGreenbelt = await db.prepare(`SELECT 1 FROM landlets WHERE status = 'greenbelt' LIMIT 1`).first();
+    if (!anyGreenbelt) await generateRingAtWorldBoundary(db);
+  }
+
+  return { grew: true };
+}
+
+async function generateRingAtWorldBoundary(db) {
+  let settings = await getWorldSettings(db);
+  let innerRadiusM = settings.radius_m;
+  let ring = null;
+  for (let attempt = 0; attempt < WORLD_GROWTH_MAX_STEPS && !ring; attempt++) {
+    // Radius-derived, not random/sequential — naturally unique per call
+    // (radius only ever grows) the same way the old frontend flow's own
+    // `dev-ring-${Math.round(innerRadiusM)}` prefix was.
+    const prefix = `auto-ring-${Math.round(innerRadiusM)}`;
+    try {
+      const result = await generateLandletRingCandidates(db, {
+        prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM, startAngleRad: 0, distribution: null,
+        adjacentToRingId: null,
+      });
+      ring = { ringId: prefix, outerRadiusM: result.outerRadiusM };
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      if (err.message === 'Resource already exists') {
+        // A previous, interrupted run already reserved this exact radius
+        // (e.g. the Worker was recycled mid-cycle) — reuse that
+        // reservation instead of failing outright.
+        const existing = await db.prepare(
+          'SELECT outer_radius_m FROM land_candidate_rings WHERE ring_id = ?',
+        ).bind(prefix).first();
+        if (!existing) throw err;
+        ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
+      } else if (err.message === 'Generated ring would overlap existing land candidates') {
+        innerRadiusM += settings.expansion_increment_m;
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (!ring) return; // no clear room found this pass — the next scheduled run tries again
+
+  try {
+    await completeRingGenerationInternal(db, ring.ringId);
+  } catch {
+    // Not every member has materialized yet — expand toward its outer
+    // edge and retry once, same fallback the old frontend flow used.
+    for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
+      settings = await getWorldSettings(db);
+      if (settings.radius_m >= ring.outerRadiusM) break;
+      await expandWorldOnce(db);
+    }
+    await completeRingGenerationInternal(db, ring.ringId);
+  }
+
+  for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
+    settings = await getWorldSettings(db);
+    if (settings.radius_m >= ring.outerRadiusM) break;
+    await expandWorldOnce(db);
+  }
 }
 
 function candidateMaterializationStatements(db, candidates) {

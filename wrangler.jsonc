@@ -26,5 +26,15 @@
   "routes": [
     { "pattern": "higglehaven.com", "custom_domain": true },
     { "pattern": "www.higglehaven.com", "custom_domain": true }
-  ]
+  ],
+  // Drives the default export's scheduled() handler in worker/index.js —
+  // automatic world growth (checks the greenbelt ratio, expands/generates
+  // land if it's dropped below world_settings.greenbelt_min_ratio). Every
+  // 10 minutes is frequent enough that a real gap in claimable land is
+  // rare and short-lived, without running so often it's ever meaningfully
+  // racing itself (a full growth cycle is a handful of D1 round trips, not
+  // a long-running job).
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  }
 }
