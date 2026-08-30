@@ -12,7 +12,8 @@
     "deploy": "vite build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply higglehaven-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply higglehaven-db --remote",
-    "deploy:ci": "npm run db:migrate:remote && wrangler deploy"
+    "deploy:ci": "npm run db:migrate:remote && wrangler deploy",
+    "seed:mockup": "node scripts/seed-mockup-data.mjs"
   },
   "dependencies": {
     "three": "^0.185.1"

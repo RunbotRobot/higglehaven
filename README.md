@@ -25,7 +25,20 @@ npm run build                          # production build to dist/
 npm run preview                        # serve the production build locally
 wrangler dev --local                   # full stack (frontend + Worker + local D1/R2), after npm run build
 npm run db:migrate:local               # apply migrations to local D1
+npm run seed:mockup                    # populate a running local instance with realistic sample data
 ```
+
+`npm run seed:mockup` needs a running `wrangler dev --local` in another terminal
+(`ADMIN_BOOTSTRAP_SECRET` must be set in `.dev.vars` — see `docs/API.md`'s
+"Admin role"). It signs up a few builder accounts with claimed land and
+placed products (using the real models in `public/models/`), a seller with
+a varied catalog (priced items, an extensible table, flooring, a digital
+good, a no-returns item), a review, a couple of simulated purchases (one
+refunded), a friendship, a shared bundle, a community sign/calendar with
+posts, and an active auction with bids — useful for building and testing
+a feature against something richer than an empty world. Prints each
+seeded account's email/password at the end so you can log in and look
+around. Dev-only; never run against a production/remote database.
 
 ## Testing
 
