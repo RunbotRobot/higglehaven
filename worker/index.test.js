@@ -1,8 +1,16 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+// Shared across every test that needs to act as an admin (world/land-
+// candidate tooling — see requireAdmin in worker/index.js) — one admin
+// account for the whole file rather than a fresh one per test, since
+// admin status carries no per-test state of its own to isolate.
+let adminSession;
+
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  const admin = await signupAdmin('shared-admin');
+  adminSession = admin.session;
 });
 
 async function api(path, options = {}) {
@@ -1063,7 +1071,7 @@ describe('Worker API', () => {
   });
 
   it('starts generation immediately for candidates already overlapping the world', async () => {
-    const created = await api('/land-candidates', {
+    const created = await api('/land-candidates', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'inside-candidate',
@@ -1071,7 +1079,7 @@ describe('Worker API', () => {
         areaM2: 4,
         center: { x: 0, y: 0 },
       }),
-    });
+    }));
     expect(created.response.status).toBe(201);
     expect(created.body.candidate.materializedAt).not.toBeNull();
     expect(created.body.landlet).toMatchObject({
@@ -1087,7 +1095,7 @@ describe('Worker API', () => {
   });
 
   it('deletes only pending land candidates', async () => {
-    await api('/land-candidates', {
+    await api('/land-candidates', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'cancelled-candidate',
@@ -1095,29 +1103,29 @@ describe('Worker API', () => {
         areaM2: 4,
         center: { x: 200, y: 0 },
       }),
-    });
-    const deleted = await api('/land-candidates/cancelled-candidate', { method: 'DELETE' });
+    }));
+    const deleted = await api('/land-candidates/cancelled-candidate', adminSession({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
     const absent = await api('/land-candidates/cancelled-candidate');
     expect(absent.response.status).toBe(404);
 
-    const materialized = await api('/land-candidates/inside-candidate', { method: 'DELETE' });
+    const materialized = await api('/land-candidates/inside-candidate', adminSession({ method: 'DELETE' }));
     expect(materialized.response.status).toBe(409);
     expect(materialized.body).toEqual({ error: 'Materialized land candidates cannot be deleted' });
     const landlet = await api('/landlets/inside-candidate');
     expect(landlet.response.status).toBe(200);
 
-    const missing = await api('/land-candidates/missing-candidate', { method: 'DELETE' });
+    const missing = await api('/land-candidates/missing-candidate', adminSession({ method: 'DELETE' }));
     expect(missing.response.status).toBe(404);
     expect(missing.body).toEqual({ error: 'Land candidate not found' });
   });
 
   it('procedurally queues an exact-area ring outside the world boundary', async () => {
-    const generated = await api('/land-candidates/generate-ring', {
+    const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'generated-ring', count: 6, innerRadiusM: 200 }),
-    });
+    }));
     expect(generated.response.status).toBe(201);
     expect(generated.body.candidates).toHaveLength(6);
     expect(generated.body.materializedLandletIds).toEqual([]);
@@ -1143,13 +1151,13 @@ describe('Worker API', () => {
     expect(ringCandidates.body.candidates.every((candidate) => candidate.ringId === 'generated-ring')).toBe(true);
     expect((await api('/land-candidates?ringId=')).response.status).toBe(400);
 
-    const deleteMember = await api('/land-candidates/generated-ring-001', { method: 'DELETE' });
+    const deleteMember = await api('/land-candidates/generated-ring-001', adminSession({ method: 'DELETE' }));
     expect(deleteMember.response.status).toBe(409);
     expect(deleteMember.body.error).toBe('Generated ring candidates cannot be deleted individually');
-    const updateMember = await api('/land-candidates/generated-ring-001', {
+    const updateMember = await api('/land-candidates/generated-ring-001', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ name: 'Detached member' }),
-    });
+    }));
     expect(updateMember.response.status).toBe(409);
     expect(updateMember.body.error).toBe('Generated ring candidates cannot be updated individually');
 
@@ -1163,38 +1171,38 @@ describe('Worker API', () => {
     `).run();
     expect(lifecycleUpdate.meta.changes).toBe(1);
 
-    const conflict = await api('/land-candidates/generate-ring', {
+    const conflict = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'overlapping-ring', count: 6, innerRadiusM: 200 }),
-    });
+    }));
     expect(conflict.response.status).toBe(409);
     expect(conflict.body.error).toBe('Generated ring would overlap existing land candidates');
 
-    const mismatchedAdjacent = await api('/land-candidates/generate-ring', {
+    const mismatchedAdjacent = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'mismatched-adjacent-ring', count: 5, innerRadiusM: generated.body.outerRadiusM }),
-    });
+    }));
     expect(mismatchedAdjacent.response.status).toBe(409);
     expect(mismatchedAdjacent.body.error).toBe('Adjacent generated rings must use matching boundary seams');
 
-    const adjacent = await api('/land-candidates/generate-ring', {
+    const adjacent = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'adjacent-ring', count: 6, adjacentToRingId: 'generated-ring' }),
-    });
+    }));
     expect(adjacent.response.status).toBe(201);
     expect(adjacent.body.innerRadiusM).toBe(generated.body.outerRadiusM);
 
-    const conflictingDerivedInput = await api('/land-candidates/generate-ring', {
+    const conflictingDerivedInput = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({
         prefix: 'invalid-derived-ring', count: 6, adjacentToRingId: 'adjacent-ring', innerRadiusM: 300,
       }),
-    });
+    }));
     expect(conflictingDerivedInput.response.status).toBe(400);
-    const missingAdjacent = await api('/land-candidates/generate-ring', {
+    const missingAdjacent = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'missing-adjacent-ring', count: 6, adjacentToRingId: 'missing-ring' }),
-    });
+    }));
     expect(missingAdjacent.response.status).toBe(404);
 
     const rings = await env.DB.prepare(`
@@ -1251,18 +1259,18 @@ describe('Worker API', () => {
       VALUES ('bad-parent-ring', 300, 301, 3, NULL, 0, 'bad-signature', 'generated-ring')
     `).run()).rejects.toThrow(/generated ring adjacency parent mismatch/);
 
-    const invalid = await api('/land-candidates/generate-ring', {
+    const invalid = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'Bad prefix', count: 2 }),
-    });
+    }));
     expect(invalid.response.status).toBe(400);
   });
 
   it('queues a deterministic organic mosaic, folding the origin cell into starter-landlet', async () => {
-    const generated = await api('/land-candidates/generate-mosaic', {
+    const generated = await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
-    });
+    }));
     expect(generated.response.status).toBe(201);
     // One of the 16 template cells always covers the world origin — the same
     // point starter-landlet sits on — so it's folded into starter-landlet
@@ -1296,20 +1304,20 @@ describe('Worker API', () => {
       landletId: 'starter-landlet', status: 'claimed', ownerBuilderId: centerPlotBuilder.builderId,
     });
 
-    const duplicate = await api('/land-candidates/generate-mosaic', {
+    const duplicate = await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST', body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
-    });
+    }));
     expect(duplicate.response.status).toBe(409);
-    expect((await api('/land-candidates/generate-mosaic', {
+    expect((await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST', body: JSON.stringify({ prefix: 'bad mosaic', count: 8 }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
 
     // A second, differently-seeded mosaic still covers the same disc around
     // the origin (only the rotation differs) — must be rejected as spatial
     // overlap, not silently allowed to double-stamp the same land.
-    const second = await api('/land-candidates/generate-mosaic', {
+    const second = await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST', body: JSON.stringify({ prefix: 'organic-patch-2', count: 16 }),
-    });
+    }));
     expect(second.response.status).toBe(409);
     expect(second.body.error).toMatch(/overlap/i);
 
@@ -1318,7 +1326,7 @@ describe('Worker API', () => {
   });
 
   it('generates the authoritative power-law mix on request', async () => {
-    const generated = await api('/land-candidates/generate-ring', {
+    const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({
         prefix: 'power-law-ring',
@@ -1326,7 +1334,7 @@ describe('Worker API', () => {
         innerRadiusM: 500,
         distribution: 'power-law',
       }),
-    });
+    }));
     expect(generated.response.status).toBe(201);
     expect(generated.body.candidates.filter((candidate) => candidate.landClass === 1)).toHaveLength(91);
     expect(generated.body.candidates.filter((candidate) => candidate.landClass === 2)).toHaveLength(9);
@@ -1335,15 +1343,15 @@ describe('Worker API', () => {
   });
 
   it('completes generation for a fully materialized ring in one request', async () => {
-    const generated = await api('/land-candidates/generate-ring', {
+    const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'completion-ring', count: 3 }),
-    });
+    }));
     expect(generated.response.status).toBe(201);
     expect(generated.body.materializedLandletIds).toHaveLength(3);
     expect(generated.body.readyForGenerationCompletion).toBe(true);
 
-    const completed = await api('/land-candidate-rings/completion-ring/generation-complete', { method: 'POST' });
+    const completed = await api('/land-candidate-rings/completion-ring/generation-complete', adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlets).toHaveLength(3);
     expect(completed.body.landlets.every((landlet) => landlet.generatedAt && landlet.status === 'generating')).toBe(true);
@@ -1355,25 +1363,25 @@ describe('Worker API', () => {
       greenbeltLandlets: 0,
     });
 
-    const retry = await api('/land-candidate-rings/completion-ring/generation-complete', { method: 'POST' });
+    const retry = await api('/land-candidate-rings/completion-ring/generation-complete', adminSession({ method: 'POST' }));
     expect(retry.response.status).toBe(200);
     expect(retry.body.landlets.map((landlet) => landlet.generatedAt)).toEqual(
       completed.body.landlets.map((landlet) => landlet.generatedAt),
     );
 
-    const pending = await api('/land-candidates/generate-ring', {
+    const pending = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'pending-completion-ring', count: 3, innerRadiusM: 1000 }),
-    });
+    }));
     expect(pending.response.status).toBe(201);
-    const premature = await api('/land-candidate-rings/pending-completion-ring/generation-complete', { method: 'POST' });
+    const premature = await api('/land-candidate-rings/pending-completion-ring/generation-complete', adminSession({ method: 'POST' }));
     expect(premature.response.status).toBe(409);
-    const missing = await api('/land-candidate-rings/missing-completion-ring/generation-complete', { method: 'POST' });
+    const missing = await api('/land-candidate-rings/missing-completion-ring/generation-complete', adminSession({ method: 'POST' }));
     expect(missing.response.status).toBe(404);
   });
 
   it('updates only pending land candidates', async () => {
-    await api('/land-candidates', {
+    await api('/land-candidates', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'corrected-candidate',
@@ -1382,8 +1390,8 @@ describe('Worker API', () => {
         center: { x: 210, y: 0 },
         metadata: { revision: 1 },
       }),
-    });
-    const updated = await api('/land-candidates/corrected-candidate', {
+    }));
+    const updated = await api('/land-candidates/corrected-candidate', adminSession({
       method: 'PATCH',
       body: JSON.stringify({
         landletId: 'ignored-id-change',
@@ -1391,7 +1399,7 @@ describe('Worker API', () => {
         center: { x: 220, y: 5 },
         metadata: { revision: 2 },
       }),
-    });
+    }));
     expect(updated.response.status).toBe(200);
     expect(updated.body.candidate).toMatchObject({
       landletId: 'corrected-candidate',
@@ -1407,10 +1415,10 @@ describe('Worker API', () => {
     `).first();
     expect(queuedRadius.min_world_radius_m).toBeGreaterThan(200);
 
-    const started = await api('/land-candidates/corrected-candidate', {
+    const started = await api('/land-candidates/corrected-candidate', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ center: { x: 0, y: 0 } }),
-    });
+    }));
     expect(started.response.status).toBe(200);
     expect(started.body.candidate.materializedAt).not.toBeNull();
     expect(started.body.landlet).toMatchObject({
@@ -1419,29 +1427,29 @@ describe('Worker API', () => {
       status: 'generating',
       center: { x: 0, y: 0 },
     });
-    const startedAgain = await api('/land-candidates/corrected-candidate', {
+    const startedAgain = await api('/land-candidates/corrected-candidate', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ name: 'Too late too' }),
-    });
+    }));
     expect(startedAgain.response.status).toBe(409);
 
-    const materialized = await api('/land-candidates/inside-candidate', {
+    const materialized = await api('/land-candidates/inside-candidate', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ name: 'Too late' }),
-    });
+    }));
     expect(materialized.response.status).toBe(409);
     expect(materialized.body).toEqual({ error: 'Materialized land candidates cannot be updated' });
 
-    const missing = await api('/land-candidates/missing-update', {
+    const missing = await api('/land-candidates/missing-update', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ name: 'Missing' }),
-    });
+    }));
     expect(missing.response.status).toBe(404);
     expect(missing.body).toEqual({ error: 'Land candidate not found' });
   });
 
   it('atomically queues candidate batches and materializes overlapping plots', async () => {
-    const created = await api('/land-candidates/batch', {
+    const created = await api('/land-candidates/batch', adminSession({
       method: 'POST',
       body: JSON.stringify({
         candidates: [
@@ -1449,7 +1457,7 @@ describe('Worker API', () => {
           { landletId: 'batch-outside', name: 'Batch outside', areaM2: 4, center: { x: 100, y: 0 } },
         ],
       }),
-    });
+    }));
 
     expect(created.response.status).toBe(201);
     expect(created.body.candidates.map(({ landletId }) => landletId).sort()).toEqual(['batch-inside', 'batch-outside']);
@@ -1458,7 +1466,7 @@ describe('Worker API', () => {
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-inside').materializedAt).not.toBeNull();
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-outside').materializedAt).toBeNull();
 
-    const invalid = await api('/land-candidates/batch', {
+    const invalid = await api('/land-candidates/batch', adminSession({
       method: 'POST',
       body: JSON.stringify({
         candidates: [
@@ -1466,18 +1474,18 @@ describe('Worker API', () => {
           { landletId: 'batch-duplicate', name: 'Second', areaM2: 4 },
         ],
       }),
-    });
+    }));
     expect(invalid.response.status).toBe(400);
     expect(invalid.body).toEqual({ error: 'landletId values must be unique' });
 
-    const absent = await api('/land-candidates/batch', {
+    const absent = await api('/land-candidates/batch', adminSession({
       method: 'POST',
       body: JSON.stringify({ candidates: [] }),
-    });
+    }));
     expect(absent.response.status).toBe(400);
     expect(absent.body).toEqual({ error: 'candidates must contain at least one item' });
 
-    const conflict = await api('/land-candidates/batch', {
+    const conflict = await api('/land-candidates/batch', adminSession({
       method: 'POST',
       body: JSON.stringify({
         candidates: [
@@ -1485,14 +1493,14 @@ describe('Worker API', () => {
           { landletId: 'batch-inside', name: 'Already exists', areaM2: 4 },
         ],
       }),
-    });
+    }));
     expect(conflict.response.status).toBe(409);
     const rolledBack = await api('/land-candidates/batch-rolled-back');
     expect(rolledBack.response.status).toBe(404);
   });
 
   it('filters and cursor-paginates the candidate generation queue', async () => {
-    await api('/land-candidates/batch', {
+    await api('/land-candidates/batch', adminSession({
       method: 'POST',
       body: JSON.stringify({
         candidates: [
@@ -1501,7 +1509,7 @@ describe('Worker API', () => {
           { landletId: 'page-outside-b', name: 'Page outside B', areaM2: 4, center: { x: 110, y: 0 } },
         ],
       }),
-    });
+    }));
 
     const materialized = await api('/land-candidates?state=materialized');
     expect(materialized.body.candidates.map(({ landletId }) => landletId)).toContain('page-inside');
@@ -1572,7 +1580,7 @@ describe('Worker API', () => {
     });
     expect(incompleteCandidate.response.status).toBe(201);
 
-    const queuedCandidate = await api('/land-candidates', {
+    const queuedCandidate = await api('/land-candidates', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'queued-edge-candidate',
@@ -1586,7 +1594,7 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(queuedCandidate.response.status).toBe(201);
     expect(queuedCandidate.body.candidate.materializedAt).toBeNull();
     expect(queuedCandidate.body.landlet).toBeNull();
@@ -1597,13 +1605,19 @@ describe('Worker API', () => {
     expect(completed.body.landlet.generatedAt).not.toBeNull();
     expect(completed.body.landlet.claimableAt).toBeNull();
 
-    const configured = await api('/world', {
+    const noSession = await api('/world/expand', { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+    const nonAdmin = await signupBuilder('non-admin-expander');
+    const notAdmin = await api('/world/expand', nonAdmin.session({ method: 'POST' }));
+    expect(notAdmin.response.status).toBe(403);
+
+    const configured = await api('/world', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ greenbeltMinRatio: 1 }),
-    });
+    }));
     const previousRadiusM = configured.body.world.radiusM;
 
-    const expanded = await api('/world/expand', { method: 'POST' });
+    const expanded = await api('/world/expand', adminSession({ method: 'POST' }));
     expect(expanded.response.status).toBe(200);
     expect(expanded.body.expansion).toMatchObject({
       previousRadiusM,
@@ -1630,14 +1644,14 @@ describe('Worker API', () => {
     expect(started.body.landlet.generatedAt).toBeNull();
     expect(started.body.landlet.claimableAt).toBeNull();
 
-    await api('/world', {
+    await api('/world', adminSession({
       method: 'PATCH',
       body: JSON.stringify({
         greenbeltMinRatio: expanded.body.world.landletCounts.greenbeltRatio,
       }),
-    });
+    }));
 
-    const blocked = await api('/world/expand', { method: 'POST' });
+    const blocked = await api('/world/expand', adminSession({ method: 'POST' }));
     expect(blocked.response.status).toBe(409);
     expect(blocked.body).toEqual({
       error: 'Greenbelt reserve is at or above the expansion threshold',

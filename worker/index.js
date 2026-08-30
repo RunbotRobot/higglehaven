@@ -2739,6 +2739,7 @@ async function handleLandletDraft(request, db, landletId) {
 
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
+    await requireAdmin(request, db);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -2831,6 +2832,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
+    await requireAdmin(request, db);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -2961,6 +2963,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
+    await requireAdmin(request, db);
     const existing = await db.prepare(`
       SELECT materialized_at, ring_id FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -2974,6 +2977,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
+    await requireAdmin(request, db);
     const existing = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -3020,6 +3024,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
+    await requireAdmin(request, db);
     const input = await readJson(request);
     if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
     if (input.candidates.length === 0) throw new HttpError('candidates must contain at least one item', 400);
@@ -3054,6 +3059,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    await requireAdmin(request, db);
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
@@ -3109,6 +3115,7 @@ async function handleLandCandidateRings(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
+    await requireAdmin(request, db);
     const ringRow = await db.prepare(`
       SELECT * FROM land_candidate_rings WHERE ring_id = ?
     `).bind(route[1]).first();
@@ -3202,6 +3209,7 @@ async function handleWorld(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'expand') {
+    await requireAdmin(request, db);
     const settings = await getWorldSettings(db);
     const countsBefore = await getLandletCounts(db);
     const total = countsBefore.total || 0;
@@ -3269,6 +3277,7 @@ async function handleWorld(request, db, route) {
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
+    await requireAdmin(request, db);
     const existing = await getWorldSettings(db);
     const input = await readJson(request);
     const world = validateWorld({ ...worldFromRow(existing), ...input });
