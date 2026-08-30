@@ -30,30 +30,52 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
   return { browser, page, errors };
 }
 
-// Drives the identity picker for either the Build or Sell nav tab. With
-// `isNew` (the default) it creates a fresh identity via #identity-new-btn,
-// answered by launchPage's own dialog handler; pass `isNew: false` to
-// instead pick an identity that already exists in the roster (e.g.
-// re-entering Build mode as the same builder after a reload). Leaves the
-// picker having just clicked that row's Build/Sell button — callers that
-// need the claim modal (mode: 'build', a brand-new builder) should follow
-// with claimLandlet().
+// Drives entry into Build or Sell mode, which now requires a real account
+// (docs/API.md's "Authentication") rather than the old free-text dev-mode
+// identity picker. Clicking the mode-nav tab opens #auth-modal only if
+// nobody's logged in yet (see ensureBuilderIdentity/ensureSellerIdentity
+// in src/main.js) — already being logged in (e.g. Sell right after Build
+// for the same account in one test, since both now share one login; or
+// re-entering after a `page.reload()`, since the session cookie persists)
+// skips straight past it, matching bootstrap()'s own silent auto-
+// provisioning. `isNew`/`label` only matter for that first, actually-
+// unauthenticated call: `label` becomes the account's display name (and,
+// slugified, its email's local part — real inboxes are never involved,
+// see worker/index.js's sendEmail dev-mode fallback), and `isNew: false`
+// is for re-entry cases where nothing needs signing up again.
 export async function chooseIdentity(page, { mode, label, isNew = true }) {
   await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
-  await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
-  if (isNew) {
-    await page.click('#identity-new-btn');
-    await page.waitForTimeout(500);
+  // Switching to Build (unlike Sell, a modal overlay with no reload —
+  // see #mode-nav's own click handler in src/main.js) always reloads the
+  // page first; bootstrap() only decides whether a login prompt is needed
+  // once that reload has actually landed, so checking for the modal
+  // before it finishes would race an in-flight navigation.
+  if (mode !== 'sell') {
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   }
-  const row = page.locator('.identity-row').filter({ hasText: label });
-  // .last() disambiguates a roster that already has an earlier identity
-  // whose id string happens to contain this run's label as a substring
-  // (Playwright's hasText match is substring-based) — the just-created or
-  // most-recently-listed row is always what a test actually wants.
-  await row.locator('.identity-row-toggle').last().click();
-  await page.waitForTimeout(300);
-  const chooseLabel = mode === 'build' ? 'Build' : 'Sell';
-  await row.locator('button', { hasText: chooseLabel }).last().click();
+  const authModalShown = await page.waitForSelector('#auth-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
+  if (!authModalShown) return; // already logged in — entry proceeds on its own
+
+  if (!isNew) {
+    throw new Error(`chooseIdentity: isNew:false but no session is active — expected to already be logged in as "${label}"`);
+  }
+  const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+  await page.click('.auth-tab-btn[data-auth-view="signup"]');
+  await page.fill('#auth-signup-name', label);
+  await page.fill('#auth-signup-email', email);
+  await page.fill('#auth-signup-password', 'e2e-test-password-123');
+  await page.click('#auth-signup-form button[type="submit"]');
+  // The signup handler only auto-closes the modal once there's no dev-mode
+  // verify-link status to show (see its own comment) — the test env never
+  // configures RESEND_API_KEY, so that status always appears here. Either
+  // way, ensureBuilderIdentity/ensureSellerIdentity's own requireLogin
+  // closes the modal itself once login succeeds, so waiting for it to
+  // disappear is the reliable signal regardless of which path fired.
+  // state: 'attached' (not the default 'visible') — the modal element
+  // itself is always attached to the DOM and this selector specifically
+  // matches it once it's HIDDEN (no .visible class, so display:none),
+  // which Playwright's default "wait for visible" can never satisfy.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 
 // Claims whatever landlet the claim-modal's overhead map offers first —

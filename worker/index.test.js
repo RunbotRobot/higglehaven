@@ -3349,4 +3349,50 @@ describe('Authentication', () => {
     const alreadyVerified = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
     expect(alreadyVerified.response.status).toBe(400);
   });
+
+  it('signup automatically provisions a linked builder profile', async () => {
+    const email = `auth-builder-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password', { displayName: 'Ada Builder' });
+    const sessionToken = extractSessionCookie(signedUp.response);
+
+    const myBuilder = await api('/builders/me', withSession(sessionToken));
+    expect(myBuilder.response.status).toBe(200);
+    expect(myBuilder.body.builder.label).toBe('Ada Builder');
+    expect(myBuilder.body.builder.builderId).toMatch(/^builder-/);
+
+    // Idempotent — the same profile every time, not a new one per call.
+    const myBuilderAgain = await api('/builders/me', withSession(sessionToken));
+    expect(myBuilderAgain.body.builder.builderId).toBe(myBuilder.body.builder.builderId);
+
+    // Falls back to the email's local part when no display name was given.
+    const emailOnly = `auth-builder-noname-${crypto.randomUUID()}@example.com`;
+    const signedUpNoName = await signup(emailOnly, 'a fine long password');
+    const noNameSession = extractSessionCookie(signedUpNoName.response);
+    const noNameBuilder = await api('/builders/me', withSession(noNameSession));
+    expect(noNameBuilder.body.builder.label).toBe(emailOnly.split('@')[0]);
+  });
+
+  it('/builders/me requires a session', async () => {
+    const response = await api('/builders/me');
+    expect(response.response.status).toBe(401);
+  });
+
+  it('lazily provisions a linked seller profile on first access, not at signup', async () => {
+    const email = `auth-seller-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password', { displayName: 'Ada Seller' });
+    const sessionToken = extractSessionCookie(signedUp.response);
+
+    const mySeller = await api('/sellers/me', withSession(sessionToken));
+    expect(mySeller.response.status).toBe(200);
+    expect(mySeller.body.seller.label).toBe('Ada Seller');
+    expect(mySeller.body.seller.sellerId).toMatch(/^seller-/);
+
+    const mySellerAgain = await api('/sellers/me', withSession(sessionToken));
+    expect(mySellerAgain.body.seller.sellerId).toBe(mySeller.body.seller.sellerId);
+  });
+
+  it('/sellers/me requires a session', async () => {
+    const response = await api('/sellers/me');
+    expect(response.response.status).toBe(401);
+  });
 });

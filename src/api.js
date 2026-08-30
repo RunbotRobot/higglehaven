@@ -104,6 +104,16 @@ export async function fetchBuilders() {
   return builders;
 }
 
+// The logged-in account's own builder profile (docs/API.md's
+// "Authentication") — auto-provisioned server-side, so there's no
+// separate "create" call needed the way the dev-mode identity picker
+// used to require. Requires a session; throws (same as every other
+// requestJson call) if not logged in.
+export async function fetchMyBuilder() {
+  const { builder } = await requestJson('/builders/me');
+  return builder;
+}
+
 export async function createBuilder(label, builderId) {
   const { builder } = await requestJson('/builders', {
     method: 'POST',
@@ -136,6 +146,14 @@ export async function deleteBuilder(builderId) {
 export async function fetchSellers() {
   const { sellers } = await requestJson('/sellers');
   return sellers;
+}
+
+// The logged-in account's own seller profile — see fetchMyBuilder's own
+// comment; the one difference is this is lazily created on first call
+// (selling is opt-in), not guaranteed to already exist from signup.
+export async function fetchMySeller() {
+  const { seller } = await requestJson('/sellers/me');
+  return seller;
 }
 
 export async function createSeller(label) {

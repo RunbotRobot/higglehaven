@@ -2,8 +2,7 @@
 // Every length is still measured, persisted, and sent to the server in
 // meters (see docs/SPEC.md); "Units" here just changes how a length gets
 // formatted for the builder to read, and how a typed number is interpreted
-// back into meters. Same localStorage-for-per-device-prefs pattern as
-// builderIdentity.js's active-identity choice.
+// back into meters.
 const UNITS_KEY = 'higglehaven.units';
 const METERS_PER_FOOT = 0.3048;
 

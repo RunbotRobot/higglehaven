@@ -1419,19 +1419,6 @@
         font-size: 13px;
         min-height: 18px;
       }
-      #seller-modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-      }
-      #seller-modal-actions button {
-        padding: 8px 16px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font: 14px/1.4 sans-serif;
-      }
       /* Same modal shell as #upload-modal. */
       #settings-modal {
         position: fixed;
@@ -1640,9 +1627,10 @@
         font: 14px/1.4 sans-serif;
       }
       /* Real login (docs/API.md's "Authentication") — same modal shell as
-         #settings-modal/#identity-modal, higher z-index than both so it can
-         be reached (and, on a verify/reset email link, opened automatically)
-         from anywhere, including on top of the identity picker. */
+         #settings-modal, higher z-index so it can be reached (and, on a
+         verify/reset email link, opened automatically) from anywhere,
+         including over the claim modal when entering Build mode requires
+         logging in first. */
       #auth-modal {
         position: fixed;
         inset: 0;
@@ -1754,6 +1742,11 @@
       }
       #auth-account-verified.verified {
         color: #3f7a1f;
+      }
+      #auth-account-pioneer {
+        font-size: 12px;
+        font-weight: 600;
+        color: #f5cf5a;
       }
       #auth-logged-in {
         display: flex;
@@ -2268,148 +2261,10 @@
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);
       }
-      /* Same modal shell as #upload-modal. Shown automatically at startup
-         (before bootstrap() resolves a landlet, so a builder is chosen
-         first) and reopenable any time afterward from #identity-btn or the
-         claim modal's Back button — the only difference is
-         #identity-close-btn's visibility, toggled in main.js, since there's
-         nothing to close back to before a first choice is made. z-index is
-         above #claim-modal's (30) so opening it from Back can simply
-         overlay the claim modal (still visible, untouched, underneath)
-         instead of having to hide and later reconstruct it. */
-      #identity-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 35;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        background: rgb(0 0 0 / 0.22);
-        padding: 16px;
-      }
-      #identity-modal.visible {
-        display: flex;
-      }
-      #identity-modal-content {
-        position: relative;
-        width: 100%;
-        max-width: 360px;
-        max-height: 90vh;
-        overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: 14px;
-        padding: 18px;
-        color: var(--pill-text);
-        font: 14px/1.4 sans-serif;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      #identity-modal-content h2 {
-        margin: 0;
-        font-size: 17px;
-      }
-      #identity-hint {
-        font-size: 12px;
-        color: rgb(var(--ink-rgb) / 0.65);
-      }
-      #identity-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        max-height: 45vh;
-        overflow-y: auto;
-      }
-      /* Rename/Delete/Play used to sit inline next to the name on every
-         row, which meant the name itself had to be truncated (ellipsis) to
-         leave them room — on a long label there wasn't enough width left to
-         read it at all. Now a row shows just its name at full width; tapping
-         it (identity-row-toggle) reveals the actions below instead, so the
-         name always gets the room it needs and the actions only cost space
-         once you've actually picked a row. */
-      .identity-row {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        background: rgb(var(--ink-rgb) / 0.08);
-        border-radius: 10px;
-        padding: 10px 12px;
-        transition: background-color 100ms ease;
-      }
-      /* Selected but no action chosen yet — a visible cue that this row
-         (not some other one) is the one whose Rename/Delete/Build-or-Sell
-         options are now showing below it. */
-      .identity-row.expanded {
-        background: rgb(108 164 46 / 0.28);
-      }
-      .identity-row-toggle {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 2px;
-        width: 100%;
-        background: none;
-        border: none;
-        padding: 0;
-        text-align: left;
-        font: inherit;
-        cursor: pointer;
-      }
-      .identity-row-label {
-        font-size: 14px;
-        color: var(--pill-text);
-        overflow-wrap: anywhere;
-      }
-      .identity-row-id {
-        font-size: 10px;
-        color: rgb(var(--ink-rgb) / 0.5);
-        overflow-wrap: anywhere;
-      }
-      .identity-row-pioneer-badge {
-        margin-left: 6px;
-        font-size: 11px;
-        font-weight: 600;
-        color: #f5cf5a;
-      }
-      .identity-row-actions {
-        display: none;
-        gap: 6px;
-        flex-wrap: wrap;
-      }
-      .identity-row.expanded .identity-row-actions {
-        display: flex;
-      }
-      .identity-row-actions button,
-      #identity-new-btn,
-      #identity-close-btn {
-        padding: 7px 14px;
-        border-radius: 999px;
-        border: none;
-        font: 13px/1.4 sans-serif;
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        white-space: nowrap;
-      }
-      .identity-row-actions .identity-choose-btn {
-        background: var(--brand-green);
-        color: #16240a;
-      }
-      /* A distinct destination from the identity list, not another row
-         action — visiting doesn't need (or set) an active builder. */
-      #shop-btn {
-        background: rgb(var(--ink-rgb) / 0.08);
-        border: 1px solid rgb(var(--ink-rgb) / 0.25);
-      }
-      #identity-status {
-        font-size: 13px;
-        min-height: 18px;
-      }
-      #identity-status.error {
-        color: #b3402c;
-      }
       /* Same modal shell as #upload-modal — shown at startup, before
          bootstrap() has resolved a landlet to build on, whenever this
-         builder (see builderIdentity.js) doesn't already own one. */
+         builder (see ensureBuilderIdentity in src/main.js) doesn't
+         already own one. */
       #claim-modal {
         position: fixed;
         inset: 0;
@@ -2568,7 +2423,6 @@
       <button id="account-menu-toggle" type="button">Menu</button>
       <div id="account-menu-panel">
         <button id="account-auth-btn" type="button">Log In</button>
-        <button id="identity-btn" type="button">Identity</button>
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
         <button id="settings-btn" type="button">Settings</button>
@@ -2704,9 +2558,6 @@
         <button id="upload-model-btn" type="button">+ Upload Model</button>
         <div id="seller-list"></div>
         <div id="seller-status"></div>
-        <div id="seller-modal-actions">
-          <button id="seller-identity-btn" type="button">Seller identity</button>
-        </div>
       </div>
     </div>
     <div id="notifications-modal">
@@ -2809,25 +2660,12 @@
         <div id="auth-logged-in" hidden>
           <div id="auth-account-email"></div>
           <div id="auth-account-verified"></div>
+          <div id="auth-account-pioneer"></div>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
           <button id="auth-logout-btn" type="button">Log Out</button>
         </div>
 
         <div id="auth-status"></div>
-      </div>
-    </div>
-    <div id="identity-modal">
-      <div id="identity-modal-content">
-        <button id="identity-close-btn" class="modal-close-btn" type="button" style="display: none" aria-label="Close">&times;</button>
-        <h2 id="identity-modal-title">Choose a builder</h2>
-        <div id="identity-hint">
-          Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to build as, rename any
-          of them, or add a new one.
-        </div>
-        <div id="identity-list"></div>
-        <button id="identity-new-btn" type="button">+ New identity</button>
-        <button id="shop-btn" type="button">Shop — fly through the world</button>
-        <div id="identity-status"></div>
       </div>
     </div>
     <div id="claim-modal">

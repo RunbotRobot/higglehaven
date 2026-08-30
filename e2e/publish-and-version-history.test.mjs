@@ -104,15 +104,10 @@ await page.waitForLoadState('networkidle', { timeout: 15000 });
 await page.waitForTimeout(1500);
 
 // A restore reloads the page with Build as the start mode (see
-// START_MODE_KEY), so bootstrap() opens the identity picker directly on
-// load — unlike a bare reload (defaults to Shop), there's no separate nav
-// click needed, and clicking the Build tab here would be a no-op blocked
-// by the already-open picker (it's already the active mode).
-await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
-const reentryRow = page.locator('.identity-row').filter({ hasText: LABEL });
-await reentryRow.locator('.identity-row-toggle').last().click();
-await page.waitForTimeout(300);
-await reentryRow.locator('button', { hasText: 'Build' }).last().click();
+// START_MODE_KEY) — the session cookie persists across the reload, so
+// bootstrap() silently re-resolves the same builder profile via
+// ensureBuilderIdentity/GET /api/builders/me with no login prompt at all
+// (unlike the old dev-mode picker, which needed re-choosing every reload).
 await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(1500);
 

@@ -76,14 +76,11 @@ audience and needs no third-party app registration to work). This is the
 first genuinely unforgeable identity concept in this app — see
 `migrations/0053_users_auth.sql` for the full schema rationale.
 
-**Deliberately scoped:** this lands as new, isolated infrastructure —
-`users`/`sessions`/`email_verification_tokens`/`password_reset_tokens` —
-that doesn't yet touch `builders`/`sellers`. Linking a builder/seller
-profile to a real logged-in account, and retiring the free-text dev-mode
-identity picker described in "Builders"/"Sellers" below, is deliberate
-follow-up work, not part of this. Until that lands, the two systems exist
-side by side: a real account proves who you are; a builder/seller profile
-is still a separate, unauthenticated roster row anyone can edit.
+**Linked to builders/sellers:** `migrations/0054_link_builders_sellers_to_users.sql`
+adds `user_id` to both, and Build/Sell mode now require a real, logged-in
+account to enter at all — see "Builders"/"Sellers" below for the full
+get-or-create contract (`GET /api/builders/me`/`GET /api/sellers/me`) and
+what happened to the old free-text dev-mode picker.
 
 **Password storage:** PBKDF2-SHA256 via the Workers runtime's own Web
 Crypto (`hashPassword`/`verifyPassword` in `worker/index.js`) — no
@@ -309,13 +306,62 @@ section above) — a good example of why "does this add a new page-load-time
 network call" is worth asking before adding one, quite apart from whatever
 that call's own status code conventionally "should" be.
 
+A second, genuinely subtle bug surfaced while testing Build mode's new
+login requirement (see "Builders" below): reloading a page that was
+already in Build mode with a perfectly valid session cookie still popped
+the login modal open, every time. Root cause was a race between two
+independent top-level `async` calls in `src/main.js` — the one that
+resolves `currentAuthUser` via `GET /api/auth/me`, and `bootstrap()`,
+which (for Build/Sell) calls `ensureBuilderIdentity()` and checks
+`currentAuthUser` synchronously. Neither awaited the other, so on a fresh
+page load `bootstrap()`'s check routinely ran before the `/auth/me` round
+trip had resolved, reading `currentAuthUser` as still `null` regardless of
+whether the cookie was valid. Fixed by storing the auth-check IIFE's
+promise (`authInitPromise`) and having `bootstrap()` await it before
+touching `currentAuthUser` — but only on the Build/Sell path, not before
+Shop mode's own `startMode === 'shop'` branch, since Shop mode is
+deliberately never held up by a network round trip (see its own comment
+on rendering instantly). This is exactly the kind of intermittent,
+load-order-dependent bug that a fresh-every-page-load flow (no persisted
+session to race against) would never surface — caught only because a real
+e2e reload-into-Build scenario exercises the actual race window.
+
 ## Builders
 
-A shared, cross-device roster of builder identities. Still not real
-authentication — anyone can list, create, rename, or delete any of these,
-there's no password or ownership check on the roster itself — but it's now
-one server-side list instead of every browser inventing its own in
-`localStorage`, so switching devices sees the same builders.
+A shared, cross-device roster of builder profiles. The roster's own CRUD
+endpoints below are unchanged and still have no ownership check on them
+(anyone can list, create, rename, or delete any row by ID) — what changed
+is how a builder profile gets attached to *you*: `migrations/0054_link_builders_sellers_to_users.sql`
+adds a `user_id` column, and **every account is automatically given a
+linked builder profile at signup** (docs/SPEC.md §3: "every user is
+automatically a builder — no separate account types"), with its `label`
+defaulting to the account's display name (or the email's local part if
+none was given).
+
+**Build mode now requires a real, logged-in account to enter at all.**
+`src/main.js`'s `ensureBuilderIdentity()` — previously backed by a
+free-text dev-mode picker anyone could type any name into — now blocks on
+`#auth-modal` (see "Authentication" above) if nobody's logged in yet, then
+calls `GET /api/builders/me` below to resolve *your* builder profile.
+Closing the login prompt without signing in/up falls back to Shop mode
+rather than proceeding with no identity. Pre-existing dev-mode builders
+created before this migration have `user_id = NULL` and are simply
+unreachable through the UI going forward (not deleted — their landlets/
+placed content stay intact) — an acceptable one-time cost specifically
+because this app has no real users yet; see the migration's own comment.
+
+### `GET /api/builders/me`
+
+Requires a session (`401` without one, the same `requireCurrentUser` gate
+"Authentication" above uses). Returns the calling account's own builder
+profile, auto-provisioning one if somehow missing (a defensive fallback —
+signup already creates it, so this should never actually need to):
+
+```json
+{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "createdAt": "...", "updatedAt": "..." } }
+```
+
+Idempotent — the same profile every call, never a new one.
 
 ### Builder object
 
@@ -343,11 +389,11 @@ dev-scale roster, not a growing content collection.
 
 ### `POST /api/builders`
 
-Creates a builder. `builderId` is optional; if omitted, the Worker
-generates one. Passing an explicit `builderId` exists for migrating a
-device's pre-existing local identity list onto this shared roster without
-losing track of whatever it already claimed under that exact ID — new
-callers should omit it and let the Worker generate one.
+Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the
+frontend never calls this directly anymore now that signup provisions a
+linked profile automatically (see "Builders" above); it remains for
+direct API/test use. `builderId` is optional; if omitted, the Worker
+generates one.
 
 Request body:
 
@@ -453,15 +499,17 @@ instance while writing this migration (window functions and
 `ALTER TABLE ... DROP COLUMN`, both also used here to retire the old
 `is_pioneer` column, are fine).
 
-This app has no separate profile page, so the identity roster row — the
-one place a builder's own name is actually shown (`renderIdentityList` in
-`src/main.js`) — is the closest fit: a ranked builder gets a small
-"🏆 Pioneer #N" badge next to their label there, showing the actual rank
-(not just membership) so it reads as more impressive the further the
-platform's real population grows past this fixed founding hundred — the
-spec's own "grows in prestige over time." Sellers have no such concept;
-`identity.isPioneer` is simply `undefined` for a seller row, so the badge
-never renders for one.
+This app has no separate profile page, so the account panel (`#auth-modal`'s
+logged-in view, `refreshAccountAuthUI` in `src/main.js` — see
+"Authentication") is the closest fit: a ranked builder gets a small
+"🏆 Pioneer #N" line there, fetched fresh via `GET /api/builders/me` every
+time the panel opens, showing the actual rank (not just membership) so it
+reads as more impressive the further the platform's real population grows
+past this fixed founding hundred — the spec's own "grows in prestige over
+time." (Before real login existed, this showed in the old free-text
+identity roster's row instead — see migrations/0054's own comment for why
+that roster no longer drives anything.) Sellers have no such concept;
+`isPioneer` is simply `undefined` on a seller row, so no badge applies.
 
 Covered by `e2e/pioneer-badge.test.mjs`: the first two claims on a fresh
 world land ranks #1 and #2 (demonstrating the cohort, not a single
@@ -478,11 +526,16 @@ this section's own opening paragraph for why.
 ## Sellers
 
 A genuinely separate roster from builders — `catalog_templates.seller_id`
-references these, not a builder's ID. Same dev-mode shape as Builders above
-(shared, cross-device, still no real authentication), but a builder and a
-seller are independent identities: uploading a product needs a seller
-identity chosen, quite apart from whichever builder identity (if any) is
-active, and the two aren't linked to each other in any way.
+references these, not a builder's ID. Same shape as Builders above
+(shared, cross-device roster, unauthenticated CRUD-by-ID), but a builder
+and a seller are independent identities: uploading a product needs a
+seller identity chosen, quite apart from whichever builder identity (if
+any) is active. The one deliberate asymmetry from Builders:
+**a seller profile is lazily provisioned on first entry to Sell mode, not
+automatically at signup** — docs/SPEC.md §3 frames selling as the more
+opt-in of the two ("uploading a product needs a seller identity chosen,
+quite apart from whichever builder identity is active"), and there's no
+reason to give every account a seller row it may never use.
 
 ### Seller object
 
@@ -495,6 +548,16 @@ active, and the two aren't linked to each other in any way.
 }
 ```
 
+### `GET /api/sellers/me`
+
+Requires a session (`401` without one). Returns the calling account's own
+seller profile, provisioning one on first call — `label` defaults to the
+account's display name (or the email's local part), same as a builder
+profile's own default. Idempotent afterward, same profile every time.
+**Sell mode now requires a real, logged-in account to enter at all** — the
+same login-wall/fallback-to-Shop behavior "Builders" above describes for
+`ensureBuilderIdentity()` applies identically to `ensureSellerIdentity()`.
+
 ### `GET /api/sellers`
 
 Lists every seller, oldest first. Not paginated, same reasoning as
@@ -502,8 +565,10 @@ Lists every seller, oldest first. Not paginated, same reasoning as
 
 ### `POST /api/sellers`
 
-Creates a seller. `sellerId` is optional; if omitted, the Worker generates
-one.
+Creates a seller, unlinked to any account — same reasoning as
+`POST /api/builders`, kept for direct API/test use now that the frontend
+provisions one automatically via `/sellers/me`. `sellerId` is optional; if
+omitted, the Worker generates one.
 
 Request body:
 
@@ -3143,15 +3208,16 @@ the gate would never see those requests.
 Shop, Build, and Sell are the three peer top-level views, switched via the
 always-visible `#mode-nav` (main.js, not a backend concept). Shop is the
 default landing view — a fresh load or a plain browser refresh goes straight
-into it, no identity gate first, matching how it's always worked (`enterShopMode`
-needs no `builderId`). Build still needs a builder identity and a claimed landlet, so
-switching into it runs the same builder-menu/claim flow bootstrap() always
-ran, just deferred until the nav is actually clicked instead of unconditionally
-at startup. Sell only needs its own seller identity — a genuinely separate
-one from a builder's, not reused (see "Sellers" and "Managing extensibility"
-above) — so it opens as a plain overlay on top of whichever of the other two
-is currently active, no builder identity, mode switch, or claimed landlet
-required.
+into it, no login gate first, matching how it's always worked (`enterShopMode`
+needs no `builderId`). Build now requires a real, logged-in account (see
+"Builders") and a claimed landlet, so switching into it runs the same
+login/claim flow bootstrap() always ran, just deferred until the nav is
+actually clicked instead of unconditionally at startup. Sell only needs
+its own seller identity — a genuinely separate one from a builder's, not
+reused (see "Sellers" and "Managing extensibility" above) — so it opens as
+a plain overlay on top of whichever of the other two is currently active,
+no builder identity, mode switch, or claimed landlet required (just the
+same login requirement, independently).
 
 Shop and Build are different enough scene setups (per-world absolute
 coordinates + flight controls vs. one landlet's local coordinates + build
@@ -3167,21 +3233,26 @@ nothing set always falls back to Shop.
 
 docs/SPEC.md §1's "Visual brand direction": "clean, minimalist, simple ...
 using expanding/collapsing menus to keep persistent on-screen chrome to a
-minimum." The Identity, Notices, Friends, and Settings buttons used to be
-four independent always-visible pills across two screen rows (top-left).
-They're now one collapsed `#account-menu-toggle` pill that expands
-`#account-menu-panel` — a small dropdown holding the same four buttons as
-plain rows — freeing an entire row of screen space in the common case
-where none of them are actually being used.
+minimum." The Log In/Notices/Friends/Settings buttons (originally Identity
+in place of Log In, back when a free-text dev-mode picker stood in for
+real accounts — see "Builders") used to be four independent always-visible
+pills across two screen rows (top-left). They're now one collapsed
+`#account-menu-toggle` pill that expands `#account-menu-panel` — a small
+dropdown holding the same four buttons as plain rows — freeing an entire
+row of screen space in the common case where none of them are actually
+being used.
 
-**The four buttons themselves are unchanged** — same IDs
-(`identity-btn`/`notifications-btn`/`friends-btn`/`settings-btn`), same
-click handlers, same modals. Only their layout changed, from independent
-`position: fixed` pills to normal-flow rows inside the panel. This matters
-for `SHOP_HIDDEN_BUILDER_UI_IDS` (main.js) — Identity/Notices/Friends are
+**Notices/Friends/Settings are otherwise unchanged** — same IDs
+(`notifications-btn`/`friends-btn`/`settings-btn`), same click handlers,
+same modals, just normal-flow rows inside the panel instead of independent
+`position: fixed` pills. The former `identity-btn` slot is now
+`account-auth-btn`, opening `#auth-modal` (real login, or the logged-in
+account panel — see "Authentication") instead of the old picker. This
+matters for `SHOP_HIDDEN_BUILDER_UI_IDS` (main.js) — Notices/Friends are
 still hidden in Shop mode (via `style.display = 'none'` on those specific
-row elements, unchanged), while Settings and the menu toggle itself stay
-visible, since Settings is relevant regardless of mode.
+row elements), while the login button, Settings, and the menu toggle
+itself all stay visible, since checking who's logged in (or logging in at
+all) and Settings are both relevant regardless of mode.
 
 A small red dot appears on the collapsed toggle whenever either badge
 inside has an unread count — pure CSS
@@ -3200,9 +3271,10 @@ Every e2e test that used to click `#identity-btn`/`#notifications-btn`/
 (`e2e/helpers.mjs`) first to expand the panel — Playwright's `.click()`
 requires a target to actually be visible, and a row inside a collapsed
 (`display: none`) panel isn't. Tests that only ever *waited* for
-`#identity-btn` to become visible as a "Build mode finished loading" sync
-point (never clicked it) now wait for `#account-menu-toggle` instead, which
-carries that same always-in-the-DOM-once-Build-mode-loads property.
+`#identity-btn`/`#account-menu-toggle` to become visible as a "Build mode
+finished loading" sync point (never clicked it) wait for
+`#account-menu-toggle` instead, which carries that same
+always-in-the-DOM-once-Build-mode-loads property real login didn't change.
 
 ## Day-night cycle — removed (fixed bright daylight instead)
 

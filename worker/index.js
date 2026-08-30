@@ -988,6 +988,14 @@ async function getVersion(db, landletId, versionId) {
 }
 
 async function handleBuilders(request, db, route) {
+  // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
+  // because of a routing conflict (this is GET, those are other methods)
+  // but so a reader hits "my own profile" before the generic CRUD story —
+  // see handleMyBuilder's own comment for why this exists at all.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
+    return handleMyBuilder(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
@@ -1092,6 +1100,27 @@ async function requireBuilder(db, builderId) {
   return row;
 }
 
+// Real accounts (migrations/0054_link_builders_sellers_to_users.sql) — the
+// builder profile behind the current session, auto-provisioned if somehow
+// missing. Every account already gets one at signup (see handleSignup,
+// docs/SPEC.md §3's "every user is automatically a builder"); the
+// get-or-create here is a defensive fallback for that invariant, not the
+// primary way a builder profile comes to exist, so this should really
+// only ever hit the "already exists" path in practice. 401 with no
+// session (requireCurrentUser); never a 404 either way.
+async function handleMyBuilder(request, db) {
+  const user = await requireCurrentUser(request, db);
+  let row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  if (!row) {
+    const builderId = `builder-${crypto.randomUUID()}`;
+    await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+      .bind(builderId, user.display_name || user.email.split('@')[0], user.user_id).run();
+    row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
+  }
+  row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
+  return json({ builder: builderFromRow(row) });
+}
+
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
 // catalog_templates.seller_id references this table's IDs now, not a
 // builder's. Simpler than handleBuilders: a seller owns no land, so
@@ -1100,6 +1129,10 @@ async function requireBuilder(db, builderId) {
 // in the roster, the same way a template can already have a null
 // seller_id for an unclaimed custom upload.
 async function handleSellers(request, db, route) {
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
+    return handleMySeller(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare('SELECT * FROM sellers ORDER BY created_at, seller_id').all();
     return json({ sellers: results.map(sellerFromRow) });
@@ -1813,6 +1846,22 @@ async function requireSeller(db, sellerId) {
   return row;
 }
 
+// Unlike handleMyBuilder, this get-or-create IS the primary way a seller
+// profile comes to exist — selling stays deliberately opt-in/lazy (see
+// migrations/0054's own comment), not auto-created at signup the way a
+// builder profile is.
+async function handleMySeller(request, db) {
+  const user = await requireCurrentUser(request, db);
+  let row = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+  if (!row) {
+    const sellerId = `seller-${crypto.randomUUID()}`;
+    await db.prepare('INSERT INTO sellers (seller_id, label, user_id) VALUES (?, ?, ?)')
+      .bind(sellerId, user.display_name || user.email.split('@')[0], user.user_id).run();
+    row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  }
+  return json({ seller: sellerFromRow(row) });
+}
+
 // Real accounts (migrations/0053_users_auth.sql) — the first genuinely
 // unforgeable identity in this app; see that migration's own comment for
 // why builders/sellers stay untouched for now. Everything below is scoped
@@ -2040,6 +2089,14 @@ async function handleSignup(request, env, db, url) {
   const passwordHash = await hashPassword(password);
   await db.prepare('INSERT INTO users (user_id, email, password_hash, display_name) VALUES (?, ?, ?, ?)')
     .bind(userId, email, passwordHash, displayName).run();
+
+  // docs/SPEC.md §3: "every user is automatically a builder — no separate
+  // account types." A seller profile stays deliberately lazy instead (see
+  // handleMySeller below) — selling is the more opt-in of the two per that
+  // same section ("uploading a product needs a seller identity chosen,
+  // quite apart from whichever builder identity is active").
+  await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+    .bind(`builder-${crypto.randomUUID()}`, displayName || email.split('@')[0], userId).run();
 
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
   const sessionToken = await createSession(db, userId);

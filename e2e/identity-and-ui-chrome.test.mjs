@@ -1,57 +1,46 @@
-// Regression coverage for the UI-chrome redesign work (tasks #87-102): the
-// identity picker's collapse-until-tapped rows and selected-row highlight,
-// contextual Build/Sell button labels, the Cancel path back out of "Choose
-// a seller," X-close buttons on modals, the Add Item catalog picker's
+// Regression coverage for modal chrome that's still relevant after real
+// login (docs/API.md's "Authentication") replaced the old dev-mode
+// identity picker: the Sell nav's active-immediately/reverts-on-cancel
+// behavior, X-close buttons on modals, the Add Item catalog picker's
 // opaque background and hint-hiding, and the pale-green-pill vs
-// pale-yellow-panel color split.
+// pale-yellow-panel color split. The old picker's own mechanics (rows
+// collapsed until tapped, a contextual choose-button label, "+ New
+// identity") no longer exist — Build/Sell entry is a real signup/login
+// form now, not a list to pick from.
 import { launchPage, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Chrome Suite Tester';
+const EMAIL = `chrome-suite-${Date.now()}@e2e.test`;
+const PASSWORD = 'e2e-test-password-123';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
-// --- Sell nav: active immediately, Close button visible right away (#88, #89) ---
+// --- Sell nav: active immediately, real login wall shown (#88, #89) ---
 await page.click('.mode-nav-btn[data-mode="sell"]');
-await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 const sellNavActiveImmediately = await page.locator('.mode-nav-btn[data-mode="sell"]').evaluate((el) => el.classList.contains('active'));
 console.log('Sell nav active immediately on click (should be true):', sellNavActiveImmediately);
-const closeBtnVisible = await page.locator('#identity-close-btn').isVisible();
-console.log('Close button visible in "Choose a seller" (should be true):', closeBtnVisible);
-
-// --- Identity row: collapsed until tapped, highlighted once expanded (#87, #100) ---
-await page.click('#identity-new-btn');
-await page.waitForTimeout(500);
-const row = () => page.locator('.identity-row').filter({ hasText: LABEL });
-const actionsVisibleBefore = await row().locator('.identity-row-actions').isVisible();
-console.log('row actions hidden before tapping (should be false):', actionsVisibleBefore);
-const expandedBeforeTap = await row().last().evaluate((el) => el.classList.contains('expanded'));
-await row().locator('.identity-row-toggle').last().click();
-await page.waitForTimeout(300);
-const actionsVisibleAfter = await row().locator('.identity-row-actions').isVisible();
-const expandedAfterTap = await row().last().evaluate((el) => el.classList.contains('expanded'));
-console.log('row actions visible after tapping (should be true):', actionsVisibleAfter);
-console.log('row expanded/highlighted after tapping (should be true):', expandedAfterTap);
-
-// --- Contextual choose-button label reads "Sell" here, not "Play" (#101) ---
-const chooseLabel = await row().locator('.identity-choose-btn').last().textContent();
-console.log('choose button label on the seller picker (should be "Sell"):', chooseLabel);
+const closeBtnVisible = await page.locator('#auth-close-btn').isVisible();
+console.log('Close button visible on the login wall (should be true):', closeBtnVisible);
 
 // --- Cancel out entirely: back to Shop, nav no longer stuck active (#88) ---
-await page.click('#identity-close-btn');
+await page.click('#auth-close-btn');
 await page.waitForTimeout(500);
-const modalGoneAfterCancel = await page.locator('#identity-modal.visible').count();
+const modalGoneAfterCancel = await page.locator('#auth-modal.visible').count();
 const sellNavActiveAfterCancel = await page.locator('.mode-nav-btn[data-mode="sell"]').evaluate((el) => el.classList.contains('active'));
 const sellerModalOpenedAfterCancel = await page.locator('#seller-modal.visible').count();
-console.log('identity modal closed after Cancel (should be 0):', modalGoneAfterCancel);
+console.log('auth modal closed after Cancel (should be 0):', modalGoneAfterCancel);
 console.log('Sell nav no longer stuck active after cancel (should be false):', sellNavActiveAfterCancel);
 console.log('seller modal did not open after cancel (should be 0):', sellerModalOpenedAfterCancel);
 
-// --- Re-open, actually choose this time -> Upload Model lives in Seller modal (#90) ---
+// --- Re-open, actually sign up this time -> Upload Model lives in Seller modal (#90) ---
 await page.click('.mode-nav-btn[data-mode="sell"]');
-await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
-await row().locator('.identity-row-toggle').last().click();
-await page.waitForTimeout(300);
-await row().locator('.identity-choose-btn').last().click();
+await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
+await page.click('.auth-tab-btn[data-auth-view="signup"]');
+await page.fill('#auth-signup-name', LABEL);
+await page.fill('#auth-signup-email', EMAIL);
+await page.fill('#auth-signup-password', PASSWORD);
+await page.click('#auth-signup-form button[type="submit"]');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();
 console.log('Upload Model button lives inside Seller modal (should be 1):', uploadBtnInSeller);
@@ -71,14 +60,9 @@ await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
 // --- Catalog picker: opaque background, hides product-info while open (#96, #97) ---
+// Already logged in from the Sell signup above — entering Build mode now
+// resolves the same account's builder profile silently, no login prompt.
 await page.click('.mode-nav-btn[data-mode="build"]');
-await page.waitForSelector('#identity-modal.visible', { timeout: 10000 });
-await page.click('#identity-new-btn');
-await page.waitForTimeout(500);
-const buildRow = page.locator('.identity-row').filter({ hasText: LABEL });
-await buildRow.locator('.identity-row-toggle').last().click();
-await page.waitForTimeout(300);
-await buildRow.locator('.identity-choose-btn').last().click();
 await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(2000);
 const claimStatus = await page.textContent('#claim-status');
@@ -137,12 +121,10 @@ console.log('--pill-rgb (should be the pale green, "214 232 190"):', pillRgb);
 console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb);
 
 const pass = sellNavActiveImmediately && closeBtnVisible &&
-  !actionsVisibleBefore && !expandedBeforeTap && actionsVisibleAfter && expandedAfterTap &&
-  chooseLabel.trim() === 'Sell' &&
   modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellerModalOpenedAfterCancel === 0 &&
   uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
   hintVisibleBeforePicker && hintTextBeforePicker.includes('Tree') && hintHiddenWhilePickerOpen &&
   pickerOpaque && hintVisibleAfterClosingPicker &&
   pillRgb === '214 232 190' && panelRgb === '250 240 199' &&
   errors.length === 0;
-await finish(browser, { pass, label: 'identity picker + modal chrome + catalog picker UI redesign', errors });
+await finish(browser, { pass, label: 'real login wall + modal chrome + catalog picker UI', errors });

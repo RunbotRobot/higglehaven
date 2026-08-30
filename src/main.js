@@ -35,13 +35,8 @@ import {
   fetchLandCandidateRing,
   completeRingGeneration,
   fetchBuilders,
-  createBuilder,
-  renameBuilder,
-  deleteBuilder,
-  fetchSellers,
-  createSeller,
-  renameSeller,
-  deleteSeller,
+  fetchMyBuilder,
+  fetchMySeller,
   fetchAllLandlets,
   fetchNotifications,
   markNotificationRead,
@@ -78,8 +73,6 @@ import {
   fetchPurchases,
   refundPurchase,
 } from './api.js';
-import { setActiveBuilderId, takeLegacyIdentities } from './builderIdentity.js';
-import { setActiveSellerId } from './sellerIdentity.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 
@@ -105,13 +98,11 @@ let myBundles = [];
 let communityBundles = [];
 let activeBundleTab = 'mine';
 
-// There's no auth system yet — a builder is just one of a list of random
-// IDs persisted in localStorage (see builderIdentity.js), chosen via the
-// builder menu at startup (runBuilderMenu, below). Both builderId and
-// currentLandletId are settled once, in bootstrap(), before anything reads
-// them; every instance created afterward is tagged with the chosen
-// builder's ID so builders only ever see and edit their own landlet's
-// placed products.
+// Resolved from the logged-in account's own builder profile (see
+// ensureBuilderIdentity, docs/API.md's "Authentication") once, in
+// bootstrap(), before anything reads it; every instance created afterward
+// is tagged with it so builders only ever see and edit their own
+// landlet's placed products. currentLandletId is settled alongside it.
 let builderId = null;
 let currentLandletId = 'starter-landlet';
 
@@ -3699,8 +3690,8 @@ function renderBuildSettingsSection() {
           });
           // Simplest correct way to get the live scene back in sync with
           // whatever the server now holds — the same "something changed
-          // server-side, reload" pattern openBuilderSwitcher and
-          // claimBackBtn already use elsewhere in this file.
+          // server-side, reload" pattern claimBackBtn already uses
+          // elsewhere in this file.
           sessionStorage.setItem(START_MODE_KEY, 'build');
           location.reload();
         } catch (err) {
@@ -5802,322 +5793,76 @@ async function resolveLandletId() {
   return runClaimFlow();
 }
 
-// Dev-only stand-in for accounts: no passwords, just a locally-kept list of
-// IDs (see builderIdentity.js) a builder can add to, rename, and switch
-// between — e.g. to claim more than one landlet for testing. The same
-// modal DOM also serves the entirely separate seller roster (see
-// sellerIdentity.js/docs/API.md's "Sellers" section) — one shared UI
-// parameterized by an IDENTITY_KINDS config below, rather than two
-// near-identical modals, since only one identity flow is ever in
-// progress at a time. Each kind's own menu (runIdentityMenu) blocks
-// bootstrap() (builder) or the Sell nav/seller-identity button (seller)
-// until one is chosen (mandatory — no Close button); the switcher buttons
-// (#identity-btn / #seller-identity-btn) reopen it any time afterward to
-// switch or rename (Close button shown, since there's already an active
-// choice to dismiss back to).
-const identityBtn = document.getElementById('identity-btn');
-const sellerIdentityBtn = document.getElementById('seller-identity-btn');
-const identityModalEl = document.getElementById('identity-modal');
-const identityModalTitleEl = document.getElementById('identity-modal-title');
-const identityHintEl = document.getElementById('identity-hint');
-const identityListEl = document.getElementById('identity-list');
-const identityNewBtn = document.getElementById('identity-new-btn');
-const identityStatusEl = document.getElementById('identity-status');
-const identityCloseBtn = document.getElementById('identity-close-btn');
+// Real login (docs/API.md's "Authentication") replaced the dev-mode
+// identity picker that used to live here — entering Build or Sell mode
+// now requires a real account, and the resulting builder/seller profile
+// is whichever one that account already has (auto-provisioned server-
+// side — see migrations/0054_link_builders_sellers_to_users.sql), not a
+// free-text label picked from a shared list. ensureBuilderIdentity/
+// ensureSellerIdentity below keep the exact same Promise<id-or-null>
+// contract the old picker-backed versions had (null only if the login
+// prompt is dismissed without logging in), so every other call site in
+// this file — bootstrap()'s Build-mode startup, openSellerModal, the
+// Upload Model fallback — needed no changes at all.
 
-const IDENTITY_KINDS = {
-  builder: {
-    noun: 'builder',
-    idField: 'builderId',
-    chooseLabel: 'Build',
-    fetch: fetchBuilders,
-    create: createBuilder,
-    rename: renameBuilder,
-    delete: deleteBuilder,
-    deleteConfirm: (label) => `Delete "${label}"? Any land it owns is cleared and goes back to available — not just removed from this list.`,
-    hint: 'Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to build as, rename any of them, or add a new one.',
-    // Only the builder flow can be reached mid-startup, before any scene
-    // has committed to Build — a seller identity is only ever needed once
-    // already inside Shop/Build/wherever the Sell tap happened, so
-    // "go to Shop instead" isn't a meaningful escape hatch there.
-    showShopEscape: true,
-  },
-  seller: {
-    noun: 'seller',
-    idField: 'sellerId',
-    chooseLabel: 'Sell',
-    fetch: fetchSellers,
-    create: createSeller,
-    rename: renameSeller,
-    delete: deleteSeller,
-    deleteConfirm: (label) => `Delete "${label}"? Its existing products stay in the catalog but lose their seller link.`,
-    hint: 'Dev-only stand-in for login — no accounts, just IDs kept in this browser. Pick one to sell as, rename any of them, or add a new one.',
-    showShopEscape: false,
-  },
-};
-
-// Which kind the modal is currently showing, and its live onChoose
-// callback (runIdentityMenu's vs a switcher's) — both set whenever the
-// modal opens, read by the per-row Choose buttons and #identity-new-btn
-// (a fresh row needs the same kind/callback wired up as everything else
-// currently on screen).
-let identityKind = IDENTITY_KINDS.builder;
-let identityOnChoose = null;
-
-// The roster itself is fetched fresh from the server every time the modal
-// opens (see docs/API.md's "Builders"/"Sellers" sections) — it's shared
-// across devices now, so a stale local copy could easily be missing an
-// identity someone just created or deleted elsewhere.
-async function renderIdentityList() {
-  const kind = identityKind;
-  identityHintEl.textContent = kind.hint;
-  shopBtn.style.display = kind.showShopEscape ? '' : 'none';
-  identityListEl.innerHTML = '';
-  identityStatusEl.textContent = `Loading ${kind.noun}s…`;
-  identityStatusEl.classList.remove('error');
-  let identities;
-  try {
-    identities = await kind.fetch();
-  } catch (err) {
-    identityStatusEl.textContent = err.message || `Could not load ${kind.noun}s.`;
-    identityStatusEl.classList.add('error');
-    return;
-  }
-  identityStatusEl.textContent = '';
-
-  for (const identity of identities) {
-    const id = identity[kind.idField];
-    const row = document.createElement('div');
-    row.className = 'identity-row';
-
-    // Rename/Delete/Play only show once this row is actually tapped —
-    // showing them inline next to the name on every row meant the name
-    // itself had to be truncated to leave them room, cutting off exactly
-    // the thing a builder/seller most needs to read. Tapping a different
-    // row's toggle collapses whichever one was open before it.
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'identity-row-toggle';
-    const labelEl = document.createElement('div');
-    labelEl.className = 'identity-row-label';
-    labelEl.textContent = identity.label;
-    // Founding/pioneer recognition (docs/SPEC.md §3) — "permanent 'Pioneer'
-    // profile badge," reputational only (see migrations/0044's own
-    // comment). This app has no separate profile page, so the identity
-    // roster row — the one place a builder's own name is actually shown —
-    // is the closest fit. Sellers have no such concept; identity.isPioneer
-    // is simply undefined for them, so this never fires there. Shows the
-    // actual rank (not just membership) so it reads as more impressive the
-    // further the platform's real population grows past this fixed
-    // founding hundred — the spec's own "grows in prestige over time."
-    if (identity.isPioneer) {
-      const pioneerBadge = document.createElement('span');
-      pioneerBadge.className = 'identity-row-pioneer-badge';
-      pioneerBadge.textContent = `🏆 Pioneer #${identity.pioneerRank}`;
-      labelEl.appendChild(pioneerBadge);
-    }
-    const idEl = document.createElement('div');
-    idEl.className = 'identity-row-id';
-    idEl.textContent = id;
-    toggle.append(labelEl, idEl);
-    toggle.addEventListener('click', () => {
-      const wasExpanded = row.classList.contains('expanded');
-      for (const otherRow of identityListEl.querySelectorAll('.identity-row')) otherRow.classList.remove('expanded');
-      if (!wasExpanded) row.classList.add('expanded');
-    });
-
-    const actions = document.createElement('div');
-    actions.className = 'identity-row-actions';
-    const renameBtn = document.createElement('button');
-    renameBtn.type = 'button';
-    renameBtn.textContent = 'Rename';
-    renameBtn.addEventListener('click', async () => {
-      const next = prompt(`Rename this ${kind.noun}`, identity.label);
-      if (!next || !next.trim()) return;
-      try {
-        await kind.rename(id, next.trim());
-      } catch (err) {
-        identityStatusEl.textContent = err.message || 'Could not rename.';
-        identityStatusEl.classList.add('error');
-      }
-      renderIdentityList();
-    });
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', async () => {
-      // Shared across devices now, so the confirm matters more than it
-      // used to — see each kind's own deleteConfirm for what's at stake.
-      if (!confirm(kind.deleteConfirm(identity.label))) return;
-      try {
-        await kind.delete(id);
-      } catch (err) {
-        identityStatusEl.textContent = err.message || 'Could not delete.';
-        identityStatusEl.classList.add('error');
-      }
-      renderIdentityList();
-    });
-    const chooseBtn = document.createElement('button');
-    chooseBtn.type = 'button';
-    chooseBtn.className = 'identity-choose-btn';
-    chooseBtn.textContent = kind.chooseLabel;
-    chooseBtn.addEventListener('click', () => identityOnChoose(id));
-    actions.append(renameBtn, deleteBtn, chooseBtn);
-
-    row.append(toggle, actions);
-    identityListEl.appendChild(row);
-  }
+// Blocks on a real login if nobody's logged in yet, opening #auth-modal
+// (openAuthModal/closeAuthModal/waitForAuthResult are defined with the
+// rest of the account-menu wiring further down) and resolving once
+// login/signup succeeds, or with null if the modal is dismissed without
+// either. Closes the modal itself once resolved — the generic signup
+// handler deliberately leaves it open afterward to show a dev-mode
+// verify-email link (see its own comment), which would otherwise sit on
+// top of the claim/build UI this is about to reveal.
+async function requireLogin(view = 'signup', hint) {
+  if (currentAuthUser) return currentAuthUser;
+  openAuthModal(view);
+  // openAuthModal itself clears any status text, so this has to come
+  // after — a plain, neutral message (no error/success styling) saying
+  // *why* a login wall just appeared, rather than leaving a first-time
+  // visitor to guess.
+  if (hint) setAuthStatus(hint);
+  const user = await waitForAuthResult();
+  closeAuthModal();
+  return user;
 }
 
-// Resolves the promise a pending runIdentityMenu() call returned, if any —
-// set for the span of that call, read by identityCloseBtn's own handler
-// below. null the rest of the time (including during openBuilderSwitcher/
-// openSellerSwitcher, which manage identityOnChoose directly rather than
-// through this promise-returning flow, so Close there is a plain dismiss).
-let pendingIdentityResolve = null;
-
-function runIdentityMenu(kind, setActiveId) {
-  return new Promise((resolve) => {
-    identityKind = kind;
-    identityModalTitleEl.textContent = `Choose a ${kind.noun}`;
-    // The builder flow's own escape hatch is "Shop instead" (showShopEscape)
-    // — Close doesn't make sense there since nothing's loaded yet for it to
-    // go back to. The seller flow has no such button (Sell is only ever
-    // reached from an already-loaded Shop/Build scene, and "go to Shop"
-    // isn't a meaningful additional option from inside it) but does have
-    // something real to cancel back to, so it gets Close instead.
-    identityCloseBtn.style.display = kind.showShopEscape ? 'none' : '';
-    pendingIdentityResolve = resolve;
-    identityOnChoose = (id) => {
-      pendingIdentityResolve = null;
-      setActiveId(id);
-      identityModalEl.classList.remove('visible');
-      resolve(id);
-    };
-    identityModalEl.classList.add('visible');
-    renderIdentityList();
-  });
-}
-
-// Sell only ever needs an identity, not a claimed landlet (the Seller
-// modal reads just activeCatalog + sellerId — see myProducts()) — so
-// reaching it from Shop mode, which never runs bootstrap()'s own builder
-// menu, still needs *some* way to resolve one. Sharing a single in-flight
-// promise (rather than always calling runIdentityMenu() fresh) matters
-// because bootstrap()'s own Build-mode flow can be awaiting the builder
-// menu at the very moment the Sell nav button is tapped — two independent
-// runIdentityMenu() calls would each set their own identityOnChoose, and
-// the second silently overwrites the first, leaving the other's own await
-// hanging forever with no way to resolve. Builder and seller each need
-// their own promise here, not one shared — both flows can genuinely be
-// in flight together (Build mode's own startup menu and a Sell tap).
-// Builder's own mandatory flow never actually offers Close (see
-// runIdentityMenu), so `id` here is never really null in practice — but
-// the check costs nothing and keeps this symmetric with ensureSellerIdentity,
-// which does need it.
+// Two independent in-flight promises (not one shared "identity" flow),
+// for the same reason the old picker's own comment gave: Build mode's own
+// startup can be awaiting a login at the very moment the Sell nav button
+// triggers its own, and each needs to resolve independently.
 let builderIdentityFlowPromise = null;
-function ensureBuilderIdentity() {
-  if (builderId) return Promise.resolve(builderId);
+async function ensureBuilderIdentity() {
+  if (builderId) return builderId;
   if (!builderIdentityFlowPromise) {
-    builderIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.builder, setActiveBuilderId).then((id) => {
-      builderIdentityFlowPromise = null;
-      if (id) builderId = id;
-      return id;
-    });
+    builderIdentityFlowPromise = (async () => {
+      const user = await requireLogin('signup', 'Sign up (or log in) to start building.');
+      if (!user) return null;
+      const builder = await fetchMyBuilder();
+      builderId = builder.builderId;
+      return builderId;
+    })();
   }
-  return builderIdentityFlowPromise;
+  const id = await builderIdentityFlowPromise;
+  builderIdentityFlowPromise = null;
+  return id;
 }
 
-// Resolves to null (rather than a sellerId) if the builder closes the
-// picker instead of choosing one — callers (openSellerModal, the upload
-// flow) need to check for that and back out cleanly rather than treating
-// a cancel as if a seller had been chosen.
 let sellerIdentityFlowPromise = null;
-function ensureSellerIdentity() {
-  if (sellerId) return Promise.resolve(sellerId);
+async function ensureSellerIdentity() {
+  if (sellerId) return sellerId;
   if (!sellerIdentityFlowPromise) {
-    sellerIdentityFlowPromise = runIdentityMenu(IDENTITY_KINDS.seller, setActiveSellerId).then((id) => {
-      sellerIdentityFlowPromise = null;
-      if (id) sellerId = id;
-      return id;
-    });
+    sellerIdentityFlowPromise = (async () => {
+      const user = await requireLogin('signup', 'Sign up (or log in) to start selling.');
+      if (!user) return null;
+      const seller = await fetchMySeller();
+      sellerId = seller.sellerId;
+      return sellerId;
+    })();
   }
-  return sellerIdentityFlowPromise;
+  const id = await sellerIdentityFlowPromise;
+  sellerIdentityFlowPromise = null;
+  return id;
 }
-
-// Shared by #identity-btn and the claim modal's Back button — the identity
-// modal sits at a higher z-index than the claim modal (see index.html) so
-// it can overlay it without needing to hide/reopen the claim modal
-// underneath: choosing the same builder just closes back to it unchanged,
-// and choosing a different one reloads (which tears down and rebuilds
-// everything, claim modal included, for the new builder).
-function openBuilderSwitcher() {
-  identityKind = IDENTITY_KINDS.builder;
-  identityModalTitleEl.textContent = 'Builder identity';
-  identityCloseBtn.style.display = '';
-  identityOnChoose = (id) => {
-    identityModalEl.classList.remove('visible');
-    if (id === builderId) return; // already this builder — nothing to reload
-    setActiveBuilderId(id);
-    // Only reachable from Build mode (see SHOP_HIDDEN_BUILDER_UI_IDS) — the
-    // reload should land back in Build for the new builder, not bounce out
-    // to Shop, the default a bare reload would otherwise pick.
-    sessionStorage.setItem(START_MODE_KEY, 'build');
-    location.reload();
-  };
-  identityModalEl.classList.add('visible');
-  renderIdentityList();
-}
-
-// Reachable only from inside the (already-open) Seller modal — unlike the
-// builder switcher, switching seller identity doesn't need a reload:
-// nothing about the Build/Shop scene depends on which seller is active,
-// only which catalog templates myProducts() considers "mine," so a
-// straight re-render of the seller list is enough.
-function openSellerSwitcher() {
-  identityKind = IDENTITY_KINDS.seller;
-  identityModalTitleEl.textContent = 'Seller identity';
-  identityCloseBtn.style.display = '';
-  identityOnChoose = (id) => {
-    identityModalEl.classList.remove('visible');
-    if (id === sellerId) return; // already this seller — nothing to refresh
-    setActiveSellerId(id);
-    sellerId = id;
-    renderSellerList();
-  };
-  identityModalEl.classList.add('visible');
-  renderIdentityList();
-}
-
-identityBtn.addEventListener('click', openBuilderSwitcher);
-sellerIdentityBtn.addEventListener('click', openSellerSwitcher);
-
-identityCloseBtn.addEventListener('click', () => {
-  identityModalEl.classList.remove('visible');
-  // Only set during a runIdentityMenu() call still awaiting a choice (the
-  // seller flow's own mandatory picker, since the builder one hides Close
-  // entirely) — openBuilderSwitcher/openSellerSwitcher manage their own
-  // identityOnChoose directly and never set this, so Close there stays a
-  // plain dismiss with nothing left to resolve.
-  if (pendingIdentityResolve) {
-    const resolve = pendingIdentityResolve;
-    pendingIdentityResolve = null;
-    resolve(null);
-  }
-});
-
-identityNewBtn.addEventListener('click', async () => {
-  const kind = identityKind;
-  const label = prompt(`Name this ${kind.noun}`, '');
-  if (!label || !label.trim()) return;
-  try {
-    await kind.create(label.trim());
-  } catch (err) {
-    identityStatusEl.textContent = err.message || `Could not create ${kind.noun}.`;
-    identityStatusEl.classList.add('error');
-  }
-  renderIdentityList();
-});
 
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
@@ -6389,13 +6134,13 @@ async function renderFriends() {
 }
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
-// Identity/Notices/Friends/Settings buttons above are unchanged in every
+// Log In/Notices/Friends/Settings buttons above are unchanged in every
 // other respect; this only adds the expand/collapse chrome around them.
-// Each row's own click handler (identityBtn/notificationsBtn/friendsBtn/
-// settingsBtn, all defined elsewhere) already opens its own modal, so the
-// only extra behavior needed here is closing the menu once a row is
-// picked, and closing it on an outside tap the way every other transient
-// popover in this app does.
+// Each row's own click handler (accountAuthBtn/notificationsBtn/
+// friendsBtn/settingsBtn, all defined elsewhere) already opens its own
+// modal, so the only extra behavior needed here is closing the menu once
+// a row is picked, and closing it on an outside tap the way every other
+// transient popover in this app does.
 const accountMenuToggle = document.getElementById('account-menu-toggle');
 const accountMenuPanel = document.getElementById('account-menu-panel');
 accountMenuToggle.addEventListener('click', () => {
@@ -6415,14 +6160,26 @@ document.addEventListener('click', (event) => {
   accountMenuToggle.classList.remove('active');
 });
 
-// Real login (docs/API.md's "Authentication") — deliberately independent
-// of the dev-mode builder/seller identity picker just above (identityBtn/
-// sellerIdentityBtn): a real account doesn't yet drive which builder/
-// seller profile is active, only proves who's logged in. See
-// migrations/0053_users_auth.sql's own comment for why linking the two is
-// separate follow-up work.
+// Real login (docs/API.md's "Authentication") — now the sole way a
+// builder/seller identity is established (see ensureBuilderIdentity/
+// ensureSellerIdentity above, migrations/0054_link_builders_sellers_to_users.sql).
 let currentAuthUser = null;
 let pendingResetToken = null;
+// Resolved by exactly one of: a successful login/signup (notifyAuthResult
+// is called with the new user from both submit handlers below), or
+// dismissing the modal without either (authCloseBtn calls it with null).
+// This is what lets ensureBuilderIdentity/ensureSellerIdentity block on
+// "the user just logged in, or gave up" regardless of which of those two
+// forms — or neither — they actually used.
+let pendingAuthResolvers = [];
+function notifyAuthResult(user) {
+  const resolvers = pendingAuthResolvers;
+  pendingAuthResolvers = [];
+  for (const resolve of resolvers) resolve(user);
+}
+function waitForAuthResult() {
+  return new Promise((resolve) => pendingAuthResolvers.push(resolve));
+}
 const accountAuthBtn = document.getElementById('account-auth-btn');
 const authModalEl = document.getElementById('auth-modal');
 const authModalTitle = document.getElementById('auth-modal-title');
@@ -6439,6 +6196,7 @@ const authForms = {
 const authStatusEl = document.getElementById('auth-status');
 const authAccountEmailEl = document.getElementById('auth-account-email');
 const authAccountVerifiedEl = document.getElementById('auth-account-verified');
+const authAccountPioneerEl = document.getElementById('auth-account-pioneer');
 const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
 const authLogoutBtn = document.getElementById('auth-logout-btn');
 
@@ -6476,6 +6234,17 @@ function refreshAccountAuthUI() {
     authAccountVerifiedEl.textContent = currentAuthUser.emailVerified ? '✓ Email verified' : 'Email not verified yet';
     authAccountVerifiedEl.classList.toggle('verified', currentAuthUser.emailVerified);
     authResendVerifyBtn.hidden = currentAuthUser.emailVerified;
+    // Founding/pioneer recognition (docs/SPEC.md §3) — this app has no
+    // separate profile page, so the account panel is the closest fit (the
+    // old dev-mode identity roster used to show this — see
+    // migrations/0054_link_builders_sellers_to_users.sql's own comment for
+    // why that roster no longer drives Build entry at all). Fetched fresh
+    // on every open rather than cached, since rank/land cap can change
+    // between one open and the next.
+    authAccountPioneerEl.textContent = '';
+    fetchMyBuilder().then((builder) => {
+      if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
+    }).catch(() => {});
   } else {
     accountAuthBtn.textContent = 'Log In';
     authLoggedOutEl.hidden = false;
@@ -6499,8 +6268,19 @@ async function refreshCurrentUser() {
   return currentAuthUser;
 }
 
-accountAuthBtn.addEventListener('click', () => openAuthModal('login'));
-authCloseBtn.addEventListener('click', closeAuthModal);
+accountAuthBtn.addEventListener('click', () => {
+  // refreshAccountAuthUI's own pioneer-rank/land-cap fetch only otherwise
+  // runs right after a login/signup/logout state change — reopening the
+  // panel later without this would keep showing whatever was true at that
+  // moment (e.g. "not yet a pioneer," even well after actually claiming a
+  // landlet and earning the badge).
+  if (currentAuthUser) refreshAccountAuthUI();
+  openAuthModal('login');
+});
+authCloseBtn.addEventListener('click', () => {
+  closeAuthModal();
+  notifyAuthResult(null);
+});
 for (const btn of authTabBtns) {
   btn.addEventListener('click', () => showAuthView(btn.dataset.authView));
 }
@@ -6517,6 +6297,7 @@ authForms.login.addEventListener('submit', async (event) => {
     refreshAccountAuthUI();
     closeAuthModal();
     authForms.login.reset();
+    notifyAuthResult(currentAuthUser);
   } catch (err) {
     setAuthStatus(err.message || 'Could not log in.', 'error');
   }
@@ -6542,6 +6323,12 @@ authForms.signup.addEventListener('submit', async (event) => {
     } else {
       closeAuthModal();
     }
+    // Notified regardless of whether the modal itself just closed —
+    // requireLogin (ensureBuilderIdentity/ensureSellerIdentity's own gate)
+    // closes it unconditionally once resolved, since the dev-mode status
+    // message above would otherwise sit on top of the claim/build UI this
+    // unblocks.
+    notifyAuthResult(currentAuthUser);
   } catch (err) {
     setAuthStatus(err.message || 'Could not sign up.', 'error');
   }
@@ -6615,8 +6402,19 @@ authLogoutBtn.addEventListener('click', async () => {
 // A verify-email or reset-password link (see issueEmailVerification/
 // handleRequestPasswordReset in worker/index.js) lands back on this same
 // page with a query param carrying the token — handled once, up front,
-// then stripped from the URL so a page refresh doesn't replay it.
-(async () => {
+// then stripped from the URL so a page refresh doesn't replay it. Also
+// where currentAuthUser first gets resolved on every page load — stored
+// as authInitPromise (rather than left as a bare fire-and-forget IIFE) so
+// bootstrap() below can await it before checking currentAuthUser itself.
+// Without that, a fresh page load with an already-valid session cookie
+// would race: bootstrap()'s own ensureBuilderIdentity check runs
+// synchronously, reaching `if (currentAuthUser) ...` before this
+// function's GET /api/auth/me round trip could possibly have resolved,
+// wrongly popping the login modal open over a session that was actually
+// fine (caught via a real reload-while-logged-in-and-in-Build-mode e2e
+// scenario, not something a fresh-every-time page load would ever surface
+// on its own).
+const authInitPromise = (async () => {
   const params = new URLSearchParams(location.search);
   const verifyToken = params.get('verifyEmail');
   const resetToken = params.get('resetPassword');
@@ -6707,7 +6505,6 @@ friendsAddBtn.addEventListener('click', async () => {
 // itself needs to know Shop mode exists.
 const shopStatusEl = document.getElementById('shop-status');
 const shopHintEl = document.getElementById('shop-hint');
-const shopBtn = document.getElementById('shop-btn');
 const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
@@ -7682,18 +7479,17 @@ function unloadShopLandletInstances(entry) {
   }
 }
 
-// The normal builder UI (toolbar, product hint, camera debug, undo/redo,
-// the Identity pill) belongs to the single-landlet editing experience —
-// none of it applies while visiting, and left showing it would just
-// overlap Shop's own overlay. There's nothing to restore on the way out:
-// leaving Shop mode (via #mode-nav's Build/Sell buttons) reloads the page
-// rather than trying to undo this.
+// The normal builder UI (toolbar, product hint, camera debug, undo/redo)
+// belongs to the single-landlet editing experience — none of it applies
+// while visiting, and left showing it would just overlap Shop's own
+// overlay. There's nothing to restore on the way out: leaving Shop mode
+// (via #mode-nav's Build/Sell buttons) reloads the page rather than
+// trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'identity-btn', 'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
 ];
 
 async function enterShopMode() {
-  identityModalEl.classList.remove('visible');
   for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopVerticalControlsEl]) {
     el.classList.add('visible');
   }
@@ -7837,18 +7633,6 @@ async function enterShopMode() {
   shopActive = true;
 }
 
-shopBtn.addEventListener('click', () => {
-  // Reached mid-identity-flow (see runBuilderMenu, still awaited by
-  // bootstrap() at this point) — no reload needed since Build mode's own
-  // scene never started loading yet, just a live switch straight into
-  // Shop instead. bootstrap()'s own `await runBuilderMenu()` is left
-  // permanently pending, harmlessly, exactly as it already was before
-  // #mode-nav existed.
-  currentMode = 'shop';
-  updateModeNavUI();
-  enterShopMode();
-});
-
 // The persistent Shop/Build/Sell switcher (#mode-nav) — see START_MODE_KEY's
 // own comment for why Shop<->Build goes through a reload while Sell doesn't.
 const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
@@ -7891,23 +7675,14 @@ function runClaimFlow() {
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
     claimGrowBtn.onclick = () => growTheWorld(resolve);
-    // openBuilderSwitcher() shows the identity modal *over* this one rather
-    // than replacing it (see its own doc comment) — fine when leaving an
-    // already-built scene behind, but here there's nothing built yet to
-    // preserve, and its own Close/Shop paths don't touch this modal at
-    // all, so backing out any way other than actually claiming something
-    // (or picking a genuinely different builder, which reloads on its own)
-    // left this modal sitting there underneath, popping back into view the
-    // moment whatever was covering it closed — including if the builder
-    // this flow is claiming for gets deleted out from under it, since
-    // nothing here is listening for that either. Reloading is the same
-    // clean-slate escape hatch #mode-nav's own Shop/Build switching uses
-    // for the same reason: nothing here to lose, and every path (Close,
-    // Shop, a different
-    // builder, this same builder again) starts over correctly from
-    // runBuilderMenu() either way. Explicitly targeting 'build' keeps this
-    // landing back in the identity/claim flow rather than the bare
-    // reload's own default of Shop.
+    // A reload rather than trying to unwind this modal in place — the
+    // same clean-slate escape hatch #mode-nav's own Shop/Build switching
+    // uses, and for the same reason: there's nothing built yet here to
+    // preserve, so starting bootstrap() over from scratch is simpler than
+    // reasoning about every way this could be left dangling (the builder
+    // this flow is claiming for getting deleted out from under it, say).
+    // Explicitly targeting 'build' keeps this landing back in the
+    // login/claim flow rather than the bare reload's own default of Shop.
     claimBackBtn.onclick = () => {
       sessionStorage.setItem(START_MODE_KEY, 'build');
       location.reload();
@@ -8321,29 +8096,7 @@ async function growTheWorld(resolve) {
 //
 // Runs after animate() has already started so the (empty, for now) scene
 // renders immediately rather than waiting on the network.
-// One-time: a device that already had local-only identities from before
-// the shared roster existed gets them POSTed up under their exact existing
-// IDs, so whatever they'd already claimed stays reachable. Best-effort and
-// not retried — takeLegacyIdentities() clears the local copy regardless of
-// whether the POSTs below actually reach the server, since this is a
-// one-shot migration for pre-existing dev/test data, not something worth
-// building real retry durability around.
-async function migrateLegacyIdentities() {
-  const legacy = takeLegacyIdentities();
-  for (const identity of legacy) {
-    try {
-      await createBuilder(identity.label, identity.id);
-    } catch {
-      // Most likely: this ID is already on the roster (e.g. backfilled
-      // server-side from landlet ownership, or a previous run of this
-      // same migration) — nothing to do.
-    }
-  }
-}
-
 async function bootstrap() {
-  await migrateLegacyIdentities();
-
   // Set by #mode-nav just before its reload; consumed
   // once here. Nothing set — a plain fresh tab — lands on Shop, the
   // product's chosen default landing view (see START_MODE_KEY above).
@@ -8358,9 +8111,26 @@ async function bootstrap() {
     return;
   }
 
+  // Only Build/Sell actually need currentAuthUser settled before
+  // proceeding (see authInitPromise's own comment on the race this
+  // avoids) — deliberately not awaited above, so a Shop-mode visit (the
+  // majority of traffic, and the one path this file already goes out of
+  // its way to render instantly without waiting on the network) is never
+  // held up by it.
+  await authInitPromise;
   currentMode = 'build';
   updateModeNavUI();
   builderId = await ensureBuilderIdentity();
+  if (!builderId) {
+    // Declined to log in (closed #auth-modal without signing in/up) —
+    // Build/Sell both require a real account now (docs/API.md's
+    // "Authentication"), so there's nothing left to build on. Falls back
+    // to Shop mode rather than proceeding with no identity at all.
+    currentMode = 'shop';
+    updateModeNavUI();
+    await enterShopMode();
+    return;
+  }
   refreshNotificationsBadge();
   refreshFriendsBadge();
   let instances;
