@@ -7,7 +7,7 @@
 // collapsed until tapped, a contextual choose-button label, "+ New
 // identity") no longer exist — Build/Sell entry is a real signup/login
 // form now, not a list to pick from.
-import { launchPage, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, openAccountMenu, growWorldAsAdmin, finish } from './helpers.mjs';
 
 const LABEL = 'Chrome Suite Tester';
 const EMAIL = `chrome-suite-${Date.now()}@e2e.test`;
@@ -66,9 +66,10 @@ await page.click('.mode-nav-btn[data-mode="build"]');
 await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(2000);
 const claimStatus = await page.textContent('#claim-status');
-if (claimStatus?.includes("hasn't grown")) {
-  await page.click('#claim-grow-btn');
-  await page.waitForTimeout(3000);
+if (claimStatus?.includes('check back again shortly')) {
+  await growWorldAsAdmin();
+  await page.click('#claim-refresh-btn');
+  await page.waitForTimeout(2000);
 }
 const canvasBox = await page.locator('#claim-map-canvas').boundingBox();
 for (const [fx, fy] of [[0.5, 0.5], [0.4, 0.4], [0.4, 0.3], [0.5, 0.3], [0.2, 0.4], [0.1, 0.4]]) {

@@ -7,6 +7,116 @@ import { chromium } from 'playwright';
 
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || '/opt/pw-browsers/chromium';
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:8787';
+// Matches the value this repo's own .dev.vars sets for local `wrangler
+// dev` (see worker/index.js's handleAdminBootstrap and migrations/
+// 0055_admin_role.sql) — overridable for a CI/CD environment that
+// provisions its own secret instead of committing one.
+const ADMIN_BOOTSTRAP_SECRET = process.env.E2E_ADMIN_BOOTSTRAP_SECRET || 'local-dev-admin-secret';
+
+// Plain Node-side fetch, deliberately not page.evaluate(fetch(...)) —
+// running this inside the browser page would share (and overwrite) the
+// cookie jar of whichever real player identity that page is mid-test as,
+// clobbering their session. A bare fetch here has its own, entirely
+// separate cookie state.
+async function adminApi(path, cookie, options = {}) {
+  const response = await fetch(`${BASE_URL}/api${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...(cookie ? { cookie } : {}),
+      ...options.headers,
+    },
+  });
+  return { response, body: await response.json() };
+}
+
+function extractSessionCookie(response) {
+  const setCookie = response.headers.get('set-cookie');
+  const match = setCookie?.match(/hh_session=([^;]+)/);
+  return match ? `hh_session=${match[1]}` : null;
+}
+
+// One throwaway admin account, reused for the lifetime of this process
+// (each e2e test file runs as its own process — see run-all.mjs — so this
+// caches per file, not across the whole suite).
+let adminCookiePromise = null;
+async function ensureAdminSession() {
+  if (adminCookiePromise) return adminCookiePromise;
+  adminCookiePromise = (async () => {
+    const email = `e2e-admin-${crypto.randomUUID()}@e2e.test`;
+    const signedUp = await adminApi('/auth/signup', null, {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'e2e-admin-password-123' }),
+    });
+    const cookie = extractSessionCookie(signedUp.response);
+    const bootstrapped = await adminApi('/auth/admin-bootstrap', cookie, {
+      method: 'POST',
+      body: JSON.stringify({ secret: ADMIN_BOOTSTRAP_SECRET }),
+    });
+    if (bootstrapped.response.status !== 200) {
+      throw new Error(`ensureAdminSession: admin-bootstrap failed (${bootstrapped.response.status}) — `
+        + 'does .dev.vars configure ADMIN_BOOTSTRAP_SECRET for this wrangler dev instance?');
+    }
+    return cookie;
+  })();
+  return adminCookiePromise;
+}
+
+const GROW_WORLD_MAX_STEPS = 20;
+
+// The real growth mechanism is now automatic (worker/index.js's scheduled()
+// export, on a Cron Trigger) — nothing a real player's browser does
+// anymore, and Cron Triggers don't fire inside a plain `wrangler dev`
+// process the way this suite runs one. This is the e2e suite's own stand-in
+// for that: log in as an admin (see ensureAdminSession above) and drive the
+// exact same admin-gated endpoints the scheduled job itself calls, so a
+// fresh test world always has something claimable. Ported from the removed
+// growTheWorld/expandToEncloseGenerating/generateRingAtBoundary in
+// src/main.js — same two-phase shape (expand to enclose what's already
+// generating, then generate+complete a fresh ring at the boundary if
+// nothing's greenbelt yet), just driven from Node instead of a browser.
+export async function growWorldAsAdmin() {
+  const cookie = await ensureAdminSession();
+  const hasGreenbelt = async () => (await adminApi('/landlets?status=greenbelt&limit=1', cookie)).body.landlets.length > 0;
+  const hasGenerating = async () => (await adminApi('/landlets?status=generating&limit=1', cookie)).body.landlets.length > 0;
+
+  for (let i = 0; i < GROW_WORLD_MAX_STEPS; i++) {
+    if (await hasGreenbelt()) return;
+    if (!(await hasGenerating())) break;
+    const expanded = await adminApi('/world/expand', cookie, { method: 'POST' });
+    if (expanded.response.status !== 200) break; // ratio gate refused — nothing more to enclose this way
+  }
+  if (await hasGreenbelt()) return;
+
+  let world = (await adminApi('/world', cookie)).body.world;
+  let innerRadiusM = world.radiusM;
+  let ring = null;
+  for (let attempt = 0; attempt < GROW_WORLD_MAX_STEPS && !ring; attempt++) {
+    const prefix = `e2e-ring-${Math.round(innerRadiusM)}-${Date.now().toString(36)}`;
+    const generated = await adminApi('/land-candidates/generate-ring', cookie, {
+      method: 'POST',
+      body: JSON.stringify({ prefix, count: 12, innerRadiusM }),
+    });
+    if (generated.response.status === 201) {
+      ring = { ringId: prefix, outerRadiusM: generated.body.outerRadiusM };
+    } else if (generated.body.error === 'Generated ring would overlap existing land candidates') {
+      innerRadiusM += world.expansionIncrementM;
+    } else {
+      throw new Error(`growWorldAsAdmin: generate-ring failed — ${generated.body.error}`);
+    }
+  }
+  if (!ring) throw new Error('growWorldAsAdmin: could not find clear room to generate a new ring');
+
+  for (let i = 0; i < GROW_WORLD_MAX_STEPS; i++) {
+    world = (await adminApi('/world', cookie)).body.world;
+    if (world.radiusM >= ring.outerRadiusM) break;
+    await adminApi('/world/expand', cookie, { method: 'POST' });
+  }
+  const completed = await adminApi(`/land-candidate-rings/${ring.ringId}/generation-complete`, cookie, { method: 'POST' });
+  if (completed.response.status !== 200) {
+    throw new Error(`growWorldAsAdmin: generation-complete failed — ${completed.body.error}`);
+  }
+}
 
 // Launches a fresh browser + page against the running dev server, with
 // console/page errors collected (callers should assert `errors.length === 0`
@@ -79,16 +189,19 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
 }
 
 // Claims whatever landlet the claim-modal's overhead map offers first —
-// grows the world if it hasn't yet, tries a handful of candidate points
-// until one reads "Available," and confirms. Leaves the page on the
-// claimed landlet's own Build view (#account-menu-toggle visible).
+// grows the world as an admin if nothing's claimable yet (see
+// growWorldAsAdmin's own comment on why this can no longer be a player-
+// facing button click), tries a handful of candidate points until one
+// reads "Available," and confirms. Leaves the page on the claimed
+// landlet's own Build view (#account-menu-toggle visible).
 export async function claimLandlet(page) {
   await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
   await page.waitForTimeout(2000);
   const status = await page.textContent('#claim-status');
-  if (status?.includes("hasn't grown")) {
-    await page.click('#claim-grow-btn');
-    await page.waitForTimeout(3000);
+  if (status?.includes('check back again shortly')) {
+    await growWorldAsAdmin();
+    await page.click('#claim-refresh-btn');
+    await page.waitForTimeout(2000);
   }
   const canvasBox = await page.locator('#claim-map-canvas').boundingBox();
   const candidatePoints = [[0.5, 0.5], [0.4, 0.4], [0.4, 0.3], [0.5, 0.3], [0.2, 0.4], [0.1, 0.4]];
