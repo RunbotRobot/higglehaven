@@ -5747,6 +5747,7 @@ function animate(now) {
   requestAnimationFrame(animate);
   if (shopActive) {
     updateShopMovement(now);
+    updateShopSky(now);
   } else {
     updateTargetTween(now);
     applyEdgePanWhileDraggingProduct();
@@ -6606,6 +6607,18 @@ let shopWorldRadiusM = null;
 let shopDomeMesh = null;
 let shopWallMesh = null;
 let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
+let shopSkyMaterial = null; // shared by both wall and dome — see createShopSkyMaterial
+let shopSkyClockStart = null;
+
+// Clouds only ever show in the upper portion of the wall (its own hazy-
+// horizon band) and above — never near the wall's ground-colored base, so
+// the boundary still mostly reads as plain sky/horizon rather than a
+// visibly "effects-y" surface. Both are absolute world Z heights (this
+// world is Z-up, ground at z=0), independent of shopDomeRiseM growing
+// later — see growShopDomeIfNeeded — since growing the dome only extends
+// clear sky *above* SHOP_CLOUD_FADE_HIGH_Z, which was already full opacity.
+const SHOP_CLOUD_FADE_LOW_Z = SHOP_WALL_HEIGHT_M * 0.55;
+const SHOP_CLOUD_FADE_HIGH_Z = SHOP_WALL_HEIGHT_M * 1.25;
 
 // Colors a geometry per-vertex along its own local "up" axis (the axis
 // CylinderGeometry/SphereGeometry both author height/pole along before any
@@ -6625,6 +6638,126 @@ function paintVerticalGradient(geometry, colorAt) {
     colors[i * 3 + 2] = out.b;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+// A soft, slowly swirling cloud layer painted directly over the wall/dome's
+// own vertex-color gradient (vColor below — the exact colors
+// paintVerticalGradient already wrote) rather than replacing it, so the
+// calm horizon/sky look this was tuned to keep is the base case and clouds
+// are only ever a translucent overlay on top of it. One shared material
+// instance for both meshes (see enterShopMode) keeps their animation
+// perfectly in sync and means only one uTime needs updating per frame.
+//
+// The "swirl": each height band drifts around the vertical axis at a
+// slightly different azimuthal speed (see the sin(heightFrac...) term in
+// `drift` below), so bands shear past each other over time instead of the
+// whole sky sliding sideways together — soft, continuous, and slow enough
+// to read as soothing rather than busy. World-space position (not each
+// geometry's own local parametrization) drives both the swirl angle and
+// the height-based fade, so the effect is seamless across the wall/dome
+// seam even though they're two separate meshes with different local
+// coordinate systems.
+const SHOP_SKY_VERTEX_SHADER = `
+  attribute vec3 color;
+  varying vec3 vColor;
+  varying vec3 vWorldPosition;
+  void main() {
+    vColor = color;
+    vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const SHOP_SKY_FRAGMENT_SHADER = `
+  varying vec3 vColor;
+  varying vec3 vWorldPosition;
+  uniform float uTime;
+  uniform float uFadeLowZ;
+  uniform float uFadeHighZ;
+  uniform float uWorldRadius;
+
+  float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+
+  float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+  }
+
+  float fbm(vec2 p) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < 4; i++) {
+      value += amplitude * noise(p);
+      p *= 2.05;
+      amplitude *= 0.55;
+    }
+    return value;
+  }
+
+  void main() {
+    float heightFrac = clamp((vWorldPosition.z - uFadeLowZ) / (uFadeHighZ - uFadeLowZ), 0.0, 1.0);
+    // Rotating the actual XY position (not an extracted angle) around the
+    // vertical axis avoids a polar singularity — sampling noise by angle
+    // alone makes every point near the dome's apex, however close
+    // together, resolve to wildly different angles, which reads as sharp
+    // rays converging to a point rather than soft cloud cover. Rotating
+    // real coordinates has no such singularity: nearby points stay nearby.
+    // Each height band rotates at a slightly different rate (the
+    // sin(heightFrac...) term) so bands shear past each other over time —
+    // that shear is what actually reads as "swirl."
+    float swirlAngle = uTime * (0.02 + 0.015 * sin(heightFrac * 6.2831));
+    float s = sin(swirlAngle);
+    float c = cos(swirlAngle);
+    // Normalized by the world's own current radius (not a fixed meters
+    // scale) so the pattern always spans the same handful of cells around
+    // the dome regardless of how big the world currently is — a fixed
+    // meters-based frequency would compress into a single, texture-less
+    // noise cell for a small early-game world, or tile too busily once the
+    // world has grown large.
+    vec2 normalizedXY = vWorldPosition.xy / max(uWorldRadius, 1.0);
+    vec2 swirled = mat2(c, -s, s, c) * normalizedXY;
+    vec2 samplePos = swirled * 2.5 + vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015);
+    float clouds = fbm(samplePos);
+    clouds = smoothstep(0.42, 0.78, clouds); // soft wispy edges, not blocky noise
+    float visibility = heightFrac * clouds * 0.5; // kept subtle — an overlay, not a repaint
+    vec3 cloudColor = vec3(0.99, 0.99, 1.0);
+    gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
+  }
+`;
+
+function createShopSkyMaterial(worldRadiusM) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uFadeLowZ: { value: SHOP_CLOUD_FADE_LOW_Z },
+      uFadeHighZ: { value: SHOP_CLOUD_FADE_HIGH_Z },
+      uWorldRadius: { value: worldRadiusM },
+    },
+    vertexShader: SHOP_SKY_VERTEX_SHADER,
+    fragmentShader: SHOP_SKY_FRAGMENT_SHADER,
+    side: THREE.BackSide,
+  });
+}
+
+// Called every animate() frame while Shop mode is active (see animate's own
+// dispatch) — advances the shared sky material's clock. A local clock
+// start rather than reusing `now` directly so the shader's time uniform
+// stays small/precise regardless of how long the page has been open before
+// Shop mode was entered.
+function updateShopSky(now) {
+  if (!shopSkyMaterial) return;
+  if (shopSkyClockStart === null) shopSkyClockStart = now;
+  shopSkyMaterial.uniforms.uTime.value = (now - shopSkyClockStart) / 1000;
 }
 
 // Called as each Shop-mode landlet's instances load in (see
@@ -7561,10 +7694,13 @@ async function enterShopMode() {
     const t = THREE.MathUtils.clamp((localY + SHOP_WALL_HEIGHT_M / 2) / SHOP_WALL_HEIGHT_M, 0, 1);
     out.copy(SHOP_GROUND_HORIZON_COLOR).lerp(SHOP_HAZY_HORIZON_COLOR, t);
   });
-  // MeshBasicMaterial (unlit) rather than Standard — a horizon/sky backdrop
-  // isn't a real lit surface, so it shouldn't visibly darken on the side
-  // facing away from the sun the way an actual object would.
-  const wall = new THREE.Mesh(wallGeometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide }));
+  // A custom shader (unlit, like the MeshBasicMaterial this replaced) so a
+  // soft swirling cloud layer can be painted over the vertex-color gradient
+  // below — see createShopSkyMaterial's own comment. Shared with the dome
+  // (created just below) so both animate in perfect sync off one clock.
+  shopSkyMaterial = createShopSkyMaterial(shopWorldRadiusM);
+  shopSkyClockStart = null;
+  const wall = new THREE.Mesh(wallGeometry, shopSkyMaterial);
   wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
   wall.position.z = SHOP_WALL_HEIGHT_M / 2;
   scene.add(wall);
@@ -7584,7 +7720,7 @@ async function enterShopMode() {
     out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
   });
   shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
-  shopDomeMesh = new THREE.Mesh(domeGeometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide }));
+  shopDomeMesh = new THREE.Mesh(domeGeometry, shopSkyMaterial);
   shopDomeMesh.rotation.x = Math.PI / 2;
   shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M;
   shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
@@ -7735,10 +7871,34 @@ function pointInPolygonXY(x, y, polygon) {
 // cut off, same as before.
 const SHOP_COVERAGE_ANGLE_SAMPLES = 144;
 const SHOP_COVERAGE_RADIUS_STEP_M = 2;
+// A landlet without a real generated polygon still actually renders as a
+// plain area-sized square (see shapeForLandlet's own fallback) — computing
+// coverage against real polygons only, while excluding those squares
+// entirely, used to make computeGaplessWorldRadius think there was a gap
+// exactly where starter-landlet's own square visibly sits. Worse than
+// merely inaccurate: starter-landlet ships with an empty polygon by
+// default and only ever gets a real one via the one-time /land-candidates/
+// generate-mosaic call, which the automatic world-growth job (see
+// worker/index.js's autoGrowWorldIfNeeded) never runs — so in a real
+// deployment relying solely on that automatic growth, the origin's
+// "coverage" would come entirely from this fallback square, permanently.
+// Mirrors shapeForLandlet's exact fallback math so this never disagrees
+// with what's actually drawn.
+function landletWorldPolygon(record) {
+  if (record.polygon && record.polygon.length >= 3) {
+    return record.polygon.map((p) => ({ x: record.center.x + p.x, y: record.center.y + p.y }));
+  }
+  const half = Math.sqrt(record.areaM2) / 2;
+  return [
+    { x: record.center.x - half, y: record.center.y - half },
+    { x: record.center.x + half, y: record.center.y - half },
+    { x: record.center.x + half, y: record.center.y + half },
+    { x: record.center.x - half, y: record.center.y + half },
+  ];
+}
+
 function computeGaplessWorldRadius(landlets, worldRadiusM) {
-  const worldPolygons = landlets
-    .filter((record) => record.polygon && record.polygon.length >= 3)
-    .map((record) => record.polygon.map((p) => ({ x: record.center.x + p.x, y: record.center.y + p.y })));
+  const worldPolygons = landlets.map(landletWorldPolygon);
   if (worldPolygons.length === 0) return worldRadiusM; // nothing to measure coverage against yet
   let minCovered = worldRadiusM;
   for (let i = 0; i < SHOP_COVERAGE_ANGLE_SAMPLES; i++) {
