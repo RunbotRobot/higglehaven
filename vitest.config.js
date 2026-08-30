@@ -10,7 +10,12 @@ export default defineConfig(async () => {
         main: './worker/index.js',
         wrangler: { configPath: './wrangler.jsonc' },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations },
+          // A fixed, known secret so the test suite can exercise admin-
+          // gated endpoints (see migrations/0055_admin_role.sql,
+          // handleAdminBootstrap) without ever configuring a real one —
+          // same "test env gets its own deterministic value" reasoning
+          // this config already uses for TEST_MIGRATIONS.
+          bindings: { TEST_MIGRATIONS: migrations, ADMIN_BOOTSTRAP_SECRET: 'test-admin-bootstrap-secret' },
         },
       }),
     ],

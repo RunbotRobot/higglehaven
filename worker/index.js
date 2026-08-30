@@ -2094,6 +2094,7 @@ function userFromRow(row) {
     email: row.email,
     displayName: row.display_name,
     emailVerified: row.email_verified_at !== null,
+    isAdmin: Boolean(row.is_admin),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -2164,6 +2165,18 @@ async function requireCurrentUser(request, db) {
   return user;
 }
 
+// Gates world-generation tooling (see migrations/0055_admin_role.sql) —
+// manual /api/world settings edits and the land-candidate/ring endpoints
+// below. Deliberately NOT applied to the endpoints that actually grow the
+// world day to day (see the scheduled() export near the bottom of this
+// file) — those run automatically, unauthenticated, as the trusted server
+// itself, not through any HTTP request a session could gate.
+async function requireAdmin(request, db) {
+  const user = await requireCurrentUser(request, db);
+  if (!user.is_admin) throw new HttpError('Admin access required', 403);
+  return user;
+}
+
 // Resend's REST API (https://resend.com/docs/api-reference/emails/send-email)
 // — chosen for a simple, well-documented API and a free tier generous
 // enough for this stage. Returns quietly (no email actually sent) whenever
@@ -2203,7 +2216,33 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'resend-verification') {
     return handleResendVerification(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
+    return handleAdminBootstrap(request, env, db);
+  }
   return json({ error: 'Not found' }, 404);
+}
+
+// The only way to become an admin (see migrations/0055_admin_role.sql) —
+// requires both a real session AND a Worker secret only whoever deploys
+// this app knows, never a self-service signup path the way builder/seller
+// profiles are. Reusable, not one-time: anyone who currently holds the
+// secret can promote themselves (or, by sharing it briefly, someone else)
+// at any time — simpler than a "first admin only" ratchet, and matching
+// this codebase's existing dev-mode-first, don't-build-what-isn't-needed-
+// yet posture. Revoking admin status has no endpoint either; it's a rare
+// enough operation to do directly against the database.
+async function handleAdminBootstrap(request, env, db) {
+  if (!env.ADMIN_BOOTSTRAP_SECRET) throw new HttpError('Admin bootstrap is not configured', 404);
+  const user = await requireCurrentUser(request, db);
+  const input = await readJson(request);
+  const secret = stringValue(input.secret, 'secret');
+  if (!timingSafeEqual(secret, env.ADMIN_BOOTSTRAP_SECRET)) {
+    throw new HttpError('Incorrect admin bootstrap secret', 403);
+  }
+  await db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
+    .bind(user.user_id).run();
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
 }
 
 async function handleSignup(request, env, db, url) {

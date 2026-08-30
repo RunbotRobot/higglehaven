@@ -1,0 +1,15 @@
+-- A real admin role (docs/API.md's "Authorization model"). World generation
+-- (/api/world, /api/land-candidates*, /api/land-candidate-rings*) has always
+-- been unauthenticated tooling — fine while nothing but this dev-mode
+-- backend's own test/seed scripts touched it, not fine once every mutating
+-- endpoint elsewhere requires a real session (migrations 0053/0054). Rather
+-- than inventing a separate roster the way builders/sellers work, admin
+-- status is a flag directly on `users`: there's no builder/seller-style
+-- "everyone gets one automatically" story here, and only a handful of
+-- trusted operators should ever hold it.
+--
+-- No self-service signup path grants this — see handleAdminBootstrap in
+-- worker/index.js, gated behind a Worker secret (ADMIN_BOOTSTRAP_SECRET,
+-- `wrangler secret put`, never committed, same pattern ACCESS_PASSPHRASE/
+-- RESEND_API_KEY already use) that only whoever deploys the Worker knows.
+ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;

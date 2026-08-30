@@ -91,6 +91,19 @@ function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
   return new File([bytes], 'chair.glb', { type: 'model/gltf-binary' });
 }
 
+// Admin status (migrations/0055_admin_role.sql) has no self-service signup
+// path — this mirrors handleAdminBootstrap's real contract (sign up, then
+// prove you hold ADMIN_BOOTSTRAP_SECRET) using the fixed test-env secret
+// vitest.config.js configures.
+async function signupAdmin(label) {
+  const account = await signupBuilder(label);
+  const bootstrapped = await api('/auth/admin-bootstrap', account.session({
+    method: 'POST',
+    body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+  }));
+  return { ...account, isAdmin: bootstrapped.body.user.isAdmin };
+}
+
 describe('Worker API', () => {
   it('validates, stores, and serves complete glTF 2.0 binary models', async () => {
     const form = new FormData();
@@ -3318,6 +3331,42 @@ describe('Authentication', () => {
     const response = await api('/auth/me');
     expect(response.response.status).toBe(200);
     expect(response.body.user).toBeNull();
+  });
+
+  it('admin-bootstrap requires a session and the correct secret, and is reusable', async () => {
+    const account = await signupBuilder('bootstrap-tester');
+    expect(account.builder).toBeTruthy();
+
+    const noSession = await api('/auth/admin-bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    });
+    expect(noSession.response.status).toBe(401);
+
+    const wrongSecret = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST',
+      body: JSON.stringify({ secret: 'not-the-real-secret' }),
+    }));
+    expect(wrongSecret.response.status).toBe(403);
+
+    const meBeforeBootstrap = await api('/auth/me', account.session());
+    expect(meBeforeBootstrap.body.user.isAdmin).toBe(false);
+
+    const bootstrapped = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST',
+      body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    expect(bootstrapped.response.status).toBe(200);
+    expect(bootstrapped.body.user.isAdmin).toBe(true);
+
+    // Reusable, not one-time — calling it again while already an admin is
+    // still a plain success, not a 409 or similar.
+    const again = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST',
+      body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    expect(again.response.status).toBe(200);
+    expect(again.body.user.isAdmin).toBe(true);
   });
 
   it('rejects signup with an already-registered email, case-insensitively', async () => {
