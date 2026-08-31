@@ -160,7 +160,7 @@ login → reset flow fully testable without a real email provider.
 ### `POST /api/auth/signup`
 
 ```json
-{ "email": "ada@example.com", "password": "correct horse battery staple", "displayName": "Ada" }
+{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada" }
 ```
 
 `email` is normalized (trimmed, lowercased) and validated against a
@@ -170,8 +170,10 @@ is actually receiving mail at it, which email verification already does.
 `409` if that email is already registered (revealing a duplicate email
 here is common, accepted practice — unlike the password-reset-request
 endpoint below, which deliberately stays silent about whether an account
-exists). `password` must be 8–200 characters. `displayName` is optional
-and unvalidated beyond being a non-empty string.
+exists). `password` must be 8–200 characters. `username` is required (how
+users identify each other, not a cosmetic label), at most 40 characters,
+and must be unique — `409` if it's already taken, case-insensitively
+("Ada" and "ada" are the same username).
 
 Creates the account, logs it in immediately (sets the `hh_session`
 cookie — no separate login step needed right after signup), and kicks off
@@ -179,7 +181,7 @@ email verification:
 
 ```json
 {
-  "user": { "userId": "user-...", "email": "ada@example.com", "displayName": "Ada", "emailVerified": false, "createdAt": "...", "updatedAt": "..." },
+  "user": { "userId": "user-...", "email": "ada@example.com", "username": "Ada", "emailVerified": false, "createdAt": "...", "updatedAt": "..." },
   "verificationEmailSent": true
 }
 ```
@@ -409,8 +411,7 @@ requires a session logged in as that builder (`403` otherwise — see
 adds a `user_id` column, and **every account is automatically given a
 linked builder profile at signup** (docs/SPEC.md §3: "every user is
 automatically a builder — no separate account types"), with its `label`
-defaulting to the account's display name (or the email's local part if
-none was given).
+set to the account's username.
 
 **Build mode now requires a real, logged-in account to enter at all.**
 `src/main.js`'s `ensureBuilderIdentity()` — previously backed by a
@@ -628,9 +629,9 @@ reason to give every account a seller row it may never use.
 ### `GET /api/sellers/me`
 
 Requires a session (`401` without one). Returns the calling account's own
-seller profile, provisioning one on first call — `label` defaults to the
-account's display name (or the email's local part), same as a builder
-profile's own default. Idempotent afterward, same profile every time.
+seller profile, provisioning one on first call — `label` is set to the
+account's username, same as a builder profile. Idempotent afterward, same
+profile every time.
 **Sell mode now requires a real, logged-in account to enter at all** — the
 same login-wall/fallback-to-Shop behavior "Builders" above describes for
 `ensureBuilderIdentity()` applies identically to `ensureSellerIdentity()`.

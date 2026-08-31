@@ -6222,7 +6222,7 @@ function showAuthView(view) {
 
 function refreshAccountAuthUI() {
   if (currentAuthUser) {
-    accountAuthBtn.textContent = currentAuthUser.displayName || currentAuthUser.email;
+    accountAuthBtn.textContent = currentAuthUser.username;
     authLoggedOutEl.hidden = true;
     authLoggedInEl.hidden = false;
     authModalTitle.textContent = 'Account';
@@ -6303,10 +6303,10 @@ authForms.signup.addEventListener('submit', async (event) => {
   event.preventDefault();
   const email = document.getElementById('auth-signup-email').value;
   const password = document.getElementById('auth-signup-password').value;
-  const displayName = document.getElementById('auth-signup-name').value.trim();
+  const username = document.getElementById('auth-signup-username').value.trim();
   setAuthStatus('');
   try {
-    const result = await signUp({ email, password, displayName: displayName || undefined });
+    const result = await signUp({ email, password, username });
     currentAuthUser = result.user;
     refreshAccountAuthUI();
     authForms.signup.reset();

@@ -32,7 +32,7 @@ async function openAuthModal(page) {
 // --- Sign up (dev-mode fallback surfaces the verify link in #auth-status) ---
 await openAuthModal(page);
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
-await page.fill('#auth-signup-name', 'Ada Suite');
+await page.fill('#auth-signup-username', 'Ada Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
 await page.click('#auth-signup-form button[type="submit"]');

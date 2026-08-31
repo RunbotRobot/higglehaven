@@ -48,11 +48,11 @@ function extractCookie(response) {
   return match ? `hh_session=${match[1]}` : null;
 }
 
-async function signUp(email, displayName) {
+async function signUp(email, username) {
   const response = await fetch(`${BASE_URL}/api/auth/signup`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password: PASSWORD, displayName }),
+    body: JSON.stringify({ email, password: PASSWORD, username }),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`signup ${email} -> ${response.status}: ${body.error}`);

@@ -46,7 +46,7 @@ async function ensureAdminSession() {
     const email = `e2e-admin-${crypto.randomUUID()}@e2e.test`;
     const signedUp = await adminApi('/auth/signup', null, {
       method: 'POST',
-      body: JSON.stringify({ email, password: 'e2e-admin-password-123' }),
+      body: JSON.stringify({ email, password: 'e2e-admin-password-123', username: `e2e-admin-${crypto.randomUUID().slice(0, 8)}` }),
     });
     const cookie = extractSessionCookie(signedUp.response);
     const bootstrapped = await adminApi('/auth/admin-bootstrap', cookie, {
@@ -171,7 +171,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   }
   const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
   await page.click('.auth-tab-btn[data-auth-view="signup"]');
-  await page.fill('#auth-signup-name', label);
+  await page.fill('#auth-signup-username', label);
   await page.fill('#auth-signup-email', email);
   await page.fill('#auth-signup-password', 'e2e-test-password-123');
   await page.click('#auth-signup-form button[type="submit"]');

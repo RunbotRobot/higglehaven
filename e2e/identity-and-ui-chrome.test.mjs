@@ -37,7 +37,7 @@ console.log('seller modal did not open after cancel (should be 0):', sellerModal
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
-await page.fill('#auth-signup-name', LABEL);
+await page.fill('#auth-signup-username', LABEL);
 await page.fill('#auth-signup-email', EMAIL);
 await page.fill('#auth-signup-password', PASSWORD);
 await page.click('#auth-signup-form button[type="submit"]');

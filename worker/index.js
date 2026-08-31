@@ -1182,7 +1182,7 @@ async function getOrCreateBuilderForUser(db, user) {
   if (!row) {
     const builderId = `builder-${crypto.randomUUID()}`;
     await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-      .bind(builderId, user.display_name || user.email.split('@')[0], user.user_id).run();
+      .bind(builderId, user.username, user.user_id).run();
     row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   }
   return row;
@@ -1991,7 +1991,7 @@ async function getOrCreateSellerForUser(db, user) {
   if (!row) {
     const sellerId = `seller-${crypto.randomUUID()}`;
     await db.prepare('INSERT INTO sellers (seller_id, label, user_id) VALUES (?, ?, ?)')
-      .bind(sellerId, user.display_name || user.email.split('@')[0], user.user_id).run();
+      .bind(sellerId, user.username, user.user_id).run();
     row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
   }
   return row;
@@ -2103,11 +2103,24 @@ function passwordValue(value) {
   return value;
 }
 
+// Required, unlike the old free-text-or-blank display_name it replaces
+// (see migrations/0056_username_required_unique.sql) — how users
+// identify each other now, so a blank one defeats the point. No character
+// restriction beyond that, matching this codebase's existing minimal-
+// validation style for other free-text labels (builder/seller names).
+// Uniqueness itself is checked separately against the DB (see
+// handleSignup) since it isn't something a single value can validate.
+function usernameValue(value) {
+  const username = stringValue(value, 'username');
+  if (username.length > 40) throw new HttpError('username must be at most 40 characters', 400);
+  return username;
+}
+
 function userFromRow(row) {
   return {
     userId: row.user_id,
     email: row.email,
-    displayName: row.display_name,
+    username: row.username,
     emailVerified: row.email_verified_at !== null,
     isAdmin: Boolean(row.is_admin),
     createdAt: row.created_at,
@@ -2264,17 +2277,21 @@ async function handleSignup(request, env, db, url) {
   const input = await readJson(request);
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
-  const displayName = input.displayName !== undefined && input.displayName !== null
-    ? stringValue(input.displayName, 'displayName')
-    : null;
+  const username = usernameValue(input.username);
 
-  const existing = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
-  if (existing) throw new HttpError('Email is already registered', 409);
+  const existingEmail = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
+  if (existingEmail) throw new HttpError('Email is already registered', 409);
+  // COLLATE NOCASE on users.username (see migrations/0056) already makes
+  // "Ada" and "ada" the same value at the DB level; checked here too so
+  // the conflict gets this friendly message instead of a raw constraint
+  // error, mirroring the email check just above.
+  const existingUsername = await db.prepare('SELECT user_id FROM users WHERE username = ?').bind(username).first();
+  if (existingUsername) throw new HttpError('Username is already taken', 409);
 
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
-  await db.prepare('INSERT INTO users (user_id, email, password_hash, display_name) VALUES (?, ?, ?, ?)')
-    .bind(userId, email, passwordHash, displayName).run();
+  await db.prepare('INSERT INTO users (user_id, email, password_hash, username) VALUES (?, ?, ?, ?)')
+    .bind(userId, email, passwordHash, username).run();
 
   // docs/SPEC.md §3: "every user is automatically a builder — no separate
   // account types." A seller profile stays deliberately lazy instead (see
@@ -2282,7 +2299,7 @@ async function handleSignup(request, env, db, url) {
   // same section ("uploading a product needs a seller identity chosen,
   // quite apart from whichever builder identity is active").
   await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(`builder-${crypto.randomUUID()}`, displayName || email.split('@')[0], userId).run();
+    .bind(`builder-${crypto.randomUUID()}`, username, userId).run();
 
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
   const sessionToken = await createSession(db, userId);

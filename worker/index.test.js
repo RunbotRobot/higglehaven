@@ -36,8 +36,14 @@ function withSession(token, options = {}) {
   return { ...options, headers: { ...options.headers, cookie: `hh_session=${token}` } };
 }
 
+// username is required at signup (migrations/0056_username_required_unique.sql)
+// and unique, so tests that don't care what it is (most of them — only a
+// handful actually assert on the chosen username) get a fresh random one
+// by default rather than needing to invent one at every call site; `extra`
+// can still override it for the tests that do care.
 async function signup(email, password, extra = {}) {
-  return api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...extra }) });
+  const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ...extra };
+  return api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
 }
 
 // Signs up a fresh account and returns its auto-provisioned builder profile
@@ -46,7 +52,7 @@ async function signup(email, password, extra = {}) {
 // that builderId can no longer be passed in directly.
 async function signupBuilder(label) {
   const email = `${label}-${crypto.randomUUID()}@example.com`;
-  const signedUp = await signup(email, 'a fine long password here', { displayName: label });
+  const signedUp = await signup(email, 'a fine long password here', { username: label });
   const sessionToken = extractSessionCookie(signedUp.response);
   const me = await api('/builders/me', withSession(sessionToken));
   return {
@@ -63,7 +69,7 @@ async function signupBuilder(label) {
 // signup rather than needing its own account-creation path.
 async function signupSeller(label) {
   const email = `${label}-${crypto.randomUUID()}@example.com`;
-  const signedUp = await signup(email, 'a fine long password here', { displayName: label });
+  const signedUp = await signup(email, 'a fine long password here', { username: label });
   const sessionToken = extractSessionCookie(signedUp.response);
   const me = await api('/sellers/me', withSession(sessionToken));
   return {
@@ -3613,7 +3619,7 @@ describe('Authentication', () => {
 
   it('signup automatically provisions a linked builder profile', async () => {
     const email = `auth-builder-${crypto.randomUUID()}@example.com`;
-    const signedUp = await signup(email, 'a fine long password', { displayName: 'Ada Builder' });
+    const signedUp = await signup(email, 'a fine long password', { username: 'Ada Builder' });
     const sessionToken = extractSessionCookie(signedUp.response);
 
     const myBuilder = await api('/builders/me', withSession(sessionToken));
@@ -3624,13 +3630,23 @@ describe('Authentication', () => {
     // Idempotent — the same profile every time, not a new one per call.
     const myBuilderAgain = await api('/builders/me', withSession(sessionToken));
     expect(myBuilderAgain.body.builder.builderId).toBe(myBuilder.body.builder.builderId);
+  });
 
-    // Falls back to the email's local part when no display name was given.
-    const emailOnly = `auth-builder-noname-${crypto.randomUUID()}@example.com`;
-    const signedUpNoName = await signup(emailOnly, 'a fine long password');
-    const noNameSession = extractSessionCookie(signedUpNoName.response);
-    const noNameBuilder = await api('/builders/me', withSession(noNameSession));
-    expect(noNameBuilder.body.builder.label).toBe(emailOnly.split('@')[0]);
+  it('rejects signup with a missing username, or one already taken (case-insensitively)', async () => {
+    const noUsername = await api('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email: `auth-nouser-${crypto.randomUUID()}@example.com`, password: 'a fine long password' }),
+    });
+    expect(noUsername.response.status).toBe(400);
+
+    const takenUsername = `taken-${crypto.randomUUID().slice(0, 8)}`;
+    await signup(`auth-uname-a-${crypto.randomUUID()}@example.com`, 'a fine long password', { username: takenUsername });
+    const dupe = await signup(
+      `auth-uname-b-${crypto.randomUUID()}@example.com`,
+      'a fine long password',
+      { username: takenUsername.toUpperCase() },
+    );
+    expect(dupe.response.status).toBe(409);
   });
 
   it('/builders/me requires a session', async () => {
@@ -3640,7 +3656,7 @@ describe('Authentication', () => {
 
   it('lazily provisions a linked seller profile on first access, not at signup', async () => {
     const email = `auth-seller-${crypto.randomUUID()}@example.com`;
-    const signedUp = await signup(email, 'a fine long password', { displayName: 'Ada Seller' });
+    const signedUp = await signup(email, 'a fine long password', { username: 'Ada Seller' });
     const sessionToken = extractSessionCookie(signedUp.response);
 
     const mySeller = await api('/sellers/me', withSession(sessionToken));
