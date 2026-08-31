@@ -6693,15 +6693,34 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
   }
 
+  // Band-limited fbm: each octave is faded out once its own noise-space
+  // period gets small relative to how much p itself changes between
+  // neighboring screen pixels (fwidth(p)). Without this, looking nearly
+  // straight up into the dome compresses a huge sweep of world-space
+  // azimuth into a handful of screen pixels near the apex, so the same
+  // pixel-to-pixel jump in p covers many full cycles of the higher
+  // octaves — undersampling them, which aliases into sharp radiating
+  // streaks rather than soft cloud texture. Fading each octave out before
+  // that happens leaves only the octaves that are still actually resolved
+  // at that pixel, which reads as a smooth (if slightly hazier) blend
+  // instead — exactly the soft wisp this was meant to look like everywhere,
+  // not just where the view happens to be gentle enough not to alias.
   float fbm(vec2 p) {
     float value = 0.0;
     float amplitude = 0.5;
+    float totalWeight = 0.0;
     for (int i = 0; i < 4; i++) {
-      value += amplitude * noise(p);
+      float footprint = fwidth(p.x) + fwidth(p.y);
+      float fade = 1.0 - smoothstep(0.005, 0.05, footprint);
+      value += amplitude * fade * noise(p);
+      totalWeight += amplitude * fade;
       p *= 2.05;
       amplitude *= 0.55;
     }
-    return value;
+    // Renormalize so fading out high octaves near the apex converges the
+    // result toward the (still fully resolved) low-frequency base rather
+    // than just going dim/dark — a change in texture, not in brightness.
+    return totalWeight > 0.0001 ? value / totalWeight : value;
   }
 
   void main() {
@@ -6728,8 +6747,13 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     vec2 swirled = mat2(c, -s, s, c) * normalizedXY;
     vec2 samplePos = swirled * 2.5 + vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015);
     float clouds = fbm(samplePos);
-    clouds = smoothstep(0.42, 0.78, clouds); // soft wispy edges, not blocky noise
-    float visibility = heightFrac * clouds * 0.5; // kept subtle — an overlay, not a repaint
+    // A narrow smoothstep range here reads as a near-binary edge — cloud or
+    // not, with barely any blend in between — which combined with how pale
+    // both colors already are shows up as a hard visible line at the
+    // boundary rather than a soft wisp. Widening it spreads the transition
+    // across much more of the noise field's own range.
+    float cloudMask = smoothstep(0.25, 0.95, clouds);
+    float visibility = heightFrac * cloudMask * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
     gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
   }
@@ -6746,6 +6770,11 @@ function createShopSkyMaterial(worldRadiusM) {
     vertexShader: SHOP_SKY_VERTEX_SHADER,
     fragmentShader: SHOP_SKY_FRAGMENT_SHADER,
     side: THREE.BackSide,
+    // fwidth() in fbm() (used to band-limit the noise near the dome apex,
+    // see fbm's own comment) needs this extension under WebGL1/GLSL ES
+    // 1.00; harmless no-op where the renderer already exposes it as core
+    // (WebGL2).
+    extensions: { derivatives: true },
   });
 }
 
