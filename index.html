@@ -1729,15 +1729,20 @@
         background: var(--brand-green);
         color: #16240a;
         font: 14px/1.4 sans-serif;
-        transition: transform 100ms ease;
+        transition: transform 90ms ease, background-color 90ms ease;
       }
       /* Tactile press feedback, same .pressed pattern as the gizmo
          controls' own Copy button (see #gizmo-mode-controls button.pressed)
-         — a brief scale-down so tapping Log In/Sign Up while waiting on the
-         network still visibly registers, rather than the button looking
-         inert until the request resolves. */
+         — a brief scale-down + darken so tapping Log In/Sign Up while
+         waiting on the network still visibly registers, rather than the
+         button looking inert until the request resolves. Bigger than the
+         gizmo buttons' own 0.92/no-color-change version and paired with an
+         actual color shift (not just scale) — this button's resting state
+         is already the brand green those buttons only turn on press, so
+         scale alone read as too faint to notice as "an animation." */
       .auth-form > button[type='submit'].pressed {
-        transform: scale(0.94);
+        transform: scale(0.88);
+        background: #4e7622;
       }
       .auth-link-btn {
         align-self: flex-start;

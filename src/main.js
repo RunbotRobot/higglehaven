@@ -6313,7 +6313,7 @@ function flashSubmitPressed(form) {
   const btn = form.querySelector('button[type="submit"]');
   if (!btn) return;
   btn.classList.add('pressed');
-  setTimeout(() => btn.classList.remove('pressed'), 150);
+  setTimeout(() => btn.classList.remove('pressed'), 220);
 }
 
 authForms.login.addEventListener('submit', async (event) => {
@@ -6428,6 +6428,18 @@ authLogoutBtn.addEventListener('click', async () => {
     // itself failed.
   }
   currentAuthUser = null;
+  // Build mode requires a real, logged-in account (ensureBuilderIdentity's
+  // own login wall) — staying on it post-logout would just immediately
+  // reprompt the login modal over whatever was on screen, stranding the
+  // builder mid-edit with no identity behind it. A reload into Shop
+  // instead is the same clean-slate escape hatch #mode-nav's own Shop<->
+  // Build switching already uses (see its own comment), and Shop needs no
+  // account at all, so it's always a safe place to land after logging out.
+  if (currentMode === 'build') {
+    sessionStorage.setItem(START_MODE_KEY, 'shop');
+    location.reload();
+    return;
+  }
   refreshAccountAuthUI();
   closeAuthModal();
 });

@@ -353,6 +353,23 @@ async function main() {
   });
   console.log(`${auctionSeller.label} started an auction on ${auctionSeller.landletId}, with 2 bids so far.`);
 
+  // ---- Publish every builder's landlet ----
+  // Placing an instance only ever edits a landlet's draft (placed_instances)
+  // — Shop mode always renders whatever was last *published* there (see
+  // docs/API.md's "Landlet drafts"/"Landlet versions" and the Publish
+  // button in Build mode's own Settings panel), same as any real site
+  // builder's draft-vs-live distinction. Without this, every plot built up
+  // above would still show as empty/unclaimed-looking to anyone exploring
+  // in Shop mode, defeating the point of a "realistic mockup dataset."
+  for (const builder of builders) {
+    const { version } = await api(`/landlets/${builder.landletId}/versions`, builder.cookie, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    await api(`/landlets/${builder.landletId}/versions/${version.versionId}/activate`, builder.cookie, { method: 'POST' });
+  }
+  console.log(`Published every builder's landlet so their builds actually show up in Shop mode.`);
+
   console.log('\n=== Mockup data ready ===');
   console.log(`Admin:    ${admin.email} / ${PASSWORD}`);
   for (const builder of builders) console.log(`Builder:  ${builder.email} / ${PASSWORD}  (landlet ${builder.landletId})`);
