@@ -1700,6 +1700,28 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
+      /* Wraps the signup password field so a Show/Hide toggle can sit right
+         next to it — lets someone check what they actually typed before
+         submitting, rather than trusting a masked field with no way to
+         double back on a typo. */
+      .auth-password-field {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .auth-password-field input {
+        flex: 1;
+        min-width: 0;
+      }
+      .auth-password-toggle-btn {
+        flex-shrink: 0;
+        padding: 7px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text-soft);
+        font: 13px/1.4 sans-serif;
+      }
       .auth-form > button[type='submit'] {
         padding: 9px 16px;
         border-radius: 999px;
@@ -1707,6 +1729,15 @@
         background: var(--brand-green);
         color: #16240a;
         font: 14px/1.4 sans-serif;
+        transition: transform 100ms ease;
+      }
+      /* Tactile press feedback, same .pressed pattern as the gizmo
+         controls' own Copy button (see #gizmo-mode-controls button.pressed)
+         — a brief scale-down so tapping Log In/Sign Up while waiting on the
+         network still visibly registers, rather than the button looking
+         inert until the request resolves. */
+      .auth-form > button[type='submit'].pressed {
+        transform: scale(0.94);
       }
       .auth-link-btn {
         align-self: flex-start;
@@ -2412,7 +2443,7 @@
     <div id="account-menu">
       <button id="account-menu-toggle" type="button">Menu</button>
       <div id="account-menu-panel">
-        <button id="account-auth-btn" type="button">Log In</button>
+        <button id="account-auth-btn" type="button">Log In / Sign Up</button>
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
         <button id="settings-btn" type="button">Settings</button>
@@ -2629,7 +2660,12 @@
           <form id="auth-signup-form" class="auth-form" hidden>
             <label>Username<input type="text" id="auth-signup-username" required autocomplete="username" /></label>
             <label>Email<input type="email" id="auth-signup-email" required autocomplete="email" /></label>
-            <label>Password (8+ characters)<input type="password" id="auth-signup-password" required autocomplete="new-password" minlength="8" /></label>
+            <label>Password (8+ characters)
+              <div class="auth-password-field">
+                <input type="password" id="auth-signup-password" required autocomplete="new-password" minlength="8" />
+                <button type="button" id="auth-signup-password-toggle" class="auth-password-toggle-btn">Show</button>
+              </div>
+            </label>
             <button type="submit">Sign Up</button>
           </form>
 

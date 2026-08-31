@@ -62,7 +62,7 @@ console.log('verified status shown in the account panel (should say verified):',
 await page.click('#auth-logout-btn');
 await page.waitForTimeout(300);
 const btnLabelAfterLogout = await page.textContent('#account-auth-btn');
-console.log('account button after logout (should be "Log In"):', btnLabelAfterLogout);
+console.log('account button after logout (should be "Log In / Sign Up"):', btnLabelAfterLogout);
 
 // --- Log back in with the real password ---
 await openAuthModal(page);
@@ -120,7 +120,7 @@ const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   verifyStatus.includes('Email verified!') &&
   !urlAfterVerify.includes('?') &&
   verifiedText.includes('verified') && !verifiedText.includes('not verified') &&
-  btnLabelAfterLogout === 'Log In' &&
+  btnLabelAfterLogout === 'Log In / Sign Up' &&
   btnLabelAfterLogin === 'Ada Suite' &&
   !!resetUrlMatch && resetFormVisible &&
   resetStatus.includes('Password reset!') &&

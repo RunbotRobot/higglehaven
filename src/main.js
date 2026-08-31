@@ -6218,6 +6218,12 @@ function showAuthView(view) {
   for (const btn of authTabBtns) btn.classList.toggle('active', btn.dataset.authView === view);
   authModalTitle.textContent = AUTH_VIEW_TITLES[view];
   setAuthStatus('');
+  // Back to masked every time this view is (re)entered — form.reset()
+  // (called after a successful signup) only resets values, not the type
+  // attribute a Show tap changes, so without this the field could still
+  // read as plain-text on a later visit despite being empty again.
+  authSignupPasswordInput.type = 'password';
+  authSignupPasswordToggleBtn.textContent = 'Show';
 }
 
 function refreshAccountAuthUI() {
@@ -6242,7 +6248,7 @@ function refreshAccountAuthUI() {
       if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
     }).catch(() => {});
   } else {
-    accountAuthBtn.textContent = 'Log In';
+    accountAuthBtn.textContent = 'Log In / Sign Up';
     authLoggedOutEl.hidden = false;
     authLoggedInEl.hidden = true;
   }
@@ -6283,8 +6289,36 @@ for (const btn of authTabBtns) {
 document.getElementById('auth-forgot-btn').addEventListener('click', () => showAuthView('forgot'));
 document.getElementById('auth-forgot-back-btn').addEventListener('click', () => showAuthView('login'));
 
+// Lets a builder double-check what they actually typed while choosing a
+// password at signup, rather than trusting a masked field with no way to
+// catch a typo before submitting. Only on signup — login's password field
+// isn't where a typo would go unnoticed (a wrong one just fails to log in
+// and can be retried), and reset's new-password field is short-lived
+// enough not to need it either.
+const authSignupPasswordInput = document.getElementById('auth-signup-password');
+const authSignupPasswordToggleBtn = document.getElementById('auth-signup-password-toggle');
+authSignupPasswordToggleBtn.addEventListener('click', () => {
+  const showing = authSignupPasswordInput.type === 'text';
+  authSignupPasswordInput.type = showing ? 'password' : 'text';
+  authSignupPasswordToggleBtn.textContent = showing ? 'Show' : 'Hide';
+});
+
+// A brief press flash (see .pressed in index.html) on every auth form's
+// submit button — these all wait on a network round-trip before anything
+// else visibly changes, so without this a tap can read as not having
+// registered at all rather than "working on it." Fired immediately on
+// submit, not after the request resolves, since it's the tap itself being
+// acknowledged, not the outcome.
+function flashSubmitPressed(form) {
+  const btn = form.querySelector('button[type="submit"]');
+  if (!btn) return;
+  btn.classList.add('pressed');
+  setTimeout(() => btn.classList.remove('pressed'), 150);
+}
+
 authForms.login.addEventListener('submit', async (event) => {
   event.preventDefault();
+  flashSubmitPressed(authForms.login);
   const email = document.getElementById('auth-login-email').value;
   const password = document.getElementById('auth-login-password').value;
   setAuthStatus('');
@@ -6301,6 +6335,7 @@ authForms.login.addEventListener('submit', async (event) => {
 
 authForms.signup.addEventListener('submit', async (event) => {
   event.preventDefault();
+  flashSubmitPressed(authForms.signup);
   const email = document.getElementById('auth-signup-email').value;
   const password = document.getElementById('auth-signup-password').value;
   const username = document.getElementById('auth-signup-username').value.trim();
@@ -6332,6 +6367,7 @@ authForms.signup.addEventListener('submit', async (event) => {
 
 authForms.forgot.addEventListener('submit', async (event) => {
   event.preventDefault();
+  flashSubmitPressed(authForms.forgot);
   const email = document.getElementById('auth-forgot-email').value;
   setAuthStatus('');
   try {
@@ -6350,6 +6386,7 @@ authForms.forgot.addEventListener('submit', async (event) => {
 
 authForms.reset.addEventListener('submit', async (event) => {
   event.preventDefault();
+  flashSubmitPressed(authForms.reset);
   const newPassword = document.getElementById('auth-reset-password').value;
   setAuthStatus('');
   try {
@@ -6514,7 +6551,13 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
 
-const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888, generating: 0xd99a3f };
+// A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
+// cold clash against this world's warm cream-and-green palette (see
+// :root's --pill-rgb/--panel-rgb/--brand-green in index.html) every other
+// bit of chrome uses. A warm tan instead reads as cleared/settled ground
+// (tilled earth, a building's footprint) while staying clearly distinct
+// from greenbelt's green and generating's amber.
+const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f };
 const SHOP_MOVE_SPEED_M_S = 14;
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_VERTICAL_SPEED_M_S = 10;
@@ -7967,7 +8010,9 @@ function shapeForLandlet(landlet) {
   return shape;
 }
 
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0x888888 };
+// Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
+// claim-map flyover and the real 3D world it's picking a plot in agree.
+const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
 
 // A navigable overhead flyover: an orbit-controlled camera looking down at
 // a flat rendering of the whole world circle and every landlet in it, each
