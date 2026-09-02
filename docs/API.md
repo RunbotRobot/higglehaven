@@ -3964,15 +3964,22 @@ the field is cleared back to blank, not `0`.
 
 ### Shop-side: seeing a price
 
-`#shop-product-info`, a new non-interactive text line, shows the nearest
-placed instance's own product name and price (`"<name> — <price>"`, or
-just `"<name>"` when unpriced) using the exact same proximity tracking
-Product Reviews already established (`shopReviews`/`updateReviewFade`,
-`SIGN_INTERACT_RADIUS_M`) — no new registration or fade logic needed, since
-"nearest reviewable instance" and "nearest instance to show info for" are
-the same thing now that every instance is unconditionally reviewable. It
-sits one slot higher than `#shop-review-hint` (`bottom: 330px` vs. `280px`)
-so both can show together without colliding.
+`#shop-product-info`, a non-interactive text line, shows a tapped placed
+instance's own product name and price (`"<name> — <price>"`, or just
+`"<name>"` when unpriced). Originally proximity-tracked the same way
+Product Reviews' own hint is (nearest in `SIGN_INTERACT_RADIUS_M`), but
+that read as noisy — a name/price popup appearing the instant a shopper
+walked near anything, whether or not they cared. Now driven by a plain
+raycast click/tap handler against every loaded `shopReviews` mesh (the
+same "walk up to whichever registered root mesh is this hit's ancestor"
+pattern Build mode's own click handler uses against `productMeshes`, see
+`findTappedShopProduct`): tapping a product shows its info, tapping
+anything else (ground, sky, empty space) dismisses it. `#shop-review-hint`/
+`#shop-buy-hint` stay proximity-driven — those are prompts to act on
+whatever's nearby, not a display, so showing them on approach still reads
+as "you can do something here" rather than clutter. It sits one slot
+higher than `#shop-review-hint` (`bottom: 330px` vs. `280px`) so both can
+show together without colliding.
 
 ### Testing note
 
@@ -3980,13 +3987,14 @@ so both can show together without colliding.
 through the real UI: setting a price during upload, the row's own display
 of it, editing an unpriced product's price afterward via "Edit Price," and
 clearing a price back to blank (verified as `null` server-side, not `0`,
-at every step). `#shop-product-info`'s display isn't covered there for the
-same reason real Shop-mode camera movement never is in this suite (see
-"Product reviews" above's own testing note) — verified manually instead,
-using a temporary `window.__debugProductInfo` hook (removed before
-committing, confirmed via `grep`) to move the camera next to a priced
-instance and screenshot the result alongside `#shop-review-hint` to
-confirm the two stack without overlapping.
+at every step). `#shop-product-info`'s tap-to-show/tap-away-to-dismiss
+display isn't covered there for the same reason real Shop-mode camera
+movement never is in this suite (see "Product reviews" above's own testing
+note) — verified manually instead, using temporary `window.__debugSetCameraPos`/
+`window.__debugSetShopYawPitch` hooks (removed before committing, confirmed
+via `grep`) to aim the camera at a placed instance and simulate a tap at
+its on-screen position, confirming the info appears only after that tap
+and clears on a follow-up tap at empty sky.
 
 ## Prohibited categories and digital goods
 

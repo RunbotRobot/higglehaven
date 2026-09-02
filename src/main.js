@@ -6890,6 +6890,15 @@ let nearestActiveCalendar = null;
 // `reviews` populated once rather than re-fetched.
 const shopReviews = [];
 let nearestActiveReview = null;
+// #shop-product-info's own content/visibility is driven by this instead of
+// nearestActiveReview (see the tap handler further below) — showing it the
+// instant a shopper wanders near anything read as noisy/intrusive, closer
+// to a tooltip stuck to the cursor than an intentional "what is this."
+// Requiring a tap makes seeing it a deliberate choice. The buy/review hints
+// stay proximity-driven below, unlike product-info — those are prompts to
+// *do* something about whatever's nearby, not information display, so
+// showing them on approach still reads as "you can act here," not clutter.
+let shopTappedProduct = null;
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -7413,23 +7422,60 @@ function updateReviewFade() {
   if (nearest !== nearestActiveReview) {
     nearestActiveReview = nearest;
     shopReviewHintEl.classList.toggle('visible', !!nearest);
-    shopProductInfoEl.classList.toggle('visible', !!nearest);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy hint at
     // all rather than one that would just 400 on click.
     shopBuyHintEl.classList.toggle('visible', !!nearest && nearest.mesh.userData.template.priceCents != null);
-    if (nearest) {
-      const { name, priceCents, metadata } = nearest.mesh.userData.template;
-      let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
-      // The "clear higglehaven-controlled disclaimer" digital goods require
-      // (docs/SPEC.md §4) — shown to the shopper right where they'd
-      // otherwise assume every placed item is a physical one.
-      const disclaimerKey = metadata?.digitalGoodDisclaimer;
-      if (disclaimerKey) text += ` (${DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]})`;
-      shopProductInfoEl.textContent = text;
-    }
   }
 }
+
+// Shared by the tap handler below and formerly by proximity — the actual
+// "name — price (disclaimer)" line #shop-product-info shows once tapped.
+function productInfoText(template) {
+  const { name, priceCents, metadata } = template;
+  let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+  // The "clear higglehaven-controlled disclaimer" digital goods require
+  // (docs/SPEC.md §4) — shown to the shopper right where they'd otherwise
+  // assume every placed item is a physical one.
+  const disclaimerKey = metadata?.digitalGoodDisclaimer;
+  if (disclaimerKey) text += ` (${DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]})`;
+  return text;
+}
+
+// Walks up from a raycast hit (a model's own nested child mesh — see
+// loadModelInstance) to whichever shopReviews entry's root mesh is its
+// ancestor, the same findRootProduct pattern Build mode's own click
+// handler uses against productMeshes.
+function findTappedShopProduct(object) {
+  let current = object;
+  while (current) {
+    const review = shopReviews.find((r) => r.mesh === current);
+    if (review) return review;
+    current = current.parent;
+  }
+  return null;
+}
+
+// Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
+// on open canvas (movement/look are joystick-driven, pinch-zoom needs two
+// fingers — see the pointerdown/pointermove pair just above), so this is
+// free to use for "what is this." Tapping a product shows its info;
+// tapping anything else (ground, sky, empty space) dismisses whatever was
+// showing, the same "tap away to close" a shopper would expect.
+renderer.domElement.addEventListener('click', (event) => {
+  if (!shopActive) return;
+  if (pointerDownPos) {
+    const dx = event.clientX - pointerDownPos.x;
+    const dy = event.clientY - pointerDownPos.y;
+    if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) return;
+  }
+  raycaster.setFromCamera(ndcFromEvent(event), camera);
+  const hits = raycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
+  const review = hits.length > 0 ? findTappedShopProduct(hits[0].object) : null;
+  shopTappedProduct = review;
+  shopProductInfoEl.classList.toggle('visible', !!review);
+  if (review) shopProductInfoEl.textContent = productInfoText(review.mesh.userData.template);
+});
 
 // The creative-tool trigger itself (docs/SPEC.md §6's own "scheduled
 // confetti-cannon" example, docs/API.md's "Community calendar"). Checked
@@ -7677,8 +7723,15 @@ function unloadShopLandletInstances(entry) {
     if (nearestActiveReview === review) {
       nearestActiveReview = null;
       shopReviewHintEl.classList.remove('visible');
-      shopProductInfoEl.classList.remove('visible');
       shopBuyHintEl.classList.remove('visible');
+    }
+    // The tapped product's own mesh is about to be disposed below — clear
+    // the reference and hide its info rather than leaving #shop-product-info
+    // pointing at (and this landlet's next load potentially reusing) a
+    // stale entry.
+    if (shopTappedProduct === review) {
+      shopTappedProduct = null;
+      shopProductInfoEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise
