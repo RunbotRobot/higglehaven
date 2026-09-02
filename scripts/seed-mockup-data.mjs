@@ -26,12 +26,30 @@ const BASE_URL = process.env.SEED_BASE_URL || 'http://localhost:8787';
 const ADMIN_BOOTSTRAP_SECRET = process.env.SEED_ADMIN_BOOTSTRAP_SECRET || 'local-dev-admin-secret';
 const PASSWORD = 'mockup-seed-password-123';
 
+// Only a real deployment ever sets ACCESS_PASSPHRASE (worker/index.js's
+// private-preview gate — see its own comment); local `wrangler dev` and the
+// test suite never do, so this stays a no-op there. Computed the same way
+// checkAccessGate does, so this script's requests carry the exact cookie a
+// browser gets after actually submitting the passphrase.
+const ACCESS_PASSPHRASE = process.env.SEED_ACCESS_PASSPHRASE || null;
+async function computeAccessToken(passphrase) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('higglehaven-access-granted'));
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+const ACCESS_COOKIE = ACCESS_PASSPHRASE ? `hh_access=${await computeAccessToken(ACCESS_PASSPHRASE)}` : null;
+
+function withAccessCookie(cookie) {
+  if (!ACCESS_COOKIE) return cookie;
+  return cookie ? `${ACCESS_COOKIE}; ${cookie}` : ACCESS_COOKIE;
+}
+
 async function api(path, cookie, options = {}) {
   const response = await fetch(`${BASE_URL}/api${path}`, {
     ...options,
     headers: {
       ...(options.body && !(options.body instanceof FormData) ? { 'content-type': 'application/json' } : {}),
-      ...(cookie ? { cookie } : {}),
+      ...(withAccessCookie(cookie) ? { cookie: withAccessCookie(cookie) } : {}),
       ...options.headers,
     },
   });
@@ -51,7 +69,10 @@ function extractCookie(response) {
 async function signUp(email, username) {
   const response = await fetch(`${BASE_URL}/api/auth/signup`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...(ACCESS_COOKIE ? { cookie: ACCESS_COOKIE } : {}),
+    },
     body: JSON.stringify({ email, password: PASSWORD, username }),
   });
   const body = await response.json();
@@ -133,7 +154,11 @@ async function uploadModel(fileName) {
   const bytes = await readFile(filePath);
   const form = new FormData();
   form.set('file', new Blob([bytes], { type: 'model/gltf-binary' }), fileName);
-  const response = await fetch(`${BASE_URL}/api/models`, { method: 'POST', body: form });
+  const response = await fetch(`${BASE_URL}/api/models`, {
+    method: 'POST',
+    headers: ACCESS_COOKIE ? { cookie: ACCESS_COOKIE } : {},
+    body: form,
+  });
   const body = await response.json();
   if (!response.ok) throw new Error(`upload ${fileName} -> ${response.status}: ${body.error}`);
   return body.modelUrl;
