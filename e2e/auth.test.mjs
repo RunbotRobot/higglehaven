@@ -16,7 +16,7 @@
 // whether the app itself handled it gracefully) — the same reasoning
 // other rejection-path tests already document avoiding elsewhere in this
 // suite.
-import { launchPage, finish } from './helpers.mjs';
+import { launchPage, finish, waitForText } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Auth Suite' });
 const email = `auth-suite-${Date.now()}@example.com`;
@@ -36,20 +36,18 @@ await page.fill('#auth-signup-username', 'Ada Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
 await page.click('#auth-signup-form button[type="submit"]');
-await page.waitForTimeout(500);
+const signupStatus = await waitForText(page, '#auth-status', 'dev mode');
 
-const signupStatus = await page.textContent('#auth-status');
 console.log('signup dev-mode status (should mention a verify link):', signupStatus);
 const verifyUrlMatch = signupStatus.match(/(http\S+verifyEmail=[0-9a-f]+)/);
-const btnLabelAfterSignup = await page.textContent('#account-auth-btn');
+const btnLabelAfterSignup = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after signup (should be "Ada Suite"):', btnLabelAfterSignup);
 await page.click('#auth-close-btn');
 await page.waitForTimeout(200);
 
 // --- Visiting the verify-email link marks the account verified ---
 await page.goto(verifyUrlMatch[1]);
-await page.waitForTimeout(1200);
-const verifyStatus = await page.textContent('#auth-status');
+const verifyStatus = await waitForText(page, '#auth-status', 'Email verified!');
 console.log('status after visiting the verify link (should say Email verified!):', verifyStatus);
 const urlAfterVerify = page.url();
 console.log('URL stripped of the verifyEmail query param (should have no "?"):', urlAfterVerify);
@@ -60,8 +58,7 @@ await openAuthModal(page);
 const verifiedText = await page.textContent('#auth-account-verified');
 console.log('verified status shown in the account panel (should say verified):', verifiedText);
 await page.click('#auth-logout-btn');
-await page.waitForTimeout(300);
-const btnLabelAfterLogout = await page.textContent('#account-auth-btn');
+const btnLabelAfterLogout = await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
 console.log('account button after logout (should be "Log In / Sign Up"):', btnLabelAfterLogout);
 
 // --- Log back in with the real password ---
@@ -69,22 +66,20 @@ await openAuthModal(page);
 await page.fill('#auth-login-email', email);
 await page.fill('#auth-login-password', password);
 await page.click('#auth-login-form button[type="submit"]');
-await page.waitForTimeout(500);
-const btnLabelAfterLogin = await page.textContent('#account-auth-btn');
+const btnLabelAfterLogin = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after logging back in (should be "Ada Suite"):', btnLabelAfterLogin);
 // Login success closes the modal (see the login form's own submit
 // handler), so it needs reopening before the logout button is reachable.
 await openAuthModal(page);
 await page.click('#auth-logout-btn');
-await page.waitForTimeout(300);
+await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
 
 // --- Forgot password -> reset link -> new password works, old one doesn't ---
 await openAuthModal(page);
 await page.click('#auth-forgot-btn');
 await page.fill('#auth-forgot-email', email);
 await page.click('#auth-forgot-form button[type="submit"]');
-await page.waitForTimeout(500);
-const forgotStatus = await page.textContent('#auth-status');
+const forgotStatus = await waitForText(page, '#auth-status', 'dev mode');
 console.log('forgot-password dev-mode status (should mention a reset link):', forgotStatus);
 const resetUrlMatch = forgotStatus.match(/(http\S+resetPassword=[0-9a-f]+)/);
 await page.click('#auth-close-btn');
@@ -97,8 +92,7 @@ console.log('reset-password form visible after following the link (should be tru
 const newPassword = 'a totally new password';
 await page.fill('#auth-reset-password', newPassword);
 await page.click('#auth-reset-form button[type="submit"]');
-await page.waitForTimeout(500);
-const resetStatus = await page.textContent('#auth-status');
+const resetStatus = await waitForText(page, '#auth-status', 'Password reset!');
 console.log('status after resetting (should say Password reset!):', resetStatus);
 
 // The old password now being rejected is covered by worker/index.test.js's
@@ -111,8 +105,7 @@ console.log('status after resetting (should say Password reset!):', resetStatus)
 await page.fill('#auth-login-email', email);
 await page.fill('#auth-login-password', newPassword);
 await page.click('#auth-login-form button[type="submit"]');
-await page.waitForTimeout(400);
-const btnLabelAfterNewPasswordLogin = await page.textContent('#account-auth-btn');
+const btnLabelAfterNewPasswordLogin = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after logging in with the NEW password (should be "Ada Suite"):', btnLabelAfterNewPasswordLogin);
 
 const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&

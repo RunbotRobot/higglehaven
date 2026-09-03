@@ -13,7 +13,7 @@
 // the cohort size) is covered by worker/index.test.js instead, where
 // filling 100 rows directly via the D1 binding is cheap; doing that
 // through 100 real browser-driven claims here would not be.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
 
 const LABEL = 'Pioneer Suite Tester';
 const SECOND_LABEL = 'Second Claimer';
@@ -28,8 +28,12 @@ await claimLandlet(page);
 await openAccountMenu(page);
 await page.click('#account-auth-btn');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
-await page.waitForTimeout(500);
-const firstRowText = await page.textContent('#auth-account-pioneer');
+// refreshAccountAuthUI's pioneer-rank text is filled in by a follow-up
+// /api/builders/me fetch it kicks off, not synchronously when the modal
+// opens (see its own comment) — poll for it rather than guessing a fixed
+// delay, which flaked under CI's own network/CPU load (see e2e/helpers.mjs's
+// waitForText).
+const firstRowText = await waitForText(page, '#auth-account-pioneer', 'Pioneer #1');
 console.log('first claimer\'s account panel (should include "Pioneer #1"):', firstRowText);
 await page.click('#auth-close-btn');
 await page.waitForTimeout(300);

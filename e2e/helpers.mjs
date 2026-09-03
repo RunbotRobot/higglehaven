@@ -254,6 +254,27 @@ export async function clickUntilSelected(page, { x, yStart, yEnd, yStep = 10, ex
   return info;
 }
 
+// Polls `selector`'s textContent until it includes `expectedSubstring` or
+// `timeout` elapses, returning whatever text was showing when it stopped —
+// same "poll instead of guess a fixed delay" shape as clickUntilSelected
+// above. Several UI updates this suite checks (account-button label after
+// login/logout, the account panel's pioneer badge) are the client side of
+// an async network round trip rather than a synchronous DOM write, so a
+// single fixed waitForTimeout before reading them is a real flake source
+// under variable load (e.g. several matrix runners hitting one CI host at
+// once) even though the underlying app logic is correct — this trades that
+// fixed guess for "wait until it's actually true, up to a generous cap."
+export async function waitForText(page, selector, expectedSubstring, { timeout = 5000, interval = 100 } = {}) {
+  const start = Date.now();
+  let text = '';
+  while (Date.now() - start < timeout) {
+    text = (await page.textContent(selector)) || '';
+    if (text.includes(expectedSubstring)) return text;
+    await page.waitForTimeout(interval);
+  }
+  return text;
+}
+
 // Standard end-of-test report + exit, matched by run-all.mjs (which reads
 // the child process's exit code) and by running a single file directly with
 // `node e2e/whatever.test.mjs`.
