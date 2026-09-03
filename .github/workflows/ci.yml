@@ -24,8 +24,41 @@ jobs:
       # .dev.vars/secrets setup at all (see that file's own comment).
       - run: npm test
 
-  e2e-tests:
+  # e2e/run-all.mjs runs its 21 files one at a time on purpose — a shared
+  # local D1 across files exhausts the claimable-land pool (see that
+  # file's own comment), so each file needs a genuinely fresh D1, not just
+  # a fresh browser page. Serially, on one machine, that's ~20 file-sized
+  # server-restart cycles back to back. In CI there's no reason to pay
+  # that serially: each matrix entry below is a *separate* GitHub-hosted
+  # VM, so "fresh D1 per file" falls out for free by construction (they're
+  # not sharing a filesystem at all, let alone a D1) — no changes needed
+  # to run-all.mjs itself, just fanning its existing single-file mode
+  # (`node e2e/run-all.mjs <file>`) out across as many runners as there
+  # are files, instead of looping through them on one.
+  discover-e2e-files:
     runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.list.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+      # Listed here, not hardcoded into the matrix below, so a newly added
+      # e2e/*.test.mjs file is automatically covered next push — a
+      # hardcoded list would silently stop covering it the moment someone
+      # forgot to update this workflow alongside e2e/.
+      - id: list
+        run: echo "files=$(ls e2e/*.test.mjs | xargs -n1 basename | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  e2e-tests:
+    needs: discover-e2e-files
+    runs-on: ubuntu-latest
+    strategy:
+      # One file failing shouldn't cancel the other ~20 still in flight —
+      # fail-fast would hide exactly the information a growing suite most
+      # needs from a CI run: which of several regressions, not just the
+      # first one GitHub happened to notice.
+      fail-fast: false
+      matrix:
+        file: ${{ fromJson(needs.discover-e2e-files.outputs.files) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,4 +77,4 @@ jobs:
       - run: |
           echo "APP_BASE_URL=http://localhost:8787" > .dev.vars
           echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
-      - run: npm run test:e2e
+      - run: node e2e/run-all.mjs ${{ matrix.file }}
