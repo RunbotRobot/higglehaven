@@ -1,0 +1,47 @@
+name: CI
+
+# Runs on GitHub's own runners, not the developer's machine — the whole
+# point is that pushing doesn't block local work on either suite. Two
+# independent jobs (rather than one job running both suites in sequence)
+# so they execute in parallel here too, not just "off your machine."
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Fully self-contained — vitest.config.js hardcodes a fixed test
+      # ADMIN_BOOTSTRAP_SECRET for the Workers pool, so this needs no
+      # .dev.vars/secrets setup at all (see that file's own comment).
+      - run: npm test
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # .dev.vars is gitignored (wrangler's standard local-only-override
+      # mechanism — see docs/API.md's own note on it), so CI recreates the
+      # one value e2e/run-all.mjs's own wrangler dev needs. Not a real
+      # secret: this exact value is already a well-known dev-only fixture,
+      # visible in plaintext in this repo's own code comments (see
+      # e2e/helpers.mjs's ADMIN_BOOTSTRAP_SECRET fallback) — nothing this
+      # unlocks exists outside each ephemeral CI run's own throwaway D1.
+      - run: |
+          echo "APP_BASE_URL=http://localhost:8787" > .dev.vars
+          echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
+      - run: npm run test:e2e

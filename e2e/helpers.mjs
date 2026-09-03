@@ -5,7 +5,15 @@
 // actually being verified" rather than repeating this boilerplate each time.
 import { chromium } from 'playwright';
 
-const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || '/opt/pw-browsers/chromium';
+// Only overridden when PLAYWRIGHT_CHROMIUM_PATH is explicitly set — e.g. a
+// sandbox with a pre-installed, version-pinned browser at a nonstandard
+// path (skipping `playwright install`'s own download). Left unset,
+// chromium.launch() finds the browser on its own via Playwright's normal
+// resolution (honoring PLAYWRIGHT_BROWSERS_PATH when that's set too),
+// which is what makes this portable to a plain `npx playwright install`
+// environment like CI, instead of only ever working against one sandbox's
+// specific directory layout.
+const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:8787';
 // Matches the value this repo's own .dev.vars sets for local `wrangler
 // dev` (see worker/index.js's handleAdminBootstrap and migrations/
@@ -124,7 +132,7 @@ export async function growWorldAsAdmin() {
 // builder/seller identity — there's no real text-input modal for it) always
 // answered with `promptAnswer`.
 export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { width: 420, height: 860 } } = {}) {
-  const browser = await chromium.launch({ executablePath: CHROMIUM_PATH });
+  const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   const page = await browser.newPage({ viewport });
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));

@@ -53,6 +53,17 @@ editing/cropping it, and the identity-picker UI — see
 [`e2e/README.md`](e2e/README.md) for why each test file gets a fresh D1 and
 how to add a new one.
 
+**CI:** both suites also run automatically on every push
+(`.github/workflows/ci.yml`), as two independent jobs so they run in
+parallel rather than queued one after the other. This is the intended way
+to get a full-suite result without blocking local work on it — push, keep
+coding, and check the commit's status (or the Actions tab) once it's
+useful to know, rather than waiting on `npm run test:e2e` synchronously
+every time. It needs no repository secrets: unit tests get a fixed test
+secret straight from `vitest.config.js`, and the e2e job recreates the
+one value its own `.dev.vars` needs inline (see that job's own comment for
+why that's not a real secret).
+
 ## Deployment
 
 Deployed to Cloudflare Workers behind a shared-passphrase access gate (dev
