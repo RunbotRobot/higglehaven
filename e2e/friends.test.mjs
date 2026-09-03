@@ -11,7 +11,7 @@
 // outgoing request. Duplicate-request rejection, the self-request 400, and
 // the "declined" (recipient-side DELETE) path are covered instead by
 // worker/index.test.js's own "Friendships" describe block.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
 
 const ALICE = 'Friends Suite Alice';
 const BOB = 'Friends Suite Bob';
@@ -46,9 +46,15 @@ await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 alicePage.removeAllListeners('dialog');
 alicePage.on('dialog', (dialog) => dialog.accept(BOB));
 await alicePage.click('#friends-add-btn');
-await alicePage.waitForTimeout(500);
-const aliceStatusAfterSend = await alicePage.textContent('#friends-status');
+// Sending kicks off an async POST + outgoing-list refresh — poll for both
+// rather than guessing a fixed delay, which flaked under CI load (a fixed
+// 500ms here read stale/empty state on a loaded runner even though the
+// request itself succeeded moments later — see e2e/helpers.mjs's
+// waitForText, used the same way auth.test.mjs/pioneer-badge.test.mjs
+// already do for this exact shape of race).
+const aliceStatusAfterSend = await waitForText(alicePage, '#friends-status', BOB);
 console.log('Alice status after sending the request (should mention Bob):', aliceStatusAfterSend);
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-outgoing-list .friend-row').length === 1, { timeout: 5000 });
 const aliceOutgoingCount = await alicePage.locator('#friends-outgoing-list .friend-row').count();
 console.log('Alice outgoing list count right after sending (should be 1):', aliceOutgoingCount);
 
@@ -56,7 +62,7 @@ console.log('Alice outgoing list count right after sending (should be 1):', alic
 await openAccountMenu(bobPage);
 await bobPage.click('#friends-btn');
 await bobPage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-await bobPage.waitForTimeout(500);
+await bobPage.waitForFunction(() => document.querySelectorAll('#friends-incoming-list .friend-row').length > 0, { timeout: 5000 });
 const bobIncomingText = await bobPage.locator('#friends-incoming-list .friend-row').first().textContent();
 console.log('Bob\'s incoming row (should mention Alice):', bobIncomingText);
 
@@ -70,7 +76,7 @@ console.log('Bob\'s accepted row (should mention Alice and her lándlet):', bobA
 await alicePage.click('#friends-close-btn');
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
-await alicePage.waitForTimeout(500);
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
 const aliceAcceptedText = await alicePage.locator('#friends-accepted-list .friend-row').first().textContent();
 console.log('Alice\'s accepted row (should mention Bob and his lándlet):', aliceAcceptedText);
 await alicePage.click('#friends-close-btn');
@@ -92,7 +98,11 @@ await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 alicePage.removeAllListeners('dialog');
 alicePage.on('dialog', (dialog) => dialog.accept(CAROL));
 await alicePage.click('#friends-add-btn');
-await alicePage.waitForTimeout(500);
+await alicePage.waitForFunction(
+  (name) => [...document.querySelectorAll('#friends-outgoing-list .friend-row')].some((row) => row.textContent.includes(name)),
+  CAROL,
+  { timeout: 5000 },
+);
 const aliceOutgoingToCarolCount = await alicePage.locator('#friends-outgoing-list .friend-row').filter({ hasText: CAROL }).count();
 console.log('Alice\'s outgoing list includes Carol after sending (should be 1):', aliceOutgoingToCarolCount);
 
