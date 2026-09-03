@@ -23,7 +23,17 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const PORT = process.env.E2E_PORT || '8787';
-const BASE_URL = `http://localhost:${PORT}`;
+// A literal IP, not the "localhost" hostname — Node/Chromium's dual-stack
+// DNS resolution can intermittently try ::1 first (Happy Eyeballs), and a
+// request that lands there gets refused outright if wrangler dev is only
+// actually listening on the IPv4 loopback (or vice versa). Locally this
+// never seems to bite, but on GitHub's runners it shows up as sporadic,
+// otherwise-inexplicable "Failed to fetch" errors on an unpredictable file
+// each run (seen hitting both a raw e2e-helper fetch and the real app's
+// own fetch calls) — a literal address sidesteps the resolution race
+// entirely rather than trying to win it. --ip below pins the server side
+// to match.
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 function sh(cmd) {
   execSync(cmd, { stdio: 'inherit', cwd: repoRoot });
@@ -63,7 +73,7 @@ async function runOneTest(testFile) {
   sh('rm -rf .wrangler/state');
   sh('npx wrangler d1 migrations apply higglehaven-db --local');
 
-  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--port', PORT], {
+  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT], {
     cwd: repoRoot,
     stdio: 'ignore',
     detached: true,

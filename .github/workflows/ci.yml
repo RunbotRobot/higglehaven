@@ -74,7 +74,13 @@ jobs:
       # visible in plaintext in this repo's own code comments (see
       # e2e/helpers.mjs's ADMIN_BOOTSTRAP_SECRET fallback) — nothing this
       # unlocks exists outside each ephemeral CI run's own throwaway D1.
+      # 127.0.0.1, not localhost, to match e2e/run-all.mjs and
+      # e2e/helpers.mjs's own BASE_URL — see run-all.mjs's comment on the
+      # dual-stack DNS race a hostname would otherwise be exposed to.
+      # Mismatched origins here would also break auth.test.mjs's own
+      # verify/reset-link flow (the dev-mode link this embeds is a
+      # different origin's cookie jar if the two don't agree).
       - run: |
-          echo "APP_BASE_URL=http://localhost:8787" > .dev.vars
+          echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
           echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
       - run: node e2e/run-all.mjs ${{ matrix.file }}

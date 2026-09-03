@@ -14,7 +14,9 @@ import { chromium } from 'playwright';
 // environment like CI, instead of only ever working against one sandbox's
 // specific directory layout.
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
-const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:8787';
+// Literal IP, not "localhost" — see run-all.mjs's own comment on the
+// intermittent dual-stack DNS resolution race this sidesteps.
+const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 // Matches the value this repo's own .dev.vars sets for local `wrangler
 // dev` (see worker/index.js's handleAdminBootstrap and migrations/
 // 0055_admin_role.sql) — overridable for a CI/CD environment that
