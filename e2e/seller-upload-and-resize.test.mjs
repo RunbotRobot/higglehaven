@@ -119,7 +119,15 @@ console.log('notifications badge after resize (should be visible, count 1):', ba
 
 await page.click('#notifications-btn');
 await page.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
-await page.waitForTimeout(300);
+// The list is itself gated behind an async fetch (renderNotifications in
+// src/main.js) — poll for the actual notice rather than guessing a fixed
+// delay, the same class of flake fixed elsewhere in this suite earlier
+// this session.
+await page.waitForFunction(
+  (name) => document.querySelector('.notification-row')?.textContent.includes(name),
+  PRODUCT_NAME,
+  { timeout: 10000 },
+);
 const noticeText = await page.locator('.notification-row').first().textContent();
 console.log('notice text (should mention product name and "resized"):', noticeText);
 

@@ -61,7 +61,11 @@ await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
 await bidderPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await bidderPage.click('.settings-tab-btn[data-section="auctions"]');
-await bidderPage.waitForTimeout(500);
+// Sell Your Land is itself gated behind an async fetch (a "Loading…"
+// placeholder until it resolves — see renderStartSection in src/main.js) —
+// wait for the actual form rather than guessing a fixed delay, the same
+// class of flake fixed elsewhere in this suite earlier this session.
+await bidderPage.waitForSelector('.auction-start-form', { timeout: 10000 });
 
 // The bidder's OWN landlet has no auction on it — Sell Your Land should
 // offer the start form, not show a live auction.
@@ -99,7 +103,10 @@ await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
-await sellerPage.waitForTimeout(500);
+await sellerPage.waitForFunction(
+  () => document.querySelector('.settings-field .auction-row')?.textContent.includes('$15.00'),
+  { timeout: 10000 },
+);
 const sellerSeesBidText = await sellerPage.locator('.auction-row').first().textContent();
 console.log('seller\'s own view after the bid (should mention $15.00):', sellerSeesBidText);
 
@@ -112,7 +119,10 @@ await sellerPage.waitForTimeout(300);
 await openAccountMenu(sellerPage);
 await sellerPage.click('#notifications-btn');
 await sellerPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
-await sellerPage.waitForTimeout(300);
+await sellerPage.waitForFunction(
+  () => document.querySelector('.notification-row')?.textContent.includes('New bid of $15.00'),
+  { timeout: 10000 },
+);
 const sellerNoticeText = await sellerPage.locator('.notification-row').first().textContent();
 console.log('seller\'s notification for the new bid (should mention "New bid of $15.00"):', sellerNoticeText);
 
