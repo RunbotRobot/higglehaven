@@ -21,10 +21,25 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
+// Retries on a network-level failure (fetch() itself rejecting — seen in
+// CI as "TypeError: Failed to fetch" right after the community-sign toggle
+// POST, not reproducible locally) rather than a non-2xx response, which
+// still resolves normally and is left for the caller to read via `status`.
+// An uncaught rejection here crashes the whole test process instead of
+// just failing an assertion, so a single transient blip shouldn't be fatal.
 async function fetchJson(path, options) {
   return page.evaluate(async ([p, opts]) => {
-    const res = await fetch(p, opts);
-    return { status: res.status, body: await res.json() };
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(p, opts);
+        return { status: res.status, body: await res.json() };
+      } catch (err) {
+        lastErr = err;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+    throw lastErr;
   }, [path, options]);
 }
 
