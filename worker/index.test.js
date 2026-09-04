@@ -164,6 +164,30 @@ describe('Worker API', () => {
     expect(rejected.headers.get('allow')).toBe('GET, HEAD, DELETE');
   });
 
+  it('rate-limits repeated model uploads from the same client', async () => {
+    // POST /api/models is unauthenticated on purpose (see the removed-URL-
+    // import comment in handleModelUpload), but each call can burn shared
+    // R2 storage headroom, so it gets the same per-client throttle as
+    // signup/password-reset. A synthetic cf-connecting-ip keeps this
+    // test's bucket from colliding with every other model-upload test in
+    // this file, which otherwise all share the same "unknown" IP bucket
+    // (mirrors how the signup rate-limit test uses a unique email instead).
+    // 20 succeed (as either a fresh 201 or a deduplicated 200 — both still
+    // count against the limit); the 21st is rejected before it ever
+    // touches R2.
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const form = new FormData();
+      form.set('file', glbFile());
+      const attempt = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+      expect(attempt.status).not.toBe(429);
+    }
+    const form = new FormData();
+    form.set('file', glbFile());
+    const limited = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+    expect(limited.status).toBe(429);
+  });
+
   it('deletes only unreferenced uploaded models', async () => {
     const missingModel = await api('/catalog', {
       method: 'POST',
@@ -182,7 +206,18 @@ describe('Worker API', () => {
     form.set('file', glbFile());
     const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
     const uploaded = await upload.json();
-    const listing = await api('/models?limit=100');
+
+    // Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup
+    // and DELETE /uploads/:key below: no session, and a logged-in-but-
+    // not-admin session, are both rejected before either handler touches
+    // R2 or D1.
+    expect((await api('/models?limit=100')).response.status).toBe(401);
+    expect((await api('/models/storage')).response.status).toBe(401);
+    const nonAdminModels = await signupBuilder('non-admin-model-listing');
+    expect((await api('/models?limit=100', nonAdminModels.session())).response.status).toBe(403);
+    expect((await api('/models/storage', nonAdminModels.session())).response.status).toBe(403);
+
+    const listing = await api('/models?limit=100', adminSession());
     expect(listing.response.status).toBe(200);
     expect(listing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
@@ -191,9 +226,9 @@ describe('Worker API', () => {
       deletable: true,
     }));
     expect(listing.body.nextCursor).toBeNull();
-    expect((await api('/models?limit=101')).response.status).toBe(400);
-    expect((await api('/models?cursor=')).response.status).toBe(400);
-    const storage = await api('/models/storage');
+    expect((await api('/models?limit=101', adminSession())).response.status).toBe(400);
+    expect((await api('/models?cursor=', adminSession())).response.status).toBe(400);
+    const storage = await api('/models/storage', adminSession());
     expect(storage.response.status).toBe(200);
     expect(storage.body).toMatchObject({
       capBytes: 8 * 1024 * 1024 * 1024,
@@ -220,7 +255,7 @@ describe('Worker API', () => {
     expect(invalidUpdate.response.status).toBe(400);
     expect((await api('/catalog/uploaded-delete-test')).body.template.modelUrl).toBe(uploaded.modelUrl);
 
-    const referencedListing = await api('/models');
+    const referencedListing = await api('/models', adminSession());
     expect(referencedListing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
       referencedByTemplateIds: ['uploaded-delete-test'],
@@ -246,9 +281,9 @@ describe('Worker API', () => {
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }))).status).toBe(404);
-    const afterRemoval = await api('/models');
+    const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
-    const storageAfterRemoval = await api('/models/storage');
+    const storageAfterRemoval = await api('/models/storage', adminSession());
     expect(storageAfterRemoval.body.usedBytes).toBe(storage.body.usedBytes - uploaded.sizeBytes);
     expect(storageAfterRemoval.body.objectCount).toBe(storage.body.objectCount - 1);
 
@@ -2299,6 +2334,43 @@ describe('Product reviews', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
+    const seller = await signupSeller('review-moderation-seller');
+    const otherSeller = await signupSeller('review-moderation-other-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-moderation-owned',
+        name: 'Seller-owned reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const unauthenticated = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const wrongSeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, otherSeller.session({ method: 'DELETE' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listedStillThere = await api(`/catalog/${templateId}/reviews`);
+    expect(listedStillThere.body.reviews).toHaveLength(1);
+
+    const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
@@ -2736,6 +2808,150 @@ describe('Auctions', () => {
     }));
     expect(bid.response.status).toBe(409);
   });
+
+  it('reports each auction\'s own highest bid and bid count on the list endpoint, not just on single-fetch', async () => {
+    // Regression test for the list branch's N+1 fix (#35): batching the
+    // highest-bid/bid-count lookup across the whole page must still land
+    // each result on the correct auction, including one with zero bids
+    // sitting alongside others that have some.
+    // Two separate owners: a builder can only ever claim one landlet
+    // through the normal claim flow (their one free starter landlet), so
+    // seeding two auctions on one page needs two owners, not one owner
+    // with two landlets.
+    const ownerNoBids = await signupBuilder('list-bids-owner-a');
+    const ownerTwoBids = await signupBuilder('list-bids-owner-b');
+    const bidder = await signupBuilder('list-bids-bidder');
+    await createGreenbeltLandlet('auction-list-bids-no-bids');
+    await createGreenbeltLandlet('auction-list-bids-two-bids');
+    await claim('auction-list-bids-no-bids', ownerNoBids);
+    await claim('auction-list-bids-two-bids', ownerTwoBids);
+
+    const noBids = await api('/landlets/auction-list-bids-no-bids/auction', ownerNoBids.session({ method: 'POST', body: JSON.stringify({}) }));
+    const twoBids = await api('/landlets/auction-list-bids-two-bids/auction', ownerTwoBids.session({ method: 'POST', body: JSON.stringify({}) }));
+    const twoBidsId = twoBids.body.auction.auctionId;
+    await api(`/auctions/${twoBidsId}/bids`, bidder.session({ method: 'POST', body: JSON.stringify({ amountCents: 500 }) }));
+    await api(`/auctions/${twoBidsId}/bids`, bidder.session({ method: 'POST', body: JSON.stringify({ amountCents: 900 }) }));
+
+    const list = await api('/auctions?status=active');
+    const noBidsListed = list.body.auctions.find((a) => a.auctionId === noBids.body.auction.auctionId);
+    const twoBidsListed = list.body.auctions.find((a) => a.auctionId === twoBidsId);
+    expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
+    expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
+  });
+});
+
+// The Auctions tests above exercise notification creation as a side effect
+// (a bid triggers one); these exercise the endpoints themselves — GET's
+// unreadOnly filter and builderId spoof guard, PATCH's mark-read and its
+// ownership/404 checks, and mark-all-read — none of which had direct
+// coverage before.
+describe('Notifications', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  // `suffix` keeps each call's builder usernames and landlet id unique —
+  // signupBuilder's username comes straight from its label argument (no
+  // randomization of its own, unlike its generated email), so two calls
+  // with the same label from different tests would collide on the
+  // uniqueness check the Authentication describe block covers elsewhere.
+  async function seedNotifications(suffix) {
+    const owner = await signupBuilder(`notif-owner-${suffix}`);
+    const bidder = await signupBuilder(`notif-bidder-${suffix}`);
+    const landletId = `notif-landlet-${suffix}`;
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Two bids: the owner is notified of each, giving this describe block
+    // two of its own notifications to read/mark/filter without touching
+    // any other test's data.
+    await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    return { owner, bidder, auctionId: started.body.auction.auctionId };
+  }
+
+  it('lists only the session builder\'s own notifications, newest first', async () => {
+    const { owner, bidder } = await seedNotifications('list');
+    const ownerNotices = await api('/notifications', owner.session());
+    expect(ownerNotices.body.notifications.length).toBeGreaterThanOrEqual(2);
+    expect(ownerNotices.body.notifications.every((n) => n.builderId === owner.builderId)).toBe(true);
+    const [first, second] = ownerNotices.body.notifications;
+    expect(new Date(first.createdAt).getTime()).toBeGreaterThanOrEqual(new Date(second.createdAt).getTime());
+
+    const bidderNotices = await api('/notifications', bidder.session());
+    expect(bidderNotices.body.notifications).toHaveLength(0);
+  });
+
+  it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
+    const { owner, bidder } = await seedNotifications('spoof');
+    const spoofed = await api(`/notifications?builderId=${owner.builderId}`, bidder.session());
+    expect(spoofed.response.status).toBe(403);
+  });
+
+  it('filters to unread-only when requested', async () => {
+    const { owner } = await seedNotifications('unread-filter');
+    const all = await api('/notifications', owner.session());
+    expect(all.body.notifications.length).toBeGreaterThanOrEqual(2);
+    await api(`/notifications/${all.body.notifications[0].notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    const unread = await api('/notifications?unreadOnly=true', owner.session());
+    expect(unread.body.notifications.some((n) => n.notificationId === all.body.notifications[0].notificationId)).toBe(false);
+    expect(unread.body.notifications.length).toBe(all.body.notifications.length - 1);
+  });
+
+  it('marks a single notification read, and 404s a nonexistent one', async () => {
+    const { owner } = await seedNotifications('mark-single');
+    const before = await api('/notifications', owner.session());
+    const target = before.body.notifications[0];
+    expect(target.readAt).toBeNull();
+
+    const patched = await api(`/notifications/${target.notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.notification.readAt).not.toBeNull();
+
+    const missing = await api('/notifications/notification-does-not-exist', owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(missing.response.status).toBe(404);
+  });
+
+  it('rejects marking another builder\'s notification read', async () => {
+    const { owner, bidder } = await seedNotifications('mark-others');
+    const ownerNotices = await api('/notifications', owner.session());
+    const targetId = ownerNotices.body.notifications[0].notificationId;
+    const asBidder = await api(`/notifications/${targetId}`, bidder.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(asBidder.response.status).toBe(403);
+  });
+
+  it('marks only the session builder\'s own unread notifications read via mark-all-read', async () => {
+    const { owner, bidder, auctionId } = await seedNotifications('mark-all');
+    const marked = await api('/notifications/mark-all-read', owner.session({ method: 'POST' }));
+    expect(marked.response.status).toBe(200);
+    expect(marked.body).toEqual({ ok: true });
+
+    const ownerAfter = await api('/notifications?unreadOnly=true', owner.session());
+    expect(ownerAfter.body.notifications).toHaveLength(0);
+
+    // A third bid, notifying the owner again, proves mark-all-read didn't
+    // touch anything belonging to the bidder (who had zero notifications
+    // to begin with) or otherwise break future notifications from firing.
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
+    expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
+  });
 });
 
 describe('Friendships', () => {
@@ -3011,6 +3227,74 @@ describe('Prohibited categories and digital goods', () => {
     });
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.digitalGoodDisclaimer).toBeUndefined();
+  });
+});
+
+describe('Shipping', () => {
+  it('rejects a non-boolean metadata.domesticOnly', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-bad-domestic-only-template',
+        name: 'Bad domestic-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: 'yes' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/domesticOnly must be a boolean/);
+  });
+
+  it('accepts a valid metadata.domesticOnly and round-trips it through GET', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-template',
+        name: 'US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBe(true);
+
+    const fetched = await api('/catalog/shipping-domestic-only-template');
+    expect(fetched.body.template.metadata.domesticOnly).toBe(true);
+  });
+
+  it('defaults to shipping internationally when metadata.domesticOnly is absent', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-default-template',
+        name: 'Default-shipping product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBeUndefined();
+  });
+
+  it('lets a domestic-only flag be cleared by omitting it from a metadata replace', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-to-clear',
+        name: 'Temporary US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    const cleared = await api('/catalog/shipping-domestic-only-to-clear', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.domesticOnly).toBeUndefined();
   });
 });
 
@@ -3338,15 +3622,42 @@ describe('Simulated purchases', () => {
     expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
 
     const before = await builderRow(seller.builderId);
-    const refunded = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    // This template has no sellerId (createTemplate's own default), so the
+    // refund falls to the admin fallback rather than seller ownership —
+    // see the "requires admin" test below for that path in isolation.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
     const after = await builderRow(seller.builderId);
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
-    const secondRefund = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+  });
+
+  it('rejects refunding a purchase with no seller without an admin session', async () => {
+    const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
+    await claim('purchase-refund-no-seller-auth-landlet', seller);
+    await createTemplate('purchase-refund-no-seller-auth-template', { priceCents: 5000 });
+    await placeInstance('purchase-refund-no-seller-auth-instance', 'purchase-refund-no-seller-auth-landlet', 'purchase-refund-no-seller-auth-template', seller);
+
+    const purchased = await api('/instances/purchase-refund-no-seller-auth-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const noSession = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+
+    // A real, logged-in, non-admin session isn't enough either — this
+    // isn't "any authenticated user," it's specifically admin.
+    const nonAdmin = await signupBuilder('purchase-refund-no-seller-auth-nonadmin');
+    const wrongSession = await api(`/purchases/${purchaseId}/refund`, nonAdmin.session({ method: 'POST' }));
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
@@ -3361,7 +3672,7 @@ describe('Simulated purchases', () => {
     // to have clawed back, so the refund must push it negative.
     await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
-    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
     expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
@@ -3374,7 +3685,7 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template', seller);
 
     const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
-    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
 
@@ -3486,6 +3797,25 @@ describe('Authentication', () => {
     await signup(email, 'first password here');
     const dupe = await signup(email.toUpperCase(), 'second password here');
     expect(dupe.response.status).toBe(409);
+  });
+
+  it('rate-limits repeated signup attempts against the same email', async () => {
+    const email = `auth-ratelimit-signup-${crypto.randomUUID()}@example.com`;
+    // First succeeds; the next 4 hit the ordinary "already registered" 409
+    // (still counted against the limit — checkRateLimit runs before that
+    // check) — 5 total attempts, right at the limit.
+    for (let i = 0; i < 5; i++) {
+      const attempt = await signup(email, 'a fine long password');
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const sixth = await signup(email, 'a fine long password');
+    expect(sixth.response.status).toBe(429);
+
+    // A different email from the same (test-env) client isn't affected —
+    // bucketed per-target, not just per-source.
+    const otherEmail = `auth-ratelimit-signup-other-${crypto.randomUUID()}@example.com`;
+    const otherAttempt = await signup(otherEmail, 'a fine long password');
+    expect(otherAttempt.response.status).toBe(201);
   });
 
   it('rejects signup with a malformed email or too-short password', async () => {
@@ -3609,6 +3939,17 @@ describe('Authentication', () => {
     expect(requested.response.status).toBe(200);
     expect(requested.body).toEqual({ requested: true });
     expect(requested.body.devResetUrl).toBeUndefined();
+  });
+
+  it('rate-limits repeated password-reset requests against the same email', async () => {
+    const email = `auth-ratelimit-reset-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'a fine long password');
+    for (let i = 0; i < 5; i++) {
+      const attempt = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+      expect(attempt.response.status).toBe(200);
+    }
+    const sixth = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    expect(sixth.response.status).toBe(429);
   });
 
   it('resends a verification email for the logged-in user, with a fresh token', async () => {
