@@ -4155,8 +4155,23 @@ function isoDateString(value, field) {
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
 const PURCHASE_BUILDER_SPLIT = 0.5; // "Universal 50/50 split"
 const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
+// quantity had no upper bound at all until this was added — a single
+// unauthenticated call with an absurd quantity (there's no shopper account
+// to even attribute it to) could mint an arbitrary amount of a builder's
+// dallers_balance_cents and daller_earnings_events credit in one request,
+// directly undermining "growth is earned through demonstrated performance,
+// never purchased" (docs/SPEC.md §0) since earnings feed the land cap
+// formula. 1000 stays generous for a legitimate bulk "buy a crate of
+// these" simulation while ruling out that abuse.
+const PURCHASE_MAX_QUANTITY = 1000;
+// Same per-IP-throttle mitigation as signup/password-reset/model-upload
+// (checkRateLimit) — this is the one other public, repeatable,
+// balance-crediting endpoint that had no throttle at all, unlike every
+// sibling mutation this dev-mode backend has already locked down today.
+const PURCHASE_RATE_LIMIT_MAX = 30;
 
 async function handleInstancePurchase(request, db, instanceId) {
+  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) return json({ error: 'Instance not found' }, 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -4193,11 +4208,13 @@ async function finishPurchase(db, instance, template, landlet, input) {
   // Capped as a sanity bound against a malformed/abusive request producing
   // an absurd totalCents (and the dállers-balance/land-cap credit that
   // flows from it) — not itself a spec requirement, same reasoning as
-  // durationHours' cap above. This endpoint has no session/rate limit
-  // (see docs/API.md's "Simulated purchases" — deliberately unauthenticated,
+  // durationHours' cap above. This endpoint has no session (see
+  // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
   // there's no real payment backing it), so quantity was the only thing
-  // standing between one request and an unbounded credit.
-  if (quantity > 1000) throw new HttpError('quantity must be 1000 or fewer', 400);
+  // standing between one request and an unbounded credit before this cap;
+  // the checkRateLimit call above closes the other half of that gap
+  // (repeated smaller requests instead of one large one).
+  if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
   const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;

@@ -3851,8 +3851,9 @@ describe('Simulated purchases', () => {
 
   it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
     // This endpoint is deliberately unauthenticated (see docs/API.md's
-    // "Simulated purchases") with no rate limit, so quantity is the only
-    // guard against one request minting an arbitrary dállers credit.
+    // "Simulated purchases"), so quantity is one of two guards (alongside
+    // the rate limit below) against one request minting an arbitrary
+    // dállers credit.
     const seller = await signupBuilder('purchase-quantity-cap-seller');
     await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
     await claim('purchase-quantity-cap-landlet', seller);
@@ -3873,6 +3874,29 @@ describe('Simulated purchases', () => {
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.quantity).toBe(1000);
   });
+
+  it('rate-limits repeated purchases from the same client', async () => {
+    // Unauthenticated on purpose (no shopper account exists to check
+    // against), but a successful call credits a real builder balance and
+    // earnings ledger entry, so it gets the same per-client throttle as
+    // signup/password-reset/model-upload. A synthetic cf-connecting-ip
+    // keeps this test's bucket from colliding with every other purchase
+    // test in this file, which otherwise all share the same "unknown" IP
+    // bucket (mirrors the model-upload rate-limit test's own approach).
+    const seller = await signupBuilder('purchase-rate-limit-seller');
+    await createGreenbeltLandletWithArea('purchase-rate-limit-landlet', 1000);
+    await claim('purchase-rate-limit-landlet', seller);
+    await createTemplate('purchase-rate-limit-template', { priceCents: 1000 });
+    await placeInstance('purchase-rate-limit-instance', 'purchase-rate-limit-landlet', 'purchase-rate-limit-template', seller);
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 30; i++) {
+      const attempt = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+    expect(limited.response.status).toBe(429);
+  }, 20000);
 
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
