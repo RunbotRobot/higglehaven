@@ -2235,15 +2235,26 @@ function clientIp(request) {
 
 async function checkRateLimit(db, bucketKey, maxAttempts) {
   const now = Date.now();
-  await db.prepare('DELETE FROM rate_limit_events WHERE bucket_key = ?1 AND created_at < ?2')
-    .bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).run();
-  const row = await db.prepare('SELECT COUNT(*) as count FROM rate_limit_events WHERE bucket_key = ?1')
-    .bind(bucketKey).first();
-  if (row.count >= maxAttempts) {
+  // A separate SELECT-then-INSERT here would be a check-then-act race:
+  // concurrent requests sharing a bucket (e.g. a burst from one IP) could
+  // all read the same under-the-limit count before any of their inserts
+  // committed, letting a burst blow well past maxAttempts. Folding the
+  // count check into the INSERT's own WHERE clause makes the whole
+  // check-and-increment one atomic statement instead — nothing can
+  // interleave inside it. `changes` is 0 exactly when the subquery's count
+  // was already at or over the limit, i.e. the guard blocked the insert.
+  // Old rows outside the window are filtered here rather than actively
+  // deleted per call now — actual cleanup is pruneExpiredAuthState's job
+  // (run from the same cron as world growth), so a rate-limit check no
+  // longer needs its own separate write just to stay tidy.
+  const result = await db.prepare(`
+    INSERT INTO rate_limit_events (bucket_key, created_at)
+    SELECT ?1, ?2
+    WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
+  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
+  if (result.meta.changes === 0) {
     throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
   }
-  await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
-    .bind(bucketKey, now).run();
 }
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
