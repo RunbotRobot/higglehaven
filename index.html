@@ -60,31 +60,6 @@
         height: 100vh;
         display: block;
       }
-      /* Was bottom-left, which put it directly under Shop mode's
-         horizontally-centered #shop-hint pill — at the 420px-wide mobile
-         viewport this app targets, that hint's full "Left stick to walk —
-         right stick to look — hold up/down to fly" text overflows past
-         center far enough to sit right on top of this. Top-right, just
-         under #undo-redo-panel/#mode-nav (top: 10px/48px, together ~65px
-         tall), is clear in every mode/modal checked (Shop, Build with an
-         item selected, Sell's seller-picker modal, Settings). */
-      #build-info {
-        position: fixed;
-        top: 82px;
-        right: 8px;
-        text-align: right;
-        color: rgba(255, 255, 255, 0.75);
-        font: 12px/1.4 monospace;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-        /* Unlike every other pointer-events: none HUD overlay in this file,
-           this one needs to be selectable (see #camera-debug's identical
-           user-select treatment) so a builder can copy the exact deployed
-           commit — small enough in the corner that losing canvas
-           drag-to-look under just this strip is worth that tradeoff. */
-        user-select: text;
-        -webkit-user-select: text;
-        z-index: 10;
-      }
       /* The wordmark's own green-on-transparent art has no contrast
          guarantee against an arbitrary background — great against the
          ground plane and most products, unreadable against the sky. Same
@@ -2527,7 +2502,6 @@
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
     </div>
-    <div id="build-info"></div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
       <button id="camera-debug-copy" type="button">Copy</button>
