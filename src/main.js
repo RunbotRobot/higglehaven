@@ -6692,6 +6692,23 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 // How fast the avatar's swing amplitude eases toward its current target
 // (moving vs. stopped) each frame — see updateShopAvatarPose.
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
+// Idle sway (see updateShopAvatarPose/shopAvatarIdleAmount): how long the
+// avatar must see zero movement input before it starts easing into the
+// sway, how fast that fade-in itself eases (fading out is instant instead —
+// see updateShopAvatarPose), and the sway's own randomized-drift shape. The
+// lean re-targets every SHOP_AVATAR_IDLE_RETARGET_MIN_S..MAX_S seconds
+// (picked fresh each time) to a new random angle up to
+// SHOP_AVATAR_IDLE_LEAN_MAX_RAD, eased toward at SHOP_AVATAR_IDLE_LEAN_EASE_PER_S,
+// plus a faster small sinusoidal "breath" layered on top so a fully idle
+// avatar is never perfectly frozen even between re-targets.
+const SHOP_AVATAR_IDLE_DELAY_S = 3;
+const SHOP_AVATAR_IDLE_EASE_PER_S = 1.5;
+const SHOP_AVATAR_IDLE_LEAN_MAX_RAD = 0.045;
+const SHOP_AVATAR_IDLE_LEAN_EASE_PER_S = 0.6;
+const SHOP_AVATAR_IDLE_RETARGET_MIN_S = 2.5;
+const SHOP_AVATAR_IDLE_RETARGET_MAX_S = 5;
+const SHOP_AVATAR_IDLE_BREATH_SPEED_RAD_S = 1.1;
+const SHOP_AVATAR_IDLE_BREATH_AMPLITUDE_RAD = 0.02;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
@@ -7166,6 +7183,13 @@ const shopCameraAnchor = new THREE.Vector3();
 // rotate the pivot about local X — swinging the limb through the
 // forward/back-and-up/down sagittal plane exactly like a real hip/shoulder
 // joint — rather than needing a skeleton for one swinging joint per limb.
+// The torso, arms, and head all hang off a shared swayPivot (empty group at
+// hip height) rather than off `group` directly, so idle sway (see
+// updateShopAvatarPose) can lean the whole upper body — torso, arms, and
+// head together, exactly as a real weight shift would move them — with one
+// rotation instead of animating each part separately. At rest (swayPivot's
+// rotation left at its identity zero) this renders identically to attaching
+// them straight to `group`.
 function createShopAvatar() {
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x5b8dc9 });
   const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe8c9a0 });
@@ -7188,34 +7212,55 @@ function createShopAvatar() {
   legPivotR.position.set(SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
   group.add(legPivotR);
 
+  const swayPivot = new THREE.Group();
+  swayPivot.position.z = SHOP_AVATAR_LEG_LENGTH_M; // hip height, where the legs top out
+  group.add(swayPivot);
+
   const torso = new THREE.Mesh(
     new THREE.CapsuleGeometry(SHOP_AVATAR_TORSO_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M, 4, 8),
     bodyMaterial,
   );
   torso.rotation.x = Math.PI / 2;
-  torso.position.z = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M / 2 + SHOP_AVATAR_TORSO_RADIUS_M;
-  group.add(torso);
+  torso.position.z = SHOP_AVATAR_TORSO_LENGTH_M / 2 + SHOP_AVATAR_TORSO_RADIUS_M;
+  swayPivot.add(torso);
 
-  const shoulderZ = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 0.6;
+  const shoulderZ = SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 0.6;
   const armPivotL = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
   armPivotL.position.set(-SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
-  group.add(armPivotL);
+  swayPivot.add(armPivotL);
   const armPivotR = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
   armPivotR.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
-  group.add(armPivotR);
+  swayPivot.add(armPivotR);
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
-  head.position.z =
-    SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
-  group.add(head);
+  head.position.z = SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
+  swayPivot.add(head);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR };
+  return { group, swayPivot, legPivotL, legPivotR, armPivotL, armPivotR };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR } — see createShopAvatar
+let shopAvatar = null; // { group, swayPivot, legPivotL, legPivotR, armPivotL, armPivotR } — see createShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
+// Idle sway (docs/SPEC.md §2: "context-aware idle state machine ... after
+// inactivity, with randomization" — this is the stand-only slice of that;
+// sit/lean need a real interaction-target system that doesn't exist yet).
+// shopAvatarIdleTimerS counts continuous seconds with no movement input;
+// once it clears SHOP_AVATAR_IDLE_DELAY_S, shopAvatarIdleAmount eases from 0
+// to 1 (see updateShopAvatarPose) and the sway becomes visible. The lean
+// itself drifts toward a freshly randomized target every few seconds
+// (shopAvatarIdleTargetLeanX/Y, re-picked when shopAvatarIdleRetargetTimerS
+// counts down past 0) rather than oscillating on a fixed period, so it
+// doesn't read as a looping animation.
+let shopAvatarIdleTimerS = 0;
+let shopAvatarIdleAmount = 0;
+let shopAvatarIdleLeanX = 0;
+let shopAvatarIdleLeanY = 0;
+let shopAvatarIdleTargetLeanX = 0;
+let shopAvatarIdleTargetLeanY = 0;
+let shopAvatarIdleRetargetTimerS = 0;
+let shopAvatarIdleBreathPhase = 0;
 
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
@@ -7238,6 +7283,38 @@ function updateShopAvatarPose(moveMagnitude, dt) {
   // amplitude than the legs.
   shopAvatar.armPivotL.rotation.x = -swing * 0.7;
   shopAvatar.armPivotR.rotation.x = swing * 0.7;
+
+  // Moving ends the idle sway immediately (spec: "ends the instant movement
+  // resumes") rather than easing it out — only the fade-*in* after a stop
+  // is gradual.
+  if (moveMagnitude > 0) {
+    shopAvatarIdleTimerS = 0;
+    shopAvatarIdleAmount = 0;
+  } else {
+    shopAvatarIdleTimerS += dt;
+    const idleTarget = shopAvatarIdleTimerS >= SHOP_AVATAR_IDLE_DELAY_S ? 1 : 0;
+    shopAvatarIdleAmount += (idleTarget - shopAvatarIdleAmount) * Math.min(1, SHOP_AVATAR_IDLE_EASE_PER_S * dt);
+  }
+
+  shopAvatarIdleRetargetTimerS -= dt;
+  if (shopAvatarIdleRetargetTimerS <= 0) {
+    shopAvatarIdleTargetLeanX = (Math.random() * 2 - 1) * SHOP_AVATAR_IDLE_LEAN_MAX_RAD;
+    shopAvatarIdleTargetLeanY = (Math.random() * 2 - 1) * SHOP_AVATAR_IDLE_LEAN_MAX_RAD;
+    shopAvatarIdleRetargetTimerS = THREE.MathUtils.lerp(
+      SHOP_AVATAR_IDLE_RETARGET_MIN_S,
+      SHOP_AVATAR_IDLE_RETARGET_MAX_S,
+      Math.random(),
+    );
+  }
+  shopAvatarIdleLeanX +=
+    (shopAvatarIdleTargetLeanX - shopAvatarIdleLeanX) * Math.min(1, SHOP_AVATAR_IDLE_LEAN_EASE_PER_S * dt);
+  shopAvatarIdleLeanY +=
+    (shopAvatarIdleTargetLeanY - shopAvatarIdleLeanY) * Math.min(1, SHOP_AVATAR_IDLE_LEAN_EASE_PER_S * dt);
+  shopAvatarIdleBreathPhase += SHOP_AVATAR_IDLE_BREATH_SPEED_RAD_S * dt;
+  const breath = Math.sin(shopAvatarIdleBreathPhase) * SHOP_AVATAR_IDLE_BREATH_AMPLITUDE_RAD;
+
+  shopAvatar.swayPivot.rotation.x = (shopAvatarIdleLeanX + breath) * shopAvatarIdleAmount;
+  shopAvatar.swayPivot.rotation.y = shopAvatarIdleLeanY * shopAvatarIdleAmount;
 }
 
 // Shared by walking's own floor clamp and the camera-follow height — keeps
@@ -8102,6 +8179,14 @@ async function enterShopMode() {
   shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
+  shopAvatarIdleTimerS = 0;
+  shopAvatarIdleAmount = 0;
+  shopAvatarIdleLeanX = 0;
+  shopAvatarIdleLeanY = 0;
+  shopAvatarIdleTargetLeanX = 0;
+  shopAvatarIdleTargetLeanY = 0;
+  shopAvatarIdleRetargetTimerS = 0;
+  shopAvatarIdleBreathPhase = 0;
 
   shopYaw = 0;
   shopPitch = -0.12;

@@ -3625,6 +3625,22 @@ shoulder feel, with no separate collision pass: `clampShopCameraHeight`
 still catch the rare look angle that would otherwise dip the camera
 underground or swing it past the world wall.
 
+After `SHOP_AVATAR_IDLE_DELAY_S` (3s) of zero movement input, the avatar
+eases into a subtle idle sway — docs/SPEC.md §2's "context-aware idle state
+machine (sit, lean, stand) after inactivity, with randomization," stand-only
+for now (sit/lean need a real interaction-target system, e.g. a chair prop
+with an occupancy slot, that doesn't exist yet). `updateShopAvatarPose`
+leans a `swayPivot` group — the parent of the torso, arms, and head, added
+at hip height in `createShopAvatar` — a few degrees toward a target angle
+re-randomized every few seconds (`SHOP_AVATAR_IDLE_RETARGET_MIN_S`..`MAX_S`),
+eased toward rather than snapped to so the drift reads as organic rather
+than mechanical, plus a small constant-period "breath" layered on top so a
+fully idle avatar is never perfectly frozen between re-targets either. The
+sway itself fades in gradually (`SHOP_AVATAR_IDLE_EASE_PER_S`) but ends the
+instant movement input resumes, rather than easing out — a beat of visible
+lag between "the shopper pushed the stick" and "the avatar actually moves"
+would read as unresponsive controls.
+
 Flight (docs/SPEC.md §2's double-tap-to-fly, altitude/speed curve, and
 takeoff/landing fades) is deliberately not built yet — this pass is
 ground-only walking/running, the spec's own phase-3 "single-player avatar/
