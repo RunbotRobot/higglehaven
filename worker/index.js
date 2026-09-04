@@ -877,10 +877,16 @@ async function handleProductReviews(request, db, route) {
       SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at LIMIT 200
     `).bind(templateId).all();
     const reviews = results.map(reviewFromRow);
-    const averageRating = reviews.length === 0
-      ? null
-      : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
-    return json({ reviews, averageRating, count: reviews.length });
+    // averageRating/count are the product's real, all-time summary, not
+    // derived from the LIMIT-200 page above (docs/API.md documents them as
+    // authoritative — "no caller needs to re-derive it from the list
+    // itself" — so past 200 reviews they'd otherwise silently become "the
+    // 200 oldest reviews' average" instead of the whole product's).
+    const summary = await db.prepare(`
+      SELECT AVG(rating) AS average_rating, COUNT(*) AS count FROM product_reviews WHERE template_id = ?
+    `).bind(templateId).first();
+    const averageRating = summary.count === 0 ? null : summary.average_rating;
+    return json({ reviews, averageRating, count: summary.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
