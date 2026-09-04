@@ -14,3 +14,22 @@
 - Use Cloudflare free-tier-compatible designs.
 - Run `npm test`, `npm run build`, and `git diff --check`.
 - Commit each completed change.
+
+## Running multiple sessions in parallel
+
+Track active parallel sessions and claim work via GitHub Issue #25
+("higglehaven: active parallel sessions") — read it in full before
+starting. Short version:
+
+- Each session works on its own branch, named `higglehaven1`,
+  `higglehaven2`, etc. (no fixed scope per number), forked from the
+  current trunk (`claude/higglehaven-mvp-setup-7zctj8` — there is no
+  separate `main`). Merge back via PR.
+- Claim a task by self-assigning its GitHub Issue before starting; file
+  one if it doesn't exist yet.
+- Comment on Issue #25 with your session name/branch/task whenever you
+  start or finish something, so other sessions can pick work that's
+  well-separated from what's already in flight.
+- Only ever run `wrangler deploy` or `wrangler d1 migrations apply
+  --remote` from trunk, after merging — never from an in-progress
+  session branch.
