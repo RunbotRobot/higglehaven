@@ -9,8 +9,10 @@ from browser `localStorage` placeholders toward persistent data.
 - Real account auth (signup/login, session cookies) and a real seller/builder
   identity model are built and live — see "Authentication," "Authorization
   model," and "Builders" below. Payments, multiplayer, and moderation are
-  still genuinely dev-only/simulated and stay that way unless explicitly
-  requested.
+  still dev-only/simulated today — that's an open gap against docs/SPEC.md,
+  not a scope boundary this backend is meant to stay behind. See AGENTS.md's
+  "Proposing big feature work" for how this project picks that kind of work
+  up.
 - Internal names use plain `a` (`land`, `landlet`, `daller`) even when display
   copy may eventually use accented customer-facing strings.
 - Coordinates and dimensions are decimal meters. Placed object positions use the
@@ -552,6 +554,12 @@ inactivity-based reclaim should be: that case should clear the *active*
 build but keep the builder's own version history, in case they come back
 and want to recreate it on a new landlet. Deleting the builder removes the
 only place that history could live, so there's nothing left to preserve.
+
+Any `purchases` row where this builder was the hosting/earning party has
+its `builderId` set to `null` rather than being deleted along with the
+builder (migrations/0062) — the purchase is a different party's (the
+product's seller's) sales-history record too, so it survives; see
+"Refunds" below for how a refund handles a null `builderId`.
 
 Response:
 
@@ -2637,12 +2645,16 @@ same label both times, the same "no accounts, just labels" constraint this
 identity system carries everywhere else it's used. Any purchase counts,
 refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
 can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
-enforced at the DB level, checked explicitly first for a `409` instead of
-a raw constraint error): the purchase gate above is a one-time eligibility
-check, not a per-review consumption check, so without this cap the same
-purchase could otherwise back an unbounded number of reviews under one
-label, directly skewing `averageRating`. Deleting the existing review frees
-that label to review again. This matches docs/SPEC.md §5's review
+enforced at the DB level): the purchase gate above is a one-time
+eligibility check, not a per-review consumption check, so without this cap
+the same purchase could otherwise back an unbounded number of reviews
+under one label, directly skewing `averageRating`. The existence check and
+the `INSERT` are folded into one atomic statement (`INSERT ... SELECT ...
+WHERE NOT EXISTS (...)`, same idiom `checkRateLimit` uses) rather than a
+separate `SELECT` then `INSERT`, which would be a check-then-act race
+between two concurrent submits under the same label — `409` either way,
+never a raw constraint error. Deleting the existing review frees that
+label to review again. This matches docs/SPEC.md §5's review
 incentives being "capped per account/period" — the purchase-matched
 `author_label` is this app's closest thing to an account.
 
@@ -3363,6 +3375,13 @@ exist, `400` if it's already been refunded, `400` if the product's seller
 has opted into "no returns" (`metadata.noReturns === true`, docs/SPEC.md
 §5's "No-returns-policy respected as seller-set default" — absent/false is
 the spec's own default of accepting returns).
+
+A purchase's `builderId` can itself be null (migrations/0062 — the host
+builder's account was later deleted; `SET NULL`, not `CASCADE`, keeps the
+purchase record itself alive, matching this table's "permanent historical
+receipt" design). In that case the balance clawback and the refund
+notification are both skipped (nothing to credit back, and no account
+left to notify) — the purchase is still marked refunded.
 
 **Deliberately does not touch `daller_earnings_events`** (migrations/0050)
 or land cap — that ledger exists only to feed land cap's trailing-earnings
@@ -4418,8 +4437,10 @@ D1. Test storage does not modify the local development D1 state.
 - Extend procedural generation beyond the current bounded annular-ring
   primitive with macro-geography-aware shapes.
 - Real payment processing, multiplayer presence, and content moderation
-  remain intentionally dev-only/simulated for now (see this doc's own
+  are still dev-only/simulated as of this writing (see this doc's own
   "Scope and assumptions" above) — real account auth and a real
   seller/builder identity model, by contrast, are already built and live
   (migrations 0053-0056; see "Authentication," "Authorization model," and
-  "Builders" above), not out of scope.
+  "Builders" above). Unlike the annular-ring-generation gap above, this
+  isn't a small follow-up: see AGENTS.md's "Proposing big feature work"
+  for how this project breaks work this size into a claimable backlog.

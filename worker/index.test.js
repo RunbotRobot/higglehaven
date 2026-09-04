@@ -2517,6 +2517,33 @@ describe('Product reviews', () => {
     expect(third.response.status).toBe(201);
   });
 
+  it('rejects a concurrent burst of the same purchaser label to exactly one review — regression test for a check-then-act race', async () => {
+    // A separate SELECT-then-INSERT for the one-review-per-purchaser check
+    // would be a check-then-act race: concurrent submits under the same
+    // label could all read "no existing review" before any INSERT
+    // committed. Firing every request at once (rather than the sequential
+    // test above, which an unfixed version would also pass) is what
+    // actually exercises that race — and an unfixed version wouldn't just
+    // let duplicates through, it would 500 on the unique index's own
+    // constraint violation instead of the clean 409 this guards.
+    const templateId = await createTemplate('review-burst-race');
+    await createPurchase(templateId, 'A Shopper');
+
+    const attempts = await Promise.all(
+      Array.from({ length: 10 }, () => api(`/catalog/${templateId}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+      })),
+    );
+    const created = attempts.filter((a) => a.response.status === 201);
+    const conflicted = attempts.filter((a) => a.response.status === 409);
+    expect(created).toHaveLength(1);
+    expect(conflicted).toHaveLength(9);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
     await createPurchase(templateId, 'A Shopper');
@@ -2916,6 +2943,36 @@ describe('Auctions', () => {
 
     const bids = await api(`/auctions/${auctionId}/bids`);
     expect(bids.body.bids.map((b) => b.amountCents)).toEqual([1500, 1000]);
+  });
+
+  it('accepts only one of two concurrent bids for the same amount, not both', async () => {
+    const owner = await signupBuilder('bid-race-owner');
+    const bidderA = await signupBuilder('bid-race-a');
+    const bidderB = await signupBuilder('bid-race-b');
+    await createGreenbeltLandlet('auction-bid-race-landlet');
+    await claim('auction-bid-race-landlet', owner);
+    const started = await api('/landlets/auction-bid-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 1000 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no bids yet", both pass
+    // validation against startingBidCents, and both land, even though only
+    // the first bid to actually insert should win a tie.
+    const [first, second] = await Promise.all([
+      api(`/auctions/${auctionId}/bids`, bidderA.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      })),
+      api(`/auctions/${auctionId}/bids`, bidderB.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 400]);
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    expect(bids.body.bids[0].amountCents).toBe(1000);
   });
 
   it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
@@ -4069,6 +4126,29 @@ describe('Simulated purchases', () => {
     expect(limited.response.status).toBe(429);
   }, 20000);
 
+  it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
+    // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;
+    // concurrent requests sharing a bucket could all read the same
+    // under-the-limit count before any of their inserts committed, letting
+    // a burst blow past the limit. Firing every request at once (rather
+    // than the sequential loop above, which an unfixed version would also
+    // have passed) is what actually exercises that race.
+    const seller = await signupBuilder('purchase-rate-limit-burst-seller');
+    await createGreenbeltLandletWithArea('purchase-rate-limit-burst-landlet', 1000);
+    await claim('purchase-rate-limit-burst-landlet', seller);
+    await createTemplate('purchase-rate-limit-burst-template', { priceCents: 1000 });
+    await placeInstance('purchase-rate-limit-burst-instance', 'purchase-rate-limit-burst-landlet', 'purchase-rate-limit-burst-template', seller);
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    const attempts = await Promise.all(
+      Array.from({ length: 40 }, () => api('/instances/purchase-rate-limit-burst-instance/purchase', { method: 'POST', headers })),
+    );
+    const succeeded = attempts.filter((a) => a.response.status !== 429);
+    const limited = attempts.filter((a) => a.response.status === 429);
+    expect(succeeded).toHaveLength(30);
+    expect(limited).toHaveLength(10);
+  }, 20000);
+
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
@@ -4183,6 +4263,36 @@ describe('Simulated purchases', () => {
     // Refunding twice is rejected — the clawback already happened once.
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+  });
+
+  it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
+    const seller = await signupBuilder('purchase-builder-deleted-seller');
+    await createGreenbeltLandletWithArea('purchase-builder-deleted-landlet', 1000);
+    await claim('purchase-builder-deleted-landlet', seller);
+    await createTemplate('purchase-builder-deleted-template', { priceCents: 4000 });
+    await placeInstance('purchase-builder-deleted-instance', 'purchase-builder-deleted-landlet', 'purchase-builder-deleted-template', seller);
+
+    const purchased = await api('/instances/purchase-builder-deleted-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    // migrations/0051's own header comment states purchases are "a
+    // permanent historical receipt" — this is the case that used to
+    // violate that: an unrelated action (the hosting builder deleting
+    // their own account) used to cascade-delete this row outright
+    // (migrations/0062 switched builder_id to SET NULL instead).
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const listing = await api(`/purchases?templateId=purchase-builder-deleted-template`);
+    expect(listing.response.status).toBe(200);
+    expect(listing.body.purchases).toContainEqual(expect.objectContaining({ purchaseId, builderId: null }));
+
+    // No seller on this template, so the admin fallback applies (same as
+    // the "no seller" refund test below) — and the null builderId must
+    // not crash the balance-clawback/notification step.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
   });
 
   it('rejects refunding a purchase with no seller without an admin session', async () => {

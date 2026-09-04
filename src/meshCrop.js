@@ -304,9 +304,22 @@ function fitTrianglesInPlane(triangles, uIndex, vIndex, from, to, scaleU, scaleV
 // value — see there for why a fixed thickness isn't reliable on its own.
 const MIN_CAP_SLAB_FRACTION = 0.025;
 // How far the search below is allowed to grow the slab before giving up
-// and using whatever it last measured — capped against the kept length
-// itself (as a fraction of it) so a very short crop can't have the slab
-// balloon to consume most of the remaining piece.
+// and using whatever it last measured — bounded by two different lengths,
+// whichever is shorter. Against the kept length (cropLength), so a very
+// short crop can't have the slab balloon to consume most of the remaining
+// piece. And, just as importantly, against the amount actually being cut
+// away (fullHalf - newBoundary): the relocated cap's own outer face always
+// ends up newBoundary + capThickness units from center (see
+// cropGeometryFromEnd's translateTriangles call — the slab's far face,
+// originally at fullHalf, lands at fullHalf + (newBoundary - capBoundary),
+// which is exactly newBoundary + capThickness since capBoundary = fullHalf
+// - capThickness), so a capThickness bigger than what's actually being
+// removed pushes that face *past* the original, uncropped model's own tip
+// — a "cropped" result literally longer than the source. A light crop
+// combined with an unrepresentative tip (the very scenario this search
+// exists for) can genuinely need to grow past that amount before this
+// function's own coverage-ratio check would otherwise accept it, so this
+// second bound has to apply even when it's the tighter of the two.
 const MAX_CAP_SLAB_FRACTION_OF_CROP = 0.6;
 // A patch within this factor of the hole it needs to cover is accepted
 // without growing the slab further — some scale correction is fine (see
@@ -328,13 +341,13 @@ const ACCEPTABLE_COVERAGE_RATIO = 1.15;
 // scan. Instead, start thin and double the slab until its own
 // freshly-cut cross-section (measured right where it will need to meet
 // the main body's hole) is actually within reach of that hole without a
-// large stretch, or until the crop-length-relative ceiling is hit —
+// large stretch, or until MAX_CAP_SLAB_FRACTION_OF_CROP's ceiling is hit —
 // whichever comes first. A product whose edge is fine at the starting
 // thickness (the common case) pays nothing extra; one like the brick
 // above grows only as much as it actually needs to.
 function pickCapThickness(all, axis, fullHalf, newBoundary, cropLength, uIndex, vIndex, hole) {
   const minThickness = fullHalf * 2 * MIN_CAP_SLAB_FRACTION;
-  const maxThickness = cropLength * MAX_CAP_SLAB_FRACTION_OF_CROP;
+  const maxThickness = Math.min(cropLength, fullHalf - newBoundary) * MAX_CAP_SLAB_FRACTION_OF_CROP;
   let best = null;
   for (let thickness = minThickness; ; thickness *= 2) {
     const capped = Math.min(thickness, maxThickness);
@@ -385,10 +398,19 @@ export function cropGeometryFromEnd(geometry, axis, cropLength, fullLength) {
   const picked = hole ? pickCapThickness(all, axis, fullHalf, newBoundary, cropLength, uIndex, vIndex, hole) : null;
 
   if (!picked) return buildGroupedGeometry(mainBody);
-  const { triangles: capSlab, patch, capThickness } = picked;
-  const capBoundary = fullHalf - capThickness;
+  const { triangles: capSlab, patch } = picked;
 
-  let fittedCap = translateTriangles(capSlab, axis, newBoundary - capBoundary);
+  // capSlab spans [fullHalf - capThickness, fullHalf] — its real tip (the
+  // product's true, uncropped surface) sits at fullHalf, not at its own
+  // back/backing-cap face. Translating so *that tip* lands at newBoundary
+  // (delta = newBoundary - fullHalf) is what actually makes the cropped
+  // model's visible length equal cropLength; translating by the slab's
+  // thickness instead (a previous version of this line) left the real tip
+  // sticking out past newBoundary by capThickness, so the model rendered
+  // as cropLength + capThickness — a checked-in worked example even
+  // remarks that capThickness can itself grow to 60% of cropLength on a
+  // difficult scan, so that was never just a cosmetic sliver of error.
+  let fittedCap = translateTriangles(capSlab, axis, newBoundary - fullHalf);
   // The lifted cap's own cross-section (patch) still isn't guaranteed to
   // *exactly* match the main body's cross-section at the new cut boundary
   // (hole) even after pickCapThickness's search — real scanned products

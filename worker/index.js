@@ -910,19 +910,6 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);
     }
-    // One review per matching purchaser label per template (migrations/
-    // 0059) — the verified-purchase check above is a one-time eligibility
-    // gate, not a per-review consumption check, so without this the same
-    // purchase could otherwise back an unbounded number of reviews under
-    // one label. Checked explicitly (rather than letting the unique index
-    // reject the INSERT) so this returns the same HttpError shape as every
-    // other conflict in this file instead of a raw D1 constraint error.
-    const existingReview = await db.prepare(
-      'SELECT 1 FROM product_reviews WHERE template_id = ? AND author_label = ? COLLATE NOCASE LIMIT 1',
-    ).bind(templateId, authorLabel).first();
-    if (existingReview) {
-      throw new HttpError('This purchaser has already reviewed this product', 409);
-    }
     const rating = Number(input.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       throw new HttpError('rating must be an integer from 1 to 5', 400);
@@ -931,10 +918,29 @@ async function handleProductReviews(request, db, route) {
       ? null
       : stringValue(input.text, 'text');
     if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // One review per matching purchaser label per template (migrations/
+    // 0059) — the verified-purchase check above is a one-time eligibility
+    // gate, not a per-review consumption check, so without this the same
+    // purchase could otherwise back an unbounded number of reviews under
+    // one label. A separate SELECT-then-INSERT here would be a
+    // check-then-act race (two concurrent submits under the same label
+    // could both pass the SELECT before either INSERT commits) — folding
+    // the existence check into the INSERT's own WHERE clause instead makes
+    // the whole check-and-insert one atomic statement, same idiom
+    // checkRateLimit uses for its own check-then-act race. `changes === 0`
+    // means the WHERE NOT EXISTS already found a matching review, i.e. the
+    // guard blocked the insert.
     const reviewId = `review-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text) VALUES (?, ?, ?, ?, ?)
-    `).bind(reviewId, templateId, authorLabel, rating, text).run();
+    const result = await db.prepare(`
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text)
+      SELECT ?, ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM product_reviews WHERE template_id = ? AND author_label = ? COLLATE NOCASE
+      )
+    `).bind(reviewId, templateId, authorLabel, rating, text, templateId, authorLabel).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('This purchaser has already reviewed this product', 409);
+    }
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
     return json({ review: reviewFromRow(row) }, 201);
   }
@@ -1814,19 +1820,45 @@ async function handleAuctionBids(request, db, route) {
       throw new HttpError('The seller cannot bid on their own auction', 400);
     }
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    const highest = await db.prepare(`
-      SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-    `).bind(auctionId).first();
-    const minimumCents = highest ? highest.amount_cents + 1 : resolved.starting_bid_cents;
-    if (amountCents < minimumCents) {
-      throw new HttpError(`amountCents must be at least ${minimumCents}`, 400);
+    // starting_bid_cents is immutable once the auction is created, so this
+    // floor is safe to check against the value already read above — no
+    // race window here. The "must exceed the current highest bid" floor
+    // below is the one that actually moves under concurrent bids, so that
+    // one is enforced atomically instead.
+    if (amountCents < resolved.starting_bid_cents) {
+      throw new HttpError(`amountCents must be at least ${resolved.starting_bid_cents}`, 400);
     }
     const bidId = `bid-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)
-    `).bind(bidId, auctionId, builderId, amountCents).run();
+    // A read-then-insert here (read the highest bid, validate against it,
+    // insert) would be the same TOCTOU shape this codebase deliberately
+    // avoids elsewhere (landlet claim's atomic UPDATE ... WHERE, the
+    // calendar-event trigger's UPDATE ... WHERE triggered_at IS NULL):
+    // two concurrent bids could both read the same stale highest, both
+    // pass validation, and both land even though each bid must strictly
+    // exceed whatever the highest actually is by the time it's inserted.
+    // This conditional insert makes "no existing bid already meets or
+    // beats this amount" part of the write itself.
+    const inserted = await db.prepare(`
+      INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+      )
+    `).bind(bidId, auctionId, builderId, amountCents, auctionId, amountCents).run();
+    if (inserted.meta.changes === 0) {
+      const currentHighest = await db.prepare(`
+        SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+      `).bind(auctionId).first();
+      throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+    }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
-    await notifyOfNewBid(db, resolved, amountCents, builderId, highest);
+    // Re-derived after the insert (excluding the bid just inserted) rather
+    // than reusing a pre-insert read, which could be stale by the time this
+    // bid actually landed.
+    const previousHighest = await db.prepare(`
+      SELECT * FROM auction_bids WHERE auction_id = ? AND bid_id != ? ORDER BY amount_cents DESC, created_at LIMIT 1
+    `).bind(auctionId, bidId).first();
+    await notifyOfNewBid(db, resolved, amountCents, builderId, previousHighest);
     const bidRow = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).first();
     return json({ bid: auctionBidFromRow(bidRow) }, 201);
   }
@@ -2235,15 +2267,26 @@ function clientIp(request) {
 
 async function checkRateLimit(db, bucketKey, maxAttempts) {
   const now = Date.now();
-  await db.prepare('DELETE FROM rate_limit_events WHERE bucket_key = ?1 AND created_at < ?2')
-    .bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).run();
-  const row = await db.prepare('SELECT COUNT(*) as count FROM rate_limit_events WHERE bucket_key = ?1')
-    .bind(bucketKey).first();
-  if (row.count >= maxAttempts) {
+  // A separate SELECT-then-INSERT here would be a check-then-act race:
+  // concurrent requests sharing a bucket (e.g. a burst from one IP) could
+  // all read the same under-the-limit count before any of their inserts
+  // committed, letting a burst blow well past maxAttempts. Folding the
+  // count check into the INSERT's own WHERE clause makes the whole
+  // check-and-increment one atomic statement instead — nothing can
+  // interleave inside it. `changes` is 0 exactly when the subquery's count
+  // was already at or over the limit, i.e. the guard blocked the insert.
+  // Old rows outside the window are filtered here rather than actively
+  // deleted per call now — actual cleanup is pruneExpiredAuthState's job
+  // (run from the same cron as world growth), so a rate-limit check no
+  // longer needs its own separate write just to stay tidy.
+  const result = await db.prepare(`
+    INSERT INTO rate_limit_events (bucket_key, created_at)
+    SELECT ?1, ?2
+    WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
+  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
+  if (result.meta.changes === 0) {
     throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
   }
-  await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
-    .bind(bucketKey, now).run();
 }
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
@@ -4342,14 +4385,24 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  await db.batch([
+  // builder_id can be null (migrations/0062 — SET NULL on the host
+  // builder's account deletion, not CASCADE, so this purchase's own record
+  // survives). Nothing to claw a balance back from in that case, and
+  // notifications.builder_id is itself NOT NULL, so skip both statements
+  // rather than crediting/notifying a builder that no longer exists.
+  const statements = [
     db.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
       .bind(purchaseId),
-    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
-      .bind(purchase.builder_share_cents, purchase.builder_id),
-    notificationStatement(db, purchase.builder_id,
-      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-  ]);
+  ];
+  if (purchase.builder_id) {
+    statements.push(
+      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
+        .bind(purchase.builder_share_cents, purchase.builder_id),
+      notificationStatement(db, purchase.builder_id,
+        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
+    );
+  }
+  await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row) });
