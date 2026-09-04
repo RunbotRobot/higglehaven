@@ -1667,9 +1667,12 @@ endpoint.
 The claim is a conditional database update: the landlet must still have
 `status: "greenbelt"`, must have no owner, and the builder must not already own
 a claimed landlet. This preserves the MVP rule that each builder can claim one
-free starter landlet even when two requests arrive close together. A partial
-unique D1 index also enforces this ownership rule for writes made through other
-dev tooling.
+free *starter* landlet even when two requests arrive close together — it's
+purely an application-level check now (migration 0058 dropped the partial
+unique D1 index that used to enforce it for every write path), because a
+builder legitimately ends up owning more than one claimed landlet once they
+win a land-acquisition auction (docs/SPEC.md §0/§5) on top of their starter
+one, and the DB-level version blocked that too.
 
 Returns the newly claimed landlet. Errors are:
 
@@ -2649,8 +2652,11 @@ needs to re-derive it from the list itself:
 ```
 
 `averageRating` is `null` when there are no reviews yet (never `0`, which
-would misleadingly read as "rated, and rated at the bottom"). Deleting a
-catalog template cascades its reviews.
+would misleadingly read as "rated, and rated at the bottom"). `reviews`
+itself is capped at 200 (oldest first), but `averageRating`/`count` are
+computed via a separate, unlimited aggregate query — the product's real,
+all-time summary regardless of how many reviews it has, not just the
+returned page's. Deleting a catalog template cascades its reviews.
 
 ### Frontend wiring
 
@@ -2694,7 +2700,8 @@ text was left), stacked the same way sign posts/calendar events are.
 
 `worker/index.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
-rating bounds, optional text, averaged summary, moderation delete (both an
+rating bounds, optional text, averaged summary, averageRating/count staying
+correct past the list's own 200-row cap, moderation delete (both an
 unowned template's unrestricted delete and a seller-owned template's
 `401`/`403`/owning-seller-succeeds gate), independence between two
 different templates' review lists, cascade delete

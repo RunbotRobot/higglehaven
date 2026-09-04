@@ -2424,6 +2424,33 @@ describe('Product reviews', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  it('computes averageRating/count over every review, not just the 200-row list page', async () => {
+    const templateId = await createTemplate('reviews-beyond-list-cap');
+    // 200 one-star reviews (the oldest, so they're the ones the list's own
+    // LIMIT 200 would return) plus one five-star review newer than all of
+    // them. If averageRating/count were derived from the returned list
+    // (bugged behavior) rather than a separate unlimited aggregate, the
+    // 201st review would never move either figure.
+    const inserts = [];
+    for (let i = 0; i < 200; i++) {
+      inserts.push(env.DB.prepare(`
+        INSERT INTO product_reviews (review_id, template_id, author_label, rating, created_at)
+        VALUES (?, ?, ?, 1, ?)
+      `).bind(`review-beyond-cap-${i}`, templateId, `Shopper ${i}`, `2020-01-01T00:00:${String(i).padStart(2, '0')}.000Z`));
+    }
+    inserts.push(env.DB.prepare(`
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, created_at)
+      VALUES (?, ?, ?, 5, '2020-01-02T00:00:00.000Z')
+    `).bind('review-beyond-cap-201st', templateId, 'Newest Shopper'));
+    await env.DB.batch(inserts);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.reviews).toHaveLength(200); // the list page itself does stay capped
+    expect(listed.body.count).toBe(201);
+    expect(listed.body.averageRating).toBeCloseTo((200 * 1 + 5) / 201);
+  });
+
   it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
     const seller = await signupSeller('review-moderation-seller');
     const otherSeller = await signupSeller('review-moderation-other-seller');
@@ -2779,6 +2806,38 @@ describe('Auctions', () => {
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+  });
+
+  it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
+    const owner = await signupBuilder('resolve-existing-owner-owner');
+    const bidder = await signupBuilder('resolve-existing-owner-bidder');
+    await createGreenbeltLandlet('auction-bidder-own-landlet');
+    await claim('auction-bidder-own-landlet', bidder);
+    await createGreenbeltLandlet('auction-resolve-existing-owner-landlet');
+    await claim('auction-resolve-existing-owner-landlet', owner);
+    const started = await api('/landlets/auction-resolve-existing-owner-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // GET /api/auctions resolves due auctions before listing (resolveDueAuctions)
+    // — this is the exact path that used to 409 for everyone once a single
+    // stuck auction like this one hit the UNIQUE constraint.
+    const list = await api('/auctions');
+    expect(list.response.status).toBe(200);
+
+    const landlet = await api('/landlets/auction-resolve-existing-owner-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(landlet.body.landlet.status).toBe('claimed');
+
+    // The bidder's own earlier landlet is untouched — they now own both.
+    const stillOwned = await api('/landlets/auction-bidder-own-landlet');
+    expect(stillOwned.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(stillOwned.body.landlet.status).toBe('claimed');
   });
 
   it('rejects resolving an auction that is not due yet', async () => {

@@ -877,10 +877,16 @@ async function handleProductReviews(request, db, route) {
       SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at LIMIT 200
     `).bind(templateId).all();
     const reviews = results.map(reviewFromRow);
-    const averageRating = reviews.length === 0
-      ? null
-      : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
-    return json({ reviews, averageRating, count: reviews.length });
+    // averageRating/count are the product's real, all-time summary, not
+    // derived from the LIMIT-200 page above (docs/API.md documents them as
+    // authoritative — "no caller needs to re-derive it from the list
+    // itself" — so past 200 reviews they'd otherwise silently become "the
+    // 200 oldest reviews' average" instead of the whole product's).
+    const summary = await db.prepare(`
+      SELECT AVG(rating) AS average_rating, COUNT(*) AS count FROM product_reviews WHERE template_id = ?
+    `).bind(templateId).first();
+    const averageRating = summary.count === 0 ? null : summary.average_rating;
+    return json({ reviews, averageRating, count: summary.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
@@ -1979,7 +1985,10 @@ async function resolveAuctionIfDue(db, auction) {
 // willingness to relinquish for free") — see docs/SPEC.md §5. Clearing
 // the landlet's build on a transfer mirrors DELETE /api/builders/:id's
 // own reasoning: a new owner gets the land, not the previous owner's
-// stuff on it.
+// stuff on it. The winning bidder keeping their own existing claimed
+// landlet(s) is intentional (docs/SPEC.md §0/§5 — auctions are how a
+// builder acquires *additional* already-claimed land) — see migration
+// 0058 on why that no longer trips a UNIQUE constraint here.
 async function resolveAuction(db, auction) {
   const highest = await db.prepare(`
     SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
@@ -4388,17 +4397,14 @@ async function getInstancesById(db, instanceIds) {
 }
 
 // Fallback classifier for constraint violations that reach D1 without an
-// explicit pre-check (e.g. a duplicate catalog templateId, a landlet claim
-// race, a version_number collision) — turns an otherwise-opaque 500 into a
-// clean 4xx. Checked only after `HttpError` in the top-level catch, so
-// routes with a more specific pre-check (assertReferenceExists above) keep
-// their own message instead of falling through to this generic one.
+// explicit pre-check (e.g. a duplicate catalog templateId, a
+// version_number collision) — turns an otherwise-opaque 500 into a clean
+// 4xx. Checked only after `HttpError` in the top-level catch, so routes
+// with a more specific pre-check (assertReferenceExists above) keep their
+// own message instead of falling through to this generic one.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
-  if (message.includes('UNIQUE constraint failed: landlets.owner_builder_id')) {
-    return new HttpError('Builder already owns a claimed landlet', 409);
-  }
   if (message.includes('UNIQUE constraint failed')) {
     return new HttpError('Resource already exists', 409);
   }
