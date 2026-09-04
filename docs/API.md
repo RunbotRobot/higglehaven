@@ -6,8 +6,11 @@ from browser `localStorage` placeholders toward persistent data.
 
 ## Scope and assumptions
 
-- This API is intentionally **dev-only**: no auth, no payments, no multiplayer,
-  no moderation, and no production seller/builder identity model yet.
+- Real account auth (signup/login, session cookies) and a real seller/builder
+  identity model are built and live — see "Authentication," "Authorization
+  model," and "Builders" below. Payments, multiplayer, and moderation are
+  still genuinely dev-only/simulated and stay that way unless explicitly
+  requested.
 - Internal names use plain `a` (`land`, `landlet`, `daller`) even when display
   copy may eventually use accented customer-facing strings.
 - Coordinates and dimensions are decimal meters. Placed object positions use the
@@ -15,8 +18,10 @@ from browser `localStorage` placeholders toward persistent data.
   vertical.
 - The Worker serves JSON under `/api/*` and falls back to Cloudflare static
   assets for all non-API routes.
-- The default development landlet is `starter-landlet` until real land selection
-  and builder ownership exist.
+- `starter-landlet` is the default landlet when none is specified — real land
+  selection (claiming any greenbelt landlet) and per-session builder ownership
+  both exist; `starter-landlet` just remains the fallback identifier for
+  requests that don't name one.
 
 ## Local and Cloudflare setup
 
