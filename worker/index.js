@@ -4253,6 +4253,23 @@ function assertValidNoReturns(metadata) {
   }
 }
 
+// International shipping (docs/SPEC.md §5: "Dimmed-filter approach:
+// shoppers toggle a filter; non-shippable items are dimmed with a label
+// ('ships to United States only')") — a seller-set flag on the product
+// itself, same single-boolean-in-metadata simplicity as noReturns above.
+// Absent/false means the product ships internationally (the permissive
+// default), so this key is only ever written when a seller actively
+// restricts to domestic shipping. Real per-destination-zone shipping
+// *cost* and a live shopper-facing filter are deliberately not built yet
+// (this dev-stage backend has no real shopper address/geo data to filter
+// against) — see docs/API.md's "Shipping" section.
+function assertValidDomesticOnly(metadata) {
+  if (metadata.domesticOnly === undefined) return;
+  if (typeof metadata.domesticOnly !== 'boolean') {
+    throw new HttpError('metadata.domesticOnly must be a boolean', 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -4275,6 +4292,7 @@ function validateTemplate(input, fallbackId) {
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
+  assertValidDomesticOnly(template.metadata);
   return template;
 }
 

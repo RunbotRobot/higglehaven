@@ -2997,6 +2997,74 @@ describe('Prohibited categories and digital goods', () => {
   });
 });
 
+describe('Shipping', () => {
+  it('rejects a non-boolean metadata.domesticOnly', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-bad-domestic-only-template',
+        name: 'Bad domestic-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: 'yes' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/domesticOnly must be a boolean/);
+  });
+
+  it('accepts a valid metadata.domesticOnly and round-trips it through GET', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-template',
+        name: 'US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBe(true);
+
+    const fetched = await api('/catalog/shipping-domestic-only-template');
+    expect(fetched.body.template.metadata.domesticOnly).toBe(true);
+  });
+
+  it('defaults to shipping internationally when metadata.domesticOnly is absent', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-default-template',
+        name: 'Default-shipping product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBeUndefined();
+  });
+
+  it('lets a domestic-only flag be cleared by omitting it from a metadata replace', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-to-clear',
+        name: 'Temporary US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    const cleared = await api('/catalog/shipping-domestic-only-to-clear', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.domesticOnly).toBeUndefined();
+  });
+});
+
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
 // enforced against auction bids — see worker/index.js's own long comment
 // on recomputeLandCap for why a hard block was tried and reverted (claiming
