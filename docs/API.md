@@ -1184,6 +1184,17 @@ inside a plain local `wrangler dev` process, which is why the e2e suite
 carries its own stand-in (`growWorldAsAdmin` in `e2e/helpers.mjs`) that logs
 in as an admin and drives the manual endpoints directly instead.
 
+The same `scheduled()` run also calls `pruneExpiredAuthState`, an unrelated
+piece of janitorial cleanup riding the same cron rather than one of its
+own: it deletes expired `sessions` rows, expired `email_verification_tokens`/
+`password_reset_tokens` rows, and `rate_limit_events` rows older than the
+rate limiter's own window. None of these are ever swept otherwise — a
+session or token only gets deleted today via an explicit logout or
+password-reset flow, and `checkRateLimit` only ever prunes the one bucket
+it's currently checking, so a bucket keyed to a target nobody retries (e.g.
+one email's signup/reset attempts) would otherwise sit in the table
+forever.
+
 ### World object
 
 ```json

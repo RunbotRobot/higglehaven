@@ -225,6 +225,9 @@ export default {
     ctx.waitUntil(autoGrowWorldIfNeeded(env.DB).catch((error) => {
       console.error('autoGrowWorldIfNeeded failed', error);
     }));
+    ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
+      console.error('pruneExpiredAuthState failed', error);
+    }));
   },
 };
 
@@ -2232,6 +2235,24 @@ async function checkRateLimit(db, bucketKey, maxAttempts) {
   }
   await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
     .bind(bucketKey, now).run();
+}
+
+// checkRateLimit only ever prunes the one bucket it's currently checking —
+// a bucket that's hit once and never revisited (e.g. signup/reset attempts
+// against an email nobody retries) has no other code path that deletes its
+// rows, so rate_limit_events grows unbounded over time. Sessions and
+// verification/reset tokens have the same shape of gap: nothing sweeps
+// them once they expire unless a user happens to hit logout or the
+// password-reset flow again. Run from scheduled() below on the same cron
+// as autoGrowWorldIfNeeded so none of this needs its own trigger.
+async function pruneExpiredAuthState(db) {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  await db.batch([
+    db.prepare('DELETE FROM rate_limit_events WHERE created_at < ?').bind(cutoff),
+    db.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+    db.prepare("DELETE FROM email_verification_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+    db.prepare("DELETE FROM password_reset_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+  ]);
 }
 
 function bytesToHex(bytes) {
