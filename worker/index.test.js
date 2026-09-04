@@ -538,7 +538,7 @@ describe('Worker API', () => {
     });
     expect(referencedTemplate.response.status).toBe(201);
     const referenceBuilder = await signupBuilder('catalog-batch-reference-builder');
-    await api('/landlets', adminSession({
+    await api('/landlets', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
@@ -584,12 +584,12 @@ describe('Worker API', () => {
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
-    // Owned directly at creation (POST /landlets still accepts ownerBuilderId
-    // unauthenticated — it's admin/test tooling, see that route's own
-    // comment) rather than going through the full claim flow, so the
-    // instance placements below can authenticate as its real owner.
+    // Owned directly at creation (POST /landlets allows creating a landlet
+    // already claimed by yourself — see that route's own comment) rather
+    // than going through the full claim flow, so the instance placements
+    // below can authenticate as its real owner.
     const pageBuilder = await signupBuilder('instance-page-builder');
-    await api('/landlets', adminSession({
+    await api('/landlets', pageBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
@@ -868,7 +868,7 @@ describe('Worker API', () => {
 
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
-    await api('/landlets', adminSession({
+    await api('/landlets', draftBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
@@ -959,7 +959,7 @@ describe('Worker API', () => {
     // require session-authenticated ownership) go against a landlet made
     // just for this test instead.
     const versionBuilder = await signupBuilder('versioned-landlet-builder');
-    await api('/landlets', adminSession({
+    await api('/landlets', versionBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
@@ -1047,7 +1047,7 @@ describe('Worker API', () => {
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
     const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
-    await api('/landlets', adminSession({
+    await api('/landlets', concurrentBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
@@ -1093,11 +1093,12 @@ describe('Worker API', () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
-    await api('/landlets', adminSession({
+    const notGeneratingBuilder = await signupBuilder('not-generating-owner');
+    await api('/landlets', notGeneratingBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
-        status: 'claimed', ownerBuilderId: 'some-owner',
+        status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId,
       }),
     }));
     const invalid = await api('/landlets/not-generating-landlet/generation-complete', adminSession({ method: 'POST' }));
@@ -1126,17 +1127,20 @@ describe('Worker API', () => {
     } while (cursor);
     expect(ids).toEqual(['landlet-page-b', 'landlet-page-a']);
 
-    await api('/landlets', adminSession({
+    const pageOwnerBuilder = await signupBuilder('owned-page-owner');
+    await api('/landlets', pageOwnerBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'owned-page-landlet',
         name: 'Owned page landlet',
         areaM2: 4,
         status: 'claimed',
-        ownerBuilderId: 'page-builder',
+        ownerBuilderId: pageOwnerBuilder.builderId,
       }),
     }));
-    const owned = await api('/landlets?status=claimed&ownerBuilderId=%20page-builder%20');
+    // Padded with spaces to confirm the query param is trimmed before
+    // filtering, same as the original literal-id version of this test.
+    const owned = await api(`/landlets?status=claimed&ownerBuilderId=${encodeURIComponent(`  ${pageOwnerBuilder.builderId}  `)}`);
     expect(owned.body.landlets.map(({ landletId }) => landletId)).toEqual(['owned-page-landlet']);
     expect(owned.body.nextCursor).toBeNull();
 
@@ -2858,6 +2862,60 @@ describe('Auctions', () => {
     const twoBidsListed = list.body.auctions.find((a) => a.auctionId === twoBidsId);
     expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
     expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
+  });
+
+  it('caps how many due auctions one GET /auctions call resolves, making forward progress across repeated calls', async () => {
+    // Regression test for AUCTION_SWEEP_LIMIT: resolveDueAuctions used to
+    // sweep and resolve every active-but-expired auction unconditionally,
+    // so a burst of simultaneously-expiring auctions would force one
+    // public, unauthenticated GET into an unbounded chain of sequential
+    // writes. Seeded directly via the DB (not through claim/start-auction,
+    // which limit one builder to one claimed landlet) — cheap, exact, and
+    // avoids needing AUCTION_SWEEP_LIMIT+ real signups just to prove a
+    // bounded sweep. The landlets are left unowned (owner_builder_id NULL)
+    // — migrations/0006's "one claimed landlet per builder" unique index
+    // only applies once a landlet actually has an owner, and
+    // resolveAuction's no-bid path (starting_bid_cents = 0, no bids) never
+    // reads landlets.owner_builder_id, only auction.seller_builder_id.
+    const seller = await signupBuilder('sweep-cap-seller');
+    const total = 27; // > AUCTION_SWEEP_LIMIT (25), so one call can't clear it all
+    const inserts = [];
+    for (let i = 0; i < total; i++) {
+      const landletId = `sweep-cap-landlet-${i}`;
+      const auctionId = `sweep-cap-auction-${i}`;
+      inserts.push(
+        env.DB.prepare(`
+          INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, 'claimed')
+        `).bind(landletId, `Sweep cap ${i}`),
+        env.DB.prepare(`
+          INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+          VALUES (?, ?, ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+        `).bind(auctionId, landletId, seller.builderId),
+      );
+    }
+    await env.DB.batch(inserts);
+
+    const dueBefore = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    expect(dueBefore.count).toBe(total);
+
+    await api('/auctions?status=active');
+    const dueAfterFirstCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // Some, but not all, resolved — proves the sweep is bounded rather than
+    // exhaustive.
+    expect(dueAfterFirstCall.count).toBeGreaterThan(0);
+    expect(dueAfterFirstCall.count).toBeLessThan(total);
+
+    await api('/auctions?status=active');
+    const dueAfterSecondCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // A second call clears the rest of the backlog rather than getting
+    // stuck resolving the same subset forever.
+    expect(dueAfterSecondCall.count).toBe(0);
   });
 });
 

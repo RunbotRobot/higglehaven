@@ -1921,9 +1921,19 @@ async function recomputeLandCapsBatch(db, rows) {
   if (updates.length > 0) await db.batch(updates);
 }
 
-// Sweeps every active-but-expired auction and resolves each in turn — the
-// closest this dev-mode backend gets to a real scheduled job (see
-// docs/API.md's own note on why: no Cron Trigger is wired up, so
+// Caps how many auctions a single GET /api/auctions call will resolve —
+// without it, a burst of auctions all becoming due around the same time
+// (e.g. many started with the same default 24h duration) would force one
+// ordinary, public, unauthenticated page view into an unbounded chain of
+// sequential resolveAuction writes, each its own SELECT + several-statement
+// db.batch. ORDER BY ends_at means each call clears the oldest-due backlog
+// first and always makes forward progress, so a large backlog still fully
+// resolves over a few calls instead of ever blocking one call indefinitely.
+const AUCTION_SWEEP_LIMIT = 25;
+
+// Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
+// each in turn — the closest this dev-mode backend gets to a real scheduled
+// job (see docs/API.md's own note on why: no Cron Trigger is wired up, so
 // resolution is purely lazy, triggered by whatever request happens to
 // touch auctions next). Called at the top of the list endpoint so a
 // shopper browsing auctions always sees current state without needing to
@@ -1931,7 +1941,8 @@ async function recomputeLandCapsBatch(db, rows) {
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
     SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).all();
+    ORDER BY ends_at LIMIT ?
+  `).bind(AUCTION_SWEEP_LIMIT).all();
   for (const row of results) await resolveAuction(db, row);
 }
 
@@ -2788,21 +2799,24 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
-    // Admin-gated (docs/API.md's "Private-preview access gate" sibling
-    // concept) — same "no builder ownership concept applies yet" world-
-    // generation/admin-housekeeping territory as the land-candidates/world
-    // endpoints below, all of which already require this. An anonymous
-    // caller could otherwise insert a landlet pre-assigned to any real
-    // builder ID from the public GET /api/builders list, bypassing every
-    // invariant POST .../claim enforces (pioneer ranking, land cap,
-    // claimable_at). ownerBuilderId itself stays as flexible as the rest of
-    // this admin tooling (no existence check, same as land-candidates) —
-    // an admin directly seeding a pre-owned landlet for testing/ops is a
-    // legitimate, already-relied-on use of this endpoint; the vulnerability
-    // was the missing auth, not the flexibility.
-    await requireAdmin(request, db);
     const input = await readJson(request);
     const landlet = validateLandlet(input, crypto.randomUUID());
+    // Unowned (greenbelt/generating) creation stays unauthenticated — the
+    // same "world-generation/admin housekeeping" territory the PUT/PATCH
+    // handler below already documents. A caller-supplied owner is a
+    // different story: without this check, anyone could fabricate an
+    // already-claimed landlet (any polygon, any location) under any
+    // builder's id from the request body alone, bypassing every invariant
+    // POST .../claim enforces (available-greenbelt-only, one claimed
+    // landlet per builder, pioneer-rank bookkeeping) — the exact vector
+    // PUT/PATCH's own comment below describes closing, just never applied
+    // to this creation path too. Creating a landlet already claimed by
+    // *yourself* is still allowed (existing test/dev-tooling usage relies
+    // on it), only ever as the session's own builder.
+    if (landlet.ownerBuilderId !== null) {
+      const sessionBuilder = await requireSessionBuilder(request, db);
+      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+    }
     await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
@@ -2818,15 +2832,15 @@ async function handleLandlets(request, db, route, url) {
     // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
-    // applies yet" territory as the land-candidates/world endpoints (POST
-    // /api/landlets itself is admin-gated now — see its own comment). An
-    // *owned* landlet is a different story: only its own builder may touch
-    // it, and — regardless of who's asking — ownership itself can never
-    // change through this endpoint.
-    // A full PUT/PATCH that could freely set `ownerBuilderId` was a real
-    // "claim any landlet, bypass every invariant POST .../claim enforces"
-    // vector with no login required at all; ownership transfer only ever
-    // happens through that dedicated, invariant-checked endpoint now.
+    // applies yet" territory as unowned creation via POST /api/landlets
+    // itself (see that handler's own comment) and the land-candidates/
+    // world endpoints. An *owned* landlet is a different story: only its
+    // own builder may touch it, and — regardless of who's asking —
+    // ownership itself can never change through this endpoint. A full
+    // PUT/PATCH that could freely set `ownerBuilderId` was a real "claim
+    // any landlet, bypass every invariant POST .../claim enforces" vector
+    // with no login required at all; ownership transfer only ever happens
+    // through that dedicated, invariant-checked endpoint now.
     if (existing.owner_builder_id !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
