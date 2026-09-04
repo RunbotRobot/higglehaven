@@ -3605,15 +3605,42 @@ describe('Simulated purchases', () => {
     expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
 
     const before = await builderRow(seller.builderId);
-    const refunded = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    // This template has no sellerId (createTemplate's own default), so the
+    // refund falls to the admin fallback rather than seller ownership —
+    // see the "requires admin" test below for that path in isolation.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
     const after = await builderRow(seller.builderId);
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
-    const secondRefund = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+  });
+
+  it('rejects refunding a purchase with no seller without an admin session', async () => {
+    const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
+    await claim('purchase-refund-no-seller-auth-landlet', seller);
+    await createTemplate('purchase-refund-no-seller-auth-template', { priceCents: 5000 });
+    await placeInstance('purchase-refund-no-seller-auth-instance', 'purchase-refund-no-seller-auth-landlet', 'purchase-refund-no-seller-auth-template', seller);
+
+    const purchased = await api('/instances/purchase-refund-no-seller-auth-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const noSession = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+
+    // A real, logged-in, non-admin session isn't enough either — this
+    // isn't "any authenticated user," it's specifically admin.
+    const nonAdmin = await signupBuilder('purchase-refund-no-seller-auth-nonadmin');
+    const wrongSession = await api(`/purchases/${purchaseId}/refund`, nonAdmin.session({ method: 'POST' }));
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
@@ -3628,7 +3655,7 @@ describe('Simulated purchases', () => {
     // to have clawed back, so the refund must push it negative.
     await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
-    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
     expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
@@ -3641,7 +3668,7 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template', seller);
 
     const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
-    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
 

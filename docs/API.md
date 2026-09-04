@@ -3268,8 +3268,12 @@ side-effect a purchase has: the builder's commission credit.
 
 `POST /api/purchases/:purchaseId/refund` (`migrations/0052_purchase_refunds.sql`)
 requires a session logged in as the purchase's own `sellerId`, if it has
-one (`403` otherwise — a purchase of a seller-less template stays open,
-matching the same rule as the `GET` above). Marks a purchase refunded and
+one (`403` otherwise). A purchase of a seller-less template (an
+admin/system-owned catalog item can still be priced) does **not** stay
+open the way the `GET` above does — unlike a read, a refund claws back
+real dállers from a builder's balance, so it falls back to requiring an
+admin session instead (`401`/`403`), never no check at all. Marks a
+purchase refunded and
 deducts exactly `builderShareCents` (not the
 full sale total — that was never the builder's money) from
 `builders.dallers_balance_cents`. **No floor** — this can and deliberately
@@ -3305,7 +3309,9 @@ platform-controlled-key simplicity as digital goods' disclaimer) —
 
 `worker/index.test.js`'s "Simulated purchases" describe block covers the
 refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
-negative-balance case, and the `templateId` listing filter.
+negative-balance case, the `templateId` listing filter, and — for a
+seller-less purchase specifically — that refunding it is rejected with no
+session or a non-admin session and only succeeds with one.
 `e2e/purchase-refunds.test.mjs` covers the Sales panel's refund button and
 the Edit Returns Policy panel through the real UI — the no-returns
 *rejection* path isn't covered there for the same reason prohibited-content
