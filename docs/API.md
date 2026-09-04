@@ -3954,17 +3954,23 @@ the built-in catalog:
   updates validate `/uploads/` model URLs against live R2 metadata and return
   `400` rather than storing a reference to a missing upload. Built-in `/models/`
   URLs and external catalog URLs are unaffected by this upload-specific check.
-- `GET /api/models` — lists uploaded R2 models without returning their bodies.
+- `GET /api/models` — **admin-only** (`requireAdmin`, `403` for a logged-in
+  non-admin, `401` for no session — same bar as the world/land-candidate
+  tooling above). Lists uploaded R2 models without returning their bodies.
   Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`, `deletable`,
   and sorted `referencedByTemplateIds`. Reference metadata is resolved with one
   bounded D1 query for the R2 page, allowing cleanup tooling to distinguish
   safe deletions without probing each object. Listings use a
   `limit` from 1 to 100, and return the R2-backed opaque `nextCursor` for the
-  next page. This is a dev inventory for finding uploads that can be reclaimed.
-- `GET /api/models/storage` — scans the paginated R2 metadata inventory and
-  reports `usedBytes`, `objectCount`, the application-level `capBytes`,
-  `availableBytes`, and `utilizationRatio`. This exposes the same live storage
-  accounting enforced before uploads, without downloading object bodies.
+  next page. This is a dev inventory for finding uploads that can be
+  reclaimed — not a builder/seller-facing endpoint, so it has no business
+  enumerating every uploaded (including unregistered, in-progress) model to
+  an ordinary session.
+- `GET /api/models/storage` — **admin-only**, same bar as `GET /api/models`
+  above. Scans the paginated R2 metadata inventory and reports `usedBytes`,
+  `objectCount`, the application-level `capBytes`, `availableBytes`, and
+  `utilizationRatio`. This exposes the same live storage accounting enforced
+  before uploads, without downloading object bodies.
 - `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
   (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
   page's catalog references in one D1 query. The response reports
