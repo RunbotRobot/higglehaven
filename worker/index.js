@@ -378,6 +378,14 @@ async function handleApi(request, env, url) {
 async function handleModelUpload(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
 
+  // Unauthenticated on purpose (see the removed-URL-import comment above),
+  // but unlike POST /api/builders/sellers this isn't just a spoof-nothing
+  // row insert — each call can burn up to MAX_MODEL_BYTES of the shared
+  // MAX_TOTAL_STORAGE_BYTES cap, so an anonymous caller looping this
+  // endpoint could otherwise exhaust R2 storage for everyone. Same
+  // per-IP-throttle mitigation as signup/password-reset (checkRateLimit).
+  await checkRateLimit(env.DB, `model-upload:${clientIp(request)}`, 20);
+
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('multipart/form-data')) {
     throw new HttpError('Expected multipart/form-data', 415);
