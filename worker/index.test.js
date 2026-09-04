@@ -738,6 +738,44 @@ describe('Worker API', () => {
     })).response.status).toBe(400);
   });
 
+  it('checks ownership of every distinct landlet in an instance batch, not just one of them', async () => {
+    const ownerBuilder = await signupBuilder('instance-batch-owner');
+    const otherBuilder = await signupBuilder('instance-batch-other');
+    await createGreenbeltLandlet('instance-batch-owned-landlet');
+    await createGreenbeltLandlet('instance-batch-other-landlet');
+    expect((await api('/landlets/instance-batch-owned-landlet/claim', ownerBuilder.session({ method: 'POST' }))).response.status).toBe(200);
+    expect((await api('/landlets/instance-batch-other-landlet/claim', otherBuilder.session({ method: 'POST' }))).response.status).toBe(200);
+
+    const seeded = await api('/instances/batch', ownerBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-owned-seed', landletId: 'instance-batch-owned-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+      ] }),
+    }));
+    expect(seeded.response.status).toBe(201);
+
+    // otherBuilder owns instance-batch-other-landlet but not
+    // instance-batch-owned-landlet — a batch spanning both must be rejected
+    // even though otherBuilder does own one of the two landlets involved.
+    const mixedCreate = await api('/instances/batch', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-other-new', landletId: 'instance-batch-other-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+        { instanceId: 'instance-batch-owned-new', landletId: 'instance-batch-owned-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+      ] }),
+    }));
+    expect(mixedCreate.response.status).toBe(403);
+    expect((await api('/instances/instance-batch-other-new')).response.status).toBe(404);
+    expect((await api('/instances/instance-batch-owned-new')).response.status).toBe(404);
+
+    const mixedDelete = await api('/instances/batch', otherBuilder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['instance-batch-owned-seed'] }),
+    }));
+    expect(mixedDelete.response.status).toBe(403);
+    expect((await api('/instances/instance-batch-owned-seed')).response.status).toBe(200);
+  });
+
   it('claims an available greenbelt landlet', async () => {
     const created = await createGreenbeltLandlet('claimable-landlet');
     expect(created.response.status).toBe(201);
