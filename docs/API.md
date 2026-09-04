@@ -3543,17 +3543,48 @@ paper-thin, single-sided geometry doesn't reliably cover the view the way
 a real solid wall would. Real clearance keeps that grazing angle out of
 reach of normal look input.
 
-Shop's horizontal movement is walking, not free flight — the move joystick
-only ever changes `camera.position.x/y`. Height (`camera.position.z`) is a
-separate, deliberately decoupled control: press-and-hold Up/Down buttons
-(`#shop-up-btn`/`#shop-down-btn`, mirroring the joystick's pointer-capture
-pattern but simpler — no drag vector, just a held direction) move the
-camera straight along world Z at `SHOP_VERTICAL_SPEED_M_S`, independent of
-look direction, walk input, or FOV/zoom. Both the walking floor clamp and
-the vertical control share one `clampShopCameraHeight()` helper, so the
-ceiling — `SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M`
-— stays consistent regardless of which input changed height last, and
-tracks the dome's own growth as it rises to clear tall builds.
+## Frontend-only default avatar and third-person walking
+
+Shop mode gives the shopper a visible body (docs/SPEC.md §2's default
+avatar — "a single, standard, deliberately non-gendered avatar assigned
+instantly at registration") instead of a bodiless free-flying camera. No
+modeled-and-rigged character asset exists yet, so `createShopAvatar` in
+`src/main.js` builds a plain placeholder from primitives — capsule torso,
+sphere head, cylinder limbs — rather than loading a GLTF. Reskinning it
+with a real asset later is a `createShopAvatar` rewrite, not a redesign of
+anything below.
+
+Movement is real ground-based walking, not free flight: the move joystick
+changes `shopAvatarPosition` (the avatar's own feet position, clamped to
+the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/2.2
+m/s, docs/SPEC.md §2's confirmed speeds) rather than moving the camera
+directly. There's no separate run input — the joystick's own deflection
+(0..1) doubles as intensity, linearly interpolating between the two
+speeds, so a full push runs and a gentle nudge walks. The same deflection
+drives `updateShopAvatarPose`'s walk-cycle: swing amplitude and cycle speed
+both scale with it and ease back to a neutral standing pose (rather than
+snapping) once the joystick releases.
+
+The camera is no longer the player — it's a third-person rig that orbits a
+fixed `SHOP_CAMERA_FOLLOW_DISTANCE_M` around a point roughly at the
+avatar's own head height (`positionShopCamera`, `SHOP_CAMERA_ANCHOR_HEIGHT_M`),
+subtracting the current look direction from that anchor. Looking down
+swings the camera up and back over the avatar's shoulder; looking up swings
+it down and in toward the avatar's own back — the standard over-the-
+shoulder feel, with no separate collision pass: `clampShopCameraHeight`
+(shared with the avatar's own ground clamp) and the wall-radius clamp
+(`clampShopRadius`, shared between the avatar's position and the camera's)
+still catch the rare look angle that would otherwise dip the camera
+underground or swing it past the world wall.
+
+Flight (docs/SPEC.md §2's double-tap-to-fly, altitude/speed curve, and
+takeoff/landing fades) is deliberately not built yet — this pass is
+ground-only walking/running, the spec's own phase-3 "single-player avatar/
+movement systems" ahead of flight in the phasing order (docs/SPEC.md §9).
+The previous free-fly camera's press-and-hold Up/Down buttons are gone
+along with it, not repurposed — they moved the *camera* straight along
+world Z with no ground-relative meaning once the camera stopped being the
+player.
 
 ## Frontend-only Resize
 
