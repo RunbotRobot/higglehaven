@@ -2282,6 +2282,43 @@ describe('Product reviews', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
+    const seller = await signupSeller('review-moderation-seller');
+    const otherSeller = await signupSeller('review-moderation-other-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-moderation-owned',
+        name: 'Seller-owned reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const unauthenticated = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const wrongSeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, otherSeller.session({ method: 'DELETE' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listedStillThere = await api(`/catalog/${templateId}/reviews`);
+    expect(listedStillThere.body.reviews).toHaveLength(1);
+
+    const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
