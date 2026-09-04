@@ -3644,14 +3644,53 @@ shoulder feel, with no separate collision pass: `clampShopCameraHeight`
 still catch the rare look angle that would otherwise dip the camera
 underground or swing it past the world wall.
 
-Flight (docs/SPEC.md §2's double-tap-to-fly, altitude/speed curve, and
-takeoff/landing fades) is deliberately not built yet — this pass is
-ground-only walking/running, the spec's own phase-3 "single-player avatar/
-movement systems" ahead of flight in the phasing order (docs/SPEC.md §9).
-The previous free-fly camera's press-and-hold Up/Down buttons are gone
-along with it, not repurposed — they moved the *camera* straight along
-world Z with no ground-relative meaning once the camera stopped being the
-player.
+## Frontend-only flight
+
+docs/SPEC.md §2's flight — `updateShopFlight`/`toggleShopFlight` in
+`src/main.js` drive a small state machine (`shopFlightState`: `'grounded'`
+| `'takingOff'` | `'flying'` | `'landing'`) over `shopFlightAltitudeM`, the
+avatar's own altitude (mirrored onto `shopAvatarPosition.z` every frame in
+`updateShopMovement`, which the existing camera-follow logic already tracks
+for free since it's relative to the avatar's position).
+
+Trigger matches the spec's own wording exactly — "double-tap jump (mobile)
+/ double-press spacebar (desktop)" — via `bindShopFlyToggle` (the new
+`#shop-fly-btn`) and a `keydown` listener on `Space`, both requiring two
+presses within `SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than
+one, so an ordinary single tap/press never launches the player
+accidentally. Takeoff ramps `shopFlightAltitudeM` from 0 to
+`SHOP_FLIGHT_HOVER_START_ALTITUDE_M` over `SHOP_FLIGHT_TAKEOFF_DURATION_S`
+(spec's "~1s lift"); landing reverses that over
+`SHOP_FLIGHT_LANDING_DURATION_S` (spec's "~2s reverse") from whatever
+altitude the player was actually at (`shopFlightLandingStartAltitudeM`,
+captured the instant landing starts). Both ramps are smoothstep-eased, not
+linear. Once actually `'flying'`, a press-and-hold Up/Down pair
+(`#shop-vertical-controls`, shown only while airborne via a `shop-flying`
+class on `<body>`) climbs/descends at `SHOP_FLIGHT_VERTICAL_SPEED_M_S`,
+clamped between a low floor and the same dynamic dome ceiling the camera's
+own height clamp already respects (`clampShopCameraHeight`'s formula) —
+**not** literally the spec's 500m, since this world's wall/dome backdrop
+was never built for a sky that tall; see `SHOP_FLIGHT_SPEED_EXPONENT`'s own
+comment in `src/main.js` for why that's a deliberate scope boundary for
+this pass, not an oversight.
+
+Horizontal flight speed follows the spec's altitude/speed curve
+(`flightSpeedMultiplier`): "each doubling of altitude ≈ 50% more max ground
+speed" fixes the curve's shape as a power law with exponent log2(1.5); the
+spec's own two data points — "~10x walking speed near building-height" and
+"up to ~100x at max altitude" — anchor it and land almost exactly on the
+spec's own 500m figure when solved, a strong signal this is the intended
+curve rather than an arbitrary fit.
+
+Two spec details are deliberately not built, both because they're
+inherently about *other players* seeing you, and this is still
+single-player only (docs/SPEC.md §9's phase-4 multiplayer presence hasn't
+landed): "flying avatars are invisible to other users" (so takeoff/landing
+here are pure altitude ramps, no fade — there's no one else to fade for)
+and "occupied landing spots offset to nearest open space" (nothing exists
+yet to occupy a spot with).
+
+## Frontend-only avatar idle animation
 
 Idle animation (docs/SPEC.md §2: "context-aware idle state machine (sit,
 lean, stand) after inactivity, with randomization") — `updateShopAvatarIdle`
