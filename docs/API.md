@@ -1895,7 +1895,7 @@ standalone read.
 Returns version metadata plus its snapshotted `instances` array. Later edits or
 deletions in the mutable draft do not alter this array. Each instance's
 `isCommunitySign`/`isCommunityCalendar` are captured in the snapshot too
-(`migrations/0058`, mirroring how `0034`/`0036` carried `crop`/`scale` into
+(`migrations/0060`, mirroring how `0034`/`0036` carried `crop`/`scale` into
 `version_instances` alongside `placed_instances` — `0041`/`0042` had added
 the two flag columns only to `placed_instances`, so every published/live
 landlet lost its community signs and calendars entirely until this closed

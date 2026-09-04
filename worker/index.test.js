@@ -1143,7 +1143,7 @@ describe('Worker API', () => {
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
-  // migrations/0058: version_instances never got is_community_sign/
+  // migrations/0060: version_instances never got is_community_sign/
   // is_community_calendar when 0041/0042 added them to placed_instances
   // (unlike crop_json/scale, which 0034/0036 added to both tables) — a
   // published/live lándlet lost every community sign and calendar entirely.
