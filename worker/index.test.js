@@ -2376,6 +2376,33 @@ describe('Product reviews', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  it('computes averageRating/count over every review, not just the 200-row list page', async () => {
+    const templateId = await createTemplate('reviews-beyond-list-cap');
+    // 200 one-star reviews (the oldest, so they're the ones the list's own
+    // LIMIT 200 would return) plus one five-star review newer than all of
+    // them. If averageRating/count were derived from the returned list
+    // (bugged behavior) rather than a separate unlimited aggregate, the
+    // 201st review would never move either figure.
+    const inserts = [];
+    for (let i = 0; i < 200; i++) {
+      inserts.push(env.DB.prepare(`
+        INSERT INTO product_reviews (review_id, template_id, author_label, rating, created_at)
+        VALUES (?, ?, ?, 1, ?)
+      `).bind(`review-beyond-cap-${i}`, templateId, `Shopper ${i}`, `2020-01-01T00:00:${String(i).padStart(2, '0')}.000Z`));
+    }
+    inserts.push(env.DB.prepare(`
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, created_at)
+      VALUES (?, ?, ?, 5, '2020-01-02T00:00:00.000Z')
+    `).bind('review-beyond-cap-201st', templateId, 'Newest Shopper'));
+    await env.DB.batch(inserts);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.reviews).toHaveLength(200); // the list page itself does stay capped
+    expect(listed.body.count).toBe(201);
+    expect(listed.body.averageRating).toBeCloseTo((200 * 1 + 5) / 201);
+  });
+
   it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
     const seller = await signupSeller('review-moderation-seller');
     const otherSeller = await signupSeller('review-moderation-other-seller');

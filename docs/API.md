@@ -2638,8 +2638,11 @@ needs to re-derive it from the list itself:
 ```
 
 `averageRating` is `null` when there are no reviews yet (never `0`, which
-would misleadingly read as "rated, and rated at the bottom"). Deleting a
-catalog template cascades its reviews.
+would misleadingly read as "rated, and rated at the bottom"). `reviews`
+itself is capped at 200 (oldest first), but `averageRating`/`count` are
+computed via a separate, unlimited aggregate query — the product's real,
+all-time summary regardless of how many reviews it has, not just the
+returned page's. Deleting a catalog template cascades its reviews.
 
 ### Frontend wiring
 
@@ -2683,7 +2686,8 @@ text was left), stacked the same way sign posts/calendar events are.
 
 `worker/index.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
-rating bounds, optional text, averaged summary, moderation delete (both an
+rating bounds, optional text, averaged summary, averageRating/count staying
+correct past the list's own 200-row cap, moderation delete (both an
 unowned template's unrestricted delete and a seller-owned template's
 `401`/`403`/owning-seller-succeeds gate), independence between two
 different templates' review lists, cascade delete
