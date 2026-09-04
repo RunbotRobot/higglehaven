@@ -1,7 +1,9 @@
 // Client-side-only persistence for which products are placed on the landlet
-// and where. There's no backend/database yet, so this is localStorage for
-// now — good enough to prove out the interaction, not meant to survive a
-// device change or count as the real data layer.
+// and where. A real D1-backed instance store exists now (worker/index.js) —
+// this is only the offline/API-unreachable fallback src/api.js's own header
+// describes (callers fall back here when a backend call fails, not because
+// there's no backend to call). Not meant to survive a device change or
+// count as the real data layer.
 //
 // Storage key bumped from the old "layout" (a position-overrides map keyed
 // by a fixed product id) to "instances" (a full list of placed items, since
