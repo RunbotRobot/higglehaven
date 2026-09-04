@@ -2645,12 +2645,16 @@ same label both times, the same "no accounts, just labels" constraint this
 identity system carries everywhere else it's used. Any purchase counts,
 refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
 can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
-enforced at the DB level, checked explicitly first for a `409` instead of
-a raw constraint error): the purchase gate above is a one-time eligibility
-check, not a per-review consumption check, so without this cap the same
-purchase could otherwise back an unbounded number of reviews under one
-label, directly skewing `averageRating`. Deleting the existing review frees
-that label to review again. This matches docs/SPEC.md §5's review
+enforced at the DB level): the purchase gate above is a one-time
+eligibility check, not a per-review consumption check, so without this cap
+the same purchase could otherwise back an unbounded number of reviews
+under one label, directly skewing `averageRating`. The existence check and
+the `INSERT` are folded into one atomic statement (`INSERT ... SELECT ...
+WHERE NOT EXISTS (...)`, same idiom `checkRateLimit` uses) rather than a
+separate `SELECT` then `INSERT`, which would be a check-then-act race
+between two concurrent submits under the same label — `409` either way,
+never a raw constraint error. Deleting the existing review frees that
+label to review again. This matches docs/SPEC.md §5's review
 incentives being "capped per account/period" — the purchase-matched
 `author_label` is this app's closest thing to an account.
 
