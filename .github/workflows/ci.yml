@@ -18,6 +18,17 @@ on:
   push:
     branches: ['**']
 
+# Cancels a branch's own earlier, now-superseded run the moment a newer push
+# lands on it — without this, every push's full ~23-job fan-out (unit-tests +
+# discover-e2e-files + ~21 e2e matrix entries) kept running to completion even
+# after a later push made it moot, which is exactly what several sessions
+# hit as runner-pool contention when iterating with multiple pushes per
+# branch. Scoped per-branch (github.ref), so it only ever cancels a branch's
+# own stale run — never another session's branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
