@@ -262,16 +262,25 @@ describe('Worker API', () => {
       deletable: false,
     }));
 
-    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    // Admin-only, same as /api/models/cleanup below: no session, and a
+    // logged-in-but-not-admin session, are both rejected before the
+    // referenced-model check ever runs.
+    const unauthedDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    expect(unauthedDelete.status).toBe(401);
+    const nonAdmin = await signupBuilder('non-admin-model-delete');
+    const nonAdminDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, nonAdmin.session({ method: 'DELETE' }));
+    expect(nonAdminDelete.status).toBe(403);
+
+    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(referenced.status).toBe(409);
     expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced by a catalog template' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
-    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
-    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
+    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }))).status).toBe(404);
     const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
     const storageAfterRemoval = await api('/models/storage', adminSession());
@@ -282,10 +291,18 @@ describe('Worker API', () => {
     orphanForm.set('file', glbFile({ json: '{"orphan":true}' }));
     const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
     const orphan = await orphanUpload.json();
-    const preview = await api('/models/cleanup', {
+
+    // Admin-only: rejected before it ever touches R2, same bar as the
+    // DELETE-a-single-upload endpoint above.
+    expect((await api('/models/cleanup', { method: 'POST', body: JSON.stringify({ maxDeletes: 1 }) })).response.status).toBe(401);
+    expect((await api('/models/cleanup', nonAdmin.session({
+      method: 'POST', body: JSON.stringify({ maxDeletes: 1 }),
+    }))).response.status).toBe(403);
+
+    const preview = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1, dryRun: true }),
-    });
+    }));
     expect(preview.response.status).toBe(200);
     expect(preview.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -295,10 +312,10 @@ describe('Worker API', () => {
       dryRun: true,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
-    const cleanup = await api('/models/cleanup', {
+    const cleanup = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1 }),
-    });
+    }));
     expect(cleanup.response.status).toBe(200);
     expect(cleanup.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -308,12 +325,12 @@ describe('Worker API', () => {
       dryRun: false,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
-    expect((await api('/models/cleanup', {
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
-    })).response.status).toBe(400);
-    expect((await api('/models/cleanup', {
+    }))).response.status).toBe(400);
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ dryRun: 'yes' }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
   });
 
   it('rejects invalid uploaded-model paths', async () => {
