@@ -1921,9 +1921,19 @@ async function recomputeLandCapsBatch(db, rows) {
   if (updates.length > 0) await db.batch(updates);
 }
 
-// Sweeps every active-but-expired auction and resolves each in turn — the
-// closest this dev-mode backend gets to a real scheduled job (see
-// docs/API.md's own note on why: no Cron Trigger is wired up, so
+// Caps how many auctions a single GET /api/auctions call will resolve —
+// without it, a burst of auctions all becoming due around the same time
+// (e.g. many started with the same default 24h duration) would force one
+// ordinary, public, unauthenticated page view into an unbounded chain of
+// sequential resolveAuction writes, each its own SELECT + several-statement
+// db.batch. ORDER BY ends_at means each call clears the oldest-due backlog
+// first and always makes forward progress, so a large backlog still fully
+// resolves over a few calls instead of ever blocking one call indefinitely.
+const AUCTION_SWEEP_LIMIT = 25;
+
+// Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
+// each in turn — the closest this dev-mode backend gets to a real scheduled
+// job (see docs/API.md's own note on why: no Cron Trigger is wired up, so
 // resolution is purely lazy, triggered by whatever request happens to
 // touch auctions next). Called at the top of the list endpoint so a
 // shopper browsing auctions always sees current state without needing to
@@ -1931,7 +1941,8 @@ async function recomputeLandCapsBatch(db, rows) {
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
     SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).all();
+    ORDER BY ends_at LIMIT ?
+  `).bind(AUCTION_SWEEP_LIMIT).all();
   for (const row of results) await resolveAuction(db, row);
 }
 
