@@ -14,53 +14,58 @@
 - Run `npm test`, `npm run build`, and `git diff --check`.
 - Commit each completed change.
 
-## Running multiple sessions in parallel
+## Branch: always `higglehaven2`
 
-Track active parallel sessions and claim work via GitHub Issue #25
-("higglehaven: active parallel sessions") — read it in full before
-starting. Short version:
+All work happens on one single branch, always named exactly
+`higglehaven2` — never a different or numbered name
+(`higglehaven1`, `higglehaven3`, `session-2`, etc.). Those other names
+are not reserved for anything in particular; `higglehaven2` is simply
+the one name to use, every time, regardless of what the work is.
 
-- Each session works on its own branch, named `higglehaven1`,
-  `higglehaven2`, etc. (no fixed scope per number), forked from the
-  current trunk (`main`). Merge back via PR.
-- Claim a task by self-assigning its GitHub Issue before starting; file
-  one if it doesn't exist yet.
-- Comment on Issue #25 with your session name/branch/task whenever you
-  start or finish something, so other sessions can pick work that's
-  well-separated from what's already in flight.
-- Only ever run `wrangler deploy` or `wrangler d1 migrations apply
-  --remote` from trunk, after merging — never from an in-progress
-  session branch.
-- **Keep `.github/workflows/ci.yml` in sync with `main`.** GitHub Actions
-  runs whichever copy of that file exists on the branch doing the
-  pushing, not some global setting — a branch that's fallen behind `main`
-  keeps running an outdated CI config until it merges/rebases `main` in.
-  This matters more than usual here: this account's Actions concurrency
-  is a genuinely shared, limited resource across every session at once
-  (GitHub Free plan caps it at 20 concurrent jobs, account-wide), so an
-  out-of-date workflow on your branch (e.g., a wider e2e matrix than
-  `main`'s current one) doesn't just affect you — it eats into the
-  budget every other active session is also drawing from. If your branch
-  is more than a few commits behind `main`, merge/rebase before your next
-  push rather than after.
+The cycle, every time you're asked to make a change:
+
+1. Update `higglehaven2` to match the current `main` (if `higglehaven2`
+   doesn't exist yet, or was already merged and is now stale, recreate/
+   reset it from `main`'s current tip — don't build on top of an old,
+   already-merged version of itself).
+2. Make your changes as commits on `higglehaven2`.
+3. Open a PR from `higglehaven2` into `main`, wait for CI to pass, and
+   merge it yourself.
+4. When asked for the next change, repeat from step 1 — update
+   `higglehaven2` to match `main` again before starting.
+
+`main` is the durable, ever-growing version history — every merge into
+it is permanent, and nothing is ever lost from it. `higglehaven2` is a
+reusable staging branch, not a growing log of its own: it gets reset to
+match `main` at the start of each cycle, so its tip only ever reflects
+"`main` plus whatever's currently in progress," never a cumulative
+record. Once a `higglehaven2` cycle's PR is merged, that branch name is
+free to reuse immediately for the next cycle — merging preserves its
+commits inside `main` forever regardless of what happens to the branch
+pointer afterward.
+
+Only ever run `wrangler deploy` or `wrangler d1 migrations apply
+--remote` from `main`, after merging — never from `higglehaven2` before
+its PR has merged.
+
+A previous version of this file documented a different scheme —
+numbered branches (`higglehaven1`, `higglehaven2`, ...) for running many
+sessions in parallel, coordinated via a GitHub Issue. That was a
+misunderstanding of the intended convention, not something to revive:
+don't create numbered branches, and don't invent a parallel-session
+coordination scheme.
 
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
 picking up an already-filed issue), you'll typically turn up several
-plausible findings before settling on one to fix. File **all** of them as
-separate GitHub Issues in that same pass, not just the one you're about
-to claim — self-assign and start on one, leave the rest open and
-unclaimed. Note in each issue body that it surfaced during a broader
-exploration pass, so nobody mistakes it for noise.
-
-This exists because exploration itself is the expensive, easy-to-duplicate
-part: with several sessions running in parallel, each one independently
-re-scanning the same files for "what's left to fix" is wasted work, and
-it's also how two sessions end up fixing the identical thing at once (it
-has happened — see Issue #25's history). A real backlog of pre-scoped,
-unclaimed issues lets the next idle session grab one directly instead of
-re-running your search from scratch.
+plausible findings before settling on one to fix. File **all** of them
+as separate GitHub Issues in that same pass, not just the one you're
+about to work on — self-assign and start on one, leave the rest open
+and unclaimed for later. Note in each issue body that it surfaced
+during a broader exploration pass, so it's clear where it came from.
+This keeps a real backlog of pre-scoped issues around instead of
+re-running the same search from scratch next time.
 
 ### Proposing big feature work — don't just fix bugs, flag what's missing
 
@@ -73,9 +78,8 @@ Unless a specific issue or doc says otherwise, treat a substantial unbuilt
 spec chunk you notice as backlog to flag, the same as a bug: don't sit on
 it waiting to be asked.
 
-Because a big feature is exactly the kind of change that's hard to land
-safely across several parallel sessions sharing one branch history, break
-it up before anyone starts coding:
+Because a big feature is hard to land safely as one giant PR, break it up
+before starting to code:
 
 1. **File one top-level tracking issue** for the feature. Summarize what
    docs/SPEC.md actually asks for, sketch the design/architecture you'd
@@ -85,15 +89,14 @@ it up before anyone starts coding:
    `issue_write`'s `create` method with `parent_issue_number` set to the
    tracking issue, or `sub_issue_write` (`method: "add"`) to attach an
    issue you already created. Each sub-issue should be independently
-   implementable and mergeable on its own.
+   implementable and mergeable on its own, through the same `higglehaven2`
+   cycle described above.
 3. **Recurse.** If a sub-issue is still big enough that landing it risks a
    painful merge or a multi-day session, break *it* into its own
    sub-issues the same way. Keep nesting until every leaf task is roughly
    the size of an ordinary backlog item from "Backlog exploration" above —
-   small enough that one session can finish and merge it same-day with low
-   conflict risk.
-4. **Claim leaves, not trunks.** Self-assign and work one leaf sub-issue
-   at a time, the same as any other backlog item. Leave the rest of the
-   tree open for other sessions. A top-level tracking issue stays open
+   small enough to finish and merge same-day.
+4. **Work leaves, not trunks.** Pick one leaf sub-issue at a time, the
+   same as any other backlog item. A top-level tracking issue stays open
    until every sub-issue under it is closed — don't close it yourself just
    because you finished one branch of it.
