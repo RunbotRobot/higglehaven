@@ -3903,7 +3903,9 @@ the built-in catalog:
   reports `usedBytes`, `objectCount`, the application-level `capBytes`,
   `availableBytes`, and `utilizationRatio`. This exposes the same live storage
   accounting enforced before uploads, without downloading object bodies.
-- `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
+- `POST /api/models/cleanup` — **admin-only** (`requireAdmin`, `403` for a
+  logged-in non-admin, `401` for no session — same bar as the world/land-
+  candidate tooling above). Deletes up to `maxDeletes` unreferenced uploads
   (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
   page's catalog references in one D1 query. The response reports
   `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
@@ -3917,10 +3919,14 @@ the built-in catalog:
   keys are never reused. `HEAD` is also supported for metadata-only checks, and
   matching `If-None-Match` requests receive `304 Not Modified`. Other methods
   receive `405 Method Not Allowed`.
-- `DELETE /uploads/:key` — removes an unreferenced upload from R2 so dev model
-  iterations do not permanently consume the application storage allowance.
-  Uploads still referenced by a catalog template return `409`; delete the
-  catalog template first. Missing uploads return `404`.
+- `DELETE /uploads/:key` — **admin-only**, same as `POST /api/models/cleanup`
+  above (checked before the referenced-model check below, so an unreferenced
+  upload still isn't deletable by its own uploader). Removes an unreferenced
+  upload from R2 so dev model iterations do not permanently consume the
+  application storage allowance. Uploads still referenced by a catalog
+  template return `409`; delete the catalog template first. Missing uploads
+  return `404`. `GET`/`HEAD` above stay unauthenticated — serving an
+  immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
