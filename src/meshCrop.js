@@ -385,10 +385,19 @@ export function cropGeometryFromEnd(geometry, axis, cropLength, fullLength) {
   const picked = hole ? pickCapThickness(all, axis, fullHalf, newBoundary, cropLength, uIndex, vIndex, hole) : null;
 
   if (!picked) return buildGroupedGeometry(mainBody);
-  const { triangles: capSlab, patch, capThickness } = picked;
-  const capBoundary = fullHalf - capThickness;
+  const { triangles: capSlab, patch } = picked;
 
-  let fittedCap = translateTriangles(capSlab, axis, newBoundary - capBoundary);
+  // capSlab spans [fullHalf - capThickness, fullHalf] — its real tip (the
+  // product's true, uncropped surface) sits at fullHalf, not at its own
+  // back/backing-cap face. Translating so *that tip* lands at newBoundary
+  // (delta = newBoundary - fullHalf) is what actually makes the cropped
+  // model's visible length equal cropLength; translating by the slab's
+  // thickness instead (a previous version of this line) left the real tip
+  // sticking out past newBoundary by capThickness, so the model rendered
+  // as cropLength + capThickness — a checked-in worked example even
+  // remarks that capThickness can itself grow to 60% of cropLength on a
+  // difficult scan, so that was never just a cosmetic sliver of error.
+  let fittedCap = translateTriangles(capSlab, axis, newBoundary - fullHalf);
   // The lifted cap's own cross-section (patch) still isn't guaranteed to
   // *exactly* match the main body's cross-section at the new cut boundary
   // (hole) even after pickCapThickness's search — real scanned products
