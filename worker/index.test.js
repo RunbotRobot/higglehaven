@@ -538,13 +538,13 @@ describe('Worker API', () => {
     });
     expect(referencedTemplate.response.status).toBe(201);
     const referenceBuilder = await signupBuilder('catalog-batch-reference-builder');
-    await api('/landlets', {
+    await api('/landlets', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
         status: 'claimed', ownerBuilderId: referenceBuilder.builderId,
       }),
-    });
+    }));
     const reference = await api('/instances', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -584,18 +584,18 @@ describe('Worker API', () => {
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
-    // Owned directly at creation (POST /landlets still accepts ownerBuilderId
-    // unauthenticated — it's admin/test tooling, see that route's own
-    // comment) rather than going through the full claim flow, so the
-    // instance placements below can authenticate as its real owner.
+    // Owned directly at creation (POST /landlets allows creating a landlet
+    // already claimed by yourself — see that route's own comment) rather
+    // than going through the full claim flow, so the instance placements
+    // below can authenticate as its real owner.
     const pageBuilder = await signupBuilder('instance-page-builder');
-    await api('/landlets', {
+    await api('/landlets', pageBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
         status: 'claimed', ownerBuilderId: pageBuilder.builderId,
       }),
-    });
+    }));
     for (const instanceId of ['instance-page-b', 'instance-page-a']) {
       const created = await api('/instances', pageBuilder.session({
         method: 'POST',
@@ -830,13 +830,13 @@ describe('Worker API', () => {
 
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', draftBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: draftBuilder.builderId,
       }),
-    });
+    }));
 
     const replaced = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
@@ -921,13 +921,13 @@ describe('Worker API', () => {
     // require session-authenticated ownership) go against a landlet made
     // just for this test instead.
     const versionBuilder = await signupBuilder('versioned-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', versionBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: versionBuilder.builderId,
       }),
-    });
+    }));
 
     const instance = await api('/instances', versionBuilder.session({
       method: 'POST',
@@ -1009,13 +1009,13 @@ describe('Worker API', () => {
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
     const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
-    await api('/landlets', {
+    await api('/landlets', concurrentBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
         status: 'claimed', ownerBuilderId: concurrentBuilder.builderId,
       }),
-    });
+    }));
 
     const saves = await Promise.all([
       api('/landlets/concurrent-versions/versions', concurrentBuilder.session({
@@ -1055,13 +1055,14 @@ describe('Worker API', () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
-    await api('/landlets', {
+    const notGeneratingBuilder = await signupBuilder('not-generating-owner');
+    await api('/landlets', notGeneratingBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
-        status: 'claimed', ownerBuilderId: 'some-owner',
+        status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId,
       }),
-    });
+    }));
     const invalid = await api('/landlets/not-generating-landlet/generation-complete', { method: 'POST' });
     expect(invalid.response.status).toBe(409);
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
@@ -1088,17 +1089,20 @@ describe('Worker API', () => {
     } while (cursor);
     expect(ids).toEqual(['landlet-page-b', 'landlet-page-a']);
 
-    await api('/landlets', {
+    const pageOwnerBuilder = await signupBuilder('owned-page-owner');
+    await api('/landlets', pageOwnerBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'owned-page-landlet',
         name: 'Owned page landlet',
         areaM2: 4,
         status: 'claimed',
-        ownerBuilderId: 'page-builder',
+        ownerBuilderId: pageOwnerBuilder.builderId,
       }),
-    });
-    const owned = await api('/landlets?status=claimed&ownerBuilderId=%20page-builder%20');
+    }));
+    // Padded with spaces to confirm the query param is trimmed before
+    // filtering, same as the original literal-id version of this test.
+    const owned = await api(`/landlets?status=claimed&ownerBuilderId=${encodeURIComponent(`  ${pageOwnerBuilder.builderId}  `)}`);
     expect(owned.body.landlets.map(({ landletId }) => landletId)).toEqual(['owned-page-landlet']);
     expect(owned.body.nextCursor).toBeNull();
 

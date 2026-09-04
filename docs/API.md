@@ -1589,7 +1589,16 @@ Fetches one landlet.
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates
-one.
+one. Creating an unowned landlet (`ownerBuilderId` omitted or `null` —
+`status: greenbelt`/`generating`) stays unauthenticated dev/world-generation
+tooling, same as `PUT`/`PATCH` on one (see that endpoint's own notes).
+Creating one with a non-null `ownerBuilderId` requires a session (`401`
+without one) and only ever as *yourself* — `403` unless `ownerBuilderId`
+matches the calling account's own builder id. This mirrors `PUT`/`PATCH`'s
+existing ownership gate rather than introducing a new one: without it,
+anyone could fabricate an already-claimed landlet (any polygon, any
+location) under any builder's id straight from the request body, bypassing
+every invariant `POST .../claim` enforces.
 
 Request body example:
 
