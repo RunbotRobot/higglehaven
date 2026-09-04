@@ -2517,6 +2517,33 @@ describe('Product reviews', () => {
     expect(third.response.status).toBe(201);
   });
 
+  it('rejects a concurrent burst of the same purchaser label to exactly one review — regression test for a check-then-act race', async () => {
+    // A separate SELECT-then-INSERT for the one-review-per-purchaser check
+    // would be a check-then-act race: concurrent submits under the same
+    // label could all read "no existing review" before any INSERT
+    // committed. Firing every request at once (rather than the sequential
+    // test above, which an unfixed version would also pass) is what
+    // actually exercises that race — and an unfixed version wouldn't just
+    // let duplicates through, it would 500 on the unique index's own
+    // constraint violation instead of the clean 409 this guards.
+    const templateId = await createTemplate('review-burst-race');
+    await createPurchase(templateId, 'A Shopper');
+
+    const attempts = await Promise.all(
+      Array.from({ length: 10 }, () => api(`/catalog/${templateId}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+      })),
+    );
+    const created = attempts.filter((a) => a.response.status === 201);
+    const conflicted = attempts.filter((a) => a.response.status === 409);
+    expect(created).toHaveLength(1);
+    expect(conflicted).toHaveLength(9);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
     await createPurchase(templateId, 'A Shopper');
