@@ -553,6 +553,12 @@ build but keep the builder's own version history, in case they come back
 and want to recreate it on a new landlet. Deleting the builder removes the
 only place that history could live, so there's nothing left to preserve.
 
+Any `purchases` row where this builder was the hosting/earning party has
+its `builderId` set to `null` rather than being deleted along with the
+builder (migrations/0062) — the purchase is a different party's (the
+product's seller's) sales-history record too, so it survives; see
+"Refunds" below for how a refund handles a null `builderId`.
+
 Response:
 
 ```json
@@ -3363,6 +3369,13 @@ exist, `400` if it's already been refunded, `400` if the product's seller
 has opted into "no returns" (`metadata.noReturns === true`, docs/SPEC.md
 §5's "No-returns-policy respected as seller-set default" — absent/false is
 the spec's own default of accepting returns).
+
+A purchase's `builderId` can itself be null (migrations/0062 — the host
+builder's account was later deleted; `SET NULL`, not `CASCADE`, keeps the
+purchase record itself alive, matching this table's "permanent historical
+receipt" design). In that case the balance clawback and the refund
+notification are both skipped (nothing to credit back, and no account
+left to notify) — the purchase is still marked refunded.
 
 **Deliberately does not touch `daller_earnings_events`** (migrations/0050)
 or land cap — that ledger exists only to feed land cap's trailing-earnings
