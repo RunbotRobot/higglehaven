@@ -3823,6 +3823,7 @@ async function handleInstances(request, db, route, url) {
     if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
     const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
+    const sessionBuilder = await requireSessionBuilder(request, db);
     const placeholders = instanceIds.map(() => '?').join(', ');
     const { results } = await db.prepare(`
       SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
@@ -3830,7 +3831,6 @@ async function handleInstances(request, db, route, url) {
     if (results.length !== instanceIds.length) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
     }
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     await db.batch(instanceIds.map((instanceId) => db.prepare(
       'DELETE FROM placed_instances WHERE instance_id = ?',
@@ -3848,10 +3848,10 @@ async function handleInstances(request, db, route, url) {
     if (new Set(instanceIds).size !== instanceIds.length) {
       throw new HttpError('instanceId values must be unique', 400);
     }
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     await assertCropWithinTemplateBounds(db, instances);
-    const sessionBuilder = await requireSessionBuilder(request, db);
     const existingInstances = await getInstancesById(db, instanceIds);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
@@ -3916,9 +3916,9 @@ async function handleInstances(request, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const instance = validateInstance(input, crypto.randomUUID());
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
@@ -3934,9 +3934,9 @@ async function handleInstances(request, db, route, url) {
     if (!existing) return json({ error: 'Instance not found' }, 404);
     const input = await readJson(request);
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
