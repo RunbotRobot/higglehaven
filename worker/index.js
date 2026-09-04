@@ -225,6 +225,9 @@ export default {
     ctx.waitUntil(autoGrowWorldIfNeeded(env.DB).catch((error) => {
       console.error('autoGrowWorldIfNeeded failed', error);
     }));
+    ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
+      console.error('pruneExpiredAuthState failed', error);
+    }));
   },
 };
 
@@ -907,6 +910,19 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);
     }
+    // One review per matching purchaser label per template (migrations/
+    // 0059) — the verified-purchase check above is a one-time eligibility
+    // gate, not a per-review consumption check, so without this the same
+    // purchase could otherwise back an unbounded number of reviews under
+    // one label. Checked explicitly (rather than letting the unique index
+    // reject the INSERT) so this returns the same HttpError shape as every
+    // other conflict in this file instead of a raw D1 constraint error.
+    const existingReview = await db.prepare(
+      'SELECT 1 FROM product_reviews WHERE template_id = ? AND author_label = ? COLLATE NOCASE LIMIT 1',
+    ).bind(templateId, authorLabel).first();
+    if (existingReview) {
+      throw new HttpError('This purchaser has already reviewed this product', 409);
+    }
     const rating = Number(input.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       throw new HttpError('rating must be an integer from 1 to 5', 400);
@@ -1041,8 +1057,8 @@ async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -1982,7 +1998,10 @@ async function resolveAuctionIfDue(db, auction) {
 // willingness to relinquish for free") — see docs/SPEC.md §5. Clearing
 // the landlet's build on a transfer mirrors DELETE /api/builders/:id's
 // own reasoning: a new owner gets the land, not the previous owner's
-// stuff on it.
+// stuff on it. The winning bidder keeping their own existing claimed
+// landlet(s) is intentional (docs/SPEC.md §0/§5 — auctions are how a
+// builder acquires *additional* already-claimed land) — see migration
+// 0058 on why that no longer trips a UNIQUE constraint here.
 async function resolveAuction(db, auction) {
   const highest = await db.prepare(`
     SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
@@ -2225,6 +2244,24 @@ async function checkRateLimit(db, bucketKey, maxAttempts) {
   }
   await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
     .bind(bucketKey, now).run();
+}
+
+// checkRateLimit only ever prunes the one bucket it's currently checking —
+// a bucket that's hit once and never revisited (e.g. signup/reset attempts
+// against an email nobody retries) has no other code path that deletes its
+// rows, so rate_limit_events grows unbounded over time. Sessions and
+// verification/reset tokens have the same shape of gap: nothing sweeps
+// them once they expire unless a user happens to hit logout or the
+// password-reset flow again. Run from scheduled() below on the same cron
+// as autoGrowWorldIfNeeded so none of this needs its own trigger.
+async function pruneExpiredAuthState(db) {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  await db.batch([
+    db.prepare('DELETE FROM rate_limit_events WHERE created_at < ?').bind(cutoff),
+    db.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+    db.prepare("DELETE FROM email_verification_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+    db.prepare("DELETE FROM password_reset_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+  ]);
 }
 
 function bytesToHex(bytes) {
@@ -2710,6 +2747,7 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
+    await requireAdmin(request, db);
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
@@ -2848,7 +2886,7 @@ async function handleLandlets(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Landlet not found' }, 404);
-    // Unowned (greenbelt/generating) landlets stay unauthenticated —
+    // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
     // applies yet" territory as unowned creation via POST /api/landlets
@@ -2958,16 +2996,44 @@ async function handleLandletDraft(request, db, landletId) {
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
 
+    // Upsert-by-instance_id, not delete-all/re-insert: sign_posts and
+    // calendar_events both cascade-delete on their own instance_id (see
+    // migrations/0041/0042), so a wholesale delete-then-recreate silently
+    // wiped every post/event on the lándlet on every single draft save,
+    // even though the recreated instance kept the same instance_id and so
+    // *looked* untouched in the UI. Genuinely-removed instances (not
+    // present in the new set) still get a real DELETE below, which is the
+    // one case where losing their posts/events to the cascade is correct.
     await db.batch([
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
       db.prepare(`
-        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+        DELETE FROM placed_instances
+        WHERE landlet_id = ?
+          AND instance_id NOT IN (SELECT json_extract(value, '$.instanceId') FROM json_each(?))
+      `).bind(landletId, JSON.stringify(instances)),
+      db.prepare(`
+        INSERT INTO placed_instances
+          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
-          json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale')
+          json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
+          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar')
         FROM json_each(?)
+        -- "WHERE true" is load-bearing, not decorative: SQLite's upsert
+        -- grammar treats a bare "ON" after "INSERT ... SELECT ... FROM"
+        -- as ambiguous with a join's ON clause unless the SELECT has a
+        -- WHERE (see sqlite.org/lang_upsert.html) -- confirmed by hand,
+        -- this statement 400s with "near DO: syntax error" without it.
+        WHERE true
+        ON CONFLICT(instance_id) DO UPDATE SET
+          landlet_id = excluded.landlet_id, template_id = excluded.template_id,
+          x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
+          rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
+          rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
+          scale = excluded.scale, is_community_sign = excluded.is_community_sign,
+          is_community_calendar = excluded.is_community_calendar,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       `).bind(landletId, JSON.stringify(instances)),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
@@ -2980,8 +3046,8 @@ async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -3757,6 +3823,7 @@ async function handleInstances(request, db, route, url) {
     if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
     const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
+    const sessionBuilder = await requireSessionBuilder(request, db);
     const placeholders = instanceIds.map(() => '?').join(', ');
     const { results } = await db.prepare(`
       SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
@@ -3764,7 +3831,6 @@ async function handleInstances(request, db, route, url) {
     if (results.length !== instanceIds.length) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
     }
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     await db.batch(instanceIds.map((instanceId) => db.prepare(
       'DELETE FROM placed_instances WHERE instance_id = ?',
@@ -3782,10 +3848,10 @@ async function handleInstances(request, db, route, url) {
     if (new Set(instanceIds).size !== instanceIds.length) {
       throw new HttpError('instanceId values must be unique', 400);
     }
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     await assertCropWithinTemplateBounds(db, instances);
-    const sessionBuilder = await requireSessionBuilder(request, db);
     const existingInstances = await getInstancesById(db, instanceIds);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
@@ -3850,9 +3916,9 @@ async function handleInstances(request, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const instance = validateInstance(input, crypto.randomUUID());
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await db.prepare(`
@@ -3868,9 +3934,9 @@ async function handleInstances(request, db, route, url) {
     if (!existing) return json({ error: 'Instance not found' }, 404);
     const input = await readJson(request);
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
+    const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
@@ -4102,8 +4168,23 @@ function isoDateString(value, field) {
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
 const PURCHASE_BUILDER_SPLIT = 0.5; // "Universal 50/50 split"
 const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
+// quantity had no upper bound at all until this was added — a single
+// unauthenticated call with an absurd quantity (there's no shopper account
+// to even attribute it to) could mint an arbitrary amount of a builder's
+// dallers_balance_cents and daller_earnings_events credit in one request,
+// directly undermining "growth is earned through demonstrated performance,
+// never purchased" (docs/SPEC.md §0) since earnings feed the land cap
+// formula. 1000 stays generous for a legitimate bulk "buy a crate of
+// these" simulation while ruling out that abuse.
+const PURCHASE_MAX_QUANTITY = 1000;
+// Same per-IP-throttle mitigation as signup/password-reset/model-upload
+// (checkRateLimit) — this is the one other public, repeatable,
+// balance-crediting endpoint that had no throttle at all, unlike every
+// sibling mutation this dev-mode backend has already locked down today.
+const PURCHASE_RATE_LIMIT_MAX = 30;
 
 async function handleInstancePurchase(request, db, instanceId) {
+  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) return json({ error: 'Instance not found' }, 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -4137,6 +4218,16 @@ async function handleInstancePurchase(request, db, instanceId) {
 
 async function finishPurchase(db, instance, template, landlet, input) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
+  // Capped as a sanity bound against a malformed/abusive request producing
+  // an absurd totalCents (and the dállers-balance/land-cap credit that
+  // flows from it) — not itself a spec requirement, same reasoning as
+  // durationHours' cap above. This endpoint has no session (see
+  // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
+  // there's no real payment backing it), so quantity was the only thing
+  // standing between one request and an unbounded credit before this cap;
+  // the checkRateLimit call above closes the other half of that gap
+  // (repeated smaller requests instead of one large one).
+  if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
   const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;
@@ -4365,17 +4456,14 @@ async function getInstancesById(db, instanceIds) {
 }
 
 // Fallback classifier for constraint violations that reach D1 without an
-// explicit pre-check (e.g. a duplicate catalog templateId, a landlet claim
-// race, a version_number collision) — turns an otherwise-opaque 500 into a
-// clean 4xx. Checked only after `HttpError` in the top-level catch, so
-// routes with a more specific pre-check (assertReferenceExists above) keep
-// their own message instead of falling through to this generic one.
+// explicit pre-check (e.g. a duplicate catalog templateId, a
+// version_number collision) — turns an otherwise-opaque 500 into a clean
+// 4xx. Checked only after `HttpError` in the top-level catch, so routes
+// with a more specific pre-check (assertReferenceExists above) keep their
+// own message instead of falling through to this generic one.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
-  if (message.includes('UNIQUE constraint failed: landlets.owner_builder_id')) {
-    return new HttpError('Builder already owns a claimed landlet', 409);
-  }
   if (message.includes('UNIQUE constraint failed')) {
     return new HttpError('Resource already exists', 409);
   }
@@ -4748,6 +4836,8 @@ function versionInstanceFromRow(row) {
     label: row.label,
     crop: JSON.parse(row.crop_json || '{}'),
     scale: row.scale,
+    isCommunitySign: Boolean(row.is_community_sign),
+    isCommunityCalendar: Boolean(row.is_community_calendar),
   };
 }
 

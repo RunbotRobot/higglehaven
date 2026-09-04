@@ -128,6 +128,23 @@ export async function growWorldAsAdmin() {
   }
 }
 
+// POST /api/landlets is admin-gated (an anonymous caller could otherwise
+// insert a landlet pre-assigned to any real builder ID, bypassing every
+// invariant the real claim flow enforces) — this is the e2e suite's own
+// way of seeding a landlet directly for a test that only cares about what
+// happens after claiming it, not about claim-map UI/generation itself
+// (which claimLandlet and growWorldAsAdmin above already exercise).
+export async function createGreenbeltLandletAsAdmin(landletId, { areaM2 = 1000 } = {}) {
+  const cookie = await ensureAdminSession();
+  const created = await adminApi('/landlets', cookie, {
+    method: 'POST',
+    body: JSON.stringify({ landletId, name: landletId, areaM2, status: 'greenbelt' }),
+  });
+  if (created.response.status !== 201) {
+    throw new Error(`createGreenbeltLandletAsAdmin: create failed — ${created.body.error}`);
+  }
+}
+
 // Launches a fresh browser + page against the running dev server, with
 // console/page errors collected (callers should assert `errors.length === 0`
 // at the end) and window.prompt() dialogs (used throughout for naming a new

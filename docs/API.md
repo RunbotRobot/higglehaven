@@ -151,6 +151,13 @@ endpoint with a different abuse shape: it doesn't send email, but each call
 can burn shared R2 storage headroom, so it's bucketed by client IP alone
 (no per-target email to key on), 20 attempts per 15-minute window.
 
+It also guards `POST /api/instances/:instanceId/purchase` (see "Simulated
+purchases" below), bucketed by client IP alone, 30 attempts per 15-minute
+window — the one other public, repeatable endpoint that credits real state
+(a builder's `dallers_balance_cents`/`daller_earnings_events`, which feeds
+land cap) with no shopper account of any kind to otherwise attribute or
+throttle by.
+
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
 and a free tier generous enough for this stage. Configure it with:
@@ -1184,6 +1191,17 @@ inside a plain local `wrangler dev` process, which is why the e2e suite
 carries its own stand-in (`growWorldAsAdmin` in `e2e/helpers.mjs`) that logs
 in as an admin and drives the manual endpoints directly instead.
 
+The same `scheduled()` run also calls `pruneExpiredAuthState`, an unrelated
+piece of janitorial cleanup riding the same cron rather than one of its
+own: it deletes expired `sessions` rows, expired `email_verification_tokens`/
+`password_reset_tokens` rows, and `rate_limit_events` rows older than the
+rate limiter's own window. None of these are ever swept otherwise — a
+session or token only gets deleted today via an explicit logout or
+password-reset flow, and `checkRateLimit` only ever prunes the one bucket
+it's currently checking, so a bucket keyed to a target nobody retries (e.g.
+one email's signup/reset attempts) would otherwise sit in the table
+forever.
+
 ### World object
 
 ```json
@@ -1656,9 +1674,12 @@ endpoint.
 The claim is a conditional database update: the landlet must still have
 `status: "greenbelt"`, must have no owner, and the builder must not already own
 a claimed landlet. This preserves the MVP rule that each builder can claim one
-free starter landlet even when two requests arrive close together. A partial
-unique D1 index also enforces this ownership rule for writes made through other
-dev tooling.
+free *starter* landlet even when two requests arrive close together — it's
+purely an application-level check now (migration 0058 dropped the partial
+unique D1 index that used to enforce it for every write path), because a
+builder legitimately ends up owning more than one claimed landlet once they
+win a land-acquisition auction (docs/SPEC.md §0/§5) on top of their starter
+one, and the DB-level version blocked that too.
 
 Returns the newly claimed landlet. Errors are:
 
@@ -1669,8 +1690,10 @@ Returns the newly claimed landlet. Errors are:
 
 ### `POST /api/landlets/:landletId/generation-complete`
 
-Records that asynchronous generation work has completed. The endpoint is
-idempotent: retries return the existing landlet once `generatedAt` is set.
+Admin-only (`401`/`403` otherwise) — same as its ring-level sibling,
+`POST /api/land-candidate-rings/:ringId/generation-complete`. Records that
+asynchronous generation work has completed. The endpoint is idempotent:
+retries return the existing landlet once `generatedAt` is set.
 
 Generation completion and geometric enclosure are independent requirements. If
 the world circle already fully encloses the landlet, completion immediately
@@ -1787,6 +1810,24 @@ or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
 `Version N`.
 
+**Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
+`instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
+real `DELETE` only for instance IDs genuinely absent from the new array —
+not a blanket delete-everything-then-reinsert. This matters because
+`sign_posts`/`calendar_events` both cascade-delete on their own
+`instance_id` ("Community signs"/"Community calendar" below): a plain
+delete-all would silently wipe every post and event on the landlet on
+*every* draft save, even for an instance that kept the exact same
+`instanceId` across the save (the common case — a builder nudging an
+existing sign's position, say) and so looked untouched in the response.
+Resending an unchanged `instanceId` now updates that row in place instead,
+leaving its posts/events alone; only actually dropping an `instanceId`
+from the array deletes it (and, correctly, cascades away whatever was
+posted to it). The request's `isCommunitySign`/`isCommunityCalendar` per
+instance are written through on both the insert and the update path — an
+earlier version of this endpoint dropped both back to `false` on every
+save regardless of what a prior `PATCH /api/instances/:id` had set.
+
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
@@ -1852,7 +1893,14 @@ standalone read.
 ### `GET /api/landlets/:landletId/versions/:versionId`
 
 Returns version metadata plus its snapshotted `instances` array. Later edits or
-deletions in the mutable draft do not alter this array.
+deletions in the mutable draft do not alter this array. Each instance's
+`isCommunitySign`/`isCommunityCalendar` are captured in the snapshot too
+(`migrations/0060`, mirroring how `0034`/`0036` carried `crop`/`scale` into
+`version_instances` alongside `placed_instances` — `0041`/`0042` had added
+the two flag columns only to `placed_instances`, so every published/live
+landlet lost its community signs and calendars entirely until this closed
+the gap) — a sign flagged in the draft stays flagged once published, and
+`GET /api/landlets/:landletId/live` (above) reflects it.
 
 ### `POST /api/landlets/:landletId/versions/:versionId/activate`
 
@@ -2587,10 +2635,16 @@ anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
 identity system carries everywhere else it's used. Any purchase counts,
-refunded or not, and one purchase can back any number of reviews (there's
-no pairing/consumption between a specific purchase and a specific review) —
-this is a simple "did you ever buy it" gate, not a stricter one-review-
-per-purchase policy.
+refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
+can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
+enforced at the DB level, checked explicitly first for a `409` instead of
+a raw constraint error): the purchase gate above is a one-time eligibility
+check, not a per-review consumption check, so without this cap the same
+purchase could otherwise back an unbounded number of reviews under one
+label, directly skewing `averageRating`. Deleting the existing review frees
+that label to review again. This matches docs/SPEC.md §5's review
+incentives being "capped per account/period" — the purchase-matched
+`author_label` is this app's closest thing to an account.
 
 **Corrected design (this section originally attached reviews to a
 builder-flagged placed instance, cloning the community sign/calendar
@@ -2618,7 +2672,8 @@ outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
 doesn't exist. `POST` additionally requires a matching purchase (see the
-purchase-gating paragraph above) — `400` without one. `DELETE`
+purchase-gating paragraph above) — `400` without one, `409` if that same
+purchaser label has already reviewed this template. `DELETE`
 (moderation) requires a session (`401` without one) and is gated to the
 template's own seller once it has one — `403` for anyone else — the same
 `if (existing.seller_id)` ownership check the catalog template's own
@@ -2856,11 +2911,14 @@ Two things the spec ties to auctions are **not** implemented, because
 neither has anywhere to attach to in this dev-mode backend yet:
 
 - **Land cap** (a per-builder max-total-area limit that grows only via
-  demonstrated commission earnings) doesn't exist anywhere in this
-  codebase — there's no real commerce/checkout pipeline to earn
-  commission from, so there's no earnings figure to gate cap growth on.
-  Starting or winning an auction never checks or changes anything cap-
-  related.
+  demonstrated commission earnings) is real and live — see "Land cap"
+  below (`migrations/0050_land_cap.sql`, `recomputeLandCap`) — but is
+  deliberately tracking-only, never enforced against starting or winning
+  an auction. That section covers why: a hard block was implemented,
+  tested, and reverted after e2e testing surfaced a bootstrapping trap
+  (every builder starts at exactly 100% of their cap, and auction sale
+  proceeds are the only dáller-earning path this dev-mode backend actually
+  has).
 - **Balance-gated bidding.** Every builder starts at `dallersBalanceCents:
   0` with no way to earn any except winning an auction as the *seller* —
   requiring a sufficient balance to *bid* would make the feature
@@ -2878,9 +2936,12 @@ neither has anywhere to attach to in this dev-mode backend yet:
   auction, voluntary or not.
 - **No scheduled resolution job.** There's no Cloudflare Cron Trigger
   wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
-  resolves every active-but-expired auction before returning results
-  (`resolveDueAuctions` in `worker/index.js`), and any single-auction read
-  or bid attempt resolves that one auction first if it's due
+  resolves due auctions before returning results (`resolveDueAuctions` in
+  `worker/index.js`), capped at `AUCTION_SWEEP_LIMIT` (25) oldest-due-first
+  per call so one request can't be forced into unbounded sequential
+  resolution work — a backlog larger than that clears over a few calls
+  instead of blocking any single one. Any single-auction read or bid
+  attempt resolves that one auction first if it's due
   (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists for a
   frontend "time's up, finalize it" action without waiting for a future
   read to trigger it as a side effect.
@@ -3206,7 +3267,13 @@ being bought. Returns `201` with the created `purchase`:
 
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
-buy) or the instance sits on an unclaimed lándlet (no builder to credit).
+buy), the instance sits on an unclaimed lándlet (no builder to credit), or
+`quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
+reasoning as auctions' `durationHours` cap above) against this deliberately
+unauthenticated endpoint turning one request into an unbounded
+`dallers_balance_cents`/land-cap credit. `429` past 30 calls per 15 minutes
+from one client IP (see "Rate limiting" above) closes the other half of
+that gap — repeated smaller requests instead of one large one.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
@@ -3644,14 +3711,53 @@ shoulder feel, with no separate collision pass: `clampShopCameraHeight`
 still catch the rare look angle that would otherwise dip the camera
 underground or swing it past the world wall.
 
-Flight (docs/SPEC.md §2's double-tap-to-fly, altitude/speed curve, and
-takeoff/landing fades) is deliberately not built yet — this pass is
-ground-only walking/running, the spec's own phase-3 "single-player avatar/
-movement systems" ahead of flight in the phasing order (docs/SPEC.md §9).
-The previous free-fly camera's press-and-hold Up/Down buttons are gone
-along with it, not repurposed — they moved the *camera* straight along
-world Z with no ground-relative meaning once the camera stopped being the
-player.
+## Frontend-only flight
+
+docs/SPEC.md §2's flight — `updateShopFlight`/`toggleShopFlight` in
+`src/main.js` drive a small state machine (`shopFlightState`: `'grounded'`
+| `'takingOff'` | `'flying'` | `'landing'`) over `shopFlightAltitudeM`, the
+avatar's own altitude (mirrored onto `shopAvatarPosition.z` every frame in
+`updateShopMovement`, which the existing camera-follow logic already tracks
+for free since it's relative to the avatar's position).
+
+Trigger matches the spec's own wording exactly — "double-tap jump (mobile)
+/ double-press spacebar (desktop)" — via `bindShopFlyToggle` (the new
+`#shop-fly-btn`) and a `keydown` listener on `Space`, both requiring two
+presses within `SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than
+one, so an ordinary single tap/press never launches the player
+accidentally. Takeoff ramps `shopFlightAltitudeM` from 0 to
+`SHOP_FLIGHT_HOVER_START_ALTITUDE_M` over `SHOP_FLIGHT_TAKEOFF_DURATION_S`
+(spec's "~1s lift"); landing reverses that over
+`SHOP_FLIGHT_LANDING_DURATION_S` (spec's "~2s reverse") from whatever
+altitude the player was actually at (`shopFlightLandingStartAltitudeM`,
+captured the instant landing starts). Both ramps are smoothstep-eased, not
+linear. Once actually `'flying'`, a press-and-hold Up/Down pair
+(`#shop-vertical-controls`, shown only while airborne via a `shop-flying`
+class on `<body>`) climbs/descends at `SHOP_FLIGHT_VERTICAL_SPEED_M_S`,
+clamped between a low floor and the same dynamic dome ceiling the camera's
+own height clamp already respects (`clampShopCameraHeight`'s formula) —
+**not** literally the spec's 500m, since this world's wall/dome backdrop
+was never built for a sky that tall; see `SHOP_FLIGHT_SPEED_EXPONENT`'s own
+comment in `src/main.js` for why that's a deliberate scope boundary for
+this pass, not an oversight.
+
+Horizontal flight speed follows the spec's altitude/speed curve
+(`flightSpeedMultiplier`): "each doubling of altitude ≈ 50% more max ground
+speed" fixes the curve's shape as a power law with exponent log2(1.5); the
+spec's own two data points — "~10x walking speed near building-height" and
+"up to ~100x at max altitude" — anchor it and land almost exactly on the
+spec's own 500m figure when solved, a strong signal this is the intended
+curve rather than an arbitrary fit.
+
+Two spec details are deliberately not built, both because they're
+inherently about *other players* seeing you, and this is still
+single-player only (docs/SPEC.md §9's phase-4 multiplayer presence hasn't
+landed): "flying avatars are invisible to other users" (so takeoff/landing
+here are pure altitude ramps, no fade — there's no one else to fade for)
+and "occupied landing spots offset to nearest open space" (nothing exists
+yet to occupy a spot with).
+
+## Frontend-only avatar idle animation
 
 Idle animation (docs/SPEC.md §2: "context-aware idle state machine (sit,
 lean, stand) after inactivity, with randomization") — `updateShopAvatarIdle`

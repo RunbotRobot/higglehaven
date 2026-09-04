@@ -4,7 +4,7 @@ A persistent 3D shopping world — browser-based, users build on owned land parc
 
 Full product/design spec: [`docs/SPEC.md`](docs/SPEC.md). Read it before making architectural decisions — it's the source of truth for naming, mechanics, and phasing.
 
-**Current phase:** single-player MVP core (spec §9) — 3D space rendering, product placement, building tools, real plot/land mechanics (claim, extend, trim), and a first pass at avatar/movement (a placeholder default-avatar body, third-person camera, ground-based walk/run — spec §2, flight not yet built), backed by a real Cloudflare Workers + D1 + R2 backend (see [`docs/API.md`](docs/API.md)), including land acquisition auctions (spec §5). No multiplayer or real payments yet — see [`docs/SPEC.md`](docs/SPEC.md) §10 for what's still genuinely open.
+**Current phase:** single-player MVP core (spec §9) — 3D space rendering, product placement, building tools, real plot/land mechanics (claim, extend, trim), and avatar/movement (a placeholder default-avatar body, third-person camera, ground-based walk/run, idle sway, and flight with a real altitude/speed curve — spec §2), backed by a real Cloudflare Workers + D1 + R2 backend (see [`docs/API.md`](docs/API.md)), including land acquisition auctions (spec §5). No multiplayer or real payments yet — see [`docs/SPEC.md`](docs/SPEC.md) §10 for what's still genuinely open.
 
 **Naming convention:** plain "a" internally in all code/files/DB/APIs (`land`, `landlet`, `daller`) — the á accent is reserved for user-facing display strings only.
 

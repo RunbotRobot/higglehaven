@@ -14,9 +14,17 @@ name: CI
 # using the push-triggered run's checks — they're tied to the commit SHA,
 # not the event that produced them, confirmed by hand (a PR's check list
 # already included its branch's push-triggered run before this change).
+#
+# paths-ignore skips the whole workflow for a push that only touches
+# Markdown — a docs-only commit (several sessions have made plenty of
+# these fixing stale comments) has no code path that could possibly need
+# either suite, so it isn't worth a ~7-job fan-out competing for the same
+# runner slots every other push is drawing from.
 on:
   push:
     branches: ['**']
+    paths-ignore:
+      - '**/*.md'
 
 # Cancels a branch's own earlier, now-superseded run the moment a newer push
 # lands on it — without this, every push's full ~23-job fan-out (unit-tests +
@@ -44,41 +52,56 @@ jobs:
       # .dev.vars/secrets setup at all (see that file's own comment).
       - run: npm test
 
-  # e2e/run-all.mjs runs its 21 files one at a time on purpose — a shared
-  # local D1 across files exhausts the claimable-land pool (see that
-  # file's own comment), so each file needs a genuinely fresh D1, not just
-  # a fresh browser page. Serially, on one machine, that's ~20 file-sized
-  # server-restart cycles back to back. In CI there's no reason to pay
-  # that serially: each matrix entry below is a *separate* GitHub-hosted
-  # VM, so "fresh D1 per file" falls out for free by construction (they're
-  # not sharing a filesystem at all, let alone a D1) — no changes needed
-  # to run-all.mjs itself, just fanning its existing single-file mode
-  # (`node e2e/run-all.mjs <file>`) out across as many runners as there
-  # are files, instead of looping through them on one.
+  # e2e/run-all.mjs runs whichever files it's given one at a time on
+  # purpose — a shared local D1 across files exhausts the claimable-land
+  # pool (see that file's own comment), so each file needs a genuinely
+  # fresh D1, not just a fresh browser page. In CI, "fresh D1 per file"
+  # falls out for free the moment two files run on separate VMs at all —
+  # it doesn't require a separate VM *per file*. Sharded into a handful of
+  # groups (SHARD_COUNT below) rather than one job per file: with several
+  # sessions now pushing to their own branches in parallel, one job per
+  # file (~21 of them, +unit-tests +discover-e2e-files) meant a single
+  # push alone could exceed this account's entire 20-job concurrent-runner
+  # budget (GitHub Free plan, account-wide, not per-repo) — every other
+  # session's push then queued behind it for real wall-clock minutes, not
+  # seconds. Shards land wall-clock speed a bit slower than one-job-per-
+  # file, in exchange for actually leaving room for more than one
+  # session's push to run at once, which is the thing that was genuinely
+  # constrained. Adjust SHARD_COUNT if that trade-off ever needs revisiting
+  # — it's the one number that governs it, no other change needed as
+  # e2e/*.test.mjs grows.
   discover-e2e-files:
     runs-on: ubuntu-latest
+    env:
+      SHARD_COUNT: 4
     outputs:
-      files: ${{ steps.list.outputs.files }}
+      shards: ${{ steps.list.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
-      # Listed here, not hardcoded into the matrix below, so a newly added
-      # e2e/*.test.mjs file is automatically covered next push — a
-      # hardcoded list would silently stop covering it the moment someone
-      # forgot to update this workflow alongside e2e/.
+      # Groups e2e/*.test.mjs into SHARD_COUNT roughly-even chunks (plain
+      # array slicing, not a jq builtin, so this doesn't depend on exactly
+      # which jq version a runner image happens to ship) — computed at run
+      # time from whatever files actually exist, not hardcoded, so a newly
+      # added e2e/*.test.mjs file is automatically covered next push.
       - id: list
-        run: echo "files=$(ls e2e/*.test.mjs | xargs -n1 basename | jq -R -s -c 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+        run: |
+          files=$(ls e2e/*.test.mjs | xargs -n1 basename | jq -R -s -c 'split("\n")[:-1]')
+          count=$(echo "$files" | jq 'length')
+          size=$(( (count + SHARD_COUNT - 1) / SHARD_COUNT ))
+          shards=$(echo "$files" | jq -c --argjson size "$size" '[range(0; length; $size) as $i | .[$i:$i+$size]]')
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   e2e-tests:
     needs: discover-e2e-files
     runs-on: ubuntu-latest
     strategy:
-      # One file failing shouldn't cancel the other ~20 still in flight —
+      # One shard failing shouldn't cancel the others still in flight —
       # fail-fast would hide exactly the information a growing suite most
       # needs from a CI run: which of several regressions, not just the
       # first one GitHub happened to notice.
       fail-fast: false
       matrix:
-        file: ${{ fromJson(needs.discover-e2e-files.outputs.files) }}
+        files: ${{ fromJson(needs.discover-e2e-files.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -103,22 +126,26 @@ jobs:
       - run: |
           echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
           echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
-      # Retries once on failure. Confirmed (via captured wrangler dev
-      # server output — see e2e/run-all.mjs's own comment on that capture)
-      # that occasional failures here are GitHub's shared runners
-      # themselves stalling under load: a request that normally takes
-      # 10-70ms takes 400-1500ms, sometimes crossing into workerd's own
-      # internal error and a dead connection for everything after. Real
-      # bugs this suite has caught (a real regression, a genuine test
+      # Retries the whole shard once on failure. Confirmed (via captured
+      # wrangler dev server output — see e2e/run-all.mjs's own comment on
+      # that capture) that occasional failures here are GitHub's shared
+      # runners themselves stalling under load: a request that normally
+      # takes 10-70ms takes 400-1500ms, sometimes crossing into workerd's
+      # own internal error and a dead connection for everything after.
+      # Real bugs this suite has caught (a real regression, a genuine test
       # race) have always reproduced identically on retry; this transient
-      # class hasn't reproduced once when simply run again.
+      # class hasn't reproduced once when simply run again. A retry here
+      # re-runs every file in the shard, not just whichever one hit it —
+      # run-all.mjs doesn't track that distinction, and with only a
+      # handful of files per shard the redundant re-runs cost is small
+      # next to what per-file granularity would cost in job count.
       - run: |
           for attempt in 1 2; do
-            if node e2e/run-all.mjs ${{ matrix.file }}; then
+            if node e2e/run-all.mjs ${{ join(matrix.files, ' ') }}; then
               exit 0
             fi
-            echo "Attempt $attempt of ${{ matrix.file }} failed — retrying after a short pause in case it was runner-load-related..." >&2
+            echo "Attempt $attempt of this shard failed — retrying after a short pause in case it was runner-load-related..." >&2
             sleep 10
           done
-          echo "${{ matrix.file }} failed twice — treating as a real failure, not a transient one." >&2
+          echo "This shard failed twice — treating as a real failure, not a transient one." >&2
           exit 1

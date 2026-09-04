@@ -76,7 +76,13 @@
         color: rgba(255, 255, 255, 0.75);
         font: 12px/1.4 monospace;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-        pointer-events: none;
+        /* Unlike every other pointer-events: none HUD overlay in this file,
+           this one needs to be selectable (see #camera-debug's identical
+           user-select treatment) so a builder can copy the exact deployed
+           commit — small enough in the corner that losing canvas
+           drag-to-look under just this strip is worth that tradeoff. */
+        user-select: text;
+        -webkit-user-select: text;
         z-index: 10;
       }
       /* The wordmark's own green-on-transparent art has no contrast
@@ -288,6 +294,57 @@
       }
       #shop-look-joystick {
         right: 20px;
+      }
+      /* docs/SPEC.md §2's flight trigger — double-tap to take off/land
+         (see bindShopFlyToggle in src/main.js; double-press space does the
+         same on desktop). Centered above the hint text, its own row so it
+         never collides with the move/look joysticks on either side. */
+      #shop-fly-btn {
+        bottom: 78px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.3);
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font-size: 18px;
+        touch-action: none;
+      }
+      #shop-fly-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+      }
+      /* Ascend/descend while actually flying (updateShopFlight in
+         src/main.js sets shop-flying on <body> for the duration) — hidden
+         the rest of the time, since holding altitude only means anything
+         once airborne. Stacked above #shop-fly-btn rather than sharing its
+         row. */
+      #shop-vertical-controls {
+        display: none;
+        bottom: 132px;
+        left: 50%;
+        transform: translateX(-50%);
+        flex-direction: column;
+        gap: 8px;
+      }
+      body.shop-flying #shop-vertical-controls.visible {
+        display: flex;
+      }
+      #shop-vertical-controls button {
+        width: 52px;
+        height: 40px;
+        border-radius: 12px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.3);
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font-size: 16px;
+        touch-action: none;
+      }
+      #shop-vertical-controls button.active {
+        background: var(--brand-green);
+        color: #16240a;
+        border-color: transparent;
       }
       /* Top-right is otherwise empty (wordmark owns top-left, camera debug
          owns bottom-right) — undo/redo are always-relevant, not tied to a
@@ -2436,7 +2493,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
-    <div id="shop-hint" class="shop-ui">Left stick to walk (push further to run) — right stick to look</div>
+    <div id="shop-hint" class="shop-ui">Left stick to walk (push further to run) — right stick to look — double-tap &#9992;&#65039; (or double-press space) to fly</div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
@@ -2444,6 +2501,11 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
+    <button id="shop-fly-btn" class="shop-ui" type="button">&#9992;&#65039;</button>
+    <div id="shop-vertical-controls" class="shop-ui">
+      <button id="shop-up-btn" type="button">&#9650;</button>
+      <button id="shop-down-btn" type="button">&#9660;</button>
+    </div>
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>

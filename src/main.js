@@ -6625,6 +6625,10 @@ const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
+const shopFlyBtn = document.getElementById('shop-fly-btn');
+const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
+const shopUpBtn = document.getElementById('shop-up-btn');
+const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
@@ -6647,6 +6651,43 @@ const SHOP_WALK_SPEED_M_S = 1.8;
 const SHOP_RUN_SPEED_M_S = 2.2;
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
+// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle. Two
+// spec details are deliberately not built here, both because they're
+// inherently about *other* players seeing you, which this single-player-
+// only build has none of: "flying avatars are invisible to other users"
+// (so takeoff/landing here are pure altitude ramps, no fade — there's no
+// one else to fade for) and "occupied landing spots offset to nearest open
+// space" (nothing to occupy a spot with yet). Revisit both once real
+// multiplayer presence exists (spec §9's own phase-4, after this one).
+const SHOP_FLIGHT_TAKEOFF_DURATION_S = 1; // spec's "~1s lift"
+const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
+const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
+const SHOP_FLIGHT_VERTICAL_SPEED_M_S = 8; // ascend/descend rate once actually flying (the up/down buttons)
+const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
+// Speed-vs-altitude curve: spec's own two data points — "~10x walking
+// speed near building-height" and "up to ~100x at max altitude" — plus its
+// governing rule, "each doubling of altitude ≈ 50% more max ground speed."
+// That rule alone fixes the curve's shape as a power law (speed ∝
+// altitude^p) with p = log2(1.5) ≈ 0.585 (a whole doubling of the input
+// giving exactly a 1.5x — not 2x — output is the definition of that
+// exponent). Anchoring it at "~10x at building height" (SHOP_FLIGHT_
+// SPEED_REF_ALTITUDE_M/MULTIPLIER below) and solving for where it reaches
+// 100x lands at ~500m — the spec's own max-altitude figure — which is a
+// strong confirmation this is the curve the spec's numbers actually
+// describe, not just a guess fitted after the fact.
+const SHOP_FLIGHT_SPEED_EXPONENT = Math.log2(1.5);
+const SHOP_FLIGHT_SPEED_REF_ALTITUDE_M = 10; // "building height"
+const SHOP_FLIGHT_SPEED_REF_MULTIPLIER = 10;
+const SHOP_FLIGHT_MIN_SPEED_MULTIPLIER = 1; // just after takeoff, before climbing
+const SHOP_FLIGHT_MAX_SPEED_MULTIPLIER = 100; // spec's "up to ~100x at max altitude"
+// docs/SPEC.md's 500m flight ceiling assumes a much taller sky than this
+// world's current wall/dome backdrop was ever built for (SHOP_WALL_HEIGHT_M
+// + a dome that only grows reactively to clear tall builds — see
+// growShopDomeIfNeeded — nowhere close to 500m by default). Capping flight
+// to the same dynamic dome ceiling the camera itself already respects
+// (clampShopCameraHeight) is a deliberate scope boundary for this pass,
+// not an attempt at the literal number — genuinely extending the dome to a
+// real 500m sky is its own separate visual-design task.
 // Tighter than the old free-fly camera's own 0.47*PI (~85deg) — that
 // figure let a bodiless camera look almost straight up/down freely, but
 // this third-person rig swings the camera up and over the avatar's own
@@ -7117,10 +7158,76 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
   shopLookY = y;
 });
 
+// Flight (docs/SPEC.md §2): double-tap the fly button, or double-press
+// space on desktop, toggles takeoff/landing (toggleShopFlight). Ascend/
+// descend while actually flying is a separate, ordinary press-and-hold
+// pair — shopVerticalInput/bindShopVerticalButton, +1 while Up is held,
+// -1 while Down, consumed every frame in updateShopFlight exactly like
+// shopMoveX/Y already are for the move joystick.
+let shopVerticalInput = 0;
+function bindShopVerticalButton(el, direction) {
+  let pointerId = null;
+  el.addEventListener('pointerdown', (event) => {
+    if (!shopActive) return;
+    event.stopPropagation();
+    pointerId = event.pointerId;
+    el.setPointerCapture(pointerId);
+    el.classList.add('active');
+    shopVerticalInput = direction;
+  });
+  const end = (event) => {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    el.classList.remove('active');
+    if (shopVerticalInput === direction) shopVerticalInput = 0;
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('pointerleave', end);
+}
+bindShopVerticalButton(shopUpBtn, 1);
+bindShopVerticalButton(shopDownBtn, -1);
+
+// A double-tap/double-press, not a single one, so a single accidental tap
+// (or an ordinary spacebar press while, say, a builder is just looking
+// around with keyboard focus on the page) never launches the player into
+// the air unintentionally — matches docs/SPEC.md §2's own wording exactly
+// ("double-tap jump (mobile) / double-press spacebar (desktop)").
+function bindShopFlyToggle(el) {
+  el.addEventListener('pointerdown', (event) => {
+    if (!shopActive) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const now = performance.now();
+    if (now - shopLastFlyBtnTapAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
+      shopLastFlyBtnTapAt = -Infinity; // consumed — a third tap starts a fresh pair, not an immediate re-trigger
+      toggleShopFlight();
+    } else {
+      shopLastFlyBtnTapAt = now;
+    }
+  });
+}
+bindShopFlyToggle(shopFlyBtn);
+
+window.addEventListener('keydown', (event) => {
+  if (event.code !== 'Space' || !shopActive) return;
+  const target = event.target;
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+  event.preventDefault(); // stop the page's own default scroll-on-space
+  const now = performance.now();
+  if (now - shopLastSpacePressAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
+    shopLastSpacePressAt = -Infinity;
+    toggleShopFlight();
+  } else {
+    shopLastSpacePressAt = now;
+  }
+});
+
 // Zoom: narrows/widens the camera's own field of view rather than moving
-// it — there's no "target" to dolly toward like OrbitControls' zoom has,
-// just a free-flying camera, so a lens-zoom is the natural equivalent.
-// Wheel for desktop, pinch for touch. Both live on the canvas itself
+// it — the camera's own position is derived every frame from the avatar it
+// follows (positionShopCamera), not something a dolly could move
+// independently, so a lens-zoom is the natural equivalent. Wheel for
+// desktop, pinch for touch. Both live on the canvas itself
 // rather than the joysticks, so a thumb already on either stick never
 // fights with a zoom gesture — pinching needs both fingers on open canvas,
 // exactly where a joystick drag isn't.
@@ -7249,6 +7356,17 @@ let shopIdleHeadTargetRad = 0;
 let shopIdleHeadTimerS = 0;
 let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
 
+// Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
+// 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
+// is ignored (see toggleShopFlight) rather than queued or reversed, so
+// there's no need to track anything beyond "which transition, how far in."
+let shopFlightState = 'grounded';
+let shopFlightTransitionElapsedS = 0;
+let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors this every frame
+let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
+let shopLastSpacePressAt = -Infinity;
+let shopLastFlyBtnTapAt = -Infinity;
+
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
 // mid-stride — and phase only advances while actually moving, so a full
@@ -7345,6 +7463,77 @@ function clampShopRadius(position) {
   }
 }
 
+// docs/SPEC.md §2's altitude/speed curve — see SHOP_FLIGHT_SPEED_EXPONENT's
+// own comment for the derivation. A pure power law diverges toward 0 as
+// altitude approaches 0, which is exactly right for "just took off, barely
+// above the ground" reading as barely faster than a walk — clamped at the
+// low end (SHOP_FLIGHT_MIN_SPEED_MULTIPLIER) purely so it never actually
+// reaches 0 and strands the player mid-transition.
+function flightSpeedMultiplier(altitudeM) {
+  const raw =
+    SHOP_FLIGHT_SPEED_REF_MULTIPLIER *
+    Math.pow(Math.max(altitudeM, 0.01) / SHOP_FLIGHT_SPEED_REF_ALTITUDE_M, SHOP_FLIGHT_SPEED_EXPONENT);
+  return THREE.MathUtils.clamp(raw, SHOP_FLIGHT_MIN_SPEED_MULTIPLIER, SHOP_FLIGHT_MAX_SPEED_MULTIPLIER);
+}
+
+// Toggling mid-transition (takingOff/landing) is ignored rather than
+// queued or reversed — let the current one finish, then the next press
+// starts cleanly from a real grounded/flying state. Landing captures its
+// own starting altitude (shopFlightLandingStartAltitudeM) so its descent
+// ramps from wherever the player actually was, not always the same height.
+function toggleShopFlight() {
+  if (shopFlightState === 'grounded') {
+    shopFlightState = 'takingOff';
+    shopFlightTransitionElapsedS = 0;
+    // shop-flying on <body> gates #shop-vertical-controls' own visibility
+    // (index.html) — shown for the whole takingOff/flying span, not just
+    // once actually airborne, so the ascend/descend buttons are already in
+    // place the moment takeoff finishes rather than popping in afterward.
+    document.body.classList.add('shop-flying');
+    shopFlyBtn.classList.add('active');
+  } else if (shopFlightState === 'flying') {
+    shopFlightLandingStartAltitudeM = shopFlightAltitudeM;
+    shopFlightState = 'landing';
+    shopFlightTransitionElapsedS = 0;
+    // Landing is an automatic descent (shopVerticalInput is only read
+    // while actually 'flying' — see updateShopFlight), so the ascend/
+    // descend controls hide the instant it starts, not once it finishes.
+    document.body.classList.remove('shop-flying');
+    shopFlyBtn.classList.remove('active');
+  }
+}
+
+// Drives shopFlightAltitudeM through takeoff/landing (smoothstep-eased
+// ramps, spec's own ~1s lift / ~2s reverse) and, once actually flying,
+// lets the up/down buttons climb or descend within the world's current
+// dome ceiling (see the "500m flight ceiling" comment above
+// SHOP_FLIGHT_SPEED_EXPONENT for why that's not literally 500m yet).
+// Called once per frame from updateShopMovement,
+// before movement/pose so everything downstream (flight speed, the
+// avatar's own z, the camera that follows it) sees this frame's altitude.
+function updateShopFlight(dt) {
+  if (shopFlightState === 'takingOff') {
+    shopFlightTransitionElapsedS += dt;
+    const t = Math.min(1, shopFlightTransitionElapsedS / SHOP_FLIGHT_TAKEOFF_DURATION_S);
+    shopFlightAltitudeM = THREE.MathUtils.smoothstep(t, 0, 1) * SHOP_FLIGHT_HOVER_START_ALTITUDE_M;
+    if (t >= 1) shopFlightState = 'flying';
+  } else if (shopFlightState === 'landing') {
+    shopFlightTransitionElapsedS += dt;
+    const t = Math.min(1, shopFlightTransitionElapsedS / SHOP_FLIGHT_LANDING_DURATION_S);
+    shopFlightAltitudeM = shopFlightLandingStartAltitudeM * (1 - THREE.MathUtils.smoothstep(t, 0, 1));
+    if (t >= 1) {
+      shopFlightState = 'grounded';
+      shopFlightAltitudeM = 0;
+    }
+  } else if (shopFlightState === 'flying') {
+    if (shopVerticalInput !== 0) {
+      shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
+    }
+    const maxAltitudeM = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+    shopFlightAltitudeM = THREE.MathUtils.clamp(shopFlightAltitudeM, SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5, maxAltitudeM);
+  }
+}
+
 // The classic over-the-shoulder third-person rig: orbits the camera around
 // a fixed-radius sphere (SHOP_CAMERA_FOLLOW_DISTANCE_M) centered on the
 // avatar's own head-height anchor, using the exact look direction
@@ -7381,11 +7570,14 @@ function updateShopMovement(now) {
     applyShopCameraOrientation();
   }
 
+  updateShopFlight(dt);
+  const airborne = shopFlightState !== 'grounded';
+
   let moveMagnitude = 0;
   if (shopMoveX !== 0 || shopMoveY !== 0) {
     // Movement stays in the horizontal plane (forward/right with their Z
-    // dropped) so looking up or down while walking doesn't walk the avatar
-    // into the ground or sky.
+    // dropped) so looking up or down while walking/flying doesn't also
+    // steer altitude — that's updateShopFlight's own separate concern.
     camera.getWorldDirection(shopForward);
     shopForward.z = 0;
     if (shopForward.lengthSq() > 1e-6) shopForward.normalize();
@@ -7394,7 +7586,14 @@ function updateShopMovement(now) {
     if (shopRight.lengthSq() > 1e-6) shopRight.normalize();
 
     moveMagnitude = Math.min(1, Math.hypot(shopMoveX, shopMoveY));
-    const speed = THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
+    // Grounded: the walk/run blend. Airborne (including mid-takeoff/
+    // landing, so horizontal speed ramps up smoothly alongside altitude
+    // rather than jumping to full flight speed the instant takeoff
+    // finishes): docs/SPEC.md §2's altitude/speed curve — see
+    // flightSpeedMultiplier and SHOP_FLIGHT_SPEED_EXPONENT's own comment.
+    const speed = airborne
+      ? SHOP_WALK_SPEED_M_S * flightSpeedMultiplier(shopFlightAltitudeM) * moveMagnitude
+      : THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
     shopMoveDir
       .set(0, 0, 0)
       .addScaledVector(shopForward, -shopMoveY)
@@ -7405,9 +7604,16 @@ function updateShopMovement(now) {
     }
     clampShopRadius(shopAvatarPosition);
   }
+  shopAvatarPosition.z = shopFlightAltitudeM;
 
-  updateShopAvatarPose(moveMagnitude, dt);
-  updateShopAvatarIdle(moveMagnitude, dt);
+  // The walk-cycle and idle sway are both ground-only poses — flying holds
+  // a plain neutral pose instead (a real flight pose, arms/legs extended,
+  // is future work alongside the rest of a real character rig). Passing
+  // moveMagnitude 0 while airborne eases the legs/arms back to neutral the
+  // same way stopping on the ground already does, rather than needing a
+  // separate code path.
+  updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
+  updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
   // The avatar always faces the way the camera looks (horizontally), plus
   // a small idle weight-shift offset when standing still — this control
   // scheme's forward/back/strafe are already relative to that facing, so
@@ -8041,7 +8247,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 ];
 
 async function enterShopMode() {
-  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
+  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
@@ -8185,6 +8391,12 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
+  shopFlightState = 'grounded';
+  shopFlightTransitionElapsedS = 0;
+  shopFlightAltitudeM = 0;
+  shopVerticalInput = 0;
+  document.body.classList.remove('shop-flying');
+  shopFlyBtn.classList.remove('active');
 
   shopYaw = 0;
   shopPitch = -0.12;

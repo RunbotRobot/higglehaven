@@ -82,7 +82,7 @@ async function signupSeller(label) {
 }
 
 async function createGreenbeltLandlet(landletId) {
-  return api('/landlets', {
+  return api('/landlets', adminSession({
     method: 'POST',
     body: JSON.stringify({
       landletId,
@@ -90,7 +90,7 @@ async function createGreenbeltLandlet(landletId) {
       areaM2: 1000,
       status: 'greenbelt',
     }),
-  });
+  }));
 }
 
 function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
@@ -845,10 +845,10 @@ describe('Worker API', () => {
   });
 
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
-    const malformedJson = await api('/landlets', {
+    const malformedJson = await api('/landlets', adminSession({
       method: 'POST',
       body: '{',
-    });
+    }));
     expect(malformedJson.response.status).toBe(400);
     expect(malformedJson.body).toEqual({ error: 'Request body is not valid JSON' });
 
@@ -864,16 +864,22 @@ describe('Worker API', () => {
     expect(duplicateTemplate.response.status).toBe(409);
     expect(duplicateTemplate.body).toEqual({ error: 'Resource already exists' });
 
-    const missingReference = await api('/instances', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'invalid-reference-instance',
-        landletId: 'starter-landlet',
-        templateId: 'missing-template',
-        x: 0,
-        y: 0,
-      }),
+    const instanceBody = JSON.stringify({
+      instanceId: 'invalid-reference-instance',
+      landletId: 'starter-landlet',
+      templateId: 'missing-template',
+      x: 0,
+      y: 0,
     });
+
+    // Auth is checked before the templateId/landletId reference assertions
+    // below (#86) — an unauthenticated caller gets 401, not a 400 that
+    // would let them enumerate which reference IDs exist without logging in.
+    const unauthenticated = await api('/instances', { method: 'POST', body: instanceBody });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const instanceBuilder = await signupBuilder('missing-reference-builder');
+    const missingReference = await api('/instances', instanceBuilder.session({ method: 'POST', body: instanceBody }));
     // /api/instances pre-checks references explicitly (assertReferenceExists
     // in worker/index.js) for a precise 400 instead of relying on the
     // generic FK-constraint fallback other routes use.
@@ -969,6 +975,81 @@ describe('Worker API', () => {
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
+  // A draft save used to DELETE FROM placed_instances WHERE landlet_id = ?
+  // then re-INSERT fresh rows — sign_posts/calendar_events both cascade-
+  // delete on their own instance_id (migrations/0041/0042), so even
+  // re-saving the *same* instance_id wiped every post/event on it, and the
+  // re-insert never carried is_community_sign/is_community_calendar at all
+  // (silently resetting both to false). Now an upsert-by-instance_id, with
+  // a real DELETE only for instances genuinely dropped from the new set.
+  it('preserves community sign posts and flags across a draft save, and only removes genuinely-dropped instances', async () => {
+    const draftSignBuilder = await signupBuilder('draft-sign-builder');
+    await api('/landlets', draftSignBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'draft-sign-landlet', name: 'Draft sign landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: draftSignBuilder.builderId,
+      }),
+    }));
+
+    const firstSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-a', templateId: 'placeholder-tree', x: 1, y: 1, isCommunitySign: true },
+        ],
+      }),
+    }));
+    expect(firstSave.response.status).toBe(200);
+    expect(firstSave.body.instances[0].isCommunitySign).toBe(true);
+
+    const posted = await api('/instances/draft-sign-a/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great spot!' }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    // Re-save the same instance (still flagged) alongside a new one.
+    const secondSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-a', templateId: 'placeholder-tree', x: 1, y: 1, isCommunitySign: true },
+          { instanceId: 'draft-sign-b', templateId: 'placeholder-chair', x: 2, y: 2 },
+        ],
+      }),
+    }));
+    expect(secondSave.response.status).toBe(200);
+    expect(secondSave.body.instances.map((instance) => instance.instanceId).sort()).toEqual(['draft-sign-a', 'draft-sign-b']);
+    const savedA = secondSave.body.instances.find((instance) => instance.instanceId === 'draft-sign-a');
+    expect(savedA.isCommunitySign).toBe(true);
+
+    // The post survives — it was never actually deleted, since the
+    // instance never really went away.
+    const postsAfterResave = await api('/instances/draft-sign-a/posts');
+    expect(postsAfterResave.response.status).toBe(200);
+    expect(postsAfterResave.body.posts).toHaveLength(1);
+    expect(postsAfterResave.body.posts[0].text).toBe('Great spot!');
+
+    // Now genuinely drop draft-sign-a from the set — it should actually be
+    // deleted this time, posts and all.
+    const thirdSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-b', templateId: 'placeholder-chair', x: 2, y: 2 },
+        ],
+      }),
+    }));
+    expect(thirdSave.response.status).toBe(200);
+    expect(thirdSave.body.instances.map((instance) => instance.instanceId)).toEqual(['draft-sign-b']);
+
+    const droppedInstance = await api('/instances/draft-sign-a');
+    expect(droppedInstance.response.status).toBe(404);
+    const postsAfterDrop = await api('/instances/draft-sign-a/posts');
+    expect(postsAfterDrop.response.status).toBe(404);
+  });
+
   it('saves immutable landlet versions and activates a selected snapshot', async () => {
     // A dedicated owned landlet rather than 'starter-landlet' itself — the
     // mosaic/world-gen test later in this file relies on starter-landlet
@@ -1062,6 +1143,57 @@ describe('Worker API', () => {
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
+  // migrations/0060: version_instances never got is_community_sign/
+  // is_community_calendar when 0041/0042 added them to placed_instances
+  // (unlike crop_json/scale, which 0034/0036 added to both tables) — a
+  // published/live lándlet lost every community sign and calendar entirely.
+  it('carries isCommunitySign/isCommunityCalendar into a saved version and the live landlet', async () => {
+    const flagBuilder = await signupBuilder('versioned-flags-builder');
+    await api('/landlets', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'versioned-flags-landlet', name: 'Versioned flags landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: flagBuilder.builderId,
+      }),
+    }));
+    await api('/instances', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'versioned-flags-sign',
+        landletId: 'versioned-flags-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+        isCommunitySign: true,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    const saved = await api('/landlets/versioned-flags-landlet/versions', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
+    expect(saved.response.status).toBe(201);
+    const versionId = saved.body.version.versionId;
+
+    const snapshot = await api(`/landlets/versioned-flags-landlet/versions/${versionId}`);
+    expect(snapshot.body.version.instances[0]).toMatchObject({
+      instanceId: 'versioned-flags-sign',
+      isCommunitySign: true,
+      isCommunityCalendar: true,
+    });
+
+    await api(`/landlets/versioned-flags-landlet/versions/${versionId}/activate`, flagBuilder.session({
+      method: 'POST',
+    }));
+    const live = await api('/landlets/versioned-flags-landlet/live');
+    expect(live.body.instances[0]).toMatchObject({
+      instanceId: 'versioned-flags-sign',
+      isCommunitySign: true,
+      isCommunityCalendar: true,
+    });
+  });
+
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
     const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
     await api('/landlets', concurrentBuilder.session({
@@ -1089,7 +1221,7 @@ describe('Worker API', () => {
   });
 
   it('makes completed enclosed generation claimable and handles retries', async () => {
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'enclosed-generation',
@@ -1098,15 +1230,15 @@ describe('Worker API', () => {
         center: { x: 0, y: 0 },
         status: 'generating',
       }),
-    });
+    }));
 
-    const completed = await api('/landlets/enclosed-generation/generation-complete', { method: 'POST' });
+    const completed = await api('/landlets/enclosed-generation/generation-complete', adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('greenbelt');
     expect(completed.body.landlet.generatedAt).not.toBeNull();
     expect(completed.body.landlet.claimableAt).not.toBeNull();
 
-    const retried = await api('/landlets/enclosed-generation/generation-complete', { method: 'POST' });
+    const retried = await api('/landlets/enclosed-generation/generation-complete', adminSession({ method: 'POST' }));
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
@@ -1118,17 +1250,17 @@ describe('Worker API', () => {
         status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId,
       }),
     }));
-    const invalid = await api('/landlets/not-generating-landlet/generation-complete', { method: 'POST' });
+    const invalid = await api('/landlets/not-generating-landlet/generation-complete', adminSession({ method: 'POST' }));
     expect(invalid.response.status).toBe(409);
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
   });
 
   it('filters and cursor-paginates landlets in stable order', async () => {
     for (const landletId of ['landlet-page-b', 'landlet-page-a']) {
-      await api('/landlets', {
+      await api('/landlets', adminSession({
         method: 'POST',
         body: JSON.stringify({ landletId, name: landletId, areaM2: 4, status: 'generating' }),
-      });
+      }));
     }
 
     const ids = [];
@@ -1643,7 +1775,7 @@ describe('Worker API', () => {
   }, 15000);
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
-    const candidate = await api('/landlets', {
+    const candidate = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'edge-candidate',
@@ -1658,14 +1790,14 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(candidate.response.status).toBe(201);
     const storedRadius = await env.DB.prepare(`
       SELECT max_world_radius_m FROM landlets WHERE landlet_id = 'edge-candidate'
     `).first();
     expect(storedRadius.max_world_radius_m).toBeCloseTo(Math.hypot(36, 1));
 
-    const incompleteCandidate = await api('/landlets', {
+    const incompleteCandidate = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'unfinished-edge-candidate',
@@ -1680,7 +1812,7 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(incompleteCandidate.response.status).toBe(201);
 
     const queuedCandidate = await api('/land-candidates', adminSession({
@@ -1702,7 +1834,7 @@ describe('Worker API', () => {
     expect(queuedCandidate.body.candidate.materializedAt).toBeNull();
     expect(queuedCandidate.body.landlet).toBeNull();
 
-    const completed = await api('/landlets/edge-candidate/generation-complete', { method: 'POST' });
+    const completed = await api('/landlets/edge-candidate/generation-complete', adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('generating');
     expect(completed.body.landlet.generatedAt).not.toBeNull();
@@ -1786,7 +1918,7 @@ describe('Worker API', () => {
     // increment" above, just enclosed by the automatic grower instead of
     // a manual /world/expand call.
     const candidateId = 'auto-grow-candidate';
-    const created = await api('/landlets', {
+    const created = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: candidateId,
@@ -1801,9 +1933,9 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(created.response.status).toBe(201);
-    const completed = await api(`/landlets/${candidateId}/generation-complete`, { method: 'POST' });
+    const completed = await api(`/landlets/${candidateId}/generation-complete`, adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('generating'); // not enclosed yet
 
@@ -1832,6 +1964,54 @@ describe('Worker API', () => {
       `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
     ).run();
   }, 15000);
+
+  it('scheduled() sweeps expired sessions, verification/reset tokens, and stale rate-limit rows', async () => {
+    // Two separate accounts so the sweep's selectivity is actually proven —
+    // only the expired one's session should disappear, not every session in
+    // the table (which would also silently log out the file's shared
+    // adminSession and every other builder created so far).
+    const expired = await signupBuilder('prune-sweep-expired');
+    const stillValid = await signupBuilder('prune-sweep-valid');
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z'
+         WHERE user_id = (SELECT user_id FROM users WHERE email = ?)`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO email_verification_tokens (token_hash, user_id, expires_at)
+         SELECT 'prune-sweep-expired-verification', user_id, '2000-01-01T00:00:00.000Z'
+         FROM users WHERE email = ?`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+         SELECT 'prune-sweep-expired-reset', user_id, '2000-01-01T00:00:00.000Z'
+         FROM users WHERE email = ?`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO rate_limit_events (bucket_key, created_at) VALUES ('prune-sweep-stale-bucket', 1)`,
+      ),
+    ]);
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM sessions WHERE user_id = (SELECT user_id FROM users WHERE email = ?)`,
+    ).bind(expired.email).first()).count).toBe(0);
+    expect((await api('/builders/me', stillValid.session())).response.status).toBe(200);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM email_verification_tokens WHERE token_hash = 'prune-sweep-expired-verification'`,
+    ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM password_reset_tokens WHERE token_hash = 'prune-sweep-expired-reset'`,
+    ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM rate_limit_events WHERE bucket_key = 'prune-sweep-stale-bucket'`,
+    ).first()).count).toBe(0);
+  });
 });
 
 describe('Community signs', () => {
@@ -2307,6 +2487,36 @@ describe('Product reviews', () => {
     expect(accepted.response.status).toBe(201);
   });
 
+  it('rejects a second review from the same purchaser label, case-insensitively — one review per purchase', async () => {
+    const templateId = await createTemplate('review-one-per-purchaser');
+    await createPurchase(templateId, 'A Shopper');
+    const first = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(first.response.status).toBe(201);
+
+    // Same label, different case — still the same reviewer.
+    const second = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'a shopper', rating: 1, text: 'Actually terrible' }),
+    });
+    expect(second.response.status).toBe(409);
+    expect(second.body).toEqual({ error: 'This purchaser has already reviewed this product' });
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+    expect(listed.body.averageRating).toBe(5);
+
+    // Deleting the first review frees the label up to review again.
+    await api(`/catalog/${templateId}/reviews/${first.body.review.reviewId}`, { method: 'DELETE' });
+    const third = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 2 }),
+    });
+    expect(third.response.status).toBe(201);
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
     await createPurchase(templateId, 'A Shopper');
@@ -2760,6 +2970,38 @@ describe('Auctions', () => {
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
   });
 
+  it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
+    const owner = await signupBuilder('resolve-existing-owner-owner');
+    const bidder = await signupBuilder('resolve-existing-owner-bidder');
+    await createGreenbeltLandlet('auction-bidder-own-landlet');
+    await claim('auction-bidder-own-landlet', bidder);
+    await createGreenbeltLandlet('auction-resolve-existing-owner-landlet');
+    await claim('auction-resolve-existing-owner-landlet', owner);
+    const started = await api('/landlets/auction-resolve-existing-owner-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // GET /api/auctions resolves due auctions before listing (resolveDueAuctions)
+    // — this is the exact path that used to 409 for everyone once a single
+    // stuck auction like this one hit the UNIQUE constraint.
+    const list = await api('/auctions');
+    expect(list.response.status).toBe(200);
+
+    const landlet = await api('/landlets/auction-resolve-existing-owner-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(landlet.body.landlet.status).toBe('claimed');
+
+    // The bidder's own earlier landlet is untouched — they now own both.
+    const stillOwned = await api('/landlets/auction-bidder-own-landlet');
+    expect(stillOwned.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(stillOwned.body.landlet.status).toBe('claimed');
+  });
+
   it('rejects resolving an auction that is not due yet', async () => {
     const owner = await signupBuilder('not-due-owner');
     await createGreenbeltLandlet('auction-not-due-landlet');
@@ -3074,6 +3316,141 @@ describe('Notifications', () => {
     }));
     const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
     expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
+  });
+});
+
+describe('Bundles', () => {
+  function bundleBody(overrides = {}) {
+    return {
+      name: 'Starter set',
+      items: [
+        { templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 },
+        { templateId: 'placeholder-tree', dx: 1, dy: 0, dz: 1 },
+      ],
+      ...overrides,
+    };
+  }
+
+  it('creates a bundle owned by the session builder, ignoring any builderId in the body', async () => {
+    const builder = await signupBuilder('bundle-create');
+    const created = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ builderId: 'someone-else' })),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.bundle).toMatchObject({
+      builderId: builder.builderId,
+      name: 'Starter set',
+      shared: false,
+    });
+    expect(created.body.bundle.items).toHaveLength(2);
+    expect(created.body.bundle.createdAt).toBeTruthy();
+  });
+
+  it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
+    const builder = await signupBuilder('bundle-validate');
+    const empty = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ items: [] })),
+    }));
+    expect(empty.response.status).toBe(400);
+
+    const tooMany = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        items: Array.from({ length: 251 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
+      })),
+    }));
+    expect(tooMany.response.status).toBe(400);
+
+    const badTemplate = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({ items: [{ templateId: 'template-does-not-exist', dx: 0, dy: 0, dz: 0 }] })),
+    }));
+    expect(badTemplate.response.status).toBe(400);
+  });
+
+  it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {
+    const owner = await signupBuilder('bundle-list-owner');
+    const other = await signupBuilder('bundle-list-other');
+    await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody({ name: 'Owner bundle' })) }));
+    await api('/bundles', other.session({ method: 'POST', body: JSON.stringify(bundleBody({ name: 'Other bundle' })) }));
+
+    const ownerList = await api('/bundles', owner.session());
+    expect(ownerList.body.bundles.map((b) => b.name)).toEqual(['Owner bundle']);
+
+    const spoofed = await api(`/bundles?builderId=${other.builderId}`, owner.session());
+    expect(spoofed.response.status).toBe(403);
+  });
+
+  it('lists every shared bundle across builders, unauthenticated, without leaking private ones', async () => {
+    const alice = await signupBuilder('bundle-shared-alice');
+    const bob = await signupBuilder('bundle-shared-bob');
+    await api('/bundles', alice.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Alice private', shared: false })),
+    }));
+    const aliceShared = await api('/bundles', alice.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Alice shared', shared: true })),
+    }));
+    const bobShared = await api('/bundles', bob.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Bob shared', shared: true })),
+    }));
+
+    // No session attached at all — the community tab is intentionally public.
+    const shared = await api('/bundles?shared=true');
+    expect(shared.response.status).toBe(200);
+    const sharedIds = shared.body.bundles.map((b) => b.bundleId);
+    expect(sharedIds).toContain(aliceShared.body.bundle.bundleId);
+    expect(sharedIds).toContain(bobShared.body.bundle.bundleId);
+    expect(shared.body.bundles.every((b) => b.shared === true)).toBe(true);
+
+    // Alice's own private bundle still shows in her private list, alongside
+    // the shared one — sharing doesn't move a bundle out of "my bundles".
+    const aliceOwn = await api('/bundles', alice.session());
+    expect(aliceOwn.body.bundles.map((b) => b.name).sort()).toEqual(['Alice private', 'Alice shared']);
+  });
+
+  it('updates name and shared independently on PATCH, and rejects another builder\'s bundle', async () => {
+    const owner = await signupBuilder('bundle-patch-owner');
+    const other = await signupBuilder('bundle-patch-other');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const renamed = await api(`/bundles/${bundleId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Renamed set' }),
+    }));
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.bundle).toMatchObject({ name: 'Renamed set', shared: false });
+
+    const shared = await api(`/bundles/${bundleId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ shared: true }),
+    }));
+    expect(shared.response.status).toBe(200);
+    // Renaming didn't get clobbered by a share-only PATCH, and vice versa.
+    expect(shared.body.bundle).toMatchObject({ name: 'Renamed set', shared: true });
+
+    const spoofed = await api(`/bundles/${bundleId}`, other.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Hijacked' }),
+    }));
+    expect(spoofed.response.status).toBe(403);
+
+    const missing = await api('/bundles/bundle-does-not-exist', owner.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Whatever' }),
+    }));
+    expect(missing.response.status).toBe(404);
+  });
+
+  it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
+    const owner = await signupBuilder('bundle-delete-owner');
+    const other = await signupBuilder('bundle-delete-other');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const spoofed = await api(`/bundles/${bundleId}`, other.session({ method: 'DELETE' }));
+    expect(spoofed.response.status).toBe(403);
+
+    const deleted = await api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+    expect((await api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' }))).response.status).toBe(404);
   });
 });
 
@@ -3439,10 +3816,10 @@ describe('Land cap', () => {
   }
 
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
-    return api('/landlets', {
+    return api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
-    });
+    }));
   }
 
   async function claim(landletId, builder) {
@@ -3540,10 +3917,10 @@ describe('Land cap', () => {
 
 describe('Simulated purchases', () => {
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
-    return api('/landlets', {
+    return api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
-    });
+    }));
   }
 
   async function claim(landletId, builder) {
@@ -3642,6 +4019,55 @@ describe('Simulated purchases', () => {
     });
     expect(badQuantity.response.status).toBe(400);
   });
+
+  it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
+    // This endpoint is deliberately unauthenticated (see docs/API.md's
+    // "Simulated purchases"), so quantity is one of two guards (alongside
+    // the rate limit below) against one request minting an arbitrary
+    // dállers credit.
+    const seller = await signupBuilder('purchase-quantity-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
+    await claim('purchase-quantity-cap-landlet', seller);
+    await createTemplate('purchase-quantity-cap-template', { priceCents: 1000 });
+    await placeInstance('purchase-quantity-cap-instance', 'purchase-quantity-cap-landlet', 'purchase-quantity-cap-template', seller);
+
+    const tooMany = await api('/instances/purchase-quantity-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1001 }),
+    });
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: 'quantity must be 1000 or fewer' });
+
+    const atCap = await api('/instances/purchase-quantity-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1000 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.quantity).toBe(1000);
+  });
+
+  it('rate-limits repeated purchases from the same client', async () => {
+    // Unauthenticated on purpose (no shopper account exists to check
+    // against), but a successful call credits a real builder balance and
+    // earnings ledger entry, so it gets the same per-client throttle as
+    // signup/password-reset/model-upload. A synthetic cf-connecting-ip
+    // keeps this test's bucket from colliding with every other purchase
+    // test in this file, which otherwise all share the same "unknown" IP
+    // bucket (mirrors the model-upload rate-limit test's own approach).
+    const seller = await signupBuilder('purchase-rate-limit-seller');
+    await createGreenbeltLandletWithArea('purchase-rate-limit-landlet', 1000);
+    await claim('purchase-rate-limit-landlet', seller);
+    await createTemplate('purchase-rate-limit-template', { priceCents: 1000 });
+    await placeInstance('purchase-rate-limit-instance', 'purchase-rate-limit-landlet', 'purchase-rate-limit-template', seller);
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 30; i++) {
+      const attempt = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+    expect(limited.response.status).toBe(429);
+  }, 20000);
 
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
