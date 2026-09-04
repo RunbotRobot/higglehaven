@@ -76,7 +76,13 @@
         color: rgba(255, 255, 255, 0.75);
         font: 12px/1.4 monospace;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-        pointer-events: none;
+        /* Unlike every other pointer-events: none HUD overlay in this file,
+           this one needs to be selectable (see #camera-debug's identical
+           user-select treatment) so a builder can copy the exact deployed
+           commit — small enough in the corner that losing canvas
+           drag-to-look under just this strip is worth that tradeoff. */
+        user-select: text;
+        -webkit-user-select: text;
         z-index: 10;
       }
       /* The wordmark's own green-on-transparent art has no contrast
