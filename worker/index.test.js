@@ -2481,6 +2481,36 @@ describe('Product reviews', () => {
     expect(accepted.response.status).toBe(201);
   });
 
+  it('rejects a second review from the same purchaser label, case-insensitively — one review per purchase', async () => {
+    const templateId = await createTemplate('review-one-per-purchaser');
+    await createPurchase(templateId, 'A Shopper');
+    const first = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(first.response.status).toBe(201);
+
+    // Same label, different case — still the same reviewer.
+    const second = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'a shopper', rating: 1, text: 'Actually terrible' }),
+    });
+    expect(second.response.status).toBe(409);
+    expect(second.body).toEqual({ error: 'This purchaser has already reviewed this product' });
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+    expect(listed.body.averageRating).toBe(5);
+
+    // Deleting the first review frees the label up to review again.
+    await api(`/catalog/${templateId}/reviews/${first.body.review.reviewId}`, { method: 'DELETE' });
+    const third = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 2 }),
+    });
+    expect(third.response.status).toBe(201);
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
     await createPurchase(templateId, 'A Shopper');

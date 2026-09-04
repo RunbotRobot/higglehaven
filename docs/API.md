@@ -2635,10 +2635,16 @@ anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
 identity system carries everywhere else it's used. Any purchase counts,
-refunded or not, and one purchase can back any number of reviews (there's
-no pairing/consumption between a specific purchase and a specific review) —
-this is a simple "did you ever buy it" gate, not a stricter one-review-
-per-purchase policy.
+refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
+can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
+enforced at the DB level, checked explicitly first for a `409` instead of
+a raw constraint error): the purchase gate above is a one-time eligibility
+check, not a per-review consumption check, so without this cap the same
+purchase could otherwise back an unbounded number of reviews under one
+label, directly skewing `averageRating`. Deleting the existing review frees
+that label to review again. This matches docs/SPEC.md §5's review
+incentives being "capped per account/period" — the purchase-matched
+`author_label` is this app's closest thing to an account.
 
 **Corrected design (this section originally attached reviews to a
 builder-flagged placed instance, cloning the community sign/calendar
@@ -2666,7 +2672,8 @@ outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
 doesn't exist. `POST` additionally requires a matching purchase (see the
-purchase-gating paragraph above) — `400` without one. `DELETE`
+purchase-gating paragraph above) — `400` without one, `409` if that same
+purchaser label has already reviewed this template. `DELETE`
 (moderation) requires a session (`401` without one) and is gated to the
 template's own seller once it has one — `403` for anyone else — the same
 `if (existing.seller_id)` ownership check the catalog template's own
