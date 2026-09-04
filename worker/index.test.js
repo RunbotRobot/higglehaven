@@ -262,16 +262,25 @@ describe('Worker API', () => {
       deletable: false,
     }));
 
-    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    // Admin-only, same as /api/models/cleanup below: no session, and a
+    // logged-in-but-not-admin session, are both rejected before the
+    // referenced-model check ever runs.
+    const unauthedDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    expect(unauthedDelete.status).toBe(401);
+    const nonAdmin = await signupBuilder('non-admin-model-delete');
+    const nonAdminDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, nonAdmin.session({ method: 'DELETE' }));
+    expect(nonAdminDelete.status).toBe(403);
+
+    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(referenced.status).toBe(409);
     expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced by a catalog template' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
-    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
-    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
+    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }))).status).toBe(404);
     const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
     const storageAfterRemoval = await api('/models/storage', adminSession());
@@ -282,10 +291,18 @@ describe('Worker API', () => {
     orphanForm.set('file', glbFile({ json: '{"orphan":true}' }));
     const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
     const orphan = await orphanUpload.json();
-    const preview = await api('/models/cleanup', {
+
+    // Admin-only: rejected before it ever touches R2, same bar as the
+    // DELETE-a-single-upload endpoint above.
+    expect((await api('/models/cleanup', { method: 'POST', body: JSON.stringify({ maxDeletes: 1 }) })).response.status).toBe(401);
+    expect((await api('/models/cleanup', nonAdmin.session({
+      method: 'POST', body: JSON.stringify({ maxDeletes: 1 }),
+    }))).response.status).toBe(403);
+
+    const preview = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1, dryRun: true }),
-    });
+    }));
     expect(preview.response.status).toBe(200);
     expect(preview.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -295,10 +312,10 @@ describe('Worker API', () => {
       dryRun: true,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
-    const cleanup = await api('/models/cleanup', {
+    const cleanup = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1 }),
-    });
+    }));
     expect(cleanup.response.status).toBe(200);
     expect(cleanup.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -308,12 +325,12 @@ describe('Worker API', () => {
       dryRun: false,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
-    expect((await api('/models/cleanup', {
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
-    })).response.status).toBe(400);
-    expect((await api('/models/cleanup', {
+    }))).response.status).toBe(400);
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ dryRun: 'yes' }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
   });
 
   it('rejects invalid uploaded-model paths', async () => {
@@ -538,13 +555,13 @@ describe('Worker API', () => {
     });
     expect(referencedTemplate.response.status).toBe(201);
     const referenceBuilder = await signupBuilder('catalog-batch-reference-builder');
-    await api('/landlets', {
+    await api('/landlets', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
         status: 'claimed', ownerBuilderId: referenceBuilder.builderId,
       }),
-    });
+    }));
     const reference = await api('/instances', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -584,18 +601,18 @@ describe('Worker API', () => {
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
-    // Owned directly at creation (POST /landlets still accepts ownerBuilderId
-    // unauthenticated — it's admin/test tooling, see that route's own
-    // comment) rather than going through the full claim flow, so the
-    // instance placements below can authenticate as its real owner.
+    // Owned directly at creation (POST /landlets allows creating a landlet
+    // already claimed by yourself — see that route's own comment) rather
+    // than going through the full claim flow, so the instance placements
+    // below can authenticate as its real owner.
     const pageBuilder = await signupBuilder('instance-page-builder');
-    await api('/landlets', {
+    await api('/landlets', pageBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
         status: 'claimed', ownerBuilderId: pageBuilder.builderId,
       }),
-    });
+    }));
     for (const instanceId of ['instance-page-b', 'instance-page-a']) {
       const created = await api('/instances', pageBuilder.session({
         method: 'POST',
@@ -868,13 +885,13 @@ describe('Worker API', () => {
 
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', draftBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: draftBuilder.builderId,
       }),
-    });
+    }));
 
     const replaced = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
@@ -959,13 +976,13 @@ describe('Worker API', () => {
     // require session-authenticated ownership) go against a landlet made
     // just for this test instead.
     const versionBuilder = await signupBuilder('versioned-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', versionBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: versionBuilder.builderId,
       }),
-    });
+    }));
 
     const instance = await api('/instances', versionBuilder.session({
       method: 'POST',
@@ -1047,13 +1064,13 @@ describe('Worker API', () => {
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
     const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
-    await api('/landlets', {
+    await api('/landlets', concurrentBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
         status: 'claimed', ownerBuilderId: concurrentBuilder.builderId,
       }),
-    });
+    }));
 
     const saves = await Promise.all([
       api('/landlets/concurrent-versions/versions', concurrentBuilder.session({
@@ -1093,13 +1110,14 @@ describe('Worker API', () => {
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
-    await api('/landlets', {
+    const notGeneratingBuilder = await signupBuilder('not-generating-owner');
+    await api('/landlets', notGeneratingBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
-        status: 'claimed', ownerBuilderId: 'some-owner',
+        status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId,
       }),
-    });
+    }));
     const invalid = await api('/landlets/not-generating-landlet/generation-complete', { method: 'POST' });
     expect(invalid.response.status).toBe(409);
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
@@ -1126,17 +1144,20 @@ describe('Worker API', () => {
     } while (cursor);
     expect(ids).toEqual(['landlet-page-b', 'landlet-page-a']);
 
-    await api('/landlets', {
+    const pageOwnerBuilder = await signupBuilder('owned-page-owner');
+    await api('/landlets', pageOwnerBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'owned-page-landlet',
         name: 'Owned page landlet',
         areaM2: 4,
         status: 'claimed',
-        ownerBuilderId: 'page-builder',
+        ownerBuilderId: pageOwnerBuilder.builderId,
       }),
-    });
-    const owned = await api('/landlets?status=claimed&ownerBuilderId=%20page-builder%20');
+    }));
+    // Padded with spaces to confirm the query param is trimmed before
+    // filtering, same as the original literal-id version of this test.
+    const owned = await api(`/landlets?status=claimed&ownerBuilderId=${encodeURIComponent(`  ${pageOwnerBuilder.builderId}  `)}`);
     expect(owned.body.landlets.map(({ landletId }) => landletId)).toEqual(['owned-page-landlet']);
     expect(owned.body.nextCursor).toBeNull();
 
@@ -2859,6 +2880,60 @@ describe('Auctions', () => {
     expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
     expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
   });
+
+  it('caps how many due auctions one GET /auctions call resolves, making forward progress across repeated calls', async () => {
+    // Regression test for AUCTION_SWEEP_LIMIT: resolveDueAuctions used to
+    // sweep and resolve every active-but-expired auction unconditionally,
+    // so a burst of simultaneously-expiring auctions would force one
+    // public, unauthenticated GET into an unbounded chain of sequential
+    // writes. Seeded directly via the DB (not through claim/start-auction,
+    // which limit one builder to one claimed landlet) — cheap, exact, and
+    // avoids needing AUCTION_SWEEP_LIMIT+ real signups just to prove a
+    // bounded sweep. The landlets are left unowned (owner_builder_id NULL)
+    // — migrations/0006's "one claimed landlet per builder" unique index
+    // only applies once a landlet actually has an owner, and
+    // resolveAuction's no-bid path (starting_bid_cents = 0, no bids) never
+    // reads landlets.owner_builder_id, only auction.seller_builder_id.
+    const seller = await signupBuilder('sweep-cap-seller');
+    const total = 27; // > AUCTION_SWEEP_LIMIT (25), so one call can't clear it all
+    const inserts = [];
+    for (let i = 0; i < total; i++) {
+      const landletId = `sweep-cap-landlet-${i}`;
+      const auctionId = `sweep-cap-auction-${i}`;
+      inserts.push(
+        env.DB.prepare(`
+          INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, 'claimed')
+        `).bind(landletId, `Sweep cap ${i}`),
+        env.DB.prepare(`
+          INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+          VALUES (?, ?, ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+        `).bind(auctionId, landletId, seller.builderId),
+      );
+    }
+    await env.DB.batch(inserts);
+
+    const dueBefore = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    expect(dueBefore.count).toBe(total);
+
+    await api('/auctions?status=active');
+    const dueAfterFirstCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // Some, but not all, resolved — proves the sweep is bounded rather than
+    // exhaustive.
+    expect(dueAfterFirstCall.count).toBeGreaterThan(0);
+    expect(dueAfterFirstCall.count).toBeLessThan(total);
+
+    await api('/auctions?status=active');
+    const dueAfterSecondCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // A second call clears the rest of the backlog rather than getting
+    // stuck resolving the same subset forever.
+    expect(dueAfterSecondCall.count).toBe(0);
+  });
 });
 
 // The Auctions tests above exercise notification creation as a side effect
@@ -3541,24 +3616,30 @@ describe('Simulated purchases', () => {
     expect(badQuantity.response.status).toBe(400);
   });
 
-  it('rejects a quantity over 1000 — there is no shopper account to attribute an absurd credit to', async () => {
-    const seller = await signupBuilder('purchase-max-qty-seller');
-    await createGreenbeltLandletWithArea('purchase-max-qty-landlet', 1000);
-    await claim('purchase-max-qty-landlet', seller);
-    await createTemplate('purchase-max-qty-template', { priceCents: 1000 });
-    await placeInstance('purchase-max-qty-instance', 'purchase-max-qty-landlet', 'purchase-max-qty-template', seller);
+  it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
+    // This endpoint is deliberately unauthenticated (see docs/API.md's
+    // "Simulated purchases"), so quantity is one of two guards (alongside
+    // the rate limit below) against one request minting an arbitrary
+    // dállers credit.
+    const seller = await signupBuilder('purchase-quantity-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
+    await claim('purchase-quantity-cap-landlet', seller);
+    await createTemplate('purchase-quantity-cap-template', { priceCents: 1000 });
+    await placeInstance('purchase-quantity-cap-instance', 'purchase-quantity-cap-landlet', 'purchase-quantity-cap-template', seller);
 
-    const atLimit = await api('/instances/purchase-max-qty-instance/purchase', {
-      method: 'POST',
-      body: JSON.stringify({ quantity: 1000 }),
-    });
-    expect(atLimit.response.status).toBe(201);
-
-    const overLimit = await api('/instances/purchase-max-qty-instance/purchase', {
+    const tooMany = await api('/instances/purchase-quantity-cap-instance/purchase', {
       method: 'POST',
       body: JSON.stringify({ quantity: 1001 }),
     });
-    expect(overLimit.response.status).toBe(400);
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: 'quantity must be 1000 or fewer' });
+
+    const atCap = await api('/instances/purchase-quantity-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1000 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.quantity).toBe(1000);
   });
 
   it('rate-limits repeated purchases from the same client', async () => {
