@@ -7164,7 +7164,21 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
 // pair — shopVerticalInput/bindShopVerticalButton, +1 while Up is held,
 // -1 while Down, consumed every frame in updateShopFlight exactly like
 // shopMoveX/Y already are for the move joystick.
+//
+// Each button's own held-state is tracked independently (shopUpHeld/
+// shopDownHeld) rather than shopVerticalInput itself recording "who's
+// holding" — holding both and releasing just one used to silently stick
+// the other off, since the second press's pointerdown would overwrite the
+// first's contribution to the one shared variable, and the first button's
+// own pointerup only ever cleared it if it still matched that button's own
+// direction. Deriving shopVerticalInput as a sum of both held-flags means
+// either button's press/release only ever touches its own flag.
+let shopUpHeld = false;
+let shopDownHeld = false;
 let shopVerticalInput = 0;
+function updateShopVerticalInput() {
+  shopVerticalInput = (shopUpHeld ? 1 : 0) + (shopDownHeld ? -1 : 0);
+}
 function bindShopVerticalButton(el, direction) {
   let pointerId = null;
   el.addEventListener('pointerdown', (event) => {
@@ -7173,13 +7187,17 @@ function bindShopVerticalButton(el, direction) {
     pointerId = event.pointerId;
     el.setPointerCapture(pointerId);
     el.classList.add('active');
-    shopVerticalInput = direction;
+    if (direction === 1) shopUpHeld = true;
+    else shopDownHeld = true;
+    updateShopVerticalInput();
   });
   const end = (event) => {
     if (event.pointerId !== pointerId) return;
     pointerId = null;
     el.classList.remove('active');
-    if (shopVerticalInput === direction) shopVerticalInput = 0;
+    if (direction === 1) shopUpHeld = false;
+    else shopDownHeld = false;
+    updateShopVerticalInput();
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
@@ -8400,6 +8418,8 @@ async function enterShopMode() {
   shopFlightState = 'grounded';
   shopFlightTransitionElapsedS = 0;
   shopFlightAltitudeM = 0;
+  shopUpHeld = false;
+  shopDownHeld = false;
   shopVerticalInput = 0;
   document.body.classList.remove('shop-flying');
   shopFlyBtn.classList.remove('active');
