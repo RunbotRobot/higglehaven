@@ -1,0 +1,24 @@
+-- migrations/0006's idx_landlets_one_claimed_per_builder enforced "a
+-- builder may own one claimed STARTER landlet" (its own comment's wording)
+-- by blocking more than one 'claimed' row per owner_builder_id — but it
+-- predates land acquisition auctions (migrations/0045) and its WHERE
+-- clause doesn't distinguish the free starter claim from land legitimately
+-- won at auction. Every other part of this codebase already assumes a
+-- builder can own more than one lándlet via auctions (see
+-- ownedLandletsByBuilderId's own comment in worker/index.js, and land cap
+-- itself — migrations/0050 — whose entire purpose is gating how much
+-- *total* area across possibly-several lándlets a builder may hold).
+--
+-- Net effect: resolveAuction's landlet-transfer UPDATE threw a UNIQUE
+-- constraint violation whenever the winning bidder already owned their own
+-- claimed lándlet (i.e. almost always, since claiming one is mandatory to
+-- enter Build mode) — resolution never completed, and because
+-- resolveDueAuctions() sweeps every due auction inside GET /api/auctions,
+-- one such stuck auction 409'd that endpoint for every caller, permanently.
+--
+-- The "one free starter claim" rule itself is unaffected — it's already
+-- enforced independently by POST /landlets/:id/claim's own
+-- "NOT EXISTS (SELECT 1 FROM landlets WHERE owner_builder_id = ? AND
+-- status = 'claimed')" query condition, which this index was always
+-- redundant with for that specific path and is now the sole enforcement.
+DROP INDEX IF EXISTS idx_landlets_one_claimed_per_builder;

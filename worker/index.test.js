@@ -2716,6 +2716,42 @@ describe('Auctions', () => {
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
   });
 
+  it('resolves a winning auction even when the bidder already owns a claimed lándlet', async () => {
+    // Regression test for migrations/0058: idx_landlets_one_claimed_per_builder
+    // used to make the winning UPDATE throw a UNIQUE constraint violation
+    // whenever the bidder already held their own claimed lándlet — which is
+    // the common case, since claiming one is mandatory to enter Build mode.
+    // A builder legitimately accumulating more than one lándlet via
+    // auctions is intended (see ownedLandletsByBuilderId's own comment, and
+    // land cap's whole purpose), so this must succeed, not 409.
+    const owner = await signupBuilder('multi-own-owner');
+    const bidder = await signupBuilder('multi-own-bidder');
+    await createGreenbeltLandlet('auction-multi-own-sold-landlet');
+    await createGreenbeltLandlet('auction-multi-own-bidder-landlet');
+    await claim('auction-multi-own-sold-landlet', owner);
+    await claim('auction-multi-own-bidder-landlet', bidder);
+
+    const started = await api('/landlets/auction-multi-own-sold-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+    expect(resolved.body.auction.status).toBe('ended');
+
+    const wonLandlet = await api('/landlets/auction-multi-own-sold-landlet');
+    expect(wonLandlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(wonLandlet.body.landlet.status).toBe('claimed');
+    const originalLandlet = await api('/landlets/auction-multi-own-bidder-landlet');
+    expect(originalLandlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(originalLandlet.body.landlet.status).toBe('claimed');
+  });
+
   it('rejects resolving an auction that is not due yet', async () => {
     const owner = await signupBuilder('not-due-owner');
     await createGreenbeltLandlet('auction-not-due-landlet');
