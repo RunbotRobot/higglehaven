@@ -864,16 +864,22 @@ describe('Worker API', () => {
     expect(duplicateTemplate.response.status).toBe(409);
     expect(duplicateTemplate.body).toEqual({ error: 'Resource already exists' });
 
-    const missingReference = await api('/instances', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'invalid-reference-instance',
-        landletId: 'starter-landlet',
-        templateId: 'missing-template',
-        x: 0,
-        y: 0,
-      }),
+    const instanceBody = JSON.stringify({
+      instanceId: 'invalid-reference-instance',
+      landletId: 'starter-landlet',
+      templateId: 'missing-template',
+      x: 0,
+      y: 0,
     });
+
+    // Auth is checked before the templateId/landletId reference assertions
+    // below (#86) — an unauthenticated caller gets 401, not a 400 that
+    // would let them enumerate which reference IDs exist without logging in.
+    const unauthenticated = await api('/instances', { method: 'POST', body: instanceBody });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const instanceBuilder = await signupBuilder('missing-reference-builder');
+    const missingReference = await api('/instances', instanceBuilder.session({ method: 'POST', body: instanceBody }));
     // /api/instances pre-checks references explicitly (assertReferenceExists
     // in worker/index.js) for a precise 400 instead of relying on the
     // generic FK-constraint fallback other routes use.
