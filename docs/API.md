@@ -9,8 +9,10 @@ from browser `localStorage` placeholders toward persistent data.
 - Real account auth (signup/login, session cookies) and a real seller/builder
   identity model are built and live — see "Authentication," "Authorization
   model," and "Builders" below. Payments, multiplayer, and moderation are
-  still genuinely dev-only/simulated and stay that way unless explicitly
-  requested.
+  still dev-only/simulated today — that's an open gap against docs/SPEC.md,
+  not a scope boundary this backend is meant to stay behind. See AGENTS.md's
+  "Proposing big feature work" for how this project picks that kind of work
+  up.
 - Internal names use plain `a` (`land`, `landlet`, `daller`) even when display
   copy may eventually use accented customer-facing strings.
 - Coordinates and dimensions are decimal meters. Placed object positions use the
@@ -4431,8 +4433,10 @@ D1. Test storage does not modify the local development D1 state.
 - Extend procedural generation beyond the current bounded annular-ring
   primitive with macro-geography-aware shapes.
 - Real payment processing, multiplayer presence, and content moderation
-  remain intentionally dev-only/simulated for now (see this doc's own
+  are still dev-only/simulated as of this writing (see this doc's own
   "Scope and assumptions" above) — real account auth and a real
   seller/builder identity model, by contrast, are already built and live
   (migrations 0053-0056; see "Authentication," "Authorization model," and
-  "Builders" above), not out of scope.
+  "Builders" above). Unlike the annular-ring-generation gap above, this
+  isn't a small follow-up: see AGENTS.md's "Proposing big feature work"
+  for how this project breaks work this size into a claimable backlog.

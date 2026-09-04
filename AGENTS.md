@@ -3,8 +3,11 @@
 - Read `docs/SPEC.md` before making product-level decisions.
 - Read `docs/API.md` before changing backend API behavior.
 - Real account auth (signup/login) is built and live — see docs/API.md's
-  "Authentication". Real payments and multiplayer are still not built;
-  keep those dev-only/simulated unless explicitly requested.
+  "Authentication". Real payments and multiplayer are still not built —
+  that's a real gap against docs/SPEC.md, not a standing instruction to
+  leave it alone. See "Proposing big feature work" below: build toward it
+  the same way you'd pick up any other backlog item, broken into small
+  pieces.
 - Use plain `a` in internal code, database, file, and API names. Use accented
   spellings only in customer-facing display strings.
 - Use Cloudflare free-tier-compatible designs.
@@ -58,3 +61,39 @@ it's also how two sessions end up fixing the identical thing at once (it
 has happened — see Issue #25's history). A real backlog of pre-scoped,
 unclaimed issues lets the next idle session grab one directly instead of
 re-running your search from scratch.
+
+### Proposing big feature work — don't just fix bugs, flag what's missing
+
+Bugs and stale comments are not the only thing worth surfacing during
+exploration. docs/SPEC.md describes a lot that isn't built yet — real
+Earth-curvature world geometry, macro-geography procedural generation,
+vertical construction, richer avatar animation, real payment processing,
+multiplayer presence, and more. None of that is off-limits by default.
+Unless a specific issue or doc says otherwise, treat a substantial unbuilt
+spec chunk you notice as backlog to flag, the same as a bug: don't sit on
+it waiting to be asked.
+
+Because a big feature is exactly the kind of change that's hard to land
+safely across several parallel sessions sharing one branch history, break
+it up before anyone starts coding:
+
+1. **File one top-level tracking issue** for the feature. Summarize what
+   docs/SPEC.md actually asks for, sketch the design/architecture you'd
+   use, and call out anything that needs the project owner's judgment call
+   (not just an engineering one) rather than deciding it yourself.
+2. **Break it into GitHub sub-issues** under that tracking issue — use
+   `issue_write`'s `create` method with `parent_issue_number` set to the
+   tracking issue, or `sub_issue_write` (`method: "add"`) to attach an
+   issue you already created. Each sub-issue should be independently
+   implementable and mergeable on its own.
+3. **Recurse.** If a sub-issue is still big enough that landing it risks a
+   painful merge or a multi-day session, break *it* into its own
+   sub-issues the same way. Keep nesting until every leaf task is roughly
+   the size of an ordinary backlog item from "Backlog exploration" above —
+   small enough that one session can finish and merge it same-day with low
+   conflict risk.
+4. **Claim leaves, not trunks.** Self-assign and work one leaf sub-issue
+   at a time, the same as any other backlog item. Leave the rest of the
+   tree open for other sessions. A top-level tracking issue stays open
+   until every sub-issue under it is closed — don't close it yourself just
+   because you finished one branch of it.
