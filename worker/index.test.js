@@ -969,6 +969,81 @@ describe('Worker API', () => {
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
+  // A draft save used to DELETE FROM placed_instances WHERE landlet_id = ?
+  // then re-INSERT fresh rows — sign_posts/calendar_events both cascade-
+  // delete on their own instance_id (migrations/0041/0042), so even
+  // re-saving the *same* instance_id wiped every post/event on it, and the
+  // re-insert never carried is_community_sign/is_community_calendar at all
+  // (silently resetting both to false). Now an upsert-by-instance_id, with
+  // a real DELETE only for instances genuinely dropped from the new set.
+  it('preserves community sign posts and flags across a draft save, and only removes genuinely-dropped instances', async () => {
+    const draftSignBuilder = await signupBuilder('draft-sign-builder');
+    await api('/landlets', draftSignBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'draft-sign-landlet', name: 'Draft sign landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: draftSignBuilder.builderId,
+      }),
+    }));
+
+    const firstSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-a', templateId: 'placeholder-tree', x: 1, y: 1, isCommunitySign: true },
+        ],
+      }),
+    }));
+    expect(firstSave.response.status).toBe(200);
+    expect(firstSave.body.instances[0].isCommunitySign).toBe(true);
+
+    const posted = await api('/instances/draft-sign-a/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great spot!' }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    // Re-save the same instance (still flagged) alongside a new one.
+    const secondSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-a', templateId: 'placeholder-tree', x: 1, y: 1, isCommunitySign: true },
+          { instanceId: 'draft-sign-b', templateId: 'placeholder-chair', x: 2, y: 2 },
+        ],
+      }),
+    }));
+    expect(secondSave.response.status).toBe(200);
+    expect(secondSave.body.instances.map((instance) => instance.instanceId).sort()).toEqual(['draft-sign-a', 'draft-sign-b']);
+    const savedA = secondSave.body.instances.find((instance) => instance.instanceId === 'draft-sign-a');
+    expect(savedA.isCommunitySign).toBe(true);
+
+    // The post survives — it was never actually deleted, since the
+    // instance never really went away.
+    const postsAfterResave = await api('/instances/draft-sign-a/posts');
+    expect(postsAfterResave.response.status).toBe(200);
+    expect(postsAfterResave.body.posts).toHaveLength(1);
+    expect(postsAfterResave.body.posts[0].text).toBe('Great spot!');
+
+    // Now genuinely drop draft-sign-a from the set — it should actually be
+    // deleted this time, posts and all.
+    const thirdSave = await api('/landlets/draft-sign-landlet/draft', draftSignBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          { instanceId: 'draft-sign-b', templateId: 'placeholder-chair', x: 2, y: 2 },
+        ],
+      }),
+    }));
+    expect(thirdSave.response.status).toBe(200);
+    expect(thirdSave.body.instances.map((instance) => instance.instanceId)).toEqual(['draft-sign-b']);
+
+    const droppedInstance = await api('/instances/draft-sign-a');
+    expect(droppedInstance.response.status).toBe(404);
+    const postsAfterDrop = await api('/instances/draft-sign-a/posts');
+    expect(postsAfterDrop.response.status).toBe(404);
+  });
+
   it('saves immutable landlet versions and activates a selected snapshot', async () => {
     // A dedicated owned landlet rather than 'starter-landlet' itself — the
     // mosaic/world-gen test later in this file relies on starter-landlet
@@ -1060,6 +1135,57 @@ describe('Worker API', () => {
     expect(versions.response.status).toBe(200);
     expect(versions.body.versions).toHaveLength(1);
     expect(versions.body.versions[0].versionId).toBe(versionId);
+  });
+
+  // migrations/0058: version_instances never got is_community_sign/
+  // is_community_calendar when 0041/0042 added them to placed_instances
+  // (unlike crop_json/scale, which 0034/0036 added to both tables) — a
+  // published/live lándlet lost every community sign and calendar entirely.
+  it('carries isCommunitySign/isCommunityCalendar into a saved version and the live landlet', async () => {
+    const flagBuilder = await signupBuilder('versioned-flags-builder');
+    await api('/landlets', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'versioned-flags-landlet', name: 'Versioned flags landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: flagBuilder.builderId,
+      }),
+    }));
+    await api('/instances', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'versioned-flags-sign',
+        landletId: 'versioned-flags-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+        isCommunitySign: true,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    const saved = await api('/landlets/versioned-flags-landlet/versions', flagBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
+    expect(saved.response.status).toBe(201);
+    const versionId = saved.body.version.versionId;
+
+    const snapshot = await api(`/landlets/versioned-flags-landlet/versions/${versionId}`);
+    expect(snapshot.body.version.instances[0]).toMatchObject({
+      instanceId: 'versioned-flags-sign',
+      isCommunitySign: true,
+      isCommunityCalendar: true,
+    });
+
+    await api(`/landlets/versioned-flags-landlet/versions/${versionId}/activate`, flagBuilder.session({
+      method: 'POST',
+    }));
+    const live = await api('/landlets/versioned-flags-landlet/live');
+    expect(live.body.instances[0]).toMatchObject({
+      instanceId: 'versioned-flags-sign',
+      isCommunitySign: true,
+      isCommunityCalendar: true,
+    });
   });
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
