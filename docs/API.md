@@ -2603,7 +2603,12 @@ outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
 doesn't exist. `POST` additionally requires a matching purchase (see the
-purchase-gating paragraph above) — `400` without one.
+purchase-gating paragraph above) — `400` without one. `DELETE`
+(moderation) requires a session (`401` without one) and is gated to the
+template's own seller once it has one — `403` for anyone else — the same
+`if (existing.seller_id)` ownership check the catalog template's own
+PATCH/DELETE handler uses; a template with no seller stays unrestricted,
+since there's no owner to check against.
 
 ```json
 POST /api/catalog/:templateId/reviews
@@ -2663,8 +2668,10 @@ text was left), stacked the same way sign posts/calendar events are.
 
 `worker/index.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
-rating bounds, optional text, averaged summary, moderation delete,
-independence between two different templates' review lists, cascade delete
+rating bounds, optional text, averaged summary, moderation delete (both an
+unowned template's unrestricted delete and a seller-owned template's
+`401`/`403`/owning-seller-succeeds gate), independence between two
+different templates' review lists, cascade delete
 when the template itself is deleted, and the purchase gate itself — no
 purchase, an anonymous-only purchase, and a real matching purchase
 including the case-insensitive label match — including the `404` for
@@ -3578,17 +3585,48 @@ paper-thin, single-sided geometry doesn't reliably cover the view the way
 a real solid wall would. Real clearance keeps that grazing angle out of
 reach of normal look input.
 
-Shop's horizontal movement is walking, not free flight — the move joystick
-only ever changes `camera.position.x/y`. Height (`camera.position.z`) is a
-separate, deliberately decoupled control: press-and-hold Up/Down buttons
-(`#shop-up-btn`/`#shop-down-btn`, mirroring the joystick's pointer-capture
-pattern but simpler — no drag vector, just a held direction) move the
-camera straight along world Z at `SHOP_VERTICAL_SPEED_M_S`, independent of
-look direction, walk input, or FOV/zoom. Both the walking floor clamp and
-the vertical control share one `clampShopCameraHeight()` helper, so the
-ceiling — `SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M`
-— stays consistent regardless of which input changed height last, and
-tracks the dome's own growth as it rises to clear tall builds.
+## Frontend-only default avatar and third-person walking
+
+Shop mode gives the shopper a visible body (docs/SPEC.md §2's default
+avatar — "a single, standard, deliberately non-gendered avatar assigned
+instantly at registration") instead of a bodiless free-flying camera. No
+modeled-and-rigged character asset exists yet, so `createShopAvatar` in
+`src/main.js` builds a plain placeholder from primitives — capsule torso,
+sphere head, cylinder limbs — rather than loading a GLTF. Reskinning it
+with a real asset later is a `createShopAvatar` rewrite, not a redesign of
+anything below.
+
+Movement is real ground-based walking, not free flight: the move joystick
+changes `shopAvatarPosition` (the avatar's own feet position, clamped to
+the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/2.2
+m/s, docs/SPEC.md §2's confirmed speeds) rather than moving the camera
+directly. There's no separate run input — the joystick's own deflection
+(0..1) doubles as intensity, linearly interpolating between the two
+speeds, so a full push runs and a gentle nudge walks. The same deflection
+drives `updateShopAvatarPose`'s walk-cycle: swing amplitude and cycle speed
+both scale with it and ease back to a neutral standing pose (rather than
+snapping) once the joystick releases.
+
+The camera is no longer the player — it's a third-person rig that orbits a
+fixed `SHOP_CAMERA_FOLLOW_DISTANCE_M` around a point roughly at the
+avatar's own head height (`positionShopCamera`, `SHOP_CAMERA_ANCHOR_HEIGHT_M`),
+subtracting the current look direction from that anchor. Looking down
+swings the camera up and back over the avatar's shoulder; looking up swings
+it down and in toward the avatar's own back — the standard over-the-
+shoulder feel, with no separate collision pass: `clampShopCameraHeight`
+(shared with the avatar's own ground clamp) and the wall-radius clamp
+(`clampShopRadius`, shared between the avatar's position and the camera's)
+still catch the rare look angle that would otherwise dip the camera
+underground or swing it past the world wall.
+
+Flight (docs/SPEC.md §2's double-tap-to-fly, altitude/speed curve, and
+takeoff/landing fades) is deliberately not built yet — this pass is
+ground-only walking/running, the spec's own phase-3 "single-player avatar/
+movement systems" ahead of flight in the phasing order (docs/SPEC.md §9).
+The previous free-fly camera's press-and-hold Up/Down buttons are gone
+along with it, not repurposed — they moved the *camera* straight along
+world Z with no ground-relative meaning once the camera stopped being the
+player.
 
 ## Frontend-only Resize
 
@@ -3923,17 +3961,23 @@ the built-in catalog:
   updates validate `/uploads/` model URLs against live R2 metadata and return
   `400` rather than storing a reference to a missing upload. Built-in `/models/`
   URLs and external catalog URLs are unaffected by this upload-specific check.
-- `GET /api/models` — lists uploaded R2 models without returning their bodies.
+- `GET /api/models` — **admin-only** (`requireAdmin`, `403` for a logged-in
+  non-admin, `401` for no session — same bar as the world/land-candidate
+  tooling above). Lists uploaded R2 models without returning their bodies.
   Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`, `deletable`,
   and sorted `referencedByTemplateIds`. Reference metadata is resolved with one
   bounded D1 query for the R2 page, allowing cleanup tooling to distinguish
   safe deletions without probing each object. Listings use a
   `limit` from 1 to 100, and return the R2-backed opaque `nextCursor` for the
-  next page. This is a dev inventory for finding uploads that can be reclaimed.
-- `GET /api/models/storage` — scans the paginated R2 metadata inventory and
-  reports `usedBytes`, `objectCount`, the application-level `capBytes`,
-  `availableBytes`, and `utilizationRatio`. This exposes the same live storage
-  accounting enforced before uploads, without downloading object bodies.
+  next page. This is a dev inventory for finding uploads that can be
+  reclaimed — not a builder/seller-facing endpoint, so it has no business
+  enumerating every uploaded (including unregistered, in-progress) model to
+  an ordinary session.
+- `GET /api/models/storage` — **admin-only**, same bar as `GET /api/models`
+  above. Scans the paginated R2 metadata inventory and reports `usedBytes`,
+  `objectCount`, the application-level `capBytes`, `availableBytes`, and
+  `utilizationRatio`. This exposes the same live storage accounting enforced
+  before uploads, without downloading object bodies.
 - `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
   (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
   page's catalog references in one D1 query. The response reports
@@ -4146,6 +4190,60 @@ digital-good text was verified manually alongside its price display (see
 "Product pricing" above's own testing note), using the same temporary
 debug-hook technique.
 
+### Shipping
+
+docs/SPEC.md §5: "Dimmed-filter approach: shoppers toggle a filter,
+non-shippable items are dimmed with a label ('ships to United States
+only'), not hidden." "Seller sets shipping cost by destination zone — not
+a fixed 'non-domestic party pays' rule." This is the seller-set data layer
+only — real per-destination-zone shipping *cost*, live 3D-mesh dimming, and
+a shopper-facing filter toggle are all deliberately not built here yet (see
+"Deferred" below).
+
+There is no separate `shipsInternationally` boolean — a catalog template
+ships internationally by default (the spec's own permissive default) and
+is restricted to domestic-only exactly when `metadata.domesticOnly` is
+`true`, the same single-flag-in-metadata simplicity `noReturns` (see
+"Refunds" above) already uses. `assertValidDomesticOnly` (also called from
+inside `validateTemplate`) rejects any non-boolean value with `400`.
+
+A seller opts a product into domestic-only shipping via its own row's
+"Edit Shipping" panel (checkbox + Save, same collapsed-panel idiom as that
+row's "Edit Returns Policy" panel) — `.seller-domestic-only-toggle`/
+`.seller-domestic-only-panel` in `src/main.js`. Unchecking and saving
+deletes the metadata key entirely rather than setting it `false`, the same
+clear-to-absent convention `noReturns` and flooring's own toggle use.
+`#shop-product-info` (see "Product pricing" above) appends "(ships to
+United States only)" in parentheses when the nearest instance is
+domestic-only-flagged — the same tap-to-inspect disclosure treatment as
+the digital-goods disclaimer above.
+
+**Deferred, not built here:** this dev-mode backend has no real shopper
+address/geo data anywhere (no checkout, no payment integration — see
+`AGENTS.md`'s "Real payments ... are still not built"), so there is
+nothing real for a live "does this ship to me" filter to filter against.
+Per-destination-zone shipping *cost* is a checkout-time concern that
+depends on that same missing real-payments integration. And the spec's
+"dimmed" visual treatment (fading a placed item's 3D mesh) has no
+precedent anywhere in this codebase yet — every other seller-set
+disclosure (`noReturns`, `digitalGoodDisclaimer`) surfaces as tap-to-inspect
+text only, not a mesh-level effect. Shipping the underlying seller-set data
+first, with live filtering/dimming as a later enhancement, follows the same
+"honest simplest form first" precedent already used elsewhere in this
+codebase (see "Friend requests" above's own graphical-map deferral).
+
+#### Testing note
+
+`worker/index.test.js`'s "Shipping" describe block covers the non-boolean
+rejection, a valid value round-tripping through `GET`, the absent-defaults-
+to-international case, and clearing one via a full `metadata` replace —
+the same matrix "Prohibited categories and digital goods" above covers for
+`digitalGoodDisclaimer`. No e2e coverage: the Seller-modal panel is
+structurally identical to the already-e2e-covered "Edit Returns Policy"
+panel (same collapsed-panel-with-a-Save-step idiom, same
+`updateCatalogTemplate` call), so a second full browser-driven test of the
+same interaction pattern would be redundant rather than additive.
+
 ## Automated tests
 
 Run the Worker integration suite with:
@@ -4163,5 +4261,9 @@ D1. Test storage does not modify the local development D1 state.
 
 - Extend procedural generation beyond the current bounded annular-ring
   primitive with macro-geography-aware shapes.
-- Add auth/trust/payment/account concepts only after the single-player dev
-  backend is stable; they are intentionally out of scope now.
+- Real payment processing, multiplayer presence, and content moderation
+  remain intentionally dev-only/simulated for now (see this doc's own
+  "Scope and assumptions" above) — real account auth and a real
+  seller/builder identity model, by contrast, are already built and live
+  (migrations 0053-0056; see "Authentication," "Authorization model," and
+  "Builders" above), not out of scope.

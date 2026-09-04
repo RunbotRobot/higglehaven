@@ -182,7 +182,18 @@ describe('Worker API', () => {
     form.set('file', glbFile());
     const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
     const uploaded = await upload.json();
-    const listing = await api('/models?limit=100');
+
+    // Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup
+    // and DELETE /uploads/:key below: no session, and a logged-in-but-
+    // not-admin session, are both rejected before either handler touches
+    // R2 or D1.
+    expect((await api('/models?limit=100')).response.status).toBe(401);
+    expect((await api('/models/storage')).response.status).toBe(401);
+    const nonAdminModels = await signupBuilder('non-admin-model-listing');
+    expect((await api('/models?limit=100', nonAdminModels.session())).response.status).toBe(403);
+    expect((await api('/models/storage', nonAdminModels.session())).response.status).toBe(403);
+
+    const listing = await api('/models?limit=100', adminSession());
     expect(listing.response.status).toBe(200);
     expect(listing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
@@ -191,9 +202,9 @@ describe('Worker API', () => {
       deletable: true,
     }));
     expect(listing.body.nextCursor).toBeNull();
-    expect((await api('/models?limit=101')).response.status).toBe(400);
-    expect((await api('/models?cursor=')).response.status).toBe(400);
-    const storage = await api('/models/storage');
+    expect((await api('/models?limit=101', adminSession())).response.status).toBe(400);
+    expect((await api('/models?cursor=', adminSession())).response.status).toBe(400);
+    const storage = await api('/models/storage', adminSession());
     expect(storage.response.status).toBe(200);
     expect(storage.body).toMatchObject({
       capBytes: 8 * 1024 * 1024 * 1024,
@@ -220,7 +231,7 @@ describe('Worker API', () => {
     expect(invalidUpdate.response.status).toBe(400);
     expect((await api('/catalog/uploaded-delete-test')).body.template.modelUrl).toBe(uploaded.modelUrl);
 
-    const referencedListing = await api('/models');
+    const referencedListing = await api('/models', adminSession());
     expect(referencedListing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
       referencedByTemplateIds: ['uploaded-delete-test'],
@@ -237,9 +248,9 @@ describe('Worker API', () => {
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
-    const afterRemoval = await api('/models');
+    const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
-    const storageAfterRemoval = await api('/models/storage');
+    const storageAfterRemoval = await api('/models/storage', adminSession());
     expect(storageAfterRemoval.body.usedBytes).toBe(storage.body.usedBytes - uploaded.sizeBytes);
     expect(storageAfterRemoval.body.objectCount).toBe(storage.body.objectCount - 1);
 
@@ -2282,6 +2293,43 @@ describe('Product reviews', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
+    const seller = await signupSeller('review-moderation-seller');
+    const otherSeller = await signupSeller('review-moderation-other-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-moderation-owned',
+        name: 'Seller-owned reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const unauthenticated = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const wrongSeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, otherSeller.session({ method: 'DELETE' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listedStillThere = await api(`/catalog/${templateId}/reviews`);
+    expect(listedStillThere.body.reviews).toHaveLength(1);
+
+    const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
@@ -2751,6 +2799,120 @@ describe('Auctions', () => {
   });
 });
 
+// The Auctions tests above exercise notification creation as a side effect
+// (a bid triggers one); these exercise the endpoints themselves — GET's
+// unreadOnly filter and builderId spoof guard, PATCH's mark-read and its
+// ownership/404 checks, and mark-all-read — none of which had direct
+// coverage before.
+describe('Notifications', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  // `suffix` keeps each call's builder usernames and landlet id unique —
+  // signupBuilder's username comes straight from its label argument (no
+  // randomization of its own, unlike its generated email), so two calls
+  // with the same label from different tests would collide on the
+  // uniqueness check the Authentication describe block covers elsewhere.
+  async function seedNotifications(suffix) {
+    const owner = await signupBuilder(`notif-owner-${suffix}`);
+    const bidder = await signupBuilder(`notif-bidder-${suffix}`);
+    const landletId = `notif-landlet-${suffix}`;
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Two bids: the owner is notified of each, giving this describe block
+    // two of its own notifications to read/mark/filter without touching
+    // any other test's data.
+    await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    return { owner, bidder, auctionId: started.body.auction.auctionId };
+  }
+
+  it('lists only the session builder\'s own notifications, newest first', async () => {
+    const { owner, bidder } = await seedNotifications('list');
+    const ownerNotices = await api('/notifications', owner.session());
+    expect(ownerNotices.body.notifications.length).toBeGreaterThanOrEqual(2);
+    expect(ownerNotices.body.notifications.every((n) => n.builderId === owner.builderId)).toBe(true);
+    const [first, second] = ownerNotices.body.notifications;
+    expect(new Date(first.createdAt).getTime()).toBeGreaterThanOrEqual(new Date(second.createdAt).getTime());
+
+    const bidderNotices = await api('/notifications', bidder.session());
+    expect(bidderNotices.body.notifications).toHaveLength(0);
+  });
+
+  it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
+    const { owner, bidder } = await seedNotifications('spoof');
+    const spoofed = await api(`/notifications?builderId=${owner.builderId}`, bidder.session());
+    expect(spoofed.response.status).toBe(403);
+  });
+
+  it('filters to unread-only when requested', async () => {
+    const { owner } = await seedNotifications('unread-filter');
+    const all = await api('/notifications', owner.session());
+    expect(all.body.notifications.length).toBeGreaterThanOrEqual(2);
+    await api(`/notifications/${all.body.notifications[0].notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    const unread = await api('/notifications?unreadOnly=true', owner.session());
+    expect(unread.body.notifications.some((n) => n.notificationId === all.body.notifications[0].notificationId)).toBe(false);
+    expect(unread.body.notifications.length).toBe(all.body.notifications.length - 1);
+  });
+
+  it('marks a single notification read, and 404s a nonexistent one', async () => {
+    const { owner } = await seedNotifications('mark-single');
+    const before = await api('/notifications', owner.session());
+    const target = before.body.notifications[0];
+    expect(target.readAt).toBeNull();
+
+    const patched = await api(`/notifications/${target.notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.notification.readAt).not.toBeNull();
+
+    const missing = await api('/notifications/notification-does-not-exist', owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(missing.response.status).toBe(404);
+  });
+
+  it('rejects marking another builder\'s notification read', async () => {
+    const { owner, bidder } = await seedNotifications('mark-others');
+    const ownerNotices = await api('/notifications', owner.session());
+    const targetId = ownerNotices.body.notifications[0].notificationId;
+    const asBidder = await api(`/notifications/${targetId}`, bidder.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(asBidder.response.status).toBe(403);
+  });
+
+  it('marks only the session builder\'s own unread notifications read via mark-all-read', async () => {
+    const { owner, bidder, auctionId } = await seedNotifications('mark-all');
+    const marked = await api('/notifications/mark-all-read', owner.session({ method: 'POST' }));
+    expect(marked.response.status).toBe(200);
+    expect(marked.body).toEqual({ ok: true });
+
+    const ownerAfter = await api('/notifications?unreadOnly=true', owner.session());
+    expect(ownerAfter.body.notifications).toHaveLength(0);
+
+    // A third bid, notifying the owner again, proves mark-all-read didn't
+    // touch anything belonging to the bidder (who had zero notifications
+    // to begin with) or otherwise break future notifications from firing.
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
+    expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
+  });
+});
+
 describe('Friendships', () => {
   async function claim(landletId, builder) {
     return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
@@ -3024,6 +3186,74 @@ describe('Prohibited categories and digital goods', () => {
     });
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.digitalGoodDisclaimer).toBeUndefined();
+  });
+});
+
+describe('Shipping', () => {
+  it('rejects a non-boolean metadata.domesticOnly', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-bad-domestic-only-template',
+        name: 'Bad domestic-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: 'yes' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/domesticOnly must be a boolean/);
+  });
+
+  it('accepts a valid metadata.domesticOnly and round-trips it through GET', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-template',
+        name: 'US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBe(true);
+
+    const fetched = await api('/catalog/shipping-domestic-only-template');
+    expect(fetched.body.template.metadata.domesticOnly).toBe(true);
+  });
+
+  it('defaults to shipping internationally when metadata.domesticOnly is absent', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-default-template',
+        name: 'Default-shipping product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.domesticOnly).toBeUndefined();
+  });
+
+  it('lets a domestic-only flag be cleared by omitting it from a metadata replace', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'shipping-domestic-only-to-clear',
+        name: 'Temporary US-only product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { domesticOnly: true },
+      }),
+    });
+    const cleared = await api('/catalog/shipping-domestic-only-to-clear', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.domesticOnly).toBeUndefined();
   });
 });
 

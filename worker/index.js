@@ -349,10 +349,10 @@ async function handleApi(request, env, url) {
 
   if (route[0] === 'models' && route.length === 1) {
     if (request.method === 'POST') return handleModelUpload(request, env);
-    if (request.method === 'GET') return handleModelListing(env, url);
+    if (request.method === 'GET') return handleModelListing(request, env, url);
   }
   if (request.method === 'GET' && route[0] === 'models' && route.length === 2 && route[1] === 'storage') {
-    return handleModelStorage(env);
+    return handleModelStorage(request, env);
   }
   if (request.method === 'POST' && route[0] === 'models' && route.length === 2 && route[1] === 'cleanup') {
     return handleModelCleanup(request, env);
@@ -427,7 +427,13 @@ async function handleModelUpload(request, env) {
   }, 201);
 }
 
-async function handleModelListing(env, url) {
+// Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup and
+// DELETE /uploads/:key — this lists every R2 upload (including
+// unregistered, in-progress ones no other builder should be able to
+// enumerate) with its size, etag, and which catalog templates reference
+// it. Not a builder/seller-facing endpoint at all.
+async function handleModelListing(request, env, url) {
+  await requireAdmin(request, env.DB);
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
   const limit = queryLimit(url.searchParams.get('limit'), 100);
   const cursorParam = url.searchParams.get('cursor');
@@ -460,7 +466,11 @@ async function handleModelListing(env, url) {
   });
 }
 
-async function handleModelStorage(env) {
+// Admin-only, same reasoning as handleModelListing above — live storage
+// utilization against the shared cap is operational data, not something a
+// shopper/builder/seller session has any business reading.
+async function handleModelStorage(request, env) {
+  await requireAdmin(request, env.DB);
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
   const usage = await getStorageUsage(env.MODELS);
   return json({
@@ -827,9 +837,11 @@ async function handleCatalog(request, db, route, url, models) {
 // itself), not to any one placed instance of it — see migrations/0048's own
 // comment for why 0047's original instance-level design was wrong. No
 // opt-in flag: every catalog template is already product-like by
-// definition, so every one is reviewable, and no ownership check on DELETE
-// (moderation) — same no-real-auth caveat as every other dev-mode identity
-// in this file.
+// definition, so every one is reviewable. DELETE (moderation) is gated to
+// the template's own seller, same "if (existing.seller_id)" pattern the
+// catalog template's own PATCH/DELETE handler above already uses — a
+// template with no seller stays unrestricted, since there's no owner to
+// check against.
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -887,6 +899,11 @@ async function handleProductReviews(request, db, route) {
     const reviewId = route[3];
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
+    const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (template?.seller_id) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     return json({ deleted: true });
   }
@@ -1348,11 +1365,10 @@ function notificationFromRow(row) {
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
-// pending -> accepted in place. PATCH/DELETE below are both real-account
-// ownership-checked: only the recipient can accept, and only the requester
-// or recipient can delete/decline/cancel — the frontend showing Accept
-// only on the recipient's own incoming requests is a UI convenience on top
-// of that, not the actual enforcement.
+// pending -> accepted in place. PATCH is gated to the recipient (only they
+// can accept) and DELETE to either side (either can end/decline it) — both
+// enforced below via requireSessionBuilder + assertOwner, not left to the
+// frontend to police.
 //
 // "Social map ... approximate location" is deliberately simplified to each
 // accepted friend's owned lándlet center — this app has no live avatar
@@ -4377,6 +4393,23 @@ function assertValidNoReturns(metadata) {
   }
 }
 
+// International shipping (docs/SPEC.md §5: "Dimmed-filter approach:
+// shoppers toggle a filter; non-shippable items are dimmed with a label
+// ('ships to United States only')") — a seller-set flag on the product
+// itself, same single-boolean-in-metadata simplicity as noReturns above.
+// Absent/false means the product ships internationally (the permissive
+// default), so this key is only ever written when a seller actively
+// restricts to domestic shipping. Real per-destination-zone shipping
+// *cost* and a live shopper-facing filter are deliberately not built yet
+// (this dev-stage backend has no real shopper address/geo data to filter
+// against) — see docs/API.md's "Shipping" section.
+function assertValidDomesticOnly(metadata) {
+  if (metadata.domesticOnly === undefined) return;
+  if (typeof metadata.domesticOnly !== 'boolean') {
+    throw new HttpError('metadata.domesticOnly must be a boolean', 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -4399,6 +4432,7 @@ function validateTemplate(input, fallbackId) {
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
+  assertValidDomesticOnly(template.metadata);
   return template;
 }
 

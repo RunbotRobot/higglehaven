@@ -4,10 +4,19 @@ name: CI
 # point is that pushing doesn't block local work on either suite. Two
 # independent jobs (rather than one job running both suites in sequence)
 # so they execute in parallel here too, not just "off your machine."
+#
+# push only, deliberately no separate `pull_request` trigger: every branch
+# here lives in this same repo (no forks), so a `pull_request` event's
+# commit is always one `push` has already tested — with several sessions
+# each pushing to their own branch with an open PR, that meant every
+# commit ran the entire suite twice for no reason, competing for the same
+# limited pool of runner slots. GitHub still shows a PR's mergeability
+# using the push-triggered run's checks — they're tied to the commit SHA,
+# not the event that produced them, confirmed by hand (a PR's check list
+# already included its branch's push-triggered run before this change).
 on:
   push:
     branches: ['**']
-  pull_request:
 
 jobs:
   unit-tests:
