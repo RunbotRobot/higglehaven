@@ -7214,6 +7214,12 @@ window.addEventListener('keydown', (event) => {
   const target = event.target;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
   event.preventDefault(); // stop the page's own default scroll-on-space
+  // OS key-auto-repeat fires further keydowns (no keyup in between) well
+  // inside SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS while the key is held, which
+  // would otherwise read as a rapid double-press and keep re-toggling
+  // flight for as long as spacebar stays down — holding is not the
+  // deliberate double-press this gesture requires.
+  if (event.repeat) return;
   const now = performance.now();
   if (now - shopLastSpacePressAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
     shopLastSpacePressAt = -Infinity;
