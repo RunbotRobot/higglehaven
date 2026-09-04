@@ -1787,6 +1787,24 @@ or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
 `Version N`.
 
+**Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
+`instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
+real `DELETE` only for instance IDs genuinely absent from the new array —
+not a blanket delete-everything-then-reinsert. This matters because
+`sign_posts`/`calendar_events` both cascade-delete on their own
+`instance_id` ("Community signs"/"Community calendar" below): a plain
+delete-all would silently wipe every post and event on the landlet on
+*every* draft save, even for an instance that kept the exact same
+`instanceId` across the save (the common case — a builder nudging an
+existing sign's position, say) and so looked untouched in the response.
+Resending an unchanged `instanceId` now updates that row in place instead,
+leaving its posts/events alone; only actually dropping an `instanceId`
+from the array deletes it (and, correctly, cascades away whatever was
+posted to it). The request's `isCommunitySign`/`isCommunityCalendar` per
+instance are written through on both the insert and the update path — an
+earlier version of this endpoint dropped both back to `false` on every
+save regardless of what a prior `PATCH /api/instances/:id` had set.
+
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
@@ -1852,7 +1870,14 @@ standalone read.
 ### `GET /api/landlets/:landletId/versions/:versionId`
 
 Returns version metadata plus its snapshotted `instances` array. Later edits or
-deletions in the mutable draft do not alter this array.
+deletions in the mutable draft do not alter this array. Each instance's
+`isCommunitySign`/`isCommunityCalendar` are captured in the snapshot too
+(`migrations/0058`, mirroring how `0034`/`0036` carried `crop`/`scale` into
+`version_instances` alongside `placed_instances` — `0041`/`0042` had added
+the two flag columns only to `placed_instances`, so every published/live
+landlet lost its community signs and calendars entirely until this closed
+the gap) — a sign flagged in the draft stays flagged once published, and
+`GET /api/landlets/:landletId/live` (above) reflects it.
 
 ### `POST /api/landlets/:landletId/versions/:versionId/activate`
 

@@ -1035,8 +1035,8 @@ async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -2952,16 +2952,44 @@ async function handleLandletDraft(request, db, landletId) {
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
 
+    // Upsert-by-instance_id, not delete-all/re-insert: sign_posts and
+    // calendar_events both cascade-delete on their own instance_id (see
+    // migrations/0041/0042), so a wholesale delete-then-recreate silently
+    // wiped every post/event on the lándlet on every single draft save,
+    // even though the recreated instance kept the same instance_id and so
+    // *looked* untouched in the UI. Genuinely-removed instances (not
+    // present in the new set) still get a real DELETE below, which is the
+    // one case where losing their posts/events to the cascade is correct.
     await db.batch([
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
       db.prepare(`
-        INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
+        DELETE FROM placed_instances
+        WHERE landlet_id = ?
+          AND instance_id NOT IN (SELECT json_extract(value, '$.instanceId') FROM json_each(?))
+      `).bind(landletId, JSON.stringify(instances)),
+      db.prepare(`
+        INSERT INTO placed_instances
+          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
-          json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale')
+          json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
+          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar')
         FROM json_each(?)
+        -- "WHERE true" is load-bearing, not decorative: SQLite's upsert
+        -- grammar treats a bare "ON" after "INSERT ... SELECT ... FROM"
+        -- as ambiguous with a join's ON clause unless the SELECT has a
+        -- WHERE (see sqlite.org/lang_upsert.html) -- confirmed by hand,
+        -- this statement 400s with "near DO: syntax error" without it.
+        WHERE true
+        ON CONFLICT(instance_id) DO UPDATE SET
+          landlet_id = excluded.landlet_id, template_id = excluded.template_id,
+          x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
+          rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
+          rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
+          scale = excluded.scale, is_community_sign = excluded.is_community_sign,
+          is_community_calendar = excluded.is_community_calendar,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       `).bind(landletId, JSON.stringify(instances)),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
@@ -2974,8 +3002,8 @@ async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
       `).bind(versionId, landletId),
     ]);
@@ -4750,6 +4778,8 @@ function versionInstanceFromRow(row) {
     label: row.label,
     crop: JSON.parse(row.crop_json || '{}'),
     scale: row.scale,
+    isCommunitySign: Boolean(row.is_community_sign),
+    isCommunityCalendar: Boolean(row.is_community_calendar),
   };
 }
 
