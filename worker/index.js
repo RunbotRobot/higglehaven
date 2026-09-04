@@ -1072,10 +1072,15 @@ async function handleBuilders(request, db, route) {
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
     // read, rather than on a schedule — the same pattern this app uses
     // everywhere else. Mutating each row in place with the freshly
-    // recomputed value avoids a second round-trip re-fetch.
-    await Promise.all(results.map(async (row) => {
-      row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
-    }));
+    // recomputed value avoids a second round-trip re-fetch. Batched (2
+    // aggregate queries + a single multi-statement update for whatever
+    // rows actually changed) rather than recomputeLandCap's one-builder
+    // round trip repeated per row — that per-row version is fine for the
+    // single-builder call sites below, but here it turned this endpoint
+    // into an N+1 query (3+ awaited round trips per builder) that gets
+    // linearly slower as the builder count grows, which is exactly what a
+    // "list everyone" endpoint can't afford.
+    await recomputeLandCapsBatch(db, results);
     return json({ builders: results.map(builderFromRow) });
   }
 
@@ -1802,6 +1807,19 @@ const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 // already use, rather than on any kind of schedule — specifically, on
 // every GET of the builder it belongs to, so landCapM2 is always current
 // by the time any caller actually reads it.
+// Pure formula shared by the single-builder and batched recompute paths
+// below — trailing earnings + currently-owned area in, the cap the
+// builder should have right now out, never lower than what they already
+// have (the ratchet).
+function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
+  const normalizedThousands = Math.max(ownedAreaM2, LAND_CAP_STARTER_M2) / 1000;
+  const trailingEarningsDollars = trailingEarningsCents / 100;
+  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
+  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
+  const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
+  return Math.max(currentCapM2, candidateCap);
+}
+
 async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return LAND_CAP_STARTER_M2;
@@ -1813,16 +1831,50 @@ async function recomputeLandCap(db, builderId) {
   const ownedRow = await db.prepare(`
     SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
   `).bind(builderId).first();
-  const normalizedThousands = Math.max(ownedRow.total, LAND_CAP_STARTER_M2) / 1000;
-  const trailingEarningsDollars = earningsRow.total / 100;
-  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
-  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
-  const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
-  const nextCap = Math.max(builder.land_cap_m2, candidateCap);
+  const nextCap = computeNextLandCap(builder.land_cap_m2, earningsRow.total, ownedRow.total);
   if (nextCap !== builder.land_cap_m2) {
     await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
   }
   return nextCap;
+}
+
+// List-endpoint version of the above: instead of the same 2-3 queries
+// repeated once per builder (an N+1 round-trip pattern that made GET
+// /api/builders get linearly slower as the builder count grew), pulls
+// earnings and owned-area totals for every builder in exactly 2 aggregate
+// queries, then applies the identical formula in memory. Mutates each
+// row's land_cap_m2 in place (matching recomputeLandCap's per-row
+// contract) and persists only the rows that actually changed, in a single
+// batched call.
+async function recomputeLandCapsBatch(db, rows) {
+  if (rows.length === 0) return;
+  const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const [earnings, owned] = await Promise.all([
+    db.prepare(`
+      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      WHERE created_at >= ? GROUP BY builder_id
+    `).bind(windowStart).all(),
+    db.prepare(`
+      SELECT owner_builder_id AS builder_id, COALESCE(SUM(area_m2), 0) AS total FROM landlets
+      WHERE owner_builder_id IS NOT NULL AND status = 'claimed' GROUP BY owner_builder_id
+    `).all(),
+  ]);
+  const earningsByBuilder = new Map(earnings.results.map((row) => [row.builder_id, row.total]));
+  const ownedByBuilder = new Map(owned.results.map((row) => [row.builder_id, row.total]));
+
+  const updates = [];
+  for (const row of rows) {
+    const nextCap = computeNextLandCap(
+      row.land_cap_m2,
+      earningsByBuilder.get(row.builder_id) ?? 0,
+      ownedByBuilder.get(row.builder_id) ?? 0,
+    );
+    if (nextCap !== row.land_cap_m2) {
+      row.land_cap_m2 = nextCap;
+      updates.push(db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, row.builder_id));
+    }
+  }
+  if (updates.length > 0) await db.batch(updates);
 }
 
 // Sweeps every active-but-expired auction and resolves each in turn — the
