@@ -151,6 +151,13 @@ endpoint with a different abuse shape: it doesn't send email, but each call
 can burn shared R2 storage headroom, so it's bucketed by client IP alone
 (no per-target email to key on), 20 attempts per 15-minute window.
 
+It also guards `POST /api/instances/:instanceId/purchase` (see "Simulated
+purchases" below), bucketed by client IP alone, 30 attempts per 15-minute
+window — the one other public, repeatable endpoint that credits real state
+(a builder's `dallers_balance_cents`/`daller_earnings_events`, which feeds
+land cap) with no shopper account of any kind to otherwise attribute or
+throttle by.
+
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
 and a free tier generous enough for this stage. Configure it with:
@@ -3193,7 +3200,11 @@ being bought. Returns `201` with the created `purchase`:
 
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
-buy) or the instance sits on an unclaimed lándlet (no builder to credit).
+buy), the instance sits on an unclaimed lándlet (no builder to credit), or
+`quantity` exceeds 1000 (there's no shopper account here to attribute an
+absurd quantity to, so nothing else stops one request from minting an
+arbitrary amount of a builder's commission credit otherwise). `429` past 30
+calls per 15 minutes from one client IP (see "Rate limiting" above).
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own

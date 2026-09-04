@@ -3541,6 +3541,49 @@ describe('Simulated purchases', () => {
     expect(badQuantity.response.status).toBe(400);
   });
 
+  it('rejects a quantity over 1000 — there is no shopper account to attribute an absurd credit to', async () => {
+    const seller = await signupBuilder('purchase-max-qty-seller');
+    await createGreenbeltLandletWithArea('purchase-max-qty-landlet', 1000);
+    await claim('purchase-max-qty-landlet', seller);
+    await createTemplate('purchase-max-qty-template', { priceCents: 1000 });
+    await placeInstance('purchase-max-qty-instance', 'purchase-max-qty-landlet', 'purchase-max-qty-template', seller);
+
+    const atLimit = await api('/instances/purchase-max-qty-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1000 }),
+    });
+    expect(atLimit.response.status).toBe(201);
+
+    const overLimit = await api('/instances/purchase-max-qty-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1001 }),
+    });
+    expect(overLimit.response.status).toBe(400);
+  });
+
+  it('rate-limits repeated purchases from the same client', async () => {
+    // Unauthenticated on purpose (no shopper account exists to check
+    // against), but a successful call credits a real builder balance and
+    // earnings ledger entry, so it gets the same per-client throttle as
+    // signup/password-reset/model-upload. A synthetic cf-connecting-ip
+    // keeps this test's bucket from colliding with every other purchase
+    // test in this file, which otherwise all share the same "unknown" IP
+    // bucket (mirrors the model-upload rate-limit test's own approach).
+    const seller = await signupBuilder('purchase-rate-limit-seller');
+    await createGreenbeltLandletWithArea('purchase-rate-limit-landlet', 1000);
+    await claim('purchase-rate-limit-landlet', seller);
+    await createTemplate('purchase-rate-limit-template', { priceCents: 1000 });
+    await placeInstance('purchase-rate-limit-instance', 'purchase-rate-limit-landlet', 'purchase-rate-limit-template', seller);
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 30; i++) {
+      const attempt = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+    expect(limited.response.status).toBe(429);
+  }, 20000);
+
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
