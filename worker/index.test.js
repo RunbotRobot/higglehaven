@@ -3098,6 +3098,141 @@ describe('Notifications', () => {
   });
 });
 
+describe('Bundles', () => {
+  function bundleBody(overrides = {}) {
+    return {
+      name: 'Starter set',
+      items: [
+        { templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 },
+        { templateId: 'placeholder-tree', dx: 1, dy: 0, dz: 1 },
+      ],
+      ...overrides,
+    };
+  }
+
+  it('creates a bundle owned by the session builder, ignoring any builderId in the body', async () => {
+    const builder = await signupBuilder('bundle-create');
+    const created = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ builderId: 'someone-else' })),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.bundle).toMatchObject({
+      builderId: builder.builderId,
+      name: 'Starter set',
+      shared: false,
+    });
+    expect(created.body.bundle.items).toHaveLength(2);
+    expect(created.body.bundle.createdAt).toBeTruthy();
+  });
+
+  it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
+    const builder = await signupBuilder('bundle-validate');
+    const empty = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ items: [] })),
+    }));
+    expect(empty.response.status).toBe(400);
+
+    const tooMany = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        items: Array.from({ length: 251 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
+      })),
+    }));
+    expect(tooMany.response.status).toBe(400);
+
+    const badTemplate = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({ items: [{ templateId: 'template-does-not-exist', dx: 0, dy: 0, dz: 0 }] })),
+    }));
+    expect(badTemplate.response.status).toBe(400);
+  });
+
+  it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {
+    const owner = await signupBuilder('bundle-list-owner');
+    const other = await signupBuilder('bundle-list-other');
+    await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody({ name: 'Owner bundle' })) }));
+    await api('/bundles', other.session({ method: 'POST', body: JSON.stringify(bundleBody({ name: 'Other bundle' })) }));
+
+    const ownerList = await api('/bundles', owner.session());
+    expect(ownerList.body.bundles.map((b) => b.name)).toEqual(['Owner bundle']);
+
+    const spoofed = await api(`/bundles?builderId=${other.builderId}`, owner.session());
+    expect(spoofed.response.status).toBe(403);
+  });
+
+  it('lists every shared bundle across builders, unauthenticated, without leaking private ones', async () => {
+    const alice = await signupBuilder('bundle-shared-alice');
+    const bob = await signupBuilder('bundle-shared-bob');
+    await api('/bundles', alice.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Alice private', shared: false })),
+    }));
+    const aliceShared = await api('/bundles', alice.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Alice shared', shared: true })),
+    }));
+    const bobShared = await api('/bundles', bob.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'Bob shared', shared: true })),
+    }));
+
+    // No session attached at all — the community tab is intentionally public.
+    const shared = await api('/bundles?shared=true');
+    expect(shared.response.status).toBe(200);
+    const sharedIds = shared.body.bundles.map((b) => b.bundleId);
+    expect(sharedIds).toContain(aliceShared.body.bundle.bundleId);
+    expect(sharedIds).toContain(bobShared.body.bundle.bundleId);
+    expect(shared.body.bundles.every((b) => b.shared === true)).toBe(true);
+
+    // Alice's own private bundle still shows in her private list, alongside
+    // the shared one — sharing doesn't move a bundle out of "my bundles".
+    const aliceOwn = await api('/bundles', alice.session());
+    expect(aliceOwn.body.bundles.map((b) => b.name).sort()).toEqual(['Alice private', 'Alice shared']);
+  });
+
+  it('updates name and shared independently on PATCH, and rejects another builder\'s bundle', async () => {
+    const owner = await signupBuilder('bundle-patch-owner');
+    const other = await signupBuilder('bundle-patch-other');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const renamed = await api(`/bundles/${bundleId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Renamed set' }),
+    }));
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.bundle).toMatchObject({ name: 'Renamed set', shared: false });
+
+    const shared = await api(`/bundles/${bundleId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ shared: true }),
+    }));
+    expect(shared.response.status).toBe(200);
+    // Renaming didn't get clobbered by a share-only PATCH, and vice versa.
+    expect(shared.body.bundle).toMatchObject({ name: 'Renamed set', shared: true });
+
+    const spoofed = await api(`/bundles/${bundleId}`, other.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Hijacked' }),
+    }));
+    expect(spoofed.response.status).toBe(403);
+
+    const missing = await api('/bundles/bundle-does-not-exist', owner.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'Whatever' }),
+    }));
+    expect(missing.response.status).toBe(404);
+  });
+
+  it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
+    const owner = await signupBuilder('bundle-delete-owner');
+    const other = await signupBuilder('bundle-delete-other');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const spoofed = await api(`/bundles/${bundleId}`, other.session({ method: 'DELETE' }));
+    expect(spoofed.response.status).toBe(403);
+
+    const deleted = await api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+    expect((await api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' }))).response.status).toBe(404);
+  });
+});
+
 describe('Friendships', () => {
   async function claim(landletId, builder) {
     return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
