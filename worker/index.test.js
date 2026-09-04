@@ -262,16 +262,25 @@ describe('Worker API', () => {
       deletable: false,
     }));
 
-    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    // Admin-only, same as /api/models/cleanup below: no session, and a
+    // logged-in-but-not-admin session, are both rejected before the
+    // referenced-model check ever runs.
+    const unauthedDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    expect(unauthedDelete.status).toBe(401);
+    const nonAdmin = await signupBuilder('non-admin-model-delete');
+    const nonAdminDelete = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, nonAdmin.session({ method: 'DELETE' }));
+    expect(nonAdminDelete.status).toBe(403);
+
+    const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(referenced.status).toBe(409);
     expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced by a catalog template' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
-    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' });
+    const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
-    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
+    expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }))).status).toBe(404);
     const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
     const storageAfterRemoval = await api('/models/storage', adminSession());
@@ -282,10 +291,18 @@ describe('Worker API', () => {
     orphanForm.set('file', glbFile({ json: '{"orphan":true}' }));
     const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
     const orphan = await orphanUpload.json();
-    const preview = await api('/models/cleanup', {
+
+    // Admin-only: rejected before it ever touches R2, same bar as the
+    // DELETE-a-single-upload endpoint above.
+    expect((await api('/models/cleanup', { method: 'POST', body: JSON.stringify({ maxDeletes: 1 }) })).response.status).toBe(401);
+    expect((await api('/models/cleanup', nonAdmin.session({
+      method: 'POST', body: JSON.stringify({ maxDeletes: 1 }),
+    }))).response.status).toBe(403);
+
+    const preview = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1, dryRun: true }),
-    });
+    }));
     expect(preview.response.status).toBe(200);
     expect(preview.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -295,10 +312,10 @@ describe('Worker API', () => {
       dryRun: true,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
-    const cleanup = await api('/models/cleanup', {
+    const cleanup = await api('/models/cleanup', adminSession({
       method: 'POST',
       body: JSON.stringify({ maxDeletes: 1 }),
-    });
+    }));
     expect(cleanup.response.status).toBe(200);
     expect(cleanup.body).toEqual({
       targetModelUrls: [orphan.modelUrl],
@@ -308,12 +325,12 @@ describe('Worker API', () => {
       dryRun: false,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
-    expect((await api('/models/cleanup', {
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
-    })).response.status).toBe(400);
-    expect((await api('/models/cleanup', {
+    }))).response.status).toBe(400);
+    expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ dryRun: 'yes' }),
-    })).response.status).toBe(400);
+    }))).response.status).toBe(400);
   });
 
   it('rejects invalid uploaded-model paths', async () => {
@@ -736,6 +753,44 @@ describe('Worker API', () => {
     expect((await api('/instances/batch', {
       method: 'DELETE', body: JSON.stringify({ instanceIds: Array.from({ length: 101 }, (_, index) => `delete-${index}`) }),
     })).response.status).toBe(400);
+  });
+
+  it('checks ownership of every distinct landlet in an instance batch, not just one of them', async () => {
+    const ownerBuilder = await signupBuilder('instance-batch-owner');
+    const otherBuilder = await signupBuilder('instance-batch-other');
+    await createGreenbeltLandlet('instance-batch-owned-landlet');
+    await createGreenbeltLandlet('instance-batch-other-landlet');
+    expect((await api('/landlets/instance-batch-owned-landlet/claim', ownerBuilder.session({ method: 'POST' }))).response.status).toBe(200);
+    expect((await api('/landlets/instance-batch-other-landlet/claim', otherBuilder.session({ method: 'POST' }))).response.status).toBe(200);
+
+    const seeded = await api('/instances/batch', ownerBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-owned-seed', landletId: 'instance-batch-owned-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+      ] }),
+    }));
+    expect(seeded.response.status).toBe(201);
+
+    // otherBuilder owns instance-batch-other-landlet but not
+    // instance-batch-owned-landlet — a batch spanning both must be rejected
+    // even though otherBuilder does own one of the two landlets involved.
+    const mixedCreate = await api('/instances/batch', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-other-new', landletId: 'instance-batch-other-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+        { instanceId: 'instance-batch-owned-new', landletId: 'instance-batch-owned-landlet', templateId: 'placeholder-chair', x: 0, y: 0 },
+      ] }),
+    }));
+    expect(mixedCreate.response.status).toBe(403);
+    expect((await api('/instances/instance-batch-other-new')).response.status).toBe(404);
+    expect((await api('/instances/instance-batch-owned-new')).response.status).toBe(404);
+
+    const mixedDelete = await api('/instances/batch', otherBuilder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['instance-batch-owned-seed'] }),
+    }));
+    expect(mixedDelete.response.status).toBe(403);
+    expect((await api('/instances/instance-batch-owned-seed')).response.status).toBe(200);
   });
 
   it('claims an available greenbelt landlet', async () => {
@@ -2825,6 +2880,60 @@ describe('Auctions', () => {
     expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
     expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
   });
+
+  it('caps how many due auctions one GET /auctions call resolves, making forward progress across repeated calls', async () => {
+    // Regression test for AUCTION_SWEEP_LIMIT: resolveDueAuctions used to
+    // sweep and resolve every active-but-expired auction unconditionally,
+    // so a burst of simultaneously-expiring auctions would force one
+    // public, unauthenticated GET into an unbounded chain of sequential
+    // writes. Seeded directly via the DB (not through claim/start-auction,
+    // which limit one builder to one claimed landlet) — cheap, exact, and
+    // avoids needing AUCTION_SWEEP_LIMIT+ real signups just to prove a
+    // bounded sweep. The landlets are left unowned (owner_builder_id NULL)
+    // — migrations/0006's "one claimed landlet per builder" unique index
+    // only applies once a landlet actually has an owner, and
+    // resolveAuction's no-bid path (starting_bid_cents = 0, no bids) never
+    // reads landlets.owner_builder_id, only auction.seller_builder_id.
+    const seller = await signupBuilder('sweep-cap-seller');
+    const total = 27; // > AUCTION_SWEEP_LIMIT (25), so one call can't clear it all
+    const inserts = [];
+    for (let i = 0; i < total; i++) {
+      const landletId = `sweep-cap-landlet-${i}`;
+      const auctionId = `sweep-cap-auction-${i}`;
+      inserts.push(
+        env.DB.prepare(`
+          INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, 'claimed')
+        `).bind(landletId, `Sweep cap ${i}`),
+        env.DB.prepare(`
+          INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+          VALUES (?, ?, ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+        `).bind(auctionId, landletId, seller.builderId),
+      );
+    }
+    await env.DB.batch(inserts);
+
+    const dueBefore = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    expect(dueBefore.count).toBe(total);
+
+    await api('/auctions?status=active');
+    const dueAfterFirstCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // Some, but not all, resolved — proves the sweep is bounded rather than
+    // exhaustive.
+    expect(dueAfterFirstCall.count).toBeGreaterThan(0);
+    expect(dueAfterFirstCall.count).toBeLessThan(total);
+
+    await api('/auctions?status=active');
+    const dueAfterSecondCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // A second call clears the rest of the backlog rather than getting
+    // stuck resolving the same subset forever.
+    expect(dueAfterSecondCall.count).toBe(0);
+  });
 });
 
 // The Auctions tests above exercise notification creation as a side effect
@@ -3609,15 +3718,42 @@ describe('Simulated purchases', () => {
     expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
 
     const before = await builderRow(seller.builderId);
-    const refunded = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    // This template has no sellerId (createTemplate's own default), so the
+    // refund falls to the admin fallback rather than seller ownership —
+    // see the "requires admin" test below for that path in isolation.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
     const after = await builderRow(seller.builderId);
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
-    const secondRefund = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+  });
+
+  it('rejects refunding a purchase with no seller without an admin session', async () => {
+    const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
+    await claim('purchase-refund-no-seller-auth-landlet', seller);
+    await createTemplate('purchase-refund-no-seller-auth-template', { priceCents: 5000 });
+    await placeInstance('purchase-refund-no-seller-auth-instance', 'purchase-refund-no-seller-auth-landlet', 'purchase-refund-no-seller-auth-template', seller);
+
+    const purchased = await api('/instances/purchase-refund-no-seller-auth-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const noSession = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+
+    // A real, logged-in, non-admin session isn't enough either — this
+    // isn't "any authenticated user," it's specifically admin.
+    const nonAdmin = await signupBuilder('purchase-refund-no-seller-auth-nonadmin');
+    const wrongSession = await api(`/purchases/${purchaseId}/refund`, nonAdmin.session({ method: 'POST' }));
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
@@ -3632,7 +3768,7 @@ describe('Simulated purchases', () => {
     // to have clawed back, so the refund must push it negative.
     await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
-    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
     expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
@@ -3645,7 +3781,7 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template', seller);
 
     const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
-    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, { method: 'POST' });
+    const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
 

@@ -3277,8 +3277,12 @@ side-effect a purchase has: the builder's commission credit.
 
 `POST /api/purchases/:purchaseId/refund` (`migrations/0052_purchase_refunds.sql`)
 requires a session logged in as the purchase's own `sellerId`, if it has
-one (`403` otherwise — a purchase of a seller-less template stays open,
-matching the same rule as the `GET` above). Marks a purchase refunded and
+one (`403` otherwise). A purchase of a seller-less template (an
+admin/system-owned catalog item can still be priced) does **not** stay
+open the way the `GET` above does — unlike a read, a refund claws back
+real dállers from a builder's balance, so it falls back to requiring an
+admin session instead (`401`/`403`), never no check at all. Marks a
+purchase refunded and
 deducts exactly `builderShareCents` (not the
 full sale total — that was never the builder's money) from
 `builders.dallers_balance_cents`. **No floor** — this can and deliberately
@@ -3314,7 +3318,9 @@ platform-controlled-key simplicity as digital goods' disclaimer) —
 
 `worker/index.test.js`'s "Simulated purchases" describe block covers the
 refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
-negative-balance case, and the `templateId` listing filter.
+negative-balance case, the `templateId` listing filter, and — for a
+seller-less purchase specifically — that refunding it is rejected with no
+session or a non-admin session and only succeeds with one.
 `e2e/purchase-refunds.test.mjs` covers the Sales panel's refund button and
 the Edit Returns Policy panel through the real UI — the no-returns
 *rejection* path isn't covered there for the same reason prohibited-content
@@ -3642,6 +3648,21 @@ The previous free-fly camera's press-and-hold Up/Down buttons are gone
 along with it, not repurposed — they moved the *camera* straight along
 world Z with no ground-relative meaning once the camera stopped being the
 player.
+
+Idle animation (docs/SPEC.md §2: "context-aware idle state machine (sit,
+lean, stand) after inactivity, with randomization") — `updateShopAvatarIdle`
+covers "stand" only: after `SHOP_IDLE_DELAY_S` with no move-joystick input,
+a subtle whole-body weight-shift sway (`shopIdleSwayYawOffset`, added on top
+of `shopYaw` when the avatar's own facing is set) plus an occasional head
+turn (`headPivot.rotation.z`, its own pivot separate from the body so it can
+turn independently) ease in. Both the sway period and the head-turn
+target/interval are re-rolled at the end of their own cycle rather than
+shared or fixed, so idle motion never repeats identically. Ends the instant
+real movement resumes — a hard cut (`shopIdleBlend` snaps to 0), not an
+ease-out, since a lingering sway would read as the avatar fighting the
+player's own input. "Sit"/"lean" are still open — both need a real
+interaction-target concept (e.g. a chair prop with an occupancy slot) that
+doesn't exist yet.
 
 ## Frontend-only Resize
 
@@ -3982,22 +4003,24 @@ the built-in catalog:
   URLs and external catalog URLs are unaffected by this upload-specific check.
 - `GET /api/models` — **admin-only** (`requireAdmin`, `403` for a logged-in
   non-admin, `401` for no session — same bar as the world/land-candidate
-  tooling above). Lists uploaded R2 models without returning their bodies.
-  Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`, `deletable`,
-  and sorted `referencedByTemplateIds`. Reference metadata is resolved with one
-  bounded D1 query for the R2 page, allowing cleanup tooling to distinguish
-  safe deletions without probing each object. Listings use a
-  `limit` from 1 to 100, and return the R2-backed opaque `nextCursor` for the
-  next page. This is a dev inventory for finding uploads that can be
-  reclaimed — not a builder/seller-facing endpoint, so it has no business
+  tooling above). Not a builder/seller-facing endpoint, so it has no business
   enumerating every uploaded (including unregistered, in-progress) model to
-  an ordinary session.
+  an ordinary session. Lists uploaded R2 models without returning their
+  bodies. Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`,
+  `deletable`, and sorted `referencedByTemplateIds`. Reference metadata is
+  resolved with one bounded D1 query for the R2 page, allowing cleanup
+  tooling to distinguish safe deletions without probing each object.
+  Listings use a `limit` from 1 to 100, and return the R2-backed opaque
+  `nextCursor` for the next page. This is a dev inventory for finding
+  uploads that can be reclaimed.
 - `GET /api/models/storage` — **admin-only**, same bar as `GET /api/models`
   above. Scans the paginated R2 metadata inventory and reports `usedBytes`,
   `objectCount`, the application-level `capBytes`, `availableBytes`, and
   `utilizationRatio`. This exposes the same live storage accounting enforced
   before uploads, without downloading object bodies.
-- `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
+- `POST /api/models/cleanup` — **admin-only** (`requireAdmin`, `403` for a
+  logged-in non-admin, `401` for no session — same bar as the world/land-
+  candidate tooling above). Deletes up to `maxDeletes` unreferenced uploads
   (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
   page's catalog references in one D1 query. The response reports
   `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
@@ -4011,10 +4034,14 @@ the built-in catalog:
   keys are never reused. `HEAD` is also supported for metadata-only checks, and
   matching `If-None-Match` requests receive `304 Not Modified`. Other methods
   receive `405 Method Not Allowed`.
-- `DELETE /uploads/:key` — removes an unreferenced upload from R2 so dev model
-  iterations do not permanently consume the application storage allowance.
-  Uploads still referenced by a catalog template return `409`; delete the
-  catalog template first. Missing uploads return `404`.
+- `DELETE /uploads/:key` — **admin-only**, same as `POST /api/models/cleanup`
+  above (checked before the referenced-model check below, so an unreferenced
+  upload still isn't deletable by its own uploader). Removes an unreferenced
+  upload from R2 so dev model iterations do not permanently consume the
+  application storage allowance. Uploads still referenced by a catalog
+  template return `409`; delete the catalog template first. Missing uploads
+  return `404`. `GET`/`HEAD` above stay unauthenticated — serving an
+  immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 

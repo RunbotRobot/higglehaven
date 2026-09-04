@@ -244,6 +244,12 @@ async function handleUploadedAsset(request, env) {
 
   if (request.method === 'DELETE') {
     if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500);
+    // Same admin-only bar as /api/models/cleanup below (and every other
+    // maintenance-tooling endpoint gated by requireAdmin) — deleting an R2
+    // object outright, unlike every other mutating endpoint in this file,
+    // has no owning builder/seller to check against, so "logged in" alone
+    // isn't a meaningful bar here.
+    await requireAdmin(request, env.DB);
     const modelUrl = `/uploads/${key}`;
     const referenced = await env.DB.prepare(`
       SELECT template_id FROM catalog_templates WHERE model_url = ? LIMIT 1
@@ -491,6 +497,14 @@ async function handleModelStorage(request, env) {
 
 async function handleModelCleanup(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  // Admin-only: this bulk-deletes any unreferenced upload in the shared R2
+  // bucket, including another builder's in-progress upload that just
+  // hasn't been registered via POST /api/catalog yet (the two are
+  // deliberately independent steps — see handleModelUpload's own comment).
+  // Same bar as the world/land-candidate tooling above. (handleApi already
+  // guarantees env.DB is configured before routing here, unlike
+  // handleUploadedAsset below, which sits outside handleApi entirely.)
+  await requireAdmin(request, env.DB);
   const input = await readJson(request);
   const maxDeletes = positiveInteger(input.maxDeletes ?? 100, 'maxDeletes');
   if (maxDeletes > 100) throw new HttpError('maxDeletes must be at most 100', 400);
@@ -1070,6 +1084,24 @@ async function requireOwnedLandlet(db, landletId, builderId) {
   const landlet = await requireLandlet(db, landletId);
   assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
   return landlet;
+}
+
+// Batched sibling to requireOwnedLandlet, for the /instances/batch endpoints
+// below where a single request can touch many distinct landlets — checks
+// every id with one IN (...) query instead of one round trip per landlet
+// (mirrors the assertReferencesExist idiom used elsewhere in this file).
+async function requireOwnedLandlets(db, landletIds, builderId) {
+  const uniqueIds = [...new Set(landletIds)];
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
+  ).bind(...uniqueIds).all();
+  const byId = new Map(results.map((row) => [row.landlet_id, row]));
+  for (const landletId of uniqueIds) {
+    const landlet = byId.get(landletId);
+    if (!landlet) throw new HttpError('Landlet not found', 404);
+    assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
+  }
 }
 
 async function getVersion(db, landletId, versionId) {
@@ -1903,9 +1935,19 @@ async function recomputeLandCapsBatch(db, rows) {
   if (updates.length > 0) await db.batch(updates);
 }
 
-// Sweeps every active-but-expired auction and resolves each in turn — the
-// closest this dev-mode backend gets to a real scheduled job (see
-// docs/API.md's own note on why: no Cron Trigger is wired up, so
+// Caps how many auctions a single GET /api/auctions call will resolve —
+// without it, a burst of auctions all becoming due around the same time
+// (e.g. many started with the same default 24h duration) would force one
+// ordinary, public, unauthenticated page view into an unbounded chain of
+// sequential resolveAuction writes, each its own SELECT + several-statement
+// db.batch. ORDER BY ends_at means each call clears the oldest-due backlog
+// first and always makes forward progress, so a large backlog still fully
+// resolves over a few calls instead of ever blocking one call indefinitely.
+const AUCTION_SWEEP_LIMIT = 25;
+
+// Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
+// each in turn — the closest this dev-mode backend gets to a real scheduled
+// job (see docs/API.md's own note on why: no Cron Trigger is wired up, so
 // resolution is purely lazy, triggered by whatever request happens to
 // touch auctions next). Called at the top of the list endpoint so a
 // shopper browsing auctions always sees current state without needing to
@@ -1913,7 +1955,8 @@ async function recomputeLandCapsBatch(db, rows) {
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
     SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).all();
+    ORDER BY ends_at LIMIT ?
+  `).bind(AUCTION_SWEEP_LIMIT).all();
   for (const row of results) await resolveAuction(db, row);
 }
 
@@ -3716,9 +3759,7 @@ async function handleInstances(request, db, route, url) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
     }
     const sessionBuilder = await requireSessionBuilder(request, db);
-    for (const landletId of new Set(results.map((row) => row.landlet_id))) {
-      await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
-    }
+    await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     await db.batch(instanceIds.map((instanceId) => db.prepare(
       'DELETE FROM placed_instances WHERE instance_id = ?',
     ).bind(instanceId)));
@@ -3742,9 +3783,7 @@ async function handleInstances(request, db, route, url) {
     const existingInstances = await getInstancesById(db, instanceIds);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
-    for (const landletId of landletIdsToCheck) {
-      await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
-    }
+    await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(instance_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, template_id = excluded.template_id,
@@ -4182,9 +4221,19 @@ async function handlePurchases(request, db, route, url) {
 async function handlePurchaseRefund(request, db, purchaseId) {
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  // A purchase's seller_id can genuinely be null — catalog templates don't
+  // require a sellerId at creation (an admin/system-owned placeholder
+  // item can still be priced and purchased). That's fine for creating one,
+  // but a refund actually claws back real dállers from a builder's
+  // balance, so it can never fall through to "no owner, no check" the way
+  // read-only/creation paths on ownerless resources do elsewhere — it
+  // needs admin instead, the same fallback used for the other genuinely
+  // ownerless-but-sensitive mutations (see requireAdmin's other callers).
   if (purchase.seller_id) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  } else {
+    await requireAdmin(request, db);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
