@@ -2800,6 +2800,22 @@ async function handleLandlets(request, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const landlet = validateLandlet(input, crypto.randomUUID());
+    // Unowned (greenbelt/generating) creation stays unauthenticated — the
+    // same "world-generation/admin housekeeping" territory the PUT/PATCH
+    // handler below already documents. A caller-supplied owner is a
+    // different story: without this check, anyone could fabricate an
+    // already-claimed landlet (any polygon, any location) under any
+    // builder's id from the request body alone, bypassing every invariant
+    // POST .../claim enforces (available-greenbelt-only, one claimed
+    // landlet per builder, pioneer-rank bookkeeping) — the exact vector
+    // PUT/PATCH's own comment below describes closing, just never applied
+    // to this creation path too. Creating a landlet already claimed by
+    // *yourself* is still allowed (existing test/dev-tooling usage relies
+    // on it), only ever as the session's own builder.
+    if (landlet.ownerBuilderId !== null) {
+      const sessionBuilder = await requireSessionBuilder(request, db);
+      assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+    }
     await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
@@ -2815,14 +2831,15 @@ async function handleLandlets(request, db, route, url) {
     // Unowned (greenbelt/generating) landlets stay unauthenticated —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
-    // applies yet" territory as POST /api/landlets itself and the
-    // land-candidates/world endpoints. An *owned* landlet is a different
-    // story: only its own builder may touch it, and — regardless of who's
-    // asking — ownership itself can never change through this endpoint.
-    // A full PUT/PATCH that could freely set `ownerBuilderId` was a real
-    // "claim any landlet, bypass every invariant POST .../claim enforces"
-    // vector with no login required at all; ownership transfer only ever
-    // happens through that dedicated, invariant-checked endpoint now.
+    // applies yet" territory as unowned creation via POST /api/landlets
+    // itself (see that handler's own comment) and the land-candidates/
+    // world endpoints. An *owned* landlet is a different story: only its
+    // own builder may touch it, and — regardless of who's asking —
+    // ownership itself can never change through this endpoint. A full
+    // PUT/PATCH that could freely set `ownerBuilderId` was a real "claim
+    // any landlet, bypass every invariant POST .../claim enforces" vector
+    // with no login required at all; ownership transfer only ever happens
+    // through that dedicated, invariant-checked endpoint now.
     if (existing.owner_builder_id !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
