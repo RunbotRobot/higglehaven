@@ -114,15 +114,6 @@ export async function fetchMyBuilder() {
   return builder;
 }
 
-export async function createBuilder(label, builderId) {
-  const { builder } = await requestJson('/builders', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(builderId ? { label, builderId } : { label }),
-  });
-  return builder;
-}
-
 export async function renameBuilder(builderId, label) {
   const { builder } = await requestJson(`/builders/${encodeURIComponent(builderId)}`, {
     method: 'PATCH',
@@ -140,28 +131,11 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
-// A separate roster from builders (see docs/API.md's "Sellers" section) —
-// catalog_templates.seller_id references these, not a builder's ID. Same
-// shared, cross-device, no-real-auth shape as builders above.
-export async function fetchSellers() {
-  const { sellers } = await requestJson('/sellers');
-  return sellers;
-}
-
 // The logged-in account's own seller profile — see fetchMyBuilder's own
 // comment; the one difference is this is lazily created on first call
 // (selling is opt-in), not guaranteed to already exist from signup.
 export async function fetchMySeller() {
   const { seller } = await requestJson('/sellers/me');
-  return seller;
-}
-
-export async function createSeller(label) {
-  const { seller } = await requestJson('/sellers', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label }),
-  });
   return seller;
 }
 
@@ -172,14 +146,6 @@ export async function renameSeller(sellerId, label) {
     body: JSON.stringify({ label }),
   });
   return seller;
-}
-
-// A seller owns no land, so unlike deleteBuilder there's no owned-land
-// release to report back — existing templates just keep whatever
-// seller_id they already had, the same as one that was never in the
-// roster at all.
-export async function deleteSeller(sellerId) {
-  await requestJson(`/sellers/${encodeURIComponent(sellerId)}`, { method: 'DELETE' });
 }
 
 // Pages through every instance on a landlet rather than returning just the
@@ -248,44 +214,6 @@ export async function claimLandlet(landletId) {
     method: 'POST',
   });
   return landlet;
-}
-
-// Grows the world circle by one configured increment, promoting any
-// generation-complete landlets it now fully encloses to greenbelt. Throws
-// (409, surfaced as a normal Error) if the greenbelt reserve is already at
-// or above the configured minimum ratio.
-export async function expandWorld() {
-  const { world } = await requestJson('/world/expand', { method: 'POST' });
-  return world;
-}
-
-// Procedurally creates one gap-free band of wedge-shaped land candidates —
-// see docs/API.md's "POST /api/land-candidates/generate-ring". Candidates
-// whose inner edge already touches the current world boundary (the default
-// when innerRadiusM is omitted) materialize immediately as 'generating'
-// landlets; they still need completeRingGeneration + enough expandWorld()
-// calls before they can become claimable.
-export async function generateLandRing(params) {
-  return requestJson('/land-candidates/generate-ring', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-}
-
-export async function fetchLandCandidateRing(ringId) {
-  const { ring } = await requestJson(`/land-candidate-rings/${encodeURIComponent(ringId)}`);
-  return ring;
-}
-
-// Marks every (already-materialized) landlet in a generated ring as
-// generation-complete, making it eligible to promote to greenbelt the next
-// time the world encloses it. Throws if any ring member hasn't materialized
-// yet — see generateLandRing's doc comment.
-export async function completeRingGeneration(ringId) {
-  return requestJson(`/land-candidate-rings/${encodeURIComponent(ringId)}/generation-complete`, {
-    method: 'POST',
-  });
 }
 
 export async function createInstanceRemote(instance) {
