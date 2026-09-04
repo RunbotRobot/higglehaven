@@ -4342,14 +4342,24 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  await db.batch([
+  // builder_id can be null (migrations/0062 — SET NULL on the host
+  // builder's account deletion, not CASCADE, so this purchase's own record
+  // survives). Nothing to claw a balance back from in that case, and
+  // notifications.builder_id is itself NOT NULL, so skip both statements
+  // rather than crediting/notifying a builder that no longer exists.
+  const statements = [
     db.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
       .bind(purchaseId),
-    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
-      .bind(purchase.builder_share_cents, purchase.builder_id),
-    notificationStatement(db, purchase.builder_id,
-      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-  ]);
+  ];
+  if (purchase.builder_id) {
+    statements.push(
+      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
+        .bind(purchase.builder_share_cents, purchase.builder_id),
+      notificationStatement(db, purchase.builder_id,
+        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
+    );
+  }
+  await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row) });

@@ -4185,6 +4185,36 @@ describe('Simulated purchases', () => {
     expect(secondRefund.response.status).toBe(400);
   });
 
+  it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
+    const seller = await signupBuilder('purchase-builder-deleted-seller');
+    await createGreenbeltLandletWithArea('purchase-builder-deleted-landlet', 1000);
+    await claim('purchase-builder-deleted-landlet', seller);
+    await createTemplate('purchase-builder-deleted-template', { priceCents: 4000 });
+    await placeInstance('purchase-builder-deleted-instance', 'purchase-builder-deleted-landlet', 'purchase-builder-deleted-template', seller);
+
+    const purchased = await api('/instances/purchase-builder-deleted-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    // migrations/0051's own header comment states purchases are "a
+    // permanent historical receipt" — this is the case that used to
+    // violate that: an unrelated action (the hosting builder deleting
+    // their own account) used to cascade-delete this row outright
+    // (migrations/0062 switched builder_id to SET NULL instead).
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const listing = await api(`/purchases?templateId=purchase-builder-deleted-template`);
+    expect(listing.response.status).toBe(200);
+    expect(listing.body.purchases).toContainEqual(expect.objectContaining({ purchaseId, builderId: null }));
+
+    // No seller on this template, so the admin fallback applies (same as
+    // the "no seller" refund test below) — and the null builderId must
+    // not crash the balance-clawback/notification step.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
+  });
+
   it('rejects refunding a purchase with no seller without an admin session', async () => {
     const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
     await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
