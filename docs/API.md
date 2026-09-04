@@ -1647,9 +1647,12 @@ endpoint.
 The claim is a conditional database update: the landlet must still have
 `status: "greenbelt"`, must have no owner, and the builder must not already own
 a claimed landlet. This preserves the MVP rule that each builder can claim one
-free starter landlet even when two requests arrive close together. A partial
-unique D1 index also enforces this ownership rule for writes made through other
-dev tooling.
+free *starter* landlet even when two requests arrive close together — it's
+purely an application-level check now (migration 0058 dropped the partial
+unique D1 index that used to enforce it for every write path), because a
+builder legitimately ends up owning more than one claimed landlet once they
+win a land-acquisition auction (docs/SPEC.md §0/§5) on top of their starter
+one, and the DB-level version blocked that too.
 
 Returns the newly claimed landlet. Errors are:
 

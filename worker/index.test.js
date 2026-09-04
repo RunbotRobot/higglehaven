@@ -2712,6 +2712,38 @@ describe('Auctions', () => {
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
   });
 
+  it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
+    const owner = await signupBuilder('resolve-existing-owner-owner');
+    const bidder = await signupBuilder('resolve-existing-owner-bidder');
+    await createGreenbeltLandlet('auction-bidder-own-landlet');
+    await claim('auction-bidder-own-landlet', bidder);
+    await createGreenbeltLandlet('auction-resolve-existing-owner-landlet');
+    await claim('auction-resolve-existing-owner-landlet', owner);
+    const started = await api('/landlets/auction-resolve-existing-owner-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // GET /api/auctions resolves due auctions before listing (resolveDueAuctions)
+    // — this is the exact path that used to 409 for everyone once a single
+    // stuck auction like this one hit the UNIQUE constraint.
+    const list = await api('/auctions');
+    expect(list.response.status).toBe(200);
+
+    const landlet = await api('/landlets/auction-resolve-existing-owner-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(landlet.body.landlet.status).toBe('claimed');
+
+    // The bidder's own earlier landlet is untouched — they now own both.
+    const stillOwned = await api('/landlets/auction-bidder-own-landlet');
+    expect(stillOwned.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(stillOwned.body.landlet.status).toBe('claimed');
+  });
+
   it('rejects resolving an auction that is not due yet', async () => {
     const owner = await signupBuilder('not-due-owner');
     await createGreenbeltLandlet('auction-not-due-landlet');
