@@ -1832,6 +1832,54 @@ describe('Worker API', () => {
       `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
     ).run();
   }, 15000);
+
+  it('scheduled() sweeps expired sessions, verification/reset tokens, and stale rate-limit rows', async () => {
+    // Two separate accounts so the sweep's selectivity is actually proven —
+    // only the expired one's session should disappear, not every session in
+    // the table (which would also silently log out the file's shared
+    // adminSession and every other builder created so far).
+    const expired = await signupBuilder('prune-sweep-expired');
+    const stillValid = await signupBuilder('prune-sweep-valid');
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE sessions SET expires_at = '2000-01-01T00:00:00.000Z'
+         WHERE user_id = (SELECT user_id FROM users WHERE email = ?)`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO email_verification_tokens (token_hash, user_id, expires_at)
+         SELECT 'prune-sweep-expired-verification', user_id, '2000-01-01T00:00:00.000Z'
+         FROM users WHERE email = ?`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+         SELECT 'prune-sweep-expired-reset', user_id, '2000-01-01T00:00:00.000Z'
+         FROM users WHERE email = ?`,
+      ).bind(expired.email),
+      env.DB.prepare(
+        `INSERT INTO rate_limit_events (bucket_key, created_at) VALUES ('prune-sweep-stale-bucket', 1)`,
+      ),
+    ]);
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM sessions WHERE user_id = (SELECT user_id FROM users WHERE email = ?)`,
+    ).bind(expired.email).first()).count).toBe(0);
+    expect((await api('/builders/me', stillValid.session())).response.status).toBe(200);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM email_verification_tokens WHERE token_hash = 'prune-sweep-expired-verification'`,
+    ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM password_reset_tokens WHERE token_hash = 'prune-sweep-expired-reset'`,
+    ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM rate_limit_events WHERE bucket_key = 'prune-sweep-stale-bucket'`,
+    ).first()).count).toBe(0);
+  });
 });
 
 describe('Community signs', () => {
