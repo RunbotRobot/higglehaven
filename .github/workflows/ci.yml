@@ -83,4 +83,22 @@ jobs:
       - run: |
           echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
           echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
-      - run: node e2e/run-all.mjs ${{ matrix.file }}
+      # Retries once on failure. Confirmed (via captured wrangler dev
+      # server output — see e2e/run-all.mjs's own comment on that capture)
+      # that occasional failures here are GitHub's shared runners
+      # themselves stalling under load: a request that normally takes
+      # 10-70ms takes 400-1500ms, sometimes crossing into workerd's own
+      # internal error and a dead connection for everything after. Real
+      # bugs this suite has caught (a real regression, a genuine test
+      # race) have always reproduced identically on retry; this transient
+      # class hasn't reproduced once when simply run again.
+      - run: |
+          for attempt in 1 2; do
+            if node e2e/run-all.mjs ${{ matrix.file }}; then
+              exit 0
+            fi
+            echo "Attempt $attempt of ${{ matrix.file }} failed — retrying after a short pause in case it was runner-load-related..." >&2
+            sleep 10
+          done
+          echo "${{ matrix.file }} failed twice — treating as a real failure, not a transient one." >&2
+          exit 1
