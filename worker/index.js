@@ -4131,6 +4131,14 @@ async function handleInstancePurchase(request, db, instanceId) {
 
 async function finishPurchase(db, instance, template, landlet, input) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
+  // Capped as a sanity bound against a malformed/abusive request producing
+  // an absurd totalCents (and the dállers-balance/land-cap credit that
+  // flows from it) — not itself a spec requirement, same reasoning as
+  // durationHours' cap above. This endpoint has no session/rate limit
+  // (see docs/API.md's "Simulated purchases" — deliberately unauthenticated,
+  // there's no real payment backing it), so quantity was the only thing
+  // standing between one request and an unbounded credit.
+  if (quantity > 1000) throw new HttpError('quantity must be 1000 or fewer', 400);
   const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;
