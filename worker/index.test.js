@@ -164,6 +164,30 @@ describe('Worker API', () => {
     expect(rejected.headers.get('allow')).toBe('GET, HEAD, DELETE');
   });
 
+  it('rate-limits repeated model uploads from the same client', async () => {
+    // POST /api/models is unauthenticated on purpose (see the removed-URL-
+    // import comment in handleModelUpload), but each call can burn shared
+    // R2 storage headroom, so it gets the same per-client throttle as
+    // signup/password-reset. A synthetic cf-connecting-ip keeps this
+    // test's bucket from colliding with every other model-upload test in
+    // this file, which otherwise all share the same "unknown" IP bucket
+    // (mirrors how the signup rate-limit test uses a unique email instead).
+    // 20 succeed (as either a fresh 201 or a deduplicated 200 — both still
+    // count against the limit); the 21st is rejected before it ever
+    // touches R2.
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const form = new FormData();
+      form.set('file', glbFile());
+      const attempt = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+      expect(attempt.status).not.toBe(429);
+    }
+    const form = new FormData();
+    form.set('file', glbFile());
+    const limited = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+    expect(limited.status).toBe(429);
+  });
+
   it('deletes only unreferenced uploaded models', async () => {
     const missingModel = await api('/catalog', {
       method: 'POST',
@@ -182,7 +206,18 @@ describe('Worker API', () => {
     form.set('file', glbFile());
     const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
     const uploaded = await upload.json();
-    const listing = await api('/models?limit=100');
+
+    // Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup
+    // and DELETE /uploads/:key below: no session, and a logged-in-but-
+    // not-admin session, are both rejected before either handler touches
+    // R2 or D1.
+    expect((await api('/models?limit=100')).response.status).toBe(401);
+    expect((await api('/models/storage')).response.status).toBe(401);
+    const nonAdminModels = await signupBuilder('non-admin-model-listing');
+    expect((await api('/models?limit=100', nonAdminModels.session())).response.status).toBe(403);
+    expect((await api('/models/storage', nonAdminModels.session())).response.status).toBe(403);
+
+    const listing = await api('/models?limit=100', adminSession());
     expect(listing.response.status).toBe(200);
     expect(listing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
@@ -191,9 +226,9 @@ describe('Worker API', () => {
       deletable: true,
     }));
     expect(listing.body.nextCursor).toBeNull();
-    expect((await api('/models?limit=101')).response.status).toBe(400);
-    expect((await api('/models?cursor=')).response.status).toBe(400);
-    const storage = await api('/models/storage');
+    expect((await api('/models?limit=101', adminSession())).response.status).toBe(400);
+    expect((await api('/models?cursor=', adminSession())).response.status).toBe(400);
+    const storage = await api('/models/storage', adminSession());
     expect(storage.response.status).toBe(200);
     expect(storage.body).toMatchObject({
       capBytes: 8 * 1024 * 1024 * 1024,
@@ -220,7 +255,7 @@ describe('Worker API', () => {
     expect(invalidUpdate.response.status).toBe(400);
     expect((await api('/catalog/uploaded-delete-test')).body.template.modelUrl).toBe(uploaded.modelUrl);
 
-    const referencedListing = await api('/models');
+    const referencedListing = await api('/models', adminSession());
     expect(referencedListing.body.models).toContainEqual(expect.objectContaining({
       modelUrl: uploaded.modelUrl,
       referencedByTemplateIds: ['uploaded-delete-test'],
@@ -237,9 +272,9 @@ describe('Worker API', () => {
     expect(await removed.json()).toEqual({ deleted: true });
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, { method: 'DELETE' })).status).toBe(404);
-    const afterRemoval = await api('/models');
+    const afterRemoval = await api('/models', adminSession());
     expect(afterRemoval.body.models.some((model) => model.modelUrl === uploaded.modelUrl)).toBe(false);
-    const storageAfterRemoval = await api('/models/storage');
+    const storageAfterRemoval = await api('/models/storage', adminSession());
     expect(storageAfterRemoval.body.usedBytes).toBe(storage.body.usedBytes - uploaded.sizeBytes);
     expect(storageAfterRemoval.body.objectCount).toBe(storage.body.objectCount - 1);
 

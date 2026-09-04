@@ -124,7 +124,7 @@ whatever guessing produced the lockout.
 
 **Rate limiting:** `checkRateLimit` in `worker/index.js` (migrations/0057)
 guards `POST /api/auth/signup` and `POST /api/auth/request-password-reset`
-— the two endpoints that are both unauthenticated/repeatable and (once
+— the two auth endpoints that are both unauthenticated/repeatable and (once
 `RESEND_API_KEY` is configured, below) can trigger a real outbound email to
 an arbitrary address. `POST /api/auth/login` doesn't need this — it
 already has the account-level lockout described above — and
@@ -144,6 +144,12 @@ covered today by the private-preview access-gate passphrase below (these
 endpoints are unreachable at all without it), and would need something
 like Cloudflare Turnstile/Bot Management if that gate ever comes off, not
 just a bigger version of this.
+
+The same `checkRateLimit` helper also guards `POST /api/models` (see
+"Custom model uploads" below) — a different unauthenticated/repeatable
+endpoint with a different abuse shape: it doesn't send email, but each call
+can burn shared R2 storage headroom, so it's bucketed by client IP alone
+(no per-target email to key on), 20 attempts per 15-minute window.
 
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
@@ -3955,23 +3961,33 @@ the built-in catalog:
   `{ modelUrl, sourceName, sizeBytes, deduplicated }`. Re-uploading identical
   validated bytes returns the existing immutable object with `200` and
   `deduplicated: true`, without consuming storage headroom or repeating the
-  full storage scan. New objects return `201`. The returned `modelUrl` is then used
+  full storage scan. New objects return `201`. Unauthenticated on purpose
+  (an upload alone doesn't register a catalog product — see below — so
+  there's no owner to spoof), but rate-limited per client IP (see "Rate
+  limiting" above) since each call can still burn shared storage headroom.
+  The returned `modelUrl` is then used
   as-is in a normal `POST /api/catalog` call to register the product — upload
   and catalog registration are two independent steps. Catalog creates and
   updates validate `/uploads/` model URLs against live R2 metadata and return
   `400` rather than storing a reference to a missing upload. Built-in `/models/`
   URLs and external catalog URLs are unaffected by this upload-specific check.
-- `GET /api/models` — lists uploaded R2 models without returning their bodies.
+- `GET /api/models` — **admin-only** (`requireAdmin`, `403` for a logged-in
+  non-admin, `401` for no session — same bar as the world/land-candidate
+  tooling above). Lists uploaded R2 models without returning their bodies.
   Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`, `deletable`,
   and sorted `referencedByTemplateIds`. Reference metadata is resolved with one
   bounded D1 query for the R2 page, allowing cleanup tooling to distinguish
   safe deletions without probing each object. Listings use a
   `limit` from 1 to 100, and return the R2-backed opaque `nextCursor` for the
-  next page. This is a dev inventory for finding uploads that can be reclaimed.
-- `GET /api/models/storage` — scans the paginated R2 metadata inventory and
-  reports `usedBytes`, `objectCount`, the application-level `capBytes`,
-  `availableBytes`, and `utilizationRatio`. This exposes the same live storage
-  accounting enforced before uploads, without downloading object bodies.
+  next page. This is a dev inventory for finding uploads that can be
+  reclaimed — not a builder/seller-facing endpoint, so it has no business
+  enumerating every uploaded (including unregistered, in-progress) model to
+  an ordinary session.
+- `GET /api/models/storage` — **admin-only**, same bar as `GET /api/models`
+  above. Scans the paginated R2 metadata inventory and reports `usedBytes`,
+  `objectCount`, the application-level `capBytes`, `availableBytes`, and
+  `utilizationRatio`. This exposes the same live storage accounting enforced
+  before uploads, without downloading object bodies.
 - `POST /api/models/cleanup` — deletes up to `maxDeletes` unreferenced uploads
   (`1`–`100`, default `100`) after scanning bounded R2 pages and resolving each
   page's catalog references in one D1 query. The response reports

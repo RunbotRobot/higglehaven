@@ -349,10 +349,10 @@ async function handleApi(request, env, url) {
 
   if (route[0] === 'models' && route.length === 1) {
     if (request.method === 'POST') return handleModelUpload(request, env);
-    if (request.method === 'GET') return handleModelListing(env, url);
+    if (request.method === 'GET') return handleModelListing(request, env, url);
   }
   if (request.method === 'GET' && route[0] === 'models' && route.length === 2 && route[1] === 'storage') {
-    return handleModelStorage(env);
+    return handleModelStorage(request, env);
   }
   if (request.method === 'POST' && route[0] === 'models' && route.length === 2 && route[1] === 'cleanup') {
     return handleModelCleanup(request, env);
@@ -377,6 +377,14 @@ async function handleApi(request, env, url) {
 // its behalf.
 async function handleModelUpload(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+
+  // Unauthenticated on purpose (see the removed-URL-import comment above),
+  // but unlike POST /api/builders/sellers this isn't just a spoof-nothing
+  // row insert — each call can burn up to MAX_MODEL_BYTES of the shared
+  // MAX_TOTAL_STORAGE_BYTES cap, so an anonymous caller looping this
+  // endpoint could otherwise exhaust R2 storage for everyone. Same
+  // per-IP-throttle mitigation as signup/password-reset (checkRateLimit).
+  await checkRateLimit(env.DB, `model-upload:${clientIp(request)}`, 20);
 
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('multipart/form-data')) {
@@ -427,7 +435,13 @@ async function handleModelUpload(request, env) {
   }, 201);
 }
 
-async function handleModelListing(env, url) {
+// Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup and
+// DELETE /uploads/:key — this lists every R2 upload (including
+// unregistered, in-progress ones no other builder should be able to
+// enumerate) with its size, etag, and which catalog templates reference
+// it. Not a builder/seller-facing endpoint at all.
+async function handleModelListing(request, env, url) {
+  await requireAdmin(request, env.DB);
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
   const limit = queryLimit(url.searchParams.get('limit'), 100);
   const cursorParam = url.searchParams.get('cursor');
@@ -460,7 +474,11 @@ async function handleModelListing(env, url) {
   });
 }
 
-async function handleModelStorage(env) {
+// Admin-only, same reasoning as handleModelListing above — live storage
+// utilization against the shared cap is operational data, not something a
+// shopper/builder/seller session has any business reading.
+async function handleModelStorage(request, env) {
+  await requireAdmin(request, env.DB);
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
   const usage = await getStorageUsage(env.MODELS);
   return json({
