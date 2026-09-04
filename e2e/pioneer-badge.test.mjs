@@ -13,7 +13,9 @@
 // the cohort size) is covered by worker/index.test.js instead, where
 // filling 100 rows directly via the D1 binding is cheap; doing that
 // through 100 real browser-driven claims here would not be.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import {
+  launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, createGreenbeltLandletAsAdmin,
+} from './helpers.mjs';
 
 const LABEL = 'Pioneer Suite Tester';
 const SECOND_LABEL = 'Second Claimer';
@@ -63,13 +65,10 @@ const secondBuilderId = await secondPage.evaluate(async (label) => {
   const me = await fetch('/api/builders/me');
   return (await me.json()).builder.builderId;
 }, SECOND_LABEL);
-await secondPage.evaluate(async () => {
-  await fetch('/api/landlets', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ landletId: 'second-claimer-landlet', name: 'Second', areaM2: 1000, status: 'greenbelt' }),
-  });
-});
+// POST /api/landlets is admin-gated (see helpers.mjs's own comment) —
+// seed it from Node as an admin, not from the second builder's own
+// unprivileged session.
+await createGreenbeltLandletAsAdmin('second-claimer-landlet');
 await secondPage.evaluate(async () => {
   await fetch('/api/landlets/second-claimer-landlet/claim', { method: 'POST' });
 });

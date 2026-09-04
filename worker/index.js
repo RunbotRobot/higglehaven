@@ -2679,6 +2679,7 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
+    await requireAdmin(request, db);
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
@@ -2787,6 +2788,19 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    // Admin-gated (docs/API.md's "Private-preview access gate" sibling
+    // concept) — same "no builder ownership concept applies yet" world-
+    // generation/admin-housekeeping territory as the land-candidates/world
+    // endpoints below, all of which already require this. An anonymous
+    // caller could otherwise insert a landlet pre-assigned to any real
+    // builder ID from the public GET /api/builders list, bypassing every
+    // invariant POST .../claim enforces (pioneer ranking, land cap,
+    // claimable_at). ownerBuilderId itself stays as flexible as the rest of
+    // this admin tooling (no existence check, same as land-candidates) —
+    // an admin directly seeding a pre-owned landlet for testing/ops is a
+    // legitimate, already-relied-on use of this endpoint; the vulnerability
+    // was the missing auth, not the flexibility.
+    await requireAdmin(request, db);
     const input = await readJson(request);
     const landlet = validateLandlet(input, crypto.randomUUID());
     await db.prepare(`
@@ -2801,13 +2815,14 @@ async function handleLandlets(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Landlet not found' }, 404);
-    // Unowned (greenbelt/generating) landlets stay unauthenticated —
+    // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
-    // applies yet" territory as POST /api/landlets itself and the
-    // land-candidates/world endpoints. An *owned* landlet is a different
-    // story: only its own builder may touch it, and — regardless of who's
-    // asking — ownership itself can never change through this endpoint.
+    // applies yet" territory as the land-candidates/world endpoints (POST
+    // /api/landlets itself is admin-gated now — see its own comment). An
+    // *owned* landlet is a different story: only its own builder may touch
+    // it, and — regardless of who's asking — ownership itself can never
+    // change through this endpoint.
     // A full PUT/PATCH that could freely set `ownerBuilderId` was a real
     // "claim any landlet, bypass every invariant POST .../claim enforces"
     // vector with no login required at all; ownership transfer only ever

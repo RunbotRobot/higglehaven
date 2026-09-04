@@ -82,7 +82,7 @@ async function signupSeller(label) {
 }
 
 async function createGreenbeltLandlet(landletId) {
-  return api('/landlets', {
+  return api('/landlets', adminSession({
     method: 'POST',
     body: JSON.stringify({
       landletId,
@@ -90,7 +90,7 @@ async function createGreenbeltLandlet(landletId) {
       areaM2: 1000,
       status: 'greenbelt',
     }),
-  });
+  }));
 }
 
 function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
@@ -538,13 +538,13 @@ describe('Worker API', () => {
     });
     expect(referencedTemplate.response.status).toBe(201);
     const referenceBuilder = await signupBuilder('catalog-batch-reference-builder');
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
         status: 'claimed', ownerBuilderId: referenceBuilder.builderId,
       }),
-    });
+    }));
     const reference = await api('/instances', referenceBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -589,13 +589,13 @@ describe('Worker API', () => {
     // comment) rather than going through the full claim flow, so the
     // instance placements below can authenticate as its real owner.
     const pageBuilder = await signupBuilder('instance-page-builder');
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
         status: 'claimed', ownerBuilderId: pageBuilder.builderId,
       }),
-    });
+    }));
     for (const instanceId of ['instance-page-b', 'instance-page-a']) {
       const created = await api('/instances', pageBuilder.session({
         method: 'POST',
@@ -828,10 +828,10 @@ describe('Worker API', () => {
   });
 
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
-    const malformedJson = await api('/landlets', {
+    const malformedJson = await api('/landlets', adminSession({
       method: 'POST',
       body: '{',
-    });
+    }));
     expect(malformedJson.response.status).toBe(400);
     expect(malformedJson.body).toEqual({ error: 'Request body is not valid JSON' });
 
@@ -868,13 +868,13 @@ describe('Worker API', () => {
 
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: draftBuilder.builderId,
       }),
-    });
+    }));
 
     const replaced = await api('/landlets/draft-landlet/draft', draftBuilder.session({
       method: 'PUT',
@@ -959,13 +959,13 @@ describe('Worker API', () => {
     // require session-authenticated ownership) go against a landlet made
     // just for this test instead.
     const versionBuilder = await signupBuilder('versioned-landlet-builder');
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
         status: 'claimed', ownerBuilderId: versionBuilder.builderId,
       }),
-    });
+    }));
 
     const instance = await api('/instances', versionBuilder.session({
       method: 'POST',
@@ -1047,13 +1047,13 @@ describe('Worker API', () => {
 
   it('allocates distinct sequential numbers to concurrent version saves', async () => {
     const concurrentBuilder = await signupBuilder('concurrent-versions-builder');
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
         status: 'claimed', ownerBuilderId: concurrentBuilder.builderId,
       }),
-    });
+    }));
 
     const saves = await Promise.all([
       api('/landlets/concurrent-versions/versions', concurrentBuilder.session({
@@ -1072,7 +1072,7 @@ describe('Worker API', () => {
   });
 
   it('makes completed enclosed generation claimable and handles retries', async () => {
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'enclosed-generation',
@@ -1081,36 +1081,36 @@ describe('Worker API', () => {
         center: { x: 0, y: 0 },
         status: 'generating',
       }),
-    });
+    }));
 
-    const completed = await api('/landlets/enclosed-generation/generation-complete', { method: 'POST' });
+    const completed = await api('/landlets/enclosed-generation/generation-complete', adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('greenbelt');
     expect(completed.body.landlet.generatedAt).not.toBeNull();
     expect(completed.body.landlet.claimableAt).not.toBeNull();
 
-    const retried = await api('/landlets/enclosed-generation/generation-complete', { method: 'POST' });
+    const retried = await api('/landlets/enclosed-generation/generation-complete', adminSession({ method: 'POST' }));
     expect(retried.response.status).toBe(200);
     expect(retried.body.landlet.generatedAt).toBe(completed.body.landlet.generatedAt);
 
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
         status: 'claimed', ownerBuilderId: 'some-owner',
       }),
-    });
-    const invalid = await api('/landlets/not-generating-landlet/generation-complete', { method: 'POST' });
+    }));
+    const invalid = await api('/landlets/not-generating-landlet/generation-complete', adminSession({ method: 'POST' }));
     expect(invalid.response.status).toBe(409);
     expect(invalid.body).toEqual({ error: 'Landlet is not currently generating' });
   });
 
   it('filters and cursor-paginates landlets in stable order', async () => {
     for (const landletId of ['landlet-page-b', 'landlet-page-a']) {
-      await api('/landlets', {
+      await api('/landlets', adminSession({
         method: 'POST',
         body: JSON.stringify({ landletId, name: landletId, areaM2: 4, status: 'generating' }),
-      });
+      }));
     }
 
     const ids = [];
@@ -1126,7 +1126,7 @@ describe('Worker API', () => {
     } while (cursor);
     expect(ids).toEqual(['landlet-page-b', 'landlet-page-a']);
 
-    await api('/landlets', {
+    await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'owned-page-landlet',
@@ -1135,7 +1135,7 @@ describe('Worker API', () => {
         status: 'claimed',
         ownerBuilderId: 'page-builder',
       }),
-    });
+    }));
     const owned = await api('/landlets?status=claimed&ownerBuilderId=%20page-builder%20');
     expect(owned.body.landlets.map(({ landletId }) => landletId)).toEqual(['owned-page-landlet']);
     expect(owned.body.nextCursor).toBeNull();
@@ -1622,7 +1622,7 @@ describe('Worker API', () => {
   }, 15000);
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
-    const candidate = await api('/landlets', {
+    const candidate = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'edge-candidate',
@@ -1637,14 +1637,14 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(candidate.response.status).toBe(201);
     const storedRadius = await env.DB.prepare(`
       SELECT max_world_radius_m FROM landlets WHERE landlet_id = 'edge-candidate'
     `).first();
     expect(storedRadius.max_world_radius_m).toBeCloseTo(Math.hypot(36, 1));
 
-    const incompleteCandidate = await api('/landlets', {
+    const incompleteCandidate = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'unfinished-edge-candidate',
@@ -1659,7 +1659,7 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(incompleteCandidate.response.status).toBe(201);
 
     const queuedCandidate = await api('/land-candidates', adminSession({
@@ -1681,7 +1681,7 @@ describe('Worker API', () => {
     expect(queuedCandidate.body.candidate.materializedAt).toBeNull();
     expect(queuedCandidate.body.landlet).toBeNull();
 
-    const completed = await api('/landlets/edge-candidate/generation-complete', { method: 'POST' });
+    const completed = await api('/landlets/edge-candidate/generation-complete', adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('generating');
     expect(completed.body.landlet.generatedAt).not.toBeNull();
@@ -1765,7 +1765,7 @@ describe('Worker API', () => {
     // increment" above, just enclosed by the automatic grower instead of
     // a manual /world/expand call.
     const candidateId = 'auto-grow-candidate';
-    const created = await api('/landlets', {
+    const created = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: candidateId,
@@ -1780,9 +1780,9 @@ describe('Worker API', () => {
           { x: -1, y: 1 },
         ],
       }),
-    });
+    }));
     expect(created.response.status).toBe(201);
-    const completed = await api(`/landlets/${candidateId}/generation-complete`, { method: 'POST' });
+    const completed = await api(`/landlets/${candidateId}/generation-complete`, adminSession({ method: 'POST' }));
     expect(completed.response.status).toBe(200);
     expect(completed.body.landlet.status).toBe('generating'); // not enclosed yet
 
@@ -3337,10 +3337,10 @@ describe('Land cap', () => {
   }
 
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
-    return api('/landlets', {
+    return api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
-    });
+    }));
   }
 
   async function claim(landletId, builder) {
@@ -3438,10 +3438,10 @@ describe('Land cap', () => {
 
 describe('Simulated purchases', () => {
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
-    return api('/landlets', {
+    return api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
-    });
+    }));
   }
 
   async function claim(landletId, builder) {
