@@ -998,28 +998,27 @@ never a squash:
 
 ### Managing extensibility — the Seller modal
 
-Still no real accounts (same dev-mode caveat as Builders/Sellers above), but
-a template's `sellerId` is a genuinely separate identity from whichever
+A template's `sellerId` is a genuinely separate identity from whichever
 builder uploaded it — see "Sellers" above. Reaching Sell mode (the `#mode-nav`
 Sell tab — the only way in; there is deliberately no "My Products" shortcut
-from Build mode) ensures a seller identity is chosen first if one isn't
-already (`ensureSellerIdentity` in `src/main.js`) — no builder identity or
-claimed landlet needed, only a seller one. The Sell modal lists every
-template whose
+from Build mode) ensures a seller identity is active first if one isn't
+already (`ensureSellerIdentity` in `src/main.js`, which now just blocks on a
+real login and fetches the account's auto-provisioned seller via
+`fetchMySeller()` — see "Authentication"/"Sellers" above) — no builder
+identity or claimed landlet needed, only a seller one. The Sell modal lists
+every template whose
 `sellerId` matches the active seller, plus any custom-uploaded template with
 a `null` `sellerId` (covers products uploaded before sellers existed as their
-own concept). A "Seller identity" button inside the modal reopens the same
-identity picker to switch or rename — unlike switching builders, this
-doesn't reload the page, since nothing about the Build/Shop scene depends on
-which seller is active.
+own concept). There's no "switch seller identity" control in the modal — a
+real account has exactly one auto-provisioned seller profile, not a roster to
+pick from.
 
 Each row leads with just the product's name; tapping it (`.seller-row-toggle`)
 expands the row to reveal everything else — dimensions, action buttons, and
-the Extensibility/Edit Size panels — the same collapse-until-tapped pattern
-the identity picker uses for builder/seller rows. Tapping a different row's
-toggle collapses whichever one was open, and a collapsed row's live preview
-(if any) is torn down (`disposeAxisPreview`) rather than left rendering
-behind a `display:none` panel.
+the Extensibility/Edit Size panels — a collapse-until-tapped pattern. Tapping
+a different row's toggle collapses whichever one was open, and a collapsed
+row's live preview (if any) is torn down (`disposeAxisPreview`) rather than
+left rendering behind a `display:none` panel.
 
 An expanded row shows its dimensions, then four action buttons — Preview,
 Rename, Duplicate, Delete — with Edit Size and Extensibility each tucked
