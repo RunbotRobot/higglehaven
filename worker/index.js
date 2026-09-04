@@ -837,9 +837,11 @@ async function handleCatalog(request, db, route, url, models) {
 // itself), not to any one placed instance of it — see migrations/0048's own
 // comment for why 0047's original instance-level design was wrong. No
 // opt-in flag: every catalog template is already product-like by
-// definition, so every one is reviewable, and no ownership check on DELETE
-// (moderation) — same no-real-auth caveat as every other dev-mode identity
-// in this file.
+// definition, so every one is reviewable. DELETE (moderation) is gated to
+// the template's own seller, same "if (existing.seller_id)" pattern the
+// catalog template's own PATCH/DELETE handler above already uses — a
+// template with no seller stays unrestricted, since there's no owner to
+// check against.
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -897,6 +899,11 @@ async function handleProductReviews(request, db, route) {
     const reviewId = route[3];
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
+    const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (template?.seller_id) {
+      const sessionSeller = await requireSessionSeller(request, db);
+      assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     return json({ deleted: true });
   }

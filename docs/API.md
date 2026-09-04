@@ -2603,7 +2603,12 @@ outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
 doesn't exist. `POST` additionally requires a matching purchase (see the
-purchase-gating paragraph above) — `400` without one.
+purchase-gating paragraph above) — `400` without one. `DELETE`
+(moderation) requires a session (`401` without one) and is gated to the
+template's own seller once it has one — `403` for anyone else — the same
+`if (existing.seller_id)` ownership check the catalog template's own
+PATCH/DELETE handler uses; a template with no seller stays unrestricted,
+since there's no owner to check against.
 
 ```json
 POST /api/catalog/:templateId/reviews
@@ -2663,8 +2668,10 @@ text was left), stacked the same way sign posts/calendar events are.
 
 `worker/index.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
-rating bounds, optional text, averaged summary, moderation delete,
-independence between two different templates' review lists, cascade delete
+rating bounds, optional text, averaged summary, moderation delete (both an
+unowned template's unrestricted delete and a seller-owned template's
+`401`/`403`/owning-seller-succeeds gate), independence between two
+different templates' review lists, cascade delete
 when the template itself is deleted, and the purchase gate itself — no
 purchase, an anonymous-only purchase, and a real matching purchase
 including the case-insensitive label match — including the `404` for
