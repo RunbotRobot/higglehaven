@@ -2918,6 +2918,36 @@ describe('Auctions', () => {
     expect(bids.body.bids.map((b) => b.amountCents)).toEqual([1500, 1000]);
   });
 
+  it('accepts only one of two concurrent bids for the same amount, not both', async () => {
+    const owner = await signupBuilder('bid-race-owner');
+    const bidderA = await signupBuilder('bid-race-a');
+    const bidderB = await signupBuilder('bid-race-b');
+    await createGreenbeltLandlet('auction-bid-race-landlet');
+    await claim('auction-bid-race-landlet', owner);
+    const started = await api('/landlets/auction-bid-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 1000 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no bids yet", both pass
+    // validation against startingBidCents, and both land, even though only
+    // the first bid to actually insert should win a tie.
+    const [first, second] = await Promise.all([
+      api(`/auctions/${auctionId}/bids`, bidderA.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      })),
+      api(`/auctions/${auctionId}/bids`, bidderB.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 400]);
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    expect(bids.body.bids[0].amountCents).toBe(1000);
+  });
+
   it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
     const owner = await signupBuilder('resolve-winner-owner');
     const bidder = await signupBuilder('resolve-winner-bidder');
