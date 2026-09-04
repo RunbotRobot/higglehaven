@@ -901,6 +901,19 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);
     }
+    // One review per matching purchaser label per template (migrations/
+    // 0059) — the verified-purchase check above is a one-time eligibility
+    // gate, not a per-review consumption check, so without this the same
+    // purchase could otherwise back an unbounded number of reviews under
+    // one label. Checked explicitly (rather than letting the unique index
+    // reject the INSERT) so this returns the same HttpError shape as every
+    // other conflict in this file instead of a raw D1 constraint error.
+    const existingReview = await db.prepare(
+      'SELECT 1 FROM product_reviews WHERE template_id = ? AND author_label = ? COLLATE NOCASE LIMIT 1',
+    ).bind(templateId, authorLabel).first();
+    if (existingReview) {
+      throw new HttpError('This purchaser has already reviewed this product', 409);
+    }
     const rating = Number(input.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
       throw new HttpError('rating must be an integer from 1 to 5', 400);
