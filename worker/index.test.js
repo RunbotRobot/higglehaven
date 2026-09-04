@@ -3471,6 +3471,25 @@ describe('Authentication', () => {
     expect(dupe.response.status).toBe(409);
   });
 
+  it('rate-limits repeated signup attempts against the same email', async () => {
+    const email = `auth-ratelimit-signup-${crypto.randomUUID()}@example.com`;
+    // First succeeds; the next 4 hit the ordinary "already registered" 409
+    // (still counted against the limit — checkRateLimit runs before that
+    // check) — 5 total attempts, right at the limit.
+    for (let i = 0; i < 5; i++) {
+      const attempt = await signup(email, 'a fine long password');
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const sixth = await signup(email, 'a fine long password');
+    expect(sixth.response.status).toBe(429);
+
+    // A different email from the same (test-env) client isn't affected —
+    // bucketed per-target, not just per-source.
+    const otherEmail = `auth-ratelimit-signup-other-${crypto.randomUUID()}@example.com`;
+    const otherAttempt = await signup(otherEmail, 'a fine long password');
+    expect(otherAttempt.response.status).toBe(201);
+  });
+
   it('rejects signup with a malformed email or too-short password', async () => {
     const badEmail = await signup('not-an-email', 'a fine long password');
     expect(badEmail.response.status).toBe(400);
@@ -3592,6 +3611,17 @@ describe('Authentication', () => {
     expect(requested.response.status).toBe(200);
     expect(requested.body).toEqual({ requested: true });
     expect(requested.body.devResetUrl).toBeUndefined();
+  });
+
+  it('rate-limits repeated password-reset requests against the same email', async () => {
+    const email = `auth-ratelimit-reset-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'a fine long password');
+    for (let i = 0; i < 5; i++) {
+      const attempt = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+      expect(attempt.response.status).toBe(200);
+    }
+    const sixth = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    expect(sixth.response.status).toBe(429);
   });
 
   it('resends a verification email for the logged-in user, with a fresh token', async () => {

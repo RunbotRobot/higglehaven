@@ -2035,6 +2035,43 @@ const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email v
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
 
+// Fixed-window rate limiting (migrations/0057) for the auth endpoints that
+// are both unauthenticated and repeatable and (once RESEND_API_KEY is
+// configured) can trigger a real outbound email to an arbitrary address:
+// signup and password-reset-request. Login already has its own real
+// per-account lockout (failed_login_attempts/locked_until above), and
+// resend-verification requires an existing session, so neither needs this.
+//
+// Bucketed by client IP + the specific email being targeted, not IP alone
+// — this limits hammering one target from one source without any new
+// Cloudflare bindings, and (deliberately) means the existing test suite's
+// per-case unique emails never collide with each other in the same D1.
+// Deliberately scoped: this stops targeted retry/harassment of one email
+// address, not an IP spraying signups across many distinct addresses —
+// that broader case is already substantially covered today by the
+// private-preview access-gate passphrase (see checkAccessGate) blocking
+// these endpoints from anyone who doesn't already have it, and would need
+// something like Cloudflare Turnstile/Bot Management if the gate ever
+// comes off, not just a bigger version of this.
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+
+function clientIp(request) {
+  return request.headers.get('cf-connecting-ip') || 'unknown';
+}
+
+async function checkRateLimit(db, bucketKey, maxAttempts) {
+  const now = Date.now();
+  await db.prepare('DELETE FROM rate_limit_events WHERE bucket_key = ?1 AND created_at < ?2')
+    .bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).run();
+  const row = await db.prepare('SELECT COUNT(*) as count FROM rate_limit_events WHERE bucket_key = ?1')
+    .bind(bucketKey).first();
+  if (row.count >= maxAttempts) {
+    throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
+  }
+  await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
+    .bind(bucketKey, now).run();
+}
+
 function bytesToHex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -2290,6 +2327,8 @@ async function handleSignup(request, env, db, url) {
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
 
+  await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
+
   const existingEmail = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
   if (existingEmail) throw new HttpError('Email is already registered', 409);
   // COLLATE NOCASE on users.username (see migrations/0056) already makes
@@ -2442,6 +2481,9 @@ async function handleVerifyEmail(request, db) {
 async function handleRequestPasswordReset(request, env, db) {
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
+
+  await checkRateLimit(db, `password-reset:${clientIp(request)}:${email}`, 5);
+
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
 
   // Always the same response regardless of whether the account exists —

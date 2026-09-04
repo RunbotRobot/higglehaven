@@ -117,6 +117,29 @@ symmetric with password reset: resetting a password also clears the
 lockout, since proving control of the email is a stronger signal than
 whatever guessing produced the lockout.
 
+**Rate limiting:** `checkRateLimit` in `worker/index.js` (migrations/0057)
+guards `POST /api/auth/signup` and `POST /api/auth/request-password-reset`
+— the two endpoints that are both unauthenticated/repeatable and (once
+`RESEND_API_KEY` is configured, below) can trigger a real outbound email to
+an arbitrary address. `POST /api/auth/login` doesn't need this — it
+already has the account-level lockout described above — and
+`resend-verification` requires an existing session, so it isn't an
+anonymous abuse vector either. A plain D1 table (no Durable Object or
+Cloudflare rate-limiting binding needed, matching the brute-force
+defense's own reasoning) tracks attempts in a bucket keyed by client IP
+*and* the specific email being targeted, fixed 15-minute window, 5
+attempts per bucket; the 6th within the window gets `429`. Bucketing by
+target email (not IP alone) is deliberate: it stops repeated
+harassment/retry-hammering of one address without needing any per-source
+global counter that a shared IP (or this app's own automated test suite,
+which never sets a real client IP) could trip on unrelated traffic. It
+does **not** stop an attacker spraying signups across many distinct
+addresses from one source — that broader case is already substantially
+covered today by the private-preview access-gate passphrase below (these
+endpoints are unreachable at all without it), and would need something
+like Cloudflare Turnstile/Bot Management if that gate ever comes off, not
+just a bigger version of this.
+
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
 and a free tier generous enough for this stage. Configure it with:
@@ -170,7 +193,9 @@ is actually receiving mail at it, which email verification already does.
 `409` if that email is already registered (revealing a duplicate email
 here is common, accepted practice — unlike the password-reset-request
 endpoint below, which deliberately stays silent about whether an account
-exists). `password` must be 8–200 characters. `username` is required (how
+exists). `429` after 5 attempts against the same email within 15 minutes
+(see "Rate limiting" above). `password` must be 8–200 characters.
+`username` is required (how
 users identify each other, not a cosmetic label), at most 40 characters,
 and must be unique — `409` if it's already taken, case-insensitively
 ("Ada" and "ada" are the same username).
@@ -245,7 +270,11 @@ still detectable as "already used" rather than silently "not found."
 
 Always `200 { "requested": true }`, regardless of whether that email has
 an account — this is the classic account-enumeration vector, so unlike
-signup it stays deliberately generic. A real account gets a reset email
+signup it stays deliberately generic. `429` after 5 attempts against the
+same email within 15 minutes (see "Rate limiting" above) — the one place
+this endpoint's response isn't generic, but only in the sense that an
+attacker learns "this specific address has been requested 5 times
+recently," not whether it has an account. A real account gets a reset email
 (or, in dev mode, the response gains a `devResetUrl` field carrying the
 link directly — this is the one place the generic response quietly
 differs, but only in dev mode, and only in a way an attacker could already
@@ -284,9 +313,11 @@ and malformed-input rejection, case-insensitive email matching, identical
 wrong-password/unknown-email responses, the five-attempt lockout, the full
 email-verification lifecycle (valid/invalid/reused token), resending
 verification (requires a session, a no-op once already verified, doesn't
-invalidate the original token), and the full password-reset lifecycle
+invalidate the original token), the full password-reset lifecycle
 (valid/invalid/reused token, old sessions invalidated, old password
-rejected afterward). All of it runs against the
+rejected afterward), and rate limiting on signup/request-password-reset
+(the 6th attempt against one email within the window is `429`, a
+different email isn't affected). All of it runs against the
 dev-mode fallback (no `RESEND_API_KEY` in the test environment) — the
 actual Resend network call itself is the one part of this that can't be
 exercised by the automated suite, since that would require a real API key
