@@ -2726,6 +2726,77 @@ function renderSellerList() {
       if (!noReturnsPanel.hidden) noReturnsCheckbox.checked = !!template.metadata?.noReturns;
     });
 
+    // Shipping (docs/SPEC.md §5: "Dimmed-filter approach ... non-shippable
+    // items are dimmed with a label ('ships to United States only')") —
+    // absent/false means the product ships internationally (the spec's own
+    // permissive default), same single-boolean-in-metadata simplicity and
+    // own-classes-per-row reasoning as No-Returns above.
+    const domesticOnlyText = document.createElement('div');
+    domesticOnlyText.className = 'seller-row-domestic-only';
+    const refreshDomesticOnlyText = () => {
+      domesticOnlyText.textContent = template.metadata?.domesticOnly
+        ? 'Shipping: United States only' : 'Shipping: international';
+    };
+    refreshDomesticOnlyText();
+    details.appendChild(domesticOnlyText);
+
+    const domesticOnlyToggle = document.createElement('button');
+    domesticOnlyToggle.className = 'seller-extensibility-toggle seller-domestic-only-toggle';
+    domesticOnlyToggle.type = 'button';
+    domesticOnlyToggle.textContent = 'Edit Shipping ▾';
+    details.appendChild(domesticOnlyToggle);
+
+    const domesticOnlyPanel = document.createElement('div');
+    domesticOnlyPanel.className = 'seller-domestic-only-panel';
+    domesticOnlyPanel.hidden = true;
+    details.appendChild(domesticOnlyPanel);
+
+    const domesticOnlyCheckboxLabel = document.createElement('label');
+    domesticOnlyCheckboxLabel.className = 'seller-domestic-only-checkbox-label';
+    const domesticOnlyCheckbox = document.createElement('input');
+    domesticOnlyCheckbox.type = 'checkbox';
+    domesticOnlyCheckboxLabel.appendChild(domesticOnlyCheckbox);
+    domesticOnlyCheckboxLabel.appendChild(document.createTextNode('This product ships to the United States only'));
+    domesticOnlyPanel.appendChild(domesticOnlyCheckboxLabel);
+
+    const domesticOnlyStatus = document.createElement('div');
+    domesticOnlyStatus.className = 'seller-domestic-only-status';
+
+    const domesticOnlySaveBtn = document.createElement('button');
+    domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn';
+    domesticOnlySaveBtn.type = 'button';
+    domesticOnlySaveBtn.textContent = 'Save Shipping';
+    domesticOnlySaveBtn.addEventListener('click', async () => {
+      domesticOnlyStatus.textContent = '';
+      domesticOnlyStatus.classList.remove('error');
+      const nextMetadata = { ...template.metadata };
+      if (domesticOnlyCheckbox.checked) {
+        nextMetadata.domesticOnly = true;
+      } else {
+        delete nextMetadata.domesticOnly;
+      }
+      domesticOnlySaveBtn.disabled = true;
+      try {
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        refreshDomesticOnlyText();
+        domesticOnlyStatus.textContent = 'Saved.';
+      } catch (err) {
+        domesticOnlyStatus.textContent = err.message || 'Could not save.';
+        domesticOnlyStatus.classList.add('error');
+      } finally {
+        domesticOnlySaveBtn.disabled = false;
+      }
+    });
+    domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
+    domesticOnlyPanel.appendChild(domesticOnlyStatus);
+
+    domesticOnlyToggle.addEventListener('click', () => {
+      domesticOnlyPanel.hidden = !domesticOnlyPanel.hidden;
+      domesticOnlyToggle.textContent = `Edit Shipping ${domesticOnlyPanel.hidden ? '▾' : '▴'}`;
+      if (!domesticOnlyPanel.hidden) domesticOnlyCheckbox.checked = !!template.metadata?.domesticOnly;
+    });
+
     // Edit Size: correct a mis-measured (or since-outgrown) real-world
     // size after the fact — proportional-only, same as the upload
     // wizard's own dimensions step (handleUploadDimensionsStep), since
@@ -7439,6 +7510,11 @@ function productInfoText(template) {
   // assume every placed item is a physical one.
   const disclaimerKey = metadata?.digitalGoodDisclaimer;
   if (disclaimerKey) text += ` (${DIGITAL_GOOD_DISCLAIMER_TEXT[disclaimerKey]})`;
+  // docs/SPEC.md §5's shipping disclosure ("ships to United States only")
+  // — same tap-to-inspect treatment as the digital-goods disclaimer above,
+  // shown right where a shopper would otherwise assume every item ships
+  // internationally like the rest of the catalog.
+  if (metadata?.domesticOnly) text += ' (ships to United States only)';
   return text;
 }
 

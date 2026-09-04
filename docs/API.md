@@ -4146,6 +4146,60 @@ digital-good text was verified manually alongside its price display (see
 "Product pricing" above's own testing note), using the same temporary
 debug-hook technique.
 
+### Shipping
+
+docs/SPEC.md §5: "Dimmed-filter approach: shoppers toggle a filter,
+non-shippable items are dimmed with a label ('ships to United States
+only'), not hidden." "Seller sets shipping cost by destination zone — not
+a fixed 'non-domestic party pays' rule." This is the seller-set data layer
+only — real per-destination-zone shipping *cost*, live 3D-mesh dimming, and
+a shopper-facing filter toggle are all deliberately not built here yet (see
+"Deferred" below).
+
+There is no separate `shipsInternationally` boolean — a catalog template
+ships internationally by default (the spec's own permissive default) and
+is restricted to domestic-only exactly when `metadata.domesticOnly` is
+`true`, the same single-flag-in-metadata simplicity `noReturns` (see
+"Refunds" above) already uses. `assertValidDomesticOnly` (also called from
+inside `validateTemplate`) rejects any non-boolean value with `400`.
+
+A seller opts a product into domestic-only shipping via its own row's
+"Edit Shipping" panel (checkbox + Save, same collapsed-panel idiom as that
+row's "Edit Returns Policy" panel) — `.seller-domestic-only-toggle`/
+`.seller-domestic-only-panel` in `src/main.js`. Unchecking and saving
+deletes the metadata key entirely rather than setting it `false`, the same
+clear-to-absent convention `noReturns` and flooring's own toggle use.
+`#shop-product-info` (see "Product pricing" above) appends "(ships to
+United States only)" in parentheses when the nearest instance is
+domestic-only-flagged — the same tap-to-inspect disclosure treatment as
+the digital-goods disclaimer above.
+
+**Deferred, not built here:** this dev-mode backend has no real shopper
+address/geo data anywhere (no checkout, no payment integration — see
+`AGENTS.md`'s "Real payments ... are still not built"), so there is
+nothing real for a live "does this ship to me" filter to filter against.
+Per-destination-zone shipping *cost* is a checkout-time concern that
+depends on that same missing real-payments integration. And the spec's
+"dimmed" visual treatment (fading a placed item's 3D mesh) has no
+precedent anywhere in this codebase yet — every other seller-set
+disclosure (`noReturns`, `digitalGoodDisclaimer`) surfaces as tap-to-inspect
+text only, not a mesh-level effect. Shipping the underlying seller-set data
+first, with live filtering/dimming as a later enhancement, follows the same
+"honest simplest form first" precedent already used elsewhere in this
+codebase (see "Friend requests" above's own graphical-map deferral).
+
+#### Testing note
+
+`worker/index.test.js`'s "Shipping" describe block covers the non-boolean
+rejection, a valid value round-tripping through `GET`, the absent-defaults-
+to-international case, and clearing one via a full `metadata` replace —
+the same matrix "Prohibited categories and digital goods" above covers for
+`digitalGoodDisclaimer`. No e2e coverage: the Seller-modal panel is
+structurally identical to the already-e2e-covered "Edit Returns Policy"
+panel (same collapsed-panel-with-a-Save-step idiom, same
+`updateCatalogTemplate` call), so a second full browser-driven test of the
+same interaction pattern would be redundant rather than additive.
+
 ## Automated tests
 
 Run the Worker integration suite with:
@@ -4163,5 +4217,9 @@ D1. Test storage does not modify the local development D1 state.
 
 - Extend procedural generation beyond the current bounded annular-ring
   primitive with macro-geography-aware shapes.
-- Add auth/trust/payment/account concepts only after the single-player dev
-  backend is stable; they are intentionally out of scope now.
+- Real payment processing, multiplayer presence, and content moderation
+  remain intentionally dev-only/simulated for now (see this doc's own
+  "Scope and assumptions" above) — real account auth and a real
+  seller/builder identity model, by contrast, are already built and live
+  (migrations 0053-0056; see "Authentication," "Authorization model," and
+  "Builders" above), not out of scope.
