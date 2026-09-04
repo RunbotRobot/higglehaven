@@ -75,9 +75,26 @@ async function runOneTest(testFile) {
 
   const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT], {
     cwd: repoRoot,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
+  // Kept only so a failure can show wrangler dev's own server-side output
+  // (a stack trace behind a 500, a D1 lock error, etc.) — previously
+  // discarded entirely via stdio: 'ignore', which left a real backend
+  // error in a test run with nothing but "failed with HTTP 500" and no way
+  // to see why. Capped and rolling so a long-running file's full request
+  // log doesn't balloon memory; only the tail end (closest to the actual
+  // failure) matters for diagnosis.
+  const WRANGLER_LOG_MAX_CHARS = 50_000;
+  let wranglerLog = '';
+  const captureWranglerOutput = (chunk) => {
+    wranglerLog += chunk.toString();
+    if (wranglerLog.length > WRANGLER_LOG_MAX_CHARS) {
+      wranglerLog = wranglerLog.slice(wranglerLog.length - WRANGLER_LOG_MAX_CHARS);
+    }
+  };
+  wrangler.stdout.on('data', captureWranglerOutput);
+  wrangler.stderr.on('data', captureWranglerOutput);
 
   let passed = false;
   try {
@@ -89,6 +106,9 @@ async function runOneTest(testFile) {
     passed = true;
   } catch (err) {
     console.error(`FAILED: ${testFile}`);
+    console.log(`\n--- wrangler dev server output for ${testFile} (tail, may explain the failure above) ---`);
+    console.log(wranglerLog || '(no server output captured)');
+    console.log(`--- end wrangler dev server output for ${testFile} ---\n`);
   } finally {
     try {
       // Negative pid signals the whole detached process group, not just
