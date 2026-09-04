@@ -1348,9 +1348,11 @@ function notificationFromRow(row) {
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
-// pending -> accepted in place. No ownership check on PATCH/DELETE — same
-// no-real-auth caveat as every other dev-mode identity in this file; the
-// frontend only shows Accept on the recipient's own incoming requests.
+// pending -> accepted in place. PATCH/DELETE below are both real-account
+// ownership-checked: only the recipient can accept, and only the requester
+// or recipient can delete/decline/cancel — the frontend showing Accept
+// only on the recipient's own incoming requests is a UI convenience on top
+// of that, not the actual enforcement.
 //
 // "Social map ... approximate location" is deliberately simplified to each
 // accepted friend's owned lándlet center — this app has no live avatar
