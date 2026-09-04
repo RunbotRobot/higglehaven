@@ -1683,8 +1683,10 @@ Returns the newly claimed landlet. Errors are:
 
 ### `POST /api/landlets/:landletId/generation-complete`
 
-Records that asynchronous generation work has completed. The endpoint is
-idempotent: retries return the existing landlet once `generatedAt` is set.
+Admin-only (`401`/`403` otherwise) — same as its ring-level sibling,
+`POST /api/land-candidate-rings/:ringId/generation-complete`. Records that
+asynchronous generation work has completed. The endpoint is idempotent:
+retries return the existing landlet once `generatedAt` is set.
 
 Generation completion and geometric enclosure are independent requirements. If
 the world circle already fully encloses the landlet, completion immediately

@@ -2734,6 +2734,7 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
+    await requireAdmin(request, db);
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
@@ -2872,7 +2873,7 @@ async function handleLandlets(request, db, route, url) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Landlet not found' }, 404);
-    // Unowned (greenbelt/generating) landlets stay unauthenticated —
+    // Unowned (greenbelt/generating) landlets stay unauthenticated here —
     // this is world-generation/admin housekeeping (status transitions,
     // polygon/metadata fixes), the same "no builder ownership concept
     // applies yet" territory as unowned creation via POST /api/landlets
