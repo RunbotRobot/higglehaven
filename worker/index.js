@@ -1356,9 +1356,10 @@ function notificationFromRow(row) {
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
-// pending -> accepted in place. No ownership check on PATCH/DELETE — same
-// no-real-auth caveat as every other dev-mode identity in this file; the
-// frontend only shows Accept on the recipient's own incoming requests.
+// pending -> accepted in place. PATCH is gated to the recipient (only they
+// can accept) and DELETE to either side (either can end/decline it) — both
+// enforced below via requireSessionBuilder + assertOwner, not left to the
+// frontend to police.
 //
 // "Social map ... approximate location" is deliberately simplified to each
 // accepted friend's owned lándlet center — this app has no live avatar
@@ -1689,7 +1690,7 @@ async function handleAuctions(request, db, route, url) {
     const page = results.slice(0, limit);
     const last = page.at(-1);
     return json({
-      auctions: await Promise.all(page.map((row) => auctionFromRow(db, row))),
+      auctions: await auctionsFromRowsBatch(db, page),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.auction_id) : null,
     });
   }
@@ -2002,11 +2003,10 @@ function formatCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-async function auctionFromRow(db, row) {
-  const highest = await db.prepare(`
-    SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-  `).bind(row.auction_id).first();
-  const bidCount = await db.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind(row.auction_id).first();
+// Pure formula shared by the single-auction and batched shaping paths
+// below — the auction row plus its highest bid/bid count in, the JSON
+// shape out.
+function auctionShape(row, highestBidCents, bidCount) {
   return {
     auctionId: row.auction_id,
     landletId: row.landlet_id,
@@ -2015,11 +2015,40 @@ async function auctionFromRow(db, row) {
     status: row.status,
     endsAt: row.ends_at,
     winningBidId: row.winning_bid_id,
-    highestBidCents: highest ? highest.amount_cents : null,
-    bidCount: bidCount.n,
+    highestBidCents,
+    bidCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+async function auctionFromRow(db, row) {
+  const highest = await db.prepare(`
+    SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+  `).bind(row.auction_id).first();
+  const bidCount = await db.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind(row.auction_id).first();
+  return auctionShape(row, highest ? highest.amount_cents : null, bidCount.n);
+}
+
+// List-endpoint version of the above: instead of the same 2 queries
+// repeated once per auction (an N+1 round-trip pattern — up to `limit`
+// auctions per page, each awaiting 2 sequential D1 queries), pulls the
+// highest bid and bid count for every auction on the page in exactly one
+// grouped query, then shapes each row in memory. Auctions with no bids at
+// all simply have no row in the grouped results, matching auctionFromRow's
+// `null`/`0` fallback.
+async function auctionsFromRowsBatch(db, rows) {
+  if (rows.length === 0) return [];
+  const placeholders = rows.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT auction_id, MAX(amount_cents) AS highest, COUNT(*) AS n
+    FROM auction_bids WHERE auction_id IN (${placeholders}) GROUP BY auction_id
+  `).bind(...rows.map((row) => row.auction_id)).all();
+  const byAuction = new Map(results.map((row) => [row.auction_id, row]));
+  return rows.map((row) => {
+    const bids = byAuction.get(row.auction_id);
+    return auctionShape(row, bids ? bids.highest : null, bids ? bids.n : 0);
+  });
 }
 
 function auctionBidFromRow(row) {
@@ -4355,6 +4384,23 @@ function assertValidNoReturns(metadata) {
   }
 }
 
+// International shipping (docs/SPEC.md §5: "Dimmed-filter approach:
+// shoppers toggle a filter; non-shippable items are dimmed with a label
+// ('ships to United States only')") — a seller-set flag on the product
+// itself, same single-boolean-in-metadata simplicity as noReturns above.
+// Absent/false means the product ships internationally (the permissive
+// default), so this key is only ever written when a seller actively
+// restricts to domestic shipping. Real per-destination-zone shipping
+// *cost* and a live shopper-facing filter are deliberately not built yet
+// (this dev-stage backend has no real shopper address/geo data to filter
+// against) — see docs/API.md's "Shipping" section.
+function assertValidDomesticOnly(metadata) {
+  if (metadata.domesticOnly === undefined) return;
+  if (typeof metadata.domesticOnly !== 'boolean') {
+    throw new HttpError('metadata.domesticOnly must be a boolean', 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -4377,6 +4423,7 @@ function validateTemplate(input, fallbackId) {
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
+  assertValidDomesticOnly(template.metadata);
   return template;
 }
 
