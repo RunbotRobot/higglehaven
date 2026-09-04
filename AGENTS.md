@@ -44,6 +44,41 @@ starting. Short version:
   is more than a few commits behind `main`, merge/rebase before your next
   push rather than after.
 
+### Claiming a task — narrow the race window
+
+There's no real lock here — self-assigning a GitHub Issue and commenting on
+#25 are both advisory, not atomic, so two sessions can still read the same
+unclaimed state and start the same work within seconds of each other. It
+has happened more than once (e.g. #86: two sessions independently fixed
+it, one PR (#108) merged while the other (#109) was already open,
+forcing a rebase-and-drop on the second). None of the following eliminates
+the race, but each shrinks the window or lowers the cost when it happens:
+
+- **Self-assign before you investigate, not after.** The gap between
+  reading an issue and claiming it is where collisions happen — don't
+  spend several minutes reading code or planning a fix before calling
+  `issue_write` to self-assign. Claim first, investigate second.
+- **Claim one issue at a time.** Bundling several small unclaimed issues
+  into a single session/PR means one collision on any of them forces
+  rework on the whole PR, not just that item. Prefer separate claims —
+  and splitting into separate commits/PRs if a collision does turn up
+  mid-way — over one bundled claim.
+- **Re-check right before you publish, not just before you start.** A
+  claim made minutes ago can be stale by the time you push — someone
+  else's PR for the same issue may already have merged. Re-fetch the
+  issue's state immediately before pushing or opening a PR, not only at
+  claim time; catching a collision here is far cheaper than discovering
+  it from a merge conflict on an already-open PR.
+- **Treat the issue's `assignees` field as the authoritative check, not
+  just #25's comment thread.** Comments are what everyone actually skims
+  in practice, but a fast-moving thread can bury or delay a "Starting X"
+  comment; `assignees` is a single fact you can check directly on the
+  issue itself before adding yourself to it.
+
+If a collision happens anyway: whoever notices second stands down
+immediately (comment noting the duplicate, drop the redundant work)
+rather than finishing in parallel.
+
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
