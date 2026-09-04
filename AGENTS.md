@@ -28,3 +28,15 @@ starting. Short version:
 - Only ever run `wrangler deploy` or `wrangler d1 migrations apply
   --remote` from trunk, after merging — never from an in-progress
   session branch.
+- **Keep `.github/workflows/ci.yml` in sync with `main`.** GitHub Actions
+  runs whichever copy of that file exists on the branch doing the
+  pushing, not some global setting — a branch that's fallen behind `main`
+  keeps running an outdated CI config until it merges/rebases `main` in.
+  This matters more than usual here: this account's Actions concurrency
+  is a genuinely shared, limited resource across every session at once
+  (GitHub Free plan caps it at 20 concurrent jobs, account-wide), so an
+  out-of-date workflow on your branch (e.g., a wider e2e matrix than
+  `main`'s current one) doesn't just affect you — it eats into the
+  budget every other active session is also drawing from. If your branch
+  is more than a few commits behind `main`, merge/rebase before your next
+  push rather than after.
