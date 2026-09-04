@@ -172,13 +172,10 @@
       /* Only shown while within SIGN_INTERACT_RADIUS_M of a community sign
          (see updateSignFade in src/main.js) — unlike shop-status/shop-hint
          above, this one is a real tappable button, so it doesn't inherit
-         their pointer-events: none. Sits well above #shop-vertical-controls
-         (bottom: 78px, ~88px tall) rather than sharing its bottom-center
-         column — directly overlapping it made the vertical-controls'
-         invisible-when-inactive hit area steal every tap intended for this
-         button (found via manual verification, not caught by the e2e suite
-         since raw Shop-mode camera movement isn't automated — see
-         docs/API.md's "Community signs"). */
+         their pointer-events: none. Stacked well above the bottom-center
+         hint text below (found via manual verification, not caught by the
+         e2e suite since raw Shop-mode camera movement isn't automated —
+         see docs/API.md's "Community signs"). */
       #shop-sign-hint {
         bottom: 180px;
         left: 50%;
@@ -291,38 +288,6 @@
       }
       #shop-look-joystick {
         right: 20px;
-      }
-      /* Altitude is a separate concern from the walk/look joysticks (and
-         from zoom, which is a pure lens effect, not movement — see
-         SHOP_MIN_FOV_DEG's own comment) — hold to rise or sink, centered
-         in the gap between the two joysticks, above the hint text below it. */
-      #shop-vertical-controls {
-        bottom: 78px;
-        left: 50%;
-        transform: translateX(-50%);
-        flex-direction: column;
-        gap: 8px;
-      }
-      /* .shop-ui.visible's own display:block would otherwise win over this
-         element's need to be display:flex (for the column stack below) —
-         higher specificity (ID + class vs. two classes) here wins instead. */
-      #shop-vertical-controls.visible {
-        display: flex;
-      }
-      #shop-vertical-controls button {
-        width: 52px;
-        height: 40px;
-        border-radius: 12px;
-        border: 1px solid rgb(var(--ink-rgb) / 0.3);
-        background: rgb(var(--ink-rgb) / 0.15);
-        color: var(--pill-text);
-        font-size: 16px;
-        touch-action: none;
-      }
-      #shop-vertical-controls button.active {
-        background: var(--brand-green);
-        color: #16240a;
-        border-color: transparent;
       }
       /* Top-right is otherwise empty (wordmark owns top-left, camera debug
          owns bottom-right) — undo/redo are always-relevant, not tied to a
@@ -2471,7 +2436,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
-    <div id="shop-hint" class="shop-ui">Left stick to walk — right stick to look — hold up/down to fly</div>
+    <div id="shop-hint" class="shop-ui">Left stick to walk (push further to run) — right stick to look</div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
@@ -2479,10 +2444,6 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <div id="shop-vertical-controls" class="shop-ui">
-      <button id="shop-up-btn" type="button">&#9650;</button>
-      <button id="shop-down-btn" type="button">&#9660;</button>
-    </div>
     <div id="wordmark-panel">
       <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
     </div>

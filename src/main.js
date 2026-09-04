@@ -6625,9 +6625,6 @@ const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
-const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
-const shopUpBtn = document.getElementById('shop-up-btn');
-const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
@@ -6641,11 +6638,60 @@ const shopBuyHintEl = document.getElementById('shop-buy-hint');
 // (tilled earth, a building's footprint) while staying clearly distinct
 // from greenbelt's green and generating's amber.
 const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f };
-const SHOP_MOVE_SPEED_M_S = 14;
+// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.2 m/s
+// running. There's no separate run input (a run key/button) — the move
+// joystick's own deflection doubles as intensity, so pushing it all the way
+// out runs and a gentle nudge walks, the same analog feel a real joystick
+// gamepad gives a run.
+const SHOP_WALK_SPEED_M_S = 1.8;
+const SHOP_RUN_SPEED_M_S = 2.2;
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
-const SHOP_VERTICAL_SPEED_M_S = 10;
 const SHOP_MIN_HEIGHT_M = 1.5;
-const SHOP_MAX_PITCH = Math.PI * 0.47;
+// Tighter than the old free-fly camera's own 0.47*PI (~85deg) — that
+// figure let a bodiless camera look almost straight up/down freely, but
+// this third-person rig swings the camera up and over the avatar's own
+// head the more it looks down (see positionShopCamera), so an equally
+// steep pitch here would swing the camera into a near-fully-overhead,
+// disorienting god's-eye view. 0.35*PI (~63deg) still allows looking well
+// down at your own feet or up at a tall build without reaching that
+// extreme.
+const SHOP_MAX_PITCH = Math.PI * 0.35;
+// The avatar's own body proportions (docs/SPEC.md §2's default avatar —
+// see createShopAvatar), all in meters, hip-up from the ground the avatar
+// group's own origin sits on:
+const SHOP_AVATAR_LEG_LENGTH_M = 0.86;
+const SHOP_AVATAR_LEG_RADIUS_M = 0.075;
+const SHOP_AVATAR_HIP_WIDTH_M = 0.12;
+const SHOP_AVATAR_TORSO_LENGTH_M = 0.5;
+const SHOP_AVATAR_TORSO_RADIUS_M = 0.17;
+const SHOP_AVATAR_ARM_LENGTH_M = 0.6;
+const SHOP_AVATAR_ARM_RADIUS_M = 0.055;
+const SHOP_AVATAR_SHOULDER_WIDTH_M = 0.23;
+const SHOP_AVATAR_HEAD_RADIUS_M = 0.14;
+// Where the third-person camera orbits around — roughly head height, not
+// the very top of the head, so looking straight ahead frames the avatar
+// low in frame rather than staring at the back of its skull.
+const SHOP_CAMERA_ANCHOR_HEIGHT_M =
+  SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 0.6;
+// A fixed-radius orbit around that anchor (`positionShopCamera` below) — the
+// classic over-the-shoulder third-person rig: subtracting the look
+// direction from the anchor means looking down swings the camera up and
+// back, looking up swings it down and in, all without a separate
+// "collision" pass (clampShopCameraHeight/the wall-radius clamp still catch
+// the rare pose that would otherwise dip the camera underground or past the
+// world wall — see updateShopMovement).
+const SHOP_CAMERA_FOLLOW_DISTANCE_M = 4.2;
+// A full walk-cycle swing (hip/shoulder pivot, radians) at a full run;
+// scales down toward 0 as the joystick's own deflection (and thus speed)
+// drops toward a stand-still — see updateShopAvatarPose.
+const SHOP_AVATAR_SWING_AMPLITUDE_RAD = 0.55;
+// Radians/second the walk-cycle phase advances at a full run; scales down
+// with speed the same way the swing amplitude does, so a slow walk cycles
+// its legs slower as well as with a smaller swing, not just a smaller one.
+const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
+// How fast the avatar's swing amplitude eases toward its current target
+// (moving vs. stopped) each frame — see updateShopAvatarPose.
+const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
@@ -7056,37 +7102,6 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
   shopLookY = y;
 });
 
-// Altitude, as a separate concern from walking (which deliberately stays
-// horizontal — see updateShopMovement's own comment) and from zoom (a pure
-// lens effect, never actual movement — see SHOP_MIN_FOV_DEG's own
-// comment): press-and-hold buttons, not a third joystick, since two thumbs
-// already cover walk+look and a vertical-only third stick would be an
-// awkward, cramped addition to a phone screen already busy with both
-// hands. +1 while Up is held, -1 while Down, 0 otherwise, consumed every
-// animate() frame in updateShopMovement exactly like shopMoveX/Y already are.
-let shopVerticalInput = 0;
-function bindShopVerticalButton(el, direction) {
-  let pointerId = null;
-  el.addEventListener('pointerdown', (event) => {
-    event.stopPropagation();
-    pointerId = event.pointerId;
-    el.setPointerCapture(pointerId);
-    el.classList.add('active');
-    shopVerticalInput = direction;
-  });
-  const end = (event) => {
-    if (event.pointerId !== pointerId) return;
-    pointerId = null;
-    el.classList.remove('active');
-    if (shopVerticalInput === direction) shopVerticalInput = 0;
-  };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-  el.addEventListener('pointerleave', end);
-}
-bindShopVerticalButton(shopUpBtn, 1);
-bindShopVerticalButton(shopDownBtn, -1);
-
 // Zoom: narrows/widens the camera's own field of view rather than moving
 // it — there's no "target" to dolly toward like OrbitControls' zoom has,
 // just a free-flying camera, so a lens-zoom is the natural equivalent.
@@ -7137,17 +7152,140 @@ renderer.domElement.addEventListener('pointercancel', shopPinchEnd);
 
 const shopForward = new THREE.Vector3();
 const shopRight = new THREE.Vector3();
+const shopViewDirection = new THREE.Vector3();
+const shopMoveDir = new THREE.Vector3();
+const shopCameraAnchor = new THREE.Vector3();
 
-// Shared by walking's own floor clamp and the vertical Up/Down buttons —
-// keeps the camera between the ground and comfortably below the dome's
-// current apex (see SHOP_DOME_CLEARANCE_MARGIN_M), the same "a real
-// boundary, not just a backdrop" treatment the radial wall clamp already
-// gets just below this. The dome's own apex can grow over the course of a
-// session (see growShopDomeIfNeeded), so this is recomputed fresh each
-// call rather than cached.
+// The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
+// non-gendered avatar assigned instantly at registration"). No character
+// asset/rig exists yet, so this is a plain, neutral placeholder built from
+// primitives — a real modeled-and-rigged replacement is future work, not
+// this pass's job. Limbs are each their own pivot Group (hip/shoulder
+// height, empty at the pivot's own local origin) with the limb mesh hung
+// below it (`mesh.position.z = -length / 2`), so a walk cycle can just
+// rotate the pivot about local X — swinging the limb through the
+// forward/back-and-up/down sagittal plane exactly like a real hip/shoulder
+// joint — rather than needing a skeleton for one swinging joint per limb.
+function createShopAvatar() {
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x5b8dc9 });
+  const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe8c9a0 });
+
+  function limb(radius, length, material) {
+    const pivot = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 8), material);
+    mesh.rotation.x = Math.PI / 2; // stand the cylinder's local-Y axis up along world Z
+    mesh.position.z = -length / 2; // hang it below the pivot rather than centered on it
+    pivot.add(mesh);
+    return pivot;
+  }
+
+  const group = new THREE.Group();
+
+  const legPivotL = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
+  legPivotL.position.set(-SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
+  group.add(legPivotL);
+  const legPivotR = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
+  legPivotR.position.set(SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
+  group.add(legPivotR);
+
+  const torso = new THREE.Mesh(
+    new THREE.CapsuleGeometry(SHOP_AVATAR_TORSO_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M, 4, 8),
+    bodyMaterial,
+  );
+  torso.rotation.x = Math.PI / 2;
+  torso.position.z = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M / 2 + SHOP_AVATAR_TORSO_RADIUS_M;
+  group.add(torso);
+
+  const shoulderZ = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 0.6;
+  const armPivotL = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
+  armPivotL.position.set(-SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
+  group.add(armPivotL);
+  const armPivotR = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
+  armPivotR.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
+  group.add(armPivotR);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
+  head.position.z =
+    SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
+  group.add(head);
+
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR };
+}
+
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR } — see createShopAvatar
+const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
+let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
+let shopAvatarWalkPhase = 0;
+
+// Swing amplitude eases toward its target (moving vs. standing still)
+// rather than snapping, so stopping doesn't visibly freeze the legs
+// mid-stride — and phase only advances while actually moving, so a full
+// stop always eases back toward a neutral standing pose rather than
+// leaving a limb stuck part-swung. moveMagnitude (0..1, the move
+// joystick's own deflection) scales both the eased-toward amplitude and
+// how fast the cycle advances, the same walk-slower/run-faster feel
+// SHOP_WALK_SPEED_M_S..SHOP_RUN_SPEED_M_S already gives actual ground speed.
+function updateShopAvatarPose(moveMagnitude, dt) {
+  const targetSwing = SHOP_AVATAR_SWING_AMPLITUDE_RAD * moveMagnitude;
+  shopAvatarSwing += (targetSwing - shopAvatarSwing) * Math.min(1, SHOP_AVATAR_SWING_EASE_PER_S * dt);
+  shopAvatarWalkPhase += SHOP_AVATAR_CYCLE_SPEED_RAD_S * moveMagnitude * dt;
+
+  const swing = Math.sin(shopAvatarWalkPhase) * shopAvatarSwing;
+  shopAvatar.legPivotL.rotation.x = swing;
+  shopAvatar.legPivotR.rotation.x = -swing;
+  // Arms swing opposite their same-side leg (left arm forward with right
+  // leg forward) — a real walk's natural counter-swing — at a gentler
+  // amplitude than the legs.
+  shopAvatar.armPivotL.rotation.x = -swing * 0.7;
+  shopAvatar.armPivotR.rotation.x = swing * 0.7;
+}
+
+// Shared by walking's own floor clamp and the camera-follow height — keeps
+// the camera between the ground and comfortably below the dome's current
+// apex (see SHOP_DOME_CLEARANCE_MARGIN_M), the same "a real boundary, not
+// just a backdrop" treatment the radial wall clamp already gets just below
+// this. The dome's own apex can grow over the course of a session (see
+// growShopDomeIfNeeded), so this is recomputed fresh each call rather than
+// cached.
 function clampShopCameraHeight() {
   const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
   camera.position.z = THREE.MathUtils.clamp(camera.position.z, SHOP_MIN_HEIGHT_M, maxHeight);
+}
+
+// The world wall (see enterShopMode) is a real boundary, not just a
+// backdrop — pulls (x, y) radially back inside it in place. Shared by the
+// avatar's own ground position (so a builder can never walk past the wall)
+// and the follow camera (so a follow distance long enough to swing the
+// camera past the wall on its own can't peek through it either).
+function clampShopRadius(position) {
+  if (shopWorldRadiusM === null) return;
+  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
+  const maxRadius = shopWorldRadiusM - clearance;
+  const distance = Math.hypot(position.x, position.y);
+  if (distance > maxRadius) {
+    const scale = maxRadius / distance;
+    position.x *= scale;
+    position.y *= scale;
+  }
+}
+
+// The classic over-the-shoulder third-person rig: orbits the camera around
+// a fixed-radius sphere (SHOP_CAMERA_FOLLOW_DISTANCE_M) centered on the
+// avatar's own head-height anchor, using the exact look direction
+// (shopViewDirection, full 3D — unlike shopForward/shopRight below, this
+// one is deliberately *not* flattened) already established by
+// applyShopCameraOrientation. Subtracting that direction from the anchor
+// means looking down swings the camera up and back over the avatar's
+// shoulder, looking up swings it down and in toward the avatar's own back —
+// exactly what a shoulder-cam should do, with no separate orbit math needed
+// beyond the walking camera's own existing yaw/pitch state.
+function positionShopCamera() {
+  camera.getWorldDirection(shopViewDirection);
+  shopCameraAnchor.copy(shopAvatarPosition);
+  shopCameraAnchor.z += SHOP_CAMERA_ANCHOR_HEIGHT_M;
+  camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
+  clampShopCameraHeight();
+  clampShopRadius(camera.position);
 }
 
 function updateShopMovement(now) {
@@ -7167,10 +7305,18 @@ function updateShopMovement(now) {
     applyShopCameraOrientation();
   }
 
+  // The avatar always faces the same way the camera looks (horizontally) —
+  // this control scheme's forward/back/strafe are already relative to that
+  // facing (below), so turning the look joystick turns the avatar's body
+  // along with the camera around it, exactly like a standard third-person
+  // shoulder-cam rig.
+  shopAvatar.group.rotation.z = shopYaw;
+
+  let moveMagnitude = 0;
   if (shopMoveX !== 0 || shopMoveY !== 0) {
     // Movement stays in the horizontal plane (forward/right with their Z
-    // dropped) so looking up or down while walking doesn't fly the camera
-    // into the ground or sky — walking, not free flight.
+    // dropped) so looking up or down while walking doesn't walk the avatar
+    // into the ground or sky.
     camera.getWorldDirection(shopForward);
     shopForward.z = 0;
     if (shopForward.lengthSq() > 1e-6) shopForward.normalize();
@@ -7178,35 +7324,22 @@ function updateShopMovement(now) {
     shopRight.z = 0;
     if (shopRight.lengthSq() > 1e-6) shopRight.normalize();
 
-    camera.position.addScaledVector(shopForward, -shopMoveY * SHOP_MOVE_SPEED_M_S * dt);
-    camera.position.addScaledVector(shopRight, shopMoveX * SHOP_MOVE_SPEED_M_S * dt);
-    clampShopCameraHeight();
-
-    // The world wall (see enterShopMode) is a real boundary, not just a
-    // backdrop — keep the camera inside it the same way the floor clamp
-    // above keeps it above ground.
-    if (shopWorldRadiusM !== null) {
-      const clearance = Math.max(
-        SHOP_WALL_CLEARANCE_MIN_M,
-        Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15),
-      );
-      const maxRadius = shopWorldRadiusM - clearance;
-      const distance = Math.hypot(camera.position.x, camera.position.y);
-      if (distance > maxRadius) {
-        const scale = maxRadius / distance;
-        camera.position.x *= scale;
-        camera.position.y *= scale;
-      }
+    moveMagnitude = Math.min(1, Math.hypot(shopMoveX, shopMoveY));
+    const speed = THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
+    shopMoveDir
+      .set(0, 0, 0)
+      .addScaledVector(shopForward, -shopMoveY)
+      .addScaledVector(shopRight, shopMoveX);
+    if (shopMoveDir.lengthSq() > 1e-6) {
+      shopMoveDir.normalize();
+      shopAvatarPosition.addScaledVector(shopMoveDir, speed * dt);
     }
+    clampShopRadius(shopAvatarPosition);
   }
 
-  // A separate concern from walking (see the comment above): press-and-hold
-  // Up/Down buttons that move the camera straight along world Z, regardless
-  // of look direction or whether the walk joystick is also active.
-  if (shopVerticalInput !== 0) {
-    camera.position.z += shopVerticalInput * SHOP_VERTICAL_SPEED_M_S * dt;
-    clampShopCameraHeight();
-  }
+  updateShopAvatarPose(moveMagnitude, dt);
+  shopAvatar.group.position.copy(shopAvatarPosition);
+  positionShopCamera();
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
     shopLastProximityCheck = now;
@@ -7831,7 +7964,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 ];
 
 async function enterShopMode() {
-  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopVerticalControlsEl]) {
+  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
@@ -7959,10 +8092,21 @@ async function enterShopMode() {
     shopLandlets.set(record.landletId, { record, group, loaded: false, objects: [] });
   }
 
-  camera.position.set(0, 0, 8);
+  // Shop mode can be (re-)entered without a reload (see this function's own
+  // opening comment) — remove any avatar left over from a previous round
+  // trip before building a fresh one, rather than ending up with two
+  // overlapping bodies.
+  if (shopAvatar) scene.remove(shopAvatar.group);
+  shopAvatar = createShopAvatar();
+  scene.add(shopAvatar.group);
+  shopAvatarPosition.set(0, 0, 0);
+  shopAvatarSwing = 0;
+  shopAvatarWalkPhase = 0;
+
   shopYaw = 0;
   shopPitch = -0.12;
   applyShopCameraOrientation();
+  positionShopCamera();
   setShopFov(camera.fov); // re-clamp in case a previous Shop session left it zoomed
   shopLastFrameTime = null;
   shopLastProximityCheck = 0;
