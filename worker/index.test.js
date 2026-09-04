@@ -4069,6 +4069,29 @@ describe('Simulated purchases', () => {
     expect(limited.response.status).toBe(429);
   }, 20000);
 
+  it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
+    // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;
+    // concurrent requests sharing a bucket could all read the same
+    // under-the-limit count before any of their inserts committed, letting
+    // a burst blow past the limit. Firing every request at once (rather
+    // than the sequential loop above, which an unfixed version would also
+    // have passed) is what actually exercises that race.
+    const seller = await signupBuilder('purchase-rate-limit-burst-seller');
+    await createGreenbeltLandletWithArea('purchase-rate-limit-burst-landlet', 1000);
+    await claim('purchase-rate-limit-burst-landlet', seller);
+    await createTemplate('purchase-rate-limit-burst-template', { priceCents: 1000 });
+    await placeInstance('purchase-rate-limit-burst-instance', 'purchase-rate-limit-burst-landlet', 'purchase-rate-limit-burst-template', seller);
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    const attempts = await Promise.all(
+      Array.from({ length: 40 }, () => api('/instances/purchase-rate-limit-burst-instance/purchase', { method: 'POST', headers })),
+    );
+    const succeeded = attempts.filter((a) => a.response.status !== 429);
+    const limited = attempts.filter((a) => a.response.status === 429);
+    expect(succeeded).toHaveLength(30);
+    expect(limited).toHaveLength(10);
+  }, 20000);
+
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
