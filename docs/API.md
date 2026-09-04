@@ -3193,7 +3193,11 @@ being bought. Returns `201` with the created `purchase`:
 
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
-buy) or the instance sits on an unclaimed lándlet (no builder to credit).
+buy), the instance sits on an unclaimed lándlet (no builder to credit), or
+`quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
+reasoning as auctions' `durationHours` cap above) against this
+deliberately unauthenticated, unrate-limited endpoint turning one request
+into an unbounded `dallers_balance_cents`/land-cap credit.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own

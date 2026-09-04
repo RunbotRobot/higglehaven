@@ -3503,6 +3503,31 @@ describe('Simulated purchases', () => {
     expect(badQuantity.response.status).toBe(400);
   });
 
+  it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
+    // This endpoint is deliberately unauthenticated (see docs/API.md's
+    // "Simulated purchases") with no rate limit, so quantity is the only
+    // guard against one request minting an arbitrary dállers credit.
+    const seller = await signupBuilder('purchase-quantity-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
+    await claim('purchase-quantity-cap-landlet', seller);
+    await createTemplate('purchase-quantity-cap-template', { priceCents: 1000 });
+    await placeInstance('purchase-quantity-cap-instance', 'purchase-quantity-cap-landlet', 'purchase-quantity-cap-template', seller);
+
+    const tooMany = await api('/instances/purchase-quantity-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1001 }),
+    });
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: 'quantity must be 1000 or fewer' });
+
+    const atCap = await api('/instances/purchase-quantity-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1000 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.quantity).toBe(1000);
+  });
+
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
