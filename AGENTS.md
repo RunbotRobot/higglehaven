@@ -2,13 +2,9 @@
 
 - Read `docs/SPEC.md` before making product-level decisions.
 - Read `docs/API.md` before changing backend API behavior.
-- Codex owns backend work: `worker/`, `migrations/`, backend tests, Wrangler
-  configuration, and backend documentation.
-- Claude owns frontend work.
-- Do not modify `src/main.js`, `src/catalog.js`, `src/layoutStorage.js`, or
-  `index.html` unless the user explicitly assigns frontend work.
-- Keep the project dev-only: no auth, payments, or multiplayer unless explicitly
-  requested.
+- Real account auth (signup/login) is built and live — see docs/API.md's
+  "Authentication". Real payments and multiplayer are still not built;
+  keep those dev-only/simulated unless explicitly requested.
 - Use plain `a` in internal code, database, file, and API names. Use accented
   spellings only in customer-facing display strings.
 - Use Cloudflare free-tier-compatible designs.
@@ -23,8 +19,7 @@ starting. Short version:
 
 - Each session works on its own branch, named `higglehaven1`,
   `higglehaven2`, etc. (no fixed scope per number), forked from the
-  current trunk (`claude/higglehaven-mvp-setup-7zctj8` — there is no
-  separate `main`). Merge back via PR.
+  current trunk (`main`). Merge back via PR.
 - Claim a task by self-assigning its GitHub Issue before starting; file
   one if it doesn't exist yet.
 - Comment on Issue #25 with your session name/branch/task whenever you
