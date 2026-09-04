@@ -2719,6 +2719,36 @@ describe('Auctions', () => {
     }));
     expect(bid.response.status).toBe(409);
   });
+
+  it('reports each auction\'s own highest bid and bid count on the list endpoint, not just on single-fetch', async () => {
+    // Regression test for the list branch's N+1 fix (#35): batching the
+    // highest-bid/bid-count lookup across the whole page must still land
+    // each result on the correct auction, including one with zero bids
+    // sitting alongside others that have some.
+    // Two separate owners: a builder can only ever claim one landlet
+    // through the normal claim flow (their one free starter landlet), so
+    // seeding two auctions on one page needs two owners, not one owner
+    // with two landlets.
+    const ownerNoBids = await signupBuilder('list-bids-owner-a');
+    const ownerTwoBids = await signupBuilder('list-bids-owner-b');
+    const bidder = await signupBuilder('list-bids-bidder');
+    await createGreenbeltLandlet('auction-list-bids-no-bids');
+    await createGreenbeltLandlet('auction-list-bids-two-bids');
+    await claim('auction-list-bids-no-bids', ownerNoBids);
+    await claim('auction-list-bids-two-bids', ownerTwoBids);
+
+    const noBids = await api('/landlets/auction-list-bids-no-bids/auction', ownerNoBids.session({ method: 'POST', body: JSON.stringify({}) }));
+    const twoBids = await api('/landlets/auction-list-bids-two-bids/auction', ownerTwoBids.session({ method: 'POST', body: JSON.stringify({}) }));
+    const twoBidsId = twoBids.body.auction.auctionId;
+    await api(`/auctions/${twoBidsId}/bids`, bidder.session({ method: 'POST', body: JSON.stringify({ amountCents: 500 }) }));
+    await api(`/auctions/${twoBidsId}/bids`, bidder.session({ method: 'POST', body: JSON.stringify({ amountCents: 900 }) }));
+
+    const list = await api('/auctions?status=active');
+    const noBidsListed = list.body.auctions.find((a) => a.auctionId === noBids.body.auction.auctionId);
+    const twoBidsListed = list.body.auctions.find((a) => a.auctionId === twoBidsId);
+    expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
+    expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
+  });
 });
 
 describe('Friendships', () => {
