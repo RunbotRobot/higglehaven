@@ -124,7 +124,7 @@ whatever guessing produced the lockout.
 
 **Rate limiting:** `checkRateLimit` in `worker/index.js` (migrations/0057)
 guards `POST /api/auth/signup` and `POST /api/auth/request-password-reset`
-— the two endpoints that are both unauthenticated/repeatable and (once
+— the two auth endpoints that are both unauthenticated/repeatable and (once
 `RESEND_API_KEY` is configured, below) can trigger a real outbound email to
 an arbitrary address. `POST /api/auth/login` doesn't need this — it
 already has the account-level lockout described above — and
@@ -144,6 +144,12 @@ covered today by the private-preview access-gate passphrase below (these
 endpoints are unreachable at all without it), and would need something
 like Cloudflare Turnstile/Bot Management if that gate ever comes off, not
 just a bigger version of this.
+
+The same `checkRateLimit` helper also guards `POST /api/models` (see
+"Custom model uploads" below) — a different unauthenticated/repeatable
+endpoint with a different abuse shape: it doesn't send email, but each call
+can burn shared R2 storage headroom, so it's bucketed by client IP alone
+(no per-target email to key on), 20 attempts per 15-minute window.
 
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
@@ -3955,7 +3961,11 @@ the built-in catalog:
   `{ modelUrl, sourceName, sizeBytes, deduplicated }`. Re-uploading identical
   validated bytes returns the existing immutable object with `200` and
   `deduplicated: true`, without consuming storage headroom or repeating the
-  full storage scan. New objects return `201`. The returned `modelUrl` is then used
+  full storage scan. New objects return `201`. Unauthenticated on purpose
+  (an upload alone doesn't register a catalog product — see below — so
+  there's no owner to spoof), but rate-limited per client IP (see "Rate
+  limiting" above) since each call can still burn shared storage headroom.
+  The returned `modelUrl` is then used
   as-is in a normal `POST /api/catalog` call to register the product — upload
   and catalog registration are two independent steps. Catalog creates and
   updates validate `/uploads/` model URLs against live R2 metadata and return

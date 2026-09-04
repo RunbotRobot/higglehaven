@@ -164,6 +164,30 @@ describe('Worker API', () => {
     expect(rejected.headers.get('allow')).toBe('GET, HEAD, DELETE');
   });
 
+  it('rate-limits repeated model uploads from the same client', async () => {
+    // POST /api/models is unauthenticated on purpose (see the removed-URL-
+    // import comment in handleModelUpload), but each call can burn shared
+    // R2 storage headroom, so it gets the same per-client throttle as
+    // signup/password-reset. A synthetic cf-connecting-ip keeps this
+    // test's bucket from colliding with every other model-upload test in
+    // this file, which otherwise all share the same "unknown" IP bucket
+    // (mirrors how the signup rate-limit test uses a unique email instead).
+    // 20 succeed (as either a fresh 201 or a deduplicated 200 — both still
+    // count against the limit); the 21st is rejected before it ever
+    // touches R2.
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const form = new FormData();
+      form.set('file', glbFile());
+      const attempt = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+      expect(attempt.status).not.toBe(429);
+    }
+    const form = new FormData();
+    form.set('file', glbFile());
+    const limited = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers });
+    expect(limited.status).toBe(429);
+  });
+
   it('deletes only unreferenced uploaded models', async () => {
     const missingModel = await api('/catalog', {
       method: 'POST',
