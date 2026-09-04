@@ -1,0 +1,16 @@
+-- Land acquisition auctions (docs/SPEC.md §5, §0: "which specific
+-- already-claimed lánds can be acquired via auction") let a winner end up
+-- owning more than one claimed lándlet — their own starter one plus
+-- whatever they win. idx_landlets_one_claimed_per_builder (0006) predates
+-- auctions and enforces a stricter "one claimed lándlet per builder, ever"
+-- rule at the database level. The free/starter claim flow (POST
+-- .../claim in worker/index.js) already re-checks this itself via a
+-- NOT EXISTS subquery in its own UPDATE statement, so the invariant this
+-- index existed for — a builder can't claim a second *free* starter
+-- lándlet — is preserved without it. Left in place, the DB-level version
+-- instead makes resolveAuction's ownership-transfer UPDATE fail with a
+-- UNIQUE constraint violation for any winning bidder who (as essentially
+-- every real builder does) already owns a claimed lándlet, which
+-- resolveDueAuctions then surfaces as a 409 on GET /api/auctions for
+-- everyone, not just that one stuck auction.
+DROP INDEX IF EXISTS idx_landlets_one_claimed_per_builder;
