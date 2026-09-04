@@ -40,3 +40,21 @@ starting. Short version:
   budget every other active session is also drawing from. If your branch
   is more than a few commits behind `main`, merge/rebase before your next
   push rather than after.
+
+### Backlog exploration — file everything you find, not just one issue
+
+When you go looking for work by exploring the codebase (rather than
+picking up an already-filed issue), you'll typically turn up several
+plausible findings before settling on one to fix. File **all** of them as
+separate GitHub Issues in that same pass, not just the one you're about
+to claim — self-assign and start on one, leave the rest open and
+unclaimed. Note in each issue body that it surfaced during a broader
+exploration pass, so nobody mistakes it for noise.
+
+This exists because exploration itself is the expensive, easy-to-duplicate
+part: with several sessions running in parallel, each one independently
+re-scanning the same files for "what's left to fix" is wasted work, and
+it's also how two sessions end up fixing the identical thing at once (it
+has happened — see Issue #25's history). A real backlog of pre-scoped,
+unclaimed issues lets the next idle session grab one directly instead of
+re-running your search from scratch.

@@ -244,6 +244,12 @@ async function handleUploadedAsset(request, env) {
 
   if (request.method === 'DELETE') {
     if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500);
+    // Same admin-only bar as /api/models/cleanup below (and every other
+    // maintenance-tooling endpoint gated by requireAdmin) — deleting an R2
+    // object outright, unlike every other mutating endpoint in this file,
+    // has no owning builder/seller to check against, so "logged in" alone
+    // isn't a meaningful bar here.
+    await requireAdmin(request, env.DB);
     const modelUrl = `/uploads/${key}`;
     const referenced = await env.DB.prepare(`
       SELECT template_id FROM catalog_templates WHERE model_url = ? LIMIT 1
@@ -491,6 +497,14 @@ async function handleModelStorage(request, env) {
 
 async function handleModelCleanup(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  // Admin-only: this bulk-deletes any unreferenced upload in the shared R2
+  // bucket, including another builder's in-progress upload that just
+  // hasn't been registered via POST /api/catalog yet (the two are
+  // deliberately independent steps — see handleModelUpload's own comment).
+  // Same bar as the world/land-candidate tooling above. (handleApi already
+  // guarantees env.DB is configured before routing here, unlike
+  // handleUploadedAsset below, which sits outside handleApi entirely.)
+  await requireAdmin(request, env.DB);
   const input = await readJson(request);
   const maxDeletes = positiveInteger(input.maxDeletes ?? 100, 'maxDeletes');
   if (maxDeletes > 100) throw new HttpError('maxDeletes must be at most 100', 400);
@@ -4117,6 +4131,14 @@ async function handleInstancePurchase(request, db, instanceId) {
 
 async function finishPurchase(db, instance, template, landlet, input) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
+  // Capped as a sanity bound against a malformed/abusive request producing
+  // an absurd totalCents (and the dállers-balance/land-cap credit that
+  // flows from it) — not itself a spec requirement, same reasoning as
+  // durationHours' cap above. This endpoint has no session/rate limit
+  // (see docs/API.md's "Simulated purchases" — deliberately unauthenticated,
+  // there's no real payment backing it), so quantity was the only thing
+  // standing between one request and an unbounded credit.
+  if (quantity > 1000) throw new HttpError('quantity must be 1000 or fewer', 400);
   const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;
