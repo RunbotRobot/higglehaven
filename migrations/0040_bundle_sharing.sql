@@ -3,7 +3,9 @@
 -- bundle tab"). A shared bundle is still owned by whoever created it —
 -- this only controls whether other builders can see and place it, not
 -- whether they can edit or delete it (see handleBundles' own ownership
--- comment in worker/index.js).
+-- comment in worker/index.js). Supersedes 0039's closing note that
+-- bundles are "private ... for now — no 'shared' visibility flag yet" —
+-- that's exactly what this migration adds, one migration later.
 ALTER TABLE bundles ADD COLUMN shared INTEGER NOT NULL DEFAULT 0;
 
 -- Partial index: the community listing only ever queries shared = 1, and
