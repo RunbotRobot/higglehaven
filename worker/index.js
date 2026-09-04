@@ -1814,19 +1814,45 @@ async function handleAuctionBids(request, db, route) {
       throw new HttpError('The seller cannot bid on their own auction', 400);
     }
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    const highest = await db.prepare(`
-      SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-    `).bind(auctionId).first();
-    const minimumCents = highest ? highest.amount_cents + 1 : resolved.starting_bid_cents;
-    if (amountCents < minimumCents) {
-      throw new HttpError(`amountCents must be at least ${minimumCents}`, 400);
+    // starting_bid_cents is immutable once the auction is created, so this
+    // floor is safe to check against the value already read above — no
+    // race window here. The "must exceed the current highest bid" floor
+    // below is the one that actually moves under concurrent bids, so that
+    // one is enforced atomically instead.
+    if (amountCents < resolved.starting_bid_cents) {
+      throw new HttpError(`amountCents must be at least ${resolved.starting_bid_cents}`, 400);
     }
     const bidId = `bid-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)
-    `).bind(bidId, auctionId, builderId, amountCents).run();
+    // A read-then-insert here (read the highest bid, validate against it,
+    // insert) would be the same TOCTOU shape this codebase deliberately
+    // avoids elsewhere (landlet claim's atomic UPDATE ... WHERE, the
+    // calendar-event trigger's UPDATE ... WHERE triggered_at IS NULL):
+    // two concurrent bids could both read the same stale highest, both
+    // pass validation, and both land even though each bid must strictly
+    // exceed whatever the highest actually is by the time it's inserted.
+    // This conditional insert makes "no existing bid already meets or
+    // beats this amount" part of the write itself.
+    const inserted = await db.prepare(`
+      INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+      )
+    `).bind(bidId, auctionId, builderId, amountCents, auctionId, amountCents).run();
+    if (inserted.meta.changes === 0) {
+      const currentHighest = await db.prepare(`
+        SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+      `).bind(auctionId).first();
+      throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+    }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
-    await notifyOfNewBid(db, resolved, amountCents, builderId, highest);
+    // Re-derived after the insert (excluding the bid just inserted) rather
+    // than reusing a pre-insert read, which could be stale by the time this
+    // bid actually landed.
+    const previousHighest = await db.prepare(`
+      SELECT * FROM auction_bids WHERE auction_id = ? AND bid_id != ? ORDER BY amount_cents DESC, created_at LIMIT 1
+    `).bind(auctionId, bidId).first();
+    await notifyOfNewBid(db, resolved, amountCents, builderId, previousHighest);
     const bidRow = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).first();
     return json({ bid: auctionBidFromRow(bidRow) }, 201);
   }
