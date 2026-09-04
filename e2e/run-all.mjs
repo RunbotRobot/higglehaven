@@ -106,6 +106,15 @@ async function runOneTest(testFile) {
     passed = true;
   } catch (err) {
     console.error(`FAILED: ${testFile}`);
+    // wrangler dev relays the Worker's own runtime console.* calls back to
+    // its CLI output asynchronously (over the inspector protocol, not a
+    // direct pipe from the request handler) — reading the captured buffer
+    // in the same tick as the failure risked missing a console.error the
+    // Worker had already made but wrangler hadn't relayed yet (confirmed:
+    // a real HTTP 500 in a run showed nothing here but the startup banner,
+    // even though worker/index.js's own catch-all does console.error every
+    // unclassified error). A short grace period lets it land first.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     console.log(`\n--- wrangler dev server output for ${testFile} (tail, may explain the failure above) ---`);
     console.log(wranglerLog || '(no server output captured)');
     console.log(`--- end wrangler dev server output for ${testFile} ---\n`);
