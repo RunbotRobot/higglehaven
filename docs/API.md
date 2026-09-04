@@ -2872,11 +2872,14 @@ Two things the spec ties to auctions are **not** implemented, because
 neither has anywhere to attach to in this dev-mode backend yet:
 
 - **Land cap** (a per-builder max-total-area limit that grows only via
-  demonstrated commission earnings) doesn't exist anywhere in this
-  codebase — there's no real commerce/checkout pipeline to earn
-  commission from, so there's no earnings figure to gate cap growth on.
-  Starting or winning an auction never checks or changes anything cap-
-  related.
+  demonstrated commission earnings) is real and live — see "Land cap"
+  below (`migrations/0050_land_cap.sql`, `recomputeLandCap`) — but is
+  deliberately tracking-only, never enforced against starting or winning
+  an auction. That section covers why: a hard block was implemented,
+  tested, and reverted after e2e testing surfaced a bootstrapping trap
+  (every builder starts at exactly 100% of their cap, and auction sale
+  proceeds are the only dáller-earning path this dev-mode backend actually
+  has).
 - **Balance-gated bidding.** Every builder starts at `dallersBalanceCents:
   0` with no way to earn any except winning an auction as the *seller* —
   requiring a sufficient balance to *bid* would make the feature
@@ -2894,9 +2897,12 @@ neither has anywhere to attach to in this dev-mode backend yet:
   auction, voluntary or not.
 - **No scheduled resolution job.** There's no Cloudflare Cron Trigger
   wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
-  resolves every active-but-expired auction before returning results
-  (`resolveDueAuctions` in `worker/index.js`), and any single-auction read
-  or bid attempt resolves that one auction first if it's due
+  resolves due auctions before returning results (`resolveDueAuctions` in
+  `worker/index.js`), capped at `AUCTION_SWEEP_LIMIT` (25) oldest-due-first
+  per call so one request can't be forced into unbounded sequential
+  resolution work — a backlog larger than that clears over a few calls
+  instead of blocking any single one. Any single-auction read or bid
+  attempt resolves that one auction first if it's due
   (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists for a
   frontend "time's up, finalize it" action without waiting for a future
   read to trigger it as a side effect.
