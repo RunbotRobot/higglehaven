@@ -4139,9 +4139,19 @@ async function handlePurchases(request, db, route, url) {
 async function handlePurchaseRefund(request, db, purchaseId) {
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  // A purchase's seller_id can genuinely be null — catalog templates don't
+  // require a sellerId at creation (an admin/system-owned placeholder
+  // item can still be priced and purchased). That's fine for creating one,
+  // but a refund actually claws back real dállers from a builder's
+  // balance, so it can never fall through to "no owner, no check" the way
+  // read-only/creation paths on ownerless resources do elsewhere — it
+  // needs admin instead, the same fallback used for the other genuinely
+  // ownerless-but-sensitive mutations (see requireAdmin's other callers).
   if (purchase.seller_id) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  } else {
+    await requireAdmin(request, db);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
