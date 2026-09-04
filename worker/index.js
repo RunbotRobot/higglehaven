@@ -1079,10 +1079,15 @@ async function handleBuilders(request, db, route) {
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
     // read, rather than on a schedule — the same pattern this app uses
     // everywhere else. Mutating each row in place with the freshly
-    // recomputed value avoids a second round-trip re-fetch.
-    await Promise.all(results.map(async (row) => {
-      row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
-    }));
+    // recomputed value avoids a second round-trip re-fetch. Batched (2
+    // aggregate queries + a single multi-statement update for whatever
+    // rows actually changed) rather than recomputeLandCap's one-builder
+    // round trip repeated per row — that per-row version is fine for the
+    // single-builder call sites below, but here it turned this endpoint
+    // into an N+1 query (3+ awaited round trips per builder) that gets
+    // linearly slower as the builder count grows, which is exactly what a
+    // "list everyone" endpoint can't afford.
+    await recomputeLandCapsBatch(db, results);
     return json({ builders: results.map(builderFromRow) });
   }
 
@@ -1350,9 +1355,10 @@ function notificationFromRow(row) {
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
-// pending -> accepted in place. No ownership check on PATCH/DELETE — same
-// no-real-auth caveat as every other dev-mode identity in this file; the
-// frontend only shows Accept on the recipient's own incoming requests.
+// pending -> accepted in place. PATCH is gated to the recipient (only they
+// can accept) and DELETE to either side (either can end/decline it) — both
+// enforced below via requireSessionBuilder + assertOwner, not left to the
+// frontend to police.
 //
 // "Social map ... approximate location" is deliberately simplified to each
 // accepted friend's owned lándlet center — this app has no live avatar
@@ -1683,7 +1689,7 @@ async function handleAuctions(request, db, route, url) {
     const page = results.slice(0, limit);
     const last = page.at(-1);
     return json({
-      auctions: await Promise.all(page.map((row) => auctionFromRow(db, row))),
+      auctions: await auctionsFromRowsBatch(db, page),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.auction_id) : null,
     });
   }
@@ -1809,6 +1815,19 @@ const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 // already use, rather than on any kind of schedule — specifically, on
 // every GET of the builder it belongs to, so landCapM2 is always current
 // by the time any caller actually reads it.
+// Pure formula shared by the single-builder and batched recompute paths
+// below — trailing earnings + currently-owned area in, the cap the
+// builder should have right now out, never lower than what they already
+// have (the ratchet).
+function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
+  const normalizedThousands = Math.max(ownedAreaM2, LAND_CAP_STARTER_M2) / 1000;
+  const trailingEarningsDollars = trailingEarningsCents / 100;
+  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
+  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
+  const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
+  return Math.max(currentCapM2, candidateCap);
+}
+
 async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return LAND_CAP_STARTER_M2;
@@ -1820,16 +1839,50 @@ async function recomputeLandCap(db, builderId) {
   const ownedRow = await db.prepare(`
     SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
   `).bind(builderId).first();
-  const normalizedThousands = Math.max(ownedRow.total, LAND_CAP_STARTER_M2) / 1000;
-  const trailingEarningsDollars = earningsRow.total / 100;
-  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
-  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
-  const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
-  const nextCap = Math.max(builder.land_cap_m2, candidateCap);
+  const nextCap = computeNextLandCap(builder.land_cap_m2, earningsRow.total, ownedRow.total);
   if (nextCap !== builder.land_cap_m2) {
     await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
   }
   return nextCap;
+}
+
+// List-endpoint version of the above: instead of the same 2-3 queries
+// repeated once per builder (an N+1 round-trip pattern that made GET
+// /api/builders get linearly slower as the builder count grew), pulls
+// earnings and owned-area totals for every builder in exactly 2 aggregate
+// queries, then applies the identical formula in memory. Mutates each
+// row's land_cap_m2 in place (matching recomputeLandCap's per-row
+// contract) and persists only the rows that actually changed, in a single
+// batched call.
+async function recomputeLandCapsBatch(db, rows) {
+  if (rows.length === 0) return;
+  const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const [earnings, owned] = await Promise.all([
+    db.prepare(`
+      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      WHERE created_at >= ? GROUP BY builder_id
+    `).bind(windowStart).all(),
+    db.prepare(`
+      SELECT owner_builder_id AS builder_id, COALESCE(SUM(area_m2), 0) AS total FROM landlets
+      WHERE owner_builder_id IS NOT NULL AND status = 'claimed' GROUP BY owner_builder_id
+    `).all(),
+  ]);
+  const earningsByBuilder = new Map(earnings.results.map((row) => [row.builder_id, row.total]));
+  const ownedByBuilder = new Map(owned.results.map((row) => [row.builder_id, row.total]));
+
+  const updates = [];
+  for (const row of rows) {
+    const nextCap = computeNextLandCap(
+      row.land_cap_m2,
+      earningsByBuilder.get(row.builder_id) ?? 0,
+      ownedByBuilder.get(row.builder_id) ?? 0,
+    );
+    if (nextCap !== row.land_cap_m2) {
+      row.land_cap_m2 = nextCap;
+      updates.push(db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, row.builder_id));
+    }
+  }
+  if (updates.length > 0) await db.batch(updates);
 }
 
 // Sweeps every active-but-expired auction and resolves each in turn — the
@@ -1949,11 +2002,10 @@ function formatCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-async function auctionFromRow(db, row) {
-  const highest = await db.prepare(`
-    SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-  `).bind(row.auction_id).first();
-  const bidCount = await db.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind(row.auction_id).first();
+// Pure formula shared by the single-auction and batched shaping paths
+// below — the auction row plus its highest bid/bid count in, the JSON
+// shape out.
+function auctionShape(row, highestBidCents, bidCount) {
   return {
     auctionId: row.auction_id,
     landletId: row.landlet_id,
@@ -1962,11 +2014,40 @@ async function auctionFromRow(db, row) {
     status: row.status,
     endsAt: row.ends_at,
     winningBidId: row.winning_bid_id,
-    highestBidCents: highest ? highest.amount_cents : null,
-    bidCount: bidCount.n,
+    highestBidCents,
+    bidCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+async function auctionFromRow(db, row) {
+  const highest = await db.prepare(`
+    SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
+  `).bind(row.auction_id).first();
+  const bidCount = await db.prepare('SELECT COUNT(*) AS n FROM auction_bids WHERE auction_id = ?').bind(row.auction_id).first();
+  return auctionShape(row, highest ? highest.amount_cents : null, bidCount.n);
+}
+
+// List-endpoint version of the above: instead of the same 2 queries
+// repeated once per auction (an N+1 round-trip pattern — up to `limit`
+// auctions per page, each awaiting 2 sequential D1 queries), pulls the
+// highest bid and bid count for every auction on the page in exactly one
+// grouped query, then shapes each row in memory. Auctions with no bids at
+// all simply have no row in the grouped results, matching auctionFromRow's
+// `null`/`0` fallback.
+async function auctionsFromRowsBatch(db, rows) {
+  if (rows.length === 0) return [];
+  const placeholders = rows.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT auction_id, MAX(amount_cents) AS highest, COUNT(*) AS n
+    FROM auction_bids WHERE auction_id IN (${placeholders}) GROUP BY auction_id
+  `).bind(...rows.map((row) => row.auction_id)).all();
+  const byAuction = new Map(results.map((row) => [row.auction_id, row]));
+  return rows.map((row) => {
+    const bids = byAuction.get(row.auction_id);
+    return auctionShape(row, bids ? bids.highest : null, bids ? bids.n : 0);
+  });
 }
 
 function auctionBidFromRow(row) {
@@ -2041,6 +2122,43 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
+
+// Fixed-window rate limiting (migrations/0057) for the auth endpoints that
+// are both unauthenticated and repeatable and (once RESEND_API_KEY is
+// configured) can trigger a real outbound email to an arbitrary address:
+// signup and password-reset-request. Login already has its own real
+// per-account lockout (failed_login_attempts/locked_until above), and
+// resend-verification requires an existing session, so neither needs this.
+//
+// Bucketed by client IP + the specific email being targeted, not IP alone
+// — this limits hammering one target from one source without any new
+// Cloudflare bindings, and (deliberately) means the existing test suite's
+// per-case unique emails never collide with each other in the same D1.
+// Deliberately scoped: this stops targeted retry/harassment of one email
+// address, not an IP spraying signups across many distinct addresses —
+// that broader case is already substantially covered today by the
+// private-preview access-gate passphrase (see checkAccessGate) blocking
+// these endpoints from anyone who doesn't already have it, and would need
+// something like Cloudflare Turnstile/Bot Management if the gate ever
+// comes off, not just a bigger version of this.
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+
+function clientIp(request) {
+  return request.headers.get('cf-connecting-ip') || 'unknown';
+}
+
+async function checkRateLimit(db, bucketKey, maxAttempts) {
+  const now = Date.now();
+  await db.prepare('DELETE FROM rate_limit_events WHERE bucket_key = ?1 AND created_at < ?2')
+    .bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).run();
+  const row = await db.prepare('SELECT COUNT(*) as count FROM rate_limit_events WHERE bucket_key = ?1')
+    .bind(bucketKey).first();
+  if (row.count >= maxAttempts) {
+    throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
+  }
+  await db.prepare('INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?1, ?2)')
+    .bind(bucketKey, now).run();
+}
 
 function bytesToHex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -2297,6 +2415,8 @@ async function handleSignup(request, env, db, url) {
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
 
+  await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
+
   const existingEmail = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
   if (existingEmail) throw new HttpError('Email is already registered', 409);
   // COLLATE NOCASE on users.username (see migrations/0056) already makes
@@ -2449,6 +2569,9 @@ async function handleVerifyEmail(request, db) {
 async function handleRequestPasswordReset(request, env, db) {
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
+
+  await checkRateLimit(db, `password-reset:${clientIp(request)}:${email}`, 5);
+
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
 
   // Always the same response regardless of whether the account exists —
@@ -4260,6 +4383,23 @@ function assertValidNoReturns(metadata) {
   }
 }
 
+// International shipping (docs/SPEC.md §5: "Dimmed-filter approach:
+// shoppers toggle a filter; non-shippable items are dimmed with a label
+// ('ships to United States only')") — a seller-set flag on the product
+// itself, same single-boolean-in-metadata simplicity as noReturns above.
+// Absent/false means the product ships internationally (the permissive
+// default), so this key is only ever written when a seller actively
+// restricts to domestic shipping. Real per-destination-zone shipping
+// *cost* and a live shopper-facing filter are deliberately not built yet
+// (this dev-stage backend has no real shopper address/geo data to filter
+// against) — see docs/API.md's "Shipping" section.
+function assertValidDomesticOnly(metadata) {
+  if (metadata.domesticOnly === undefined) return;
+  if (typeof metadata.domesticOnly !== 'boolean') {
+    throw new HttpError('metadata.domesticOnly must be a boolean', 400);
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -4282,6 +4422,7 @@ function validateTemplate(input, fallbackId) {
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
+  assertValidDomesticOnly(template.metadata);
   return template;
 }
 
