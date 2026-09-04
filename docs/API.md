@@ -3628,6 +3628,21 @@ along with it, not repurposed — they moved the *camera* straight along
 world Z with no ground-relative meaning once the camera stopped being the
 player.
 
+Idle animation (docs/SPEC.md §2: "context-aware idle state machine (sit,
+lean, stand) after inactivity, with randomization") — `updateShopAvatarIdle`
+covers "stand" only: after `SHOP_IDLE_DELAY_S` with no move-joystick input,
+a subtle whole-body weight-shift sway (`shopIdleSwayYawOffset`, added on top
+of `shopYaw` when the avatar's own facing is set) plus an occasional head
+turn (`headPivot.rotation.z`, its own pivot separate from the body so it can
+turn independently) ease in. Both the sway period and the head-turn
+target/interval are re-rolled at the end of their own cycle rather than
+shared or fixed, so idle motion never repeats identically. Ends the instant
+real movement resumes — a hard cut (`shopIdleBlend` snaps to 0), not an
+ease-out, since a lingering sway would read as the avatar fighting the
+player's own input. "Sit"/"lean" are still open — both need a real
+interaction-target concept (e.g. a chair prop with an occupancy slot) that
+doesn't exist yet.
+
 ## Frontend-only Resize
 
 A real uniform scale for a placed instance (`mesh.userData.scale`, persisted

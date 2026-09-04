@@ -6692,6 +6692,21 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 // How fast the avatar's swing amplitude eases toward its current target
 // (moving vs. stopped) each frame — see updateShopAvatarPose.
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
+// docs/SPEC.md §2's "context-aware idle state machine ... after inactivity,
+// with randomization" — see updateShopAvatarIdle. This pass only covers
+// "stand" (a subtle randomized weight-shift sway + occasional head turn);
+// "sit"/"lean" need a real interaction-target system (e.g. a chair prop
+// with an occupancy slot) that doesn't exist yet.
+const SHOP_IDLE_DELAY_S = 3; // no movement input for this long before idle sway starts easing in
+const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in on stillness, out the instant movement resumes)
+const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
+const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
+const SHOP_IDLE_SWAY_PERIOD_MAX_S = 6;
+const SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD = 0.05;
+const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full look-behind
+const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
+const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
+const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
 const SHOP_LOAD_RADIUS_M = 60;
@@ -7204,18 +7219,35 @@ function createShopAvatar() {
   armPivotR.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
   group.add(armPivotR);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
-  head.position.z =
+  // Its own pivot (rather than a bare mesh straight on `group`, like the
+  // torso) purely so the idle "look around" behavior (updateShopAvatarIdle)
+  // can turn just the head about local Z without touching the rest of the
+  // body.
+  const headPivot = new THREE.Group();
+  headPivot.position.z =
     SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
-  group.add(head);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
+  headPivot.add(head);
+  group.add(headPivot);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR };
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR } — see createShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot } — see createShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
+
+// Idle sway state (docs/SPEC.md §2) — see updateShopAvatarIdle.
+let shopIdleElapsedS = 0; // seconds since the last real movement input
+let shopIdleBlend = 0; // 0..1 eased "how much idle sway is showing"
+let shopIdleSwayPhase = 0;
+let shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
+let shopIdleSwayYawOffset = 0; // read by updateShopMovement to offset the avatar's own facing
+let shopIdleHeadCurrentRad = 0;
+let shopIdleHeadTargetRad = 0;
+let shopIdleHeadTimerS = 0;
+let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
 
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
@@ -7238,6 +7270,50 @@ function updateShopAvatarPose(moveMagnitude, dt) {
   // amplitude than the legs.
   shopAvatar.armPivotL.rotation.x = -swing * 0.7;
   shopAvatar.armPivotR.rotation.x = swing * 0.7;
+}
+
+// docs/SPEC.md §2: "context-aware idle state machine ... after inactivity,
+// with randomization." This pass only covers "stand" — a subtle whole-body
+// weight-shift sway plus an occasional head turn, both re-randomized on
+// their own cycle so idle never visibly repeats the same motion twice in a
+// row. "Sit"/"lean" need a real interaction-target system (e.g. a chair
+// prop with an occupancy slot) that doesn't exist yet — future work.
+//
+// Called every frame right after updateShopAvatarPose, whose walk-cycle
+// arm rotations it adds on top of (already ~0 by the time idle sway is
+// actually visible, since walking and idling are mutually exclusive in
+// practice — see moveMagnitude below). Ends the instant real movement
+// resumes (a hard cut, not an ease-out) — a lingering idle sway would read
+// as the avatar fighting the player's own input.
+function updateShopAvatarIdle(moveMagnitude, dt) {
+  if (moveMagnitude > 0) {
+    shopIdleElapsedS = 0;
+    shopIdleBlend = 0;
+  } else {
+    shopIdleElapsedS += dt;
+    const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
+    shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+  }
+
+  shopIdleSwayPhase += (dt / shopIdleSwayPeriodS) * Math.PI * 2;
+  if (shopIdleSwayPhase >= Math.PI * 2) {
+    shopIdleSwayPhase -= Math.PI * 2;
+    shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
+  }
+  shopIdleHeadTimerS += dt;
+  if (shopIdleHeadTimerS >= shopIdleHeadIntervalS) {
+    shopIdleHeadTimerS = 0;
+    shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
+    shopIdleHeadTargetRad = THREE.MathUtils.randFloatSpread(SHOP_IDLE_HEAD_TURN_MAX_RAD * 2);
+  }
+  shopIdleHeadCurrentRad +=
+    (shopIdleHeadTargetRad * shopIdleBlend - shopIdleHeadCurrentRad) * Math.min(1, SHOP_IDLE_HEAD_TURN_EASE_PER_S * dt);
+
+  shopIdleSwayYawOffset = Math.sin(shopIdleSwayPhase) * SHOP_IDLE_SWAY_AMPLITUDE_RAD * shopIdleBlend;
+  const armIdleSway = Math.sin(shopIdleSwayPhase * 0.5) * SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD * shopIdleBlend;
+  shopAvatar.armPivotL.rotation.x += armIdleSway;
+  shopAvatar.armPivotR.rotation.x -= armIdleSway;
+  shopAvatar.headPivot.rotation.z = shopIdleHeadCurrentRad;
 }
 
 // Shared by walking's own floor clamp and the camera-follow height — keeps
@@ -7305,13 +7381,6 @@ function updateShopMovement(now) {
     applyShopCameraOrientation();
   }
 
-  // The avatar always faces the same way the camera looks (horizontally) —
-  // this control scheme's forward/back/strafe are already relative to that
-  // facing (below), so turning the look joystick turns the avatar's body
-  // along with the camera around it, exactly like a standard third-person
-  // shoulder-cam rig.
-  shopAvatar.group.rotation.z = shopYaw;
-
   let moveMagnitude = 0;
   if (shopMoveX !== 0 || shopMoveY !== 0) {
     // Movement stays in the horizontal plane (forward/right with their Z
@@ -7338,6 +7407,14 @@ function updateShopMovement(now) {
   }
 
   updateShopAvatarPose(moveMagnitude, dt);
+  updateShopAvatarIdle(moveMagnitude, dt);
+  // The avatar always faces the way the camera looks (horizontally), plus
+  // a small idle weight-shift offset when standing still — this control
+  // scheme's forward/back/strafe are already relative to that facing, so
+  // turning the look joystick turns the avatar's body along with the
+  // camera around it, exactly like a standard third-person shoulder-cam
+  // rig.
+  shopAvatar.group.rotation.z = shopYaw + shopIdleSwayYawOffset;
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
@@ -8102,6 +8179,12 @@ async function enterShopMode() {
   shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
+  shopIdleElapsedS = 0;
+  shopIdleBlend = 0;
+  shopIdleSwayYawOffset = 0;
+  shopIdleHeadCurrentRad = 0;
+  shopIdleHeadTargetRad = 0;
+  shopIdleHeadTimerS = 0;
 
   shopYaw = 0;
   shopPitch = -0.12;
