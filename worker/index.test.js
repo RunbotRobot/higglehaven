@@ -2797,6 +2797,60 @@ describe('Auctions', () => {
     expect(noBidsListed).toMatchObject({ highestBidCents: null, bidCount: 0 });
     expect(twoBidsListed).toMatchObject({ highestBidCents: 900, bidCount: 2 });
   });
+
+  it('caps how many due auctions one GET /auctions call resolves, making forward progress across repeated calls', async () => {
+    // Regression test for AUCTION_SWEEP_LIMIT: resolveDueAuctions used to
+    // sweep and resolve every active-but-expired auction unconditionally,
+    // so a burst of simultaneously-expiring auctions would force one
+    // public, unauthenticated GET into an unbounded chain of sequential
+    // writes. Seeded directly via the DB (not through claim/start-auction,
+    // which limit one builder to one claimed landlet) — cheap, exact, and
+    // avoids needing AUCTION_SWEEP_LIMIT+ real signups just to prove a
+    // bounded sweep. The landlets are left unowned (owner_builder_id NULL)
+    // — migrations/0006's "one claimed landlet per builder" unique index
+    // only applies once a landlet actually has an owner, and
+    // resolveAuction's no-bid path (starting_bid_cents = 0, no bids) never
+    // reads landlets.owner_builder_id, only auction.seller_builder_id.
+    const seller = await signupBuilder('sweep-cap-seller');
+    const total = 27; // > AUCTION_SWEEP_LIMIT (25), so one call can't clear it all
+    const inserts = [];
+    for (let i = 0; i < total; i++) {
+      const landletId = `sweep-cap-landlet-${i}`;
+      const auctionId = `sweep-cap-auction-${i}`;
+      inserts.push(
+        env.DB.prepare(`
+          INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, 'claimed')
+        `).bind(landletId, `Sweep cap ${i}`),
+        env.DB.prepare(`
+          INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+          VALUES (?, ?, ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+        `).bind(auctionId, landletId, seller.builderId),
+      );
+    }
+    await env.DB.batch(inserts);
+
+    const dueBefore = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    expect(dueBefore.count).toBe(total);
+
+    await api('/auctions?status=active');
+    const dueAfterFirstCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // Some, but not all, resolved — proves the sweep is bounded rather than
+    // exhaustive.
+    expect(dueAfterFirstCall.count).toBeGreaterThan(0);
+    expect(dueAfterFirstCall.count).toBeLessThan(total);
+
+    await api('/auctions?status=active');
+    const dueAfterSecondCall = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+    ).first();
+    // A second call clears the rest of the backlog rather than getting
+    // stuck resolving the same subset forever.
+    expect(dueAfterSecondCall.count).toBe(0);
+  });
 });
 
 // The Auctions tests above exercise notification creation as a side effect
