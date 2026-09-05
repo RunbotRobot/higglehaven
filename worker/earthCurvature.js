@@ -77,6 +77,42 @@ export function flatPosition({ x, y, z }, earthRadiusM = DEFAULT_EARTH_RADIUS_M)
   };
 }
 
+// The local "up" direction (unit vector, in the same ground-tangent-at-
+// the-origin frame curvedPosition/flatPosition use) at a given flat
+// (x, y) — the direction z actually extends along at that position once
+// curvature applies, and the surface normal a curved ground mesh (#135)
+// or the radial-cone buildable volume (#136) will need to orient itself,
+// without either of those duplicating this trig themselves. Independent
+// of height (only the point's position on the sphere's surface, not how
+// far above/below it, determines which way "up" points there) and of the
+// frame's z-offset (a fixed translation doesn't change a direction), so
+// it's exactly the same formula whether measured from the origin or from
+// Earth's own center. At the origin (x = y = 0) this is exactly
+// (0, 0, 1); it tilts further away from that the farther out (x, y) is,
+// exactly matching a real sphere's surface normal.
+export function surfaceUpDirection(x, y, earthRadiusM = DEFAULT_EARTH_RADIUS_M) {
+  const d = Math.hypot(x, y);
+  if (d === 0) return { x: 0, y: 0, z: 1 };
+  const bearing = Math.atan2(y, x);
+  const phi = d / earthRadiusM;
+  return {
+    x: Math.sin(phi) * Math.cos(bearing),
+    y: Math.sin(phi) * Math.sin(bearing),
+    z: Math.cos(phi),
+  };
+}
+
+// How far the real curved surface sags below the flat tangent plane at a
+// given flat-map distance from the origin — curvedPosition's own z at
+// that distance with height 0, restated without needing to call the full
+// 3D transform just to read one number back out. Lets #137 (LOD/backdrop
+// bands) decide how far out the flat approximation stays visually
+// indistinguishable from the real curve.
+export function curvatureDropM(flatDistanceM, earthRadiusM = DEFAULT_EARTH_RADIUS_M) {
+  const phi = flatDistanceM / earthRadiusM;
+  return earthRadiusM * (1 - Math.cos(phi));
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
