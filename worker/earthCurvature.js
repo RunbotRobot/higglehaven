@@ -95,6 +95,39 @@ export function footprintScaleAtHeight(z, earthRadiusM = DEFAULT_EARTH_RADIUS_M)
   return (earthRadiusM + z) / earthRadiusM;
 }
 
+// docs/SPEC.md §1's "no gaps between adjacent lánds at any given level...
+// no overlap at deep below-ground levels" requirement (#170, sub-issue of
+// #167) — quantifies how far apart two neighboring lándlets' cone
+// boundaries actually drift once each widens/narrows its own footprint by
+// footprintScaleAtHeight(z) around its own local center (src/main.js's
+// clampToLandlet, #136), rather than around the single shared point
+// (Earth's center, projected onto the flat map as the world origin) a
+// true fixed-angular cone would scale from.
+//
+// Proof (independent of which shared vertex, or which landlet's own
+// size/shape, you pick — a property of the two centers alone): a vertex P
+// two adjacent lándlets agree on at ground level maps, under this
+// per-landlet-local-center scaling, to centerA + (P - centerA) * scale
+// from A's own polygon and centerB + (P - centerB) * scale from B's — a
+// difference of (centerA - centerB) * (1 - scale) that cancels P
+// entirely. So the two lándlets' boundaries end up exactly this far
+// apart — nonzero for any scale != 1 (i.e. any height off the ground)
+// whenever the two lándlets don't share a center, however precisely
+// their ground-level polygons meet.
+//
+// This is the same underlying gap #166 already named and deliberately
+// deferred as "horizontal foreshortening" (real curvature reprojects
+// every vertex relative to Earth's center, not just this one pairwise
+// symptom of skipping that) — not a separate problem to solve here. This
+// function exists so that whoever eventually does pick #166 up has an
+// exact, tested number instead of a re-derivation, and so today's
+// magnitude (see this function's own tests) can be weighed against #135's
+// already-accepted vertical sag rather than assumed away.
+export function neighborAdjacencyErrorM(centerAx, centerAy, centerBx, centerBy, z, earthRadiusM = DEFAULT_EARTH_RADIUS_M) {
+  const scale = footprintScaleAtHeight(z, earthRadiusM);
+  return Math.hypot(centerAx - centerBx, centerAy - centerBy) * (scale - 1);
+}
+
 // The local "up" direction (unit vector, in the same ground-tangent-at-
 // the-origin frame curvedPosition/flatPosition use) at a given flat
 // (x, y) — the direction z actually extends along at that position once
