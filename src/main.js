@@ -4132,16 +4132,18 @@ const undoStack = [];
 const redoStack = [];
 const UNDO_HISTORY_LIMIT = 50;
 
-// restoreSnapshot below does async mesh rebuilding plus a batch of network
-// sync calls — without this, a rapid second click on Undo/Redo before that
-// resolves would pop another snapshot and start a second, concurrent
-// restoreSnapshot mutating the same shared productMeshes/selectedMeshes/
-// undoStack/redoStack and firing overlapping batch requests.
-let undoRedoBusy = false;
-
 function captureSnapshot() {
   return productMeshes.map((mesh) => instanceFromMesh(mesh));
 }
+
+// Set for the duration of restoreSnapshot's own await (mesh rebuilding plus
+// the batch create/update/delete network calls) — without it, a second
+// rapid click (a trackpad double-click, or just an eager user) before the
+// first restoreSnapshot resolves would pop another snapshot and start a
+// second, concurrent restoreSnapshot mutating the same shared
+// productMeshes/selectedMeshes/undoStack/redoStack and firing overlapping
+// batch requests, potentially for the same instance IDs.
+let undoRedoBusy = false;
 
 function updateUndoRedoButtons() {
   undoBtn.disabled = undoRedoBusy || undoStack.length === 0;
@@ -4219,7 +4221,7 @@ async function restoreSnapshot(snapshot) {
 }
 
 async function undo() {
-  if (undoRedoBusy || undoStack.length === 0) return;
+  if (undoStack.length === 0 || undoRedoBusy) return;
   undoRedoBusy = true;
   updateUndoRedoButtons();
   try {
@@ -4233,7 +4235,7 @@ async function undo() {
 }
 
 async function redo() {
-  if (undoRedoBusy || redoStack.length === 0) return;
+  if (redoStack.length === 0 || undoRedoBusy) return;
   undoRedoBusy = true;
   updateUndoRedoButtons();
   try {
