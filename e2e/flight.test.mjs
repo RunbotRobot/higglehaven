@@ -18,6 +18,22 @@ await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
 const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-fly-btn').classList.contains('active'));
 
+// #119: a genuinely first-ever Shop-mode visit on this device (no
+// localStorage flag set yet — exactly this fresh browser context's state
+// right now) spawns already flying, above the world, with no double-tap
+// at all — checked before anything below sets that flag.
+const flyingOnFirstEverVisit = await isFlyingClassSet();
+const flyBtnActiveOnFirstEverVisit = await isFlyBtnActive();
+
+// The rest of this file is about the manual double-tap toggle flow, not
+// the first-visit spawn above — set the "visited before" flag and reload
+// so it starts from the ordinary grounded baseline every later Shop-mode
+// entry uses (matching src/main.js's own enterShopMode distinction).
+await page.evaluate(() => localStorage.setItem('higglehaven.shopVisitedBefore', '1'));
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1500);
+await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+
 const groundedBeforeTakeoff = !(await isFlyingClassSet());
 
 // Double-tap: a single click is deliberately ignored (see bindShopFlyToggle
@@ -58,6 +74,8 @@ const flyBtnActiveRightAfterLandingTap = await isFlyBtnActive();
 await page.waitForTimeout(2500);
 const groundedAfterLanding = !(await isFlyingClassSet());
 
+console.log('flying immediately on a genuinely first-ever visit, no double-tap (should be true):', flyingOnFirstEverVisit);
+console.log('#shop-fly-btn.active on that same first-ever visit (should be true):', flyBtnActiveOnFirstEverVisit);
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff double-tap (should be true):', flyingClassRightAfterTakeoffTap);
 console.log('#shop-fly-btn.active immediately after the takeoff double-tap (should be true):', flyBtnActiveRightAfterTakeoffTap);
@@ -69,6 +87,8 @@ console.log('#shop-fly-btn.active cleared immediately after the landing double-t
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
 const pass =
+  flyingOnFirstEverVisit &&
+  flyBtnActiveOnFirstEverVisit &&
   groundedBeforeTakeoff &&
   flyingClassRightAfterTakeoffTap &&
   flyBtnActiveRightAfterTakeoffTap &&
