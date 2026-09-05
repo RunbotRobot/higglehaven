@@ -8612,6 +8612,17 @@ function runClaimFlow() {
 // torn down each time the modal opens without touching builder state.
 let claimFlyover = null;
 
+// loadLandletMap awaits a fetch before building its scene; if Refresh is
+// clicked again before that fetch resolves, disposeClaimFlyover() at the
+// new call's start is a no-op (claimFlyover is still null either way), so
+// without this guard both calls would go on to build a full scene, attach
+// their own canvas click/resize listeners, and race to overwrite the
+// shared claimFlyover — leaking one call's listeners/RAF loop forever.
+// Each call captures the token's value *before* it starts awaiting, then
+// checks it's still the latest afterward; a superseded call bails out
+// quietly instead of building anything.
+let claimMapLoadToken = 0;
+
 function disposeClaimFlyover() {
   if (!claimFlyover) return;
   cancelAnimationFrame(claimFlyover.animationHandle);
@@ -8737,6 +8748,7 @@ const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
 // plot previews it below regardless of status; only an available
 // (greenbelt) one enables the Claim button.
 async function loadLandletMap(resolve) {
+  const myLoadToken = ++claimMapLoadToken;
   claimStatusEl.textContent = 'Loading the world…';
   claimStatusEl.classList.remove('error');
   claimSelectionNameEl.textContent = 'No plot selected';
@@ -8758,10 +8770,12 @@ async function loadLandletMap(resolve) {
     world = fetchedWorld;
     landlets = [...greenbeltLandlets, ...claimedLandlets];
   } catch (err) {
+    if (myLoadToken !== claimMapLoadToken) return; // superseded — a newer load owns the UI now
     claimStatusEl.textContent = err.message || 'Could not load the world.';
     claimStatusEl.classList.add('error');
     return;
   }
+  if (myLoadToken !== claimMapLoadToken) return; // superseded while fetching — abandon quietly, nothing built yet
 
   const radiusM = world.radiusM;
   const scene = new THREE.Scene();

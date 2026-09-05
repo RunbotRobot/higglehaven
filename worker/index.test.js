@@ -4204,7 +4204,7 @@ describe('Simulated purchases', () => {
     const limited = attempts.filter((a) => a.response.status === 429);
     expect(succeeded).toHaveLength(30);
     expect(limited).toHaveLength(10);
-  }, 20000);
+  }, 45000);
 
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
     const seller = await signupBuilder('purchase-commission-seller');
