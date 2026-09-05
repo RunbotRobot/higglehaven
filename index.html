@@ -138,6 +138,24 @@
         font: 13px/1.4 sans-serif;
         pointer-events: none;
       }
+      /* Which claimed landlet the shopper is currently standing on, and who
+         built it (docs/API.md's "Builders") — otherwise the world gives a
+         shopper no way to tell whose land they're on at all. Reuses the
+         top-right corner the old #build-info HUD element used to occupy
+         (moved into Settings — see that commit) — already confirmed clear
+         of every other overlay in every mode/modal. */
+      #shop-landlet-info {
+        top: 82px;
+        right: 8px;
+        text-align: right;
+        max-width: 55vw;
+        background: rgb(var(--pill-rgb) / 0.55);
+        padding: 6px 12px;
+        border-radius: 8px;
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+        pointer-events: none;
+      }
       #shop-hint {
         bottom: 16px;
         left: 50%;
@@ -2468,6 +2486,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
+    <div id="shop-landlet-info" class="shop-ui"></div>
     <div id="shop-hint" class="shop-ui">Left stick to walk (push further to run) — right stick to look — double-tap &#9992;&#65039; (or double-press space) to fly</div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>

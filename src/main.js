@@ -6542,6 +6542,17 @@ authResendVerifyBtn.addEventListener('click', async () => {
 });
 
 authLogoutBtn.addEventListener('click', async () => {
+  // The button gave zero feedback while the request was in flight —
+  // nothing to distinguish a slow network from an unregistered click.
+  // Mirrors claimConfirmBtn's own disable-plus-status-text pattern. Reset
+  // unconditionally right after, rather than only on the non-reload path:
+  // this is the same persistent DOM button across logins within one tab
+  // (refreshAccountAuthUI only toggles #auth-logged-in's `hidden`, never
+  // touches `disabled`), so leaving it disabled on the Build-mode reload
+  // path would still matter if that reload ever stopped happening, and
+  // costs nothing when it does.
+  authLogoutBtn.disabled = true;
+  setAuthStatus('Logging out…');
   try {
     await logOut();
   } catch {
@@ -6549,6 +6560,7 @@ authLogoutBtn.addEventListener('click', async () => {
     // once currentAuthUser is nulled out below, even if the network call
     // itself failed.
   }
+  authLogoutBtn.disabled = false;
   currentAuthUser = null;
   // Build mode requires a real, logged-in account (ensureBuilderIdentity's
   // own login wall) — staying on it post-logout would just immediately
@@ -6685,6 +6697,7 @@ const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
+const shopLandletInfoEl = document.getElementById('shop-landlet-info');
 
 // A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
 // cold clash against this world's warm cream-and-green palette (see
@@ -7145,6 +7158,8 @@ let shopLookY = 0;
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
+let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode — see updateShopLandletInfo
+let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
 // posts, sprites }. Populated/torn down alongside its landlet's own
@@ -7826,6 +7841,7 @@ function updateShopMovement(now) {
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
     shopLastProximityCheck = now;
     updateShopProximity();
+    updateShopLandletInfo();
   }
   updateSignFade();
   updateCalendarFade();
@@ -7848,6 +7864,46 @@ function updateShopProximity() {
       unloadShopLandletInstances(entry);
     }
   }
+}
+
+// True if the given world point falls inside this landlet's own footprint
+// — the same shape shapeForLandlet draws for its Shop-mode ground mesh
+// (a real polygon where one's stored, else the same default square used
+// for a plain areaM2). record.polygon (when present) is landlet-local,
+// like a placed instance's own position, so the point is translated into
+// that local space first.
+function landletContainsPoint(record, worldX, worldY) {
+  const localX = worldX - record.center.x;
+  const localY = worldY - record.center.y;
+  if (record.polygon && record.polygon.length >= 3) return pointInPolygonXY(localX, localY, record.polygon);
+  const half = Math.sqrt(record.areaM2) / 2;
+  return Math.abs(localX) <= half && Math.abs(localY) <= half;
+}
+
+// Which claimed landlet (if any) the shopper is currently standing on, and
+// who built it — otherwise the world gives a shopper no way to tell whose
+// land they're on at all. shopBuilderLabels is populated once at Shop-mode
+// bootstrap (see enterShopMode); a builder renaming mid-session goes stale
+// here until the next full Shop-mode entry, an acceptable tradeoff for
+// something this rarely changing.
+function updateShopLandletInfo() {
+  let found = null;
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.status !== 'claimed') continue;
+    if (landletContainsPoint(entry.record, shopAvatarPosition.x, shopAvatarPosition.y)) {
+      found = entry;
+      break;
+    }
+  }
+  if (found === shopCurrentLandletEntry) return;
+  shopCurrentLandletEntry = found;
+  if (!found) {
+    shopLandletInfoEl.classList.remove('visible');
+    return;
+  }
+  const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
+  shopLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
+  shopLandletInfoEl.classList.add('visible');
 }
 
 async function loadShopLandletInstances(entry) {
@@ -8498,6 +8554,14 @@ async function enterShopMode() {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
     return;
   }
+  // Builder display labels for updateShopLandletInfo — supplementary, so a
+  // failure here just leaves shopBuilderLabels empty (falls back to "an
+  // unknown builder" per-landlet) rather than blocking Shop mode itself.
+  shopCurrentLandletEntry = null;
+  shopLandletInfoEl.classList.remove('visible');
+  fetchBuilders()
+    .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
+    .catch(() => {});
 
   // The wall sits at the largest gap-free radius, not the administrative
   // world radius itself — see computeGaplessWorldRadius's doc comment.
@@ -8678,10 +8742,15 @@ function runClaimFlow() {
     // preserve, so starting bootstrap() over from scratch is simpler than
     // reasoning about every way this could be left dangling (the builder
     // this flow is claiming for getting deleted out from under it, say).
-    // Explicitly targeting 'build' keeps this landing back in the
-    // login/claim flow rather than the bare reload's own default of Shop.
+    // Targets 'shop', not 'build': a builder with nothing claimed yet who
+    // backs out of this flow has nothing left to build on, same as
+    // declining to log in (see bootstrap()'s own fallback) — targeting
+    // 'build' here used to land back in resolveLandletId(), which finds
+    // the same still-unclaimed builder and immediately reopens this exact
+    // modal, an inescapable loop that also blocked reaching the account
+    // menu (it sits under this modal's z-index) to log out at all.
     claimBackBtn.onclick = () => {
-      sessionStorage.setItem(START_MODE_KEY, 'build');
+      sessionStorage.setItem(START_MODE_KEY, 'shop');
       location.reload();
     };
   });
