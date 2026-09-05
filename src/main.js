@@ -8554,10 +8554,8 @@ async function enterShopMode() {
 
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
-    const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
-    applyGroundCurvature(groundGeometry, record.center.x, record.center.y);
     const groundMesh = new THREE.Mesh(
-      groundGeometry,
+      new THREE.ShapeGeometry(shapeForLandlet(record)),
       new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
     );
     groundMesh.position.z = 0.02;
@@ -8810,19 +8808,22 @@ function shapeForLandlet(landlet) {
 }
 
 // #135 (docs/SPEC.md §1's "Earth-curvature coordinate system from day
-// one"): a flat ShapeGeometry's vertices lie exactly in its own XY plane
-// (z = 0 everywhere) — this nudges each one to where it actually sits on
-// a curved Earth, relative to (worldCenterX, worldCenterY): the mesh's own
-// local origin (e.g. a lándlet's own center) stays at z = 0 exactly, and
-// every other vertex gets the tiny extra sag or rise relativeCurvatureDropM
-// says it should have relative to that. Z-only — real curvature also
-// foreshortens the horizontal (x, y) span slightly, and a mesh whose own
-// local frame doesn't tilt to match its true surface normal can't blend
-// seamlessly with a neighboring one right at their shared edge, but both
-// are genuinely imperceptible at a single ground plate's real-world scale
-// (see earthCurvature.js's own module comment) — carved out as later
-// follow-up work under #135, not attempted here. Called once right after
-// building a ground mesh's geometry, before it's ever added to the scene.
+// one"): a flat CircleGeometry's vertices lie exactly in its own XY plane
+// (z = 0 everywhere) — this nudges each one to where it actually sits on a
+// curved Earth, relative to (worldCenterX, worldCenterY): the mesh's own
+// local origin stays at z = 0 exactly, and every other vertex gets the
+// extra sag or rise relativeCurvatureDropM says it should have relative to
+// that. Z-only, and doesn't reorient the mesh's own local frame to match
+// its true surface normal at each vertex — fine for this function's only
+// call site, wildGround's single, scene-origin-anchored fill circle:
+// sagging visibly toward the rim over real world-radius distances is
+// exactly the effect wanted, and there's no neighboring mesh it needs to
+// blend with at a shared edge. (Per-landlet ground curvature isn't done
+// this way — see #135/#166 — a landlet's own polygon is small enough that
+// positioning/orienting its whole THREE.Group is both simpler and
+// visually indistinguishable from a true per-vertex curve.) Called once
+// right after building a ground mesh's geometry, before it's ever added
+// to the scene.
 function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
   const position = geometry.attributes.position;
   for (let i = 0; i < position.count; i++) {
