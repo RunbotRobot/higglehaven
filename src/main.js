@@ -71,6 +71,7 @@ import {
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
+import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -7543,17 +7544,18 @@ function clampShopRadius(position) {
   }
 }
 
-// docs/SPEC.md §2's altitude/speed curve — see SHOP_FLIGHT_SPEED_EXPONENT's
-// own comment for the derivation. A pure power law diverges toward 0 as
-// altitude approaches 0, which is exactly right for "just took off, barely
-// above the ground" reading as barely faster than a walk — clamped at the
-// low end (SHOP_FLIGHT_MIN_SPEED_MULTIPLIER) purely so it never actually
-// reaches 0 and strands the player mid-transition.
-function flightSpeedMultiplier(altitudeM) {
-  const raw =
-    SHOP_FLIGHT_SPEED_REF_MULTIPLIER *
-    Math.pow(Math.max(altitudeM, 0.01) / SHOP_FLIGHT_SPEED_REF_ALTITUDE_M, SHOP_FLIGHT_SPEED_EXPONENT);
-  return THREE.MathUtils.clamp(raw, SHOP_FLIGHT_MIN_SPEED_MULTIPLIER, SHOP_FLIGHT_MAX_SPEED_MULTIPLIER);
+// docs/SPEC.md §2's altitude/speed curve — the actual math (a power law
+// clamped to the spec's own [1x, 100x] range) now lives in flight.js as a
+// pure, directly-unit-tested function (src/flight.test.js); this call site
+// just supplies this feature's own spec-derived constants from above.
+function shopFlightSpeedMultiplier(altitudeM) {
+  return flightSpeedMultiplier(altitudeM, {
+    refAltitudeM: SHOP_FLIGHT_SPEED_REF_ALTITUDE_M,
+    refMultiplier: SHOP_FLIGHT_SPEED_REF_MULTIPLIER,
+    exponent: SHOP_FLIGHT_SPEED_EXPONENT,
+    minMultiplier: SHOP_FLIGHT_MIN_SPEED_MULTIPLIER,
+    maxMultiplier: SHOP_FLIGHT_MAX_SPEED_MULTIPLIER,
+  });
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
@@ -7594,14 +7596,16 @@ function toggleShopFlight() {
 function updateShopFlight(dt) {
   if (shopFlightState === 'takingOff') {
     shopFlightTransitionElapsedS += dt;
-    const t = Math.min(1, shopFlightTransitionElapsedS / SHOP_FLIGHT_TAKEOFF_DURATION_S);
-    shopFlightAltitudeM = THREE.MathUtils.smoothstep(t, 0, 1) * SHOP_FLIGHT_HOVER_START_ALTITUDE_M;
-    if (t >= 1) shopFlightState = 'flying';
+    shopFlightAltitudeM = takeoffAltitudeM(
+      shopFlightTransitionElapsedS, SHOP_FLIGHT_TAKEOFF_DURATION_S, SHOP_FLIGHT_HOVER_START_ALTITUDE_M,
+    );
+    if (shopFlightTransitionElapsedS >= SHOP_FLIGHT_TAKEOFF_DURATION_S) shopFlightState = 'flying';
   } else if (shopFlightState === 'landing') {
     shopFlightTransitionElapsedS += dt;
-    const t = Math.min(1, shopFlightTransitionElapsedS / SHOP_FLIGHT_LANDING_DURATION_S);
-    shopFlightAltitudeM = shopFlightLandingStartAltitudeM * (1 - THREE.MathUtils.smoothstep(t, 0, 1));
-    if (t >= 1) {
+    shopFlightAltitudeM = landingAltitudeM(
+      shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM,
+    );
+    if (shopFlightTransitionElapsedS >= SHOP_FLIGHT_LANDING_DURATION_S) {
       shopFlightState = 'grounded';
       shopFlightAltitudeM = 0;
     }
@@ -7726,9 +7730,9 @@ function updateShopMovement(now) {
     // landing, so horizontal speed ramps up smoothly alongside altitude
     // rather than jumping to full flight speed the instant takeoff
     // finishes): docs/SPEC.md §2's altitude/speed curve — see
-    // flightSpeedMultiplier and SHOP_FLIGHT_SPEED_EXPONENT's own comment.
+    // shopFlightSpeedMultiplier and SHOP_FLIGHT_SPEED_EXPONENT's own comment.
     const speed = airborne
-      ? SHOP_WALK_SPEED_M_S * flightSpeedMultiplier(shopFlightAltitudeM) * moveMagnitude
+      ? SHOP_WALK_SPEED_M_S * shopFlightSpeedMultiplier(shopFlightAltitudeM) * moveMagnitude
       : THREE.MathUtils.lerp(SHOP_WALK_SPEED_M_S, SHOP_RUN_SPEED_M_S, moveMagnitude);
     shopMoveDir
       .set(0, 0, 0)
