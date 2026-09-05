@@ -6576,6 +6576,17 @@ authResendVerifyBtn.addEventListener('click', async () => {
 });
 
 authLogoutBtn.addEventListener('click', async () => {
+  // The button gave zero feedback while the request was in flight —
+  // nothing to distinguish a slow network from an unregistered click.
+  // Mirrors claimConfirmBtn's own disable-plus-status-text pattern. Reset
+  // unconditionally right after, rather than only on the non-reload path:
+  // this is the same persistent DOM button across logins within one tab
+  // (refreshAccountAuthUI only toggles #auth-logged-in's `hidden`, never
+  // touches `disabled`), so leaving it disabled on the Build-mode reload
+  // path would still matter if that reload ever stopped happening, and
+  // costs nothing when it does.
+  authLogoutBtn.disabled = true;
+  setAuthStatus('Logging out…');
   try {
     await logOut();
   } catch {
@@ -6583,6 +6594,7 @@ authLogoutBtn.addEventListener('click', async () => {
     // once currentAuthUser is nulled out below, even if the network call
     // itself failed.
   }
+  authLogoutBtn.disabled = false;
   currentAuthUser = null;
   // Build mode requires a real, logged-in account (ensureBuilderIdentity's
   // own login wall) — staying on it post-logout would just immediately
@@ -6719,6 +6731,7 @@ const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
+const shopLandletInfoEl = document.getElementById('shop-landlet-info');
 
 // A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
 // cold clash against this world's warm cream-and-green palette (see
@@ -6864,6 +6877,18 @@ const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
+// This binary load/unload distance is the only "chunk loading" that exists
+// today — docs/SPEC.md §1's fuller near/middle-LOD/far-panoramic-backdrop
+// banding (see #133/#137) isn't built, so there's no per-band curvature
+// concern to check yet. And even if it were: worker/earthCurvature.js's
+// curvatureDropM says the real curved surface sags a mere ~0.3-0.6mm below
+// the flat plane at these two radii, ~2cm even out at 500m, and still only
+// ~8cm at a hypothetical 1km world radius (this world starts at ~31.6m and
+// grows just 10m per expansion, so reaching even 500m is already a very
+// mature world) — all comfortably imperceptible against a 60m-tall wall/
+// dome backdrop and typical camera distances. Revisit only once a real
+// chunked LOD/backdrop system actually exists to hang a per-band decision
+// on; there's nothing here today for curvature to change.
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
@@ -7167,6 +7192,8 @@ let shopLookY = 0;
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
+let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode — see updateShopLandletInfo
+let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
 // posts, sprites }. Populated/torn down alongside its landlet's own
@@ -7848,6 +7875,7 @@ function updateShopMovement(now) {
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
     shopLastProximityCheck = now;
     updateShopProximity();
+    updateShopLandletInfo();
   }
   updateSignFade();
   updateCalendarFade();
@@ -7870,6 +7898,46 @@ function updateShopProximity() {
       unloadShopLandletInstances(entry);
     }
   }
+}
+
+// True if the given world point falls inside this landlet's own footprint
+// — the same shape shapeForLandlet draws for its Shop-mode ground mesh
+// (a real polygon where one's stored, else the same default square used
+// for a plain areaM2). record.polygon (when present) is landlet-local,
+// like a placed instance's own position, so the point is translated into
+// that local space first.
+function landletContainsPoint(record, worldX, worldY) {
+  const localX = worldX - record.center.x;
+  const localY = worldY - record.center.y;
+  if (record.polygon && record.polygon.length >= 3) return pointInPolygonXY(localX, localY, record.polygon);
+  const half = Math.sqrt(record.areaM2) / 2;
+  return Math.abs(localX) <= half && Math.abs(localY) <= half;
+}
+
+// Which claimed landlet (if any) the shopper is currently standing on, and
+// who built it — otherwise the world gives a shopper no way to tell whose
+// land they're on at all. shopBuilderLabels is populated once at Shop-mode
+// bootstrap (see enterShopMode); a builder renaming mid-session goes stale
+// here until the next full Shop-mode entry, an acceptable tradeoff for
+// something this rarely changing.
+function updateShopLandletInfo() {
+  let found = null;
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.status !== 'claimed') continue;
+    if (landletContainsPoint(entry.record, shopAvatarPosition.x, shopAvatarPosition.y)) {
+      found = entry;
+      break;
+    }
+  }
+  if (found === shopCurrentLandletEntry) return;
+  shopCurrentLandletEntry = found;
+  if (!found) {
+    shopLandletInfoEl.classList.remove('visible');
+    return;
+  }
+  const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
+  shopLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
+  shopLandletInfoEl.classList.add('visible');
 }
 
 async function loadShopLandletInstances(entry) {
@@ -8520,6 +8588,14 @@ async function enterShopMode() {
     shopStatusEl.textContent = err.message || 'Could not load the world.';
     return;
   }
+  // Builder display labels for updateShopLandletInfo — supplementary, so a
+  // failure here just leaves shopBuilderLabels empty (falls back to "an
+  // unknown builder" per-landlet) rather than blocking Shop mode itself.
+  shopCurrentLandletEntry = null;
+  shopLandletInfoEl.classList.remove('visible');
+  fetchBuilders()
+    .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
+    .catch(() => {});
 
   // The wall sits at the largest gap-free radius, not the administrative
   // world radius itself — see computeGaplessWorldRadius's doc comment.
@@ -8700,10 +8776,15 @@ function runClaimFlow() {
     // preserve, so starting bootstrap() over from scratch is simpler than
     // reasoning about every way this could be left dangling (the builder
     // this flow is claiming for getting deleted out from under it, say).
-    // Explicitly targeting 'build' keeps this landing back in the
-    // login/claim flow rather than the bare reload's own default of Shop.
+    // Targets 'shop', not 'build': a builder with nothing claimed yet who
+    // backs out of this flow has nothing left to build on, same as
+    // declining to log in (see bootstrap()'s own fallback) — targeting
+    // 'build' here used to land back in resolveLandletId(), which finds
+    // the same still-unclaimed builder and immediately reopens this exact
+    // modal, an inescapable loop that also blocked reaching the account
+    // menu (it sits under this modal's z-index) to log out at all.
     claimBackBtn.onclick = () => {
-      sessionStorage.setItem(START_MODE_KEY, 'build');
+      sessionStorage.setItem(START_MODE_KEY, 'shop');
       location.reload();
     };
   });
@@ -8843,13 +8924,102 @@ function shapeForLandlet(landlet) {
 // claim-map flyover and the real 3D world it's picking a plot in agree.
 const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
 
+// docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
+// earthCurvature.js) applied to this flyover — the one place in this app
+// that currently renders many landlets across a real fraction of the
+// world's own radius at once. A single landlet's own ~31.6m ground plane
+// (Build/Shop mode's flat ground meshes, deliberately left untouched)
+// sags by a fraction of a millimeter at Earth's real radius — genuinely
+// imperceptible, the same "correct architecture, imperceptible at this
+// scale" tradeoff docs/SPEC.md §3 already makes for the buildable-volume
+// cone (see clampToLandlet/footprintScaleAtHeight above). This flyover's
+// own radius (the world's current growth radius) is the only distance
+// this app deals with that's large enough for that sag to eventually
+// matter, so it's the one ground mesh actually worth curving today.
+//
+// Builds a triangulated disc — ringCount concentric rings (plus a center
+// point) of angularSegments vertices each — with every vertex run through
+// curvedPosition, rather than THREE.CircleGeometry's flat single-ring fan
+// (which has no interior vertices to displace at all). Reused for both
+// the ground fill (a full disc from r=0) and the world-boundary ring
+// (innerRadius > 0, an annulus with no center fan) via buildCurvedRingBand
+// below.
+function buildCurvedDiscGeometry(radius, ringCount, angularSegments) {
+  const positions = [];
+  const center = curvedPosition({ x: 0, y: 0, z: 0 });
+  positions.push(center.x, center.y, center.z);
+  const ringStart = [];
+  for (let ring = 1; ring <= ringCount; ring++) {
+    ringStart[ring] = positions.length / 3;
+    const r = (radius * ring) / ringCount;
+    for (let a = 0; a < angularSegments; a++) {
+      const theta = (a / angularSegments) * Math.PI * 2;
+      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
+      positions.push(point.x, point.y, point.z);
+    }
+  }
+  const indices = [];
+  for (let a = 0; a < angularSegments; a++) {
+    const next = (a + 1) % angularSegments;
+    indices.push(0, ringStart[1] + a, ringStart[1] + next);
+  }
+  for (let ring = 1; ring < ringCount; ring++) {
+    const inner = ringStart[ring];
+    const outer = ringStart[ring + 1];
+    for (let a = 0; a < angularSegments; a++) {
+      const next = (a + 1) % angularSegments;
+      indices.push(inner + a, outer + a, outer + next);
+      indices.push(inner + a, outer + next, inner + next);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+// A thin curved annulus between innerRadius and outerRadius — the same
+// per-vertex curvedPosition treatment as buildCurvedDiscGeometry, just two
+// rings with no center fan (this map's world-boundary line never reaches
+// r=0). ringCount lets a wide band (unused here, innerRadius/outerRadius
+// are close together for this map's own thin boundary line) still curve
+// smoothly instead of interpolating flat between just two curved rings.
+function buildCurvedRingBand(innerRadius, outerRadius, ringCount, angularSegments) {
+  const positions = [];
+  const ringStart = [];
+  for (let ring = 0; ring <= ringCount; ring++) {
+    ringStart[ring] = positions.length / 3;
+    const r = innerRadius + ((outerRadius - innerRadius) * ring) / ringCount;
+    for (let a = 0; a < angularSegments; a++) {
+      const theta = (a / angularSegments) * Math.PI * 2;
+      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
+      positions.push(point.x, point.y, point.z);
+    }
+  }
+  const indices = [];
+  for (let ring = 0; ring < ringCount; ring++) {
+    const inner = ringStart[ring];
+    const outer = ringStart[ring + 1];
+    for (let a = 0; a < angularSegments; a++) {
+      const next = (a + 1) % angularSegments;
+      indices.push(inner + a, outer + a, outer + next);
+      indices.push(inner + a, outer + next, inner + next);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
 // A navigable overhead flyover: an orbit-controlled camera looking down at
-// a flat rendering of the whole world circle and every landlet in it, each
-// shape/position/color drawn straight from real world data (no separate 2D
-// projection math — a landlet's plot sits at its own center_x_m/center_y_m
-// on the same X/Y ground plane the builder scene itself uses). Tapping a
-// plot previews it below regardless of status; only an available
-// (greenbelt) one enables the Claim button.
+// a curved rendering (see buildCurvedDiscGeometry above) of the whole world
+// circle and every landlet in it, each shape/position/color drawn straight
+// from real world data (no separate 2D projection math — a landlet's plot
+// sits at its own center_x_m/center_y_m, run through curvedPosition, on
+// the same ground the builder scene itself uses). Tapping a plot previews
+// it below regardless of status; only an available (greenbelt) one enables
+// the Claim button.
 async function loadLandletMap(resolve) {
   const myLoadToken = ++claimMapLoadToken;
   claimStatusEl.textContent = 'Loading the world…';
@@ -8893,13 +9063,13 @@ async function loadLandletMap(resolve) {
   scene.add(sun);
 
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(radiusM * 1.4, 64),
+    buildCurvedDiscGeometry(radiusM * 1.4, 16, 64),
     new THREE.MeshBasicMaterial({ color: 0xa8d98a }),
   );
   scene.add(ground);
 
   const boundary = new THREE.Mesh(
-    new THREE.RingGeometry(radiusM * 0.99, radiusM * 1.01, 128),
+    buildCurvedRingBand(radiusM * 0.99, radiusM * 1.01, 2, 128),
     new THREE.MeshBasicMaterial({ color: 0x16240a, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
   );
   boundary.position.z = 0.02;
@@ -8920,7 +9090,15 @@ async function loadLandletMap(resolve) {
     const geometry = new THREE.ShapeGeometry(shape);
     const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(landlet.center.x, landlet.center.y, 0.05);
+    // The plot's own polygon (shape, above) stays flat — only its
+    // placement moves to the real curved position. Tilting the polygon
+    // itself to lie tangent to the curve would be more "correct," but at
+    // one landlet's own ~31.6m span the tilt is imperceptible (the same
+    // reasoning this map's own ground curve comment gives), so it's left
+    // flat rather than adding a tangent-plane rotation with no visible
+    // payoff yet.
+    const curvedCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
+    mesh.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.05);
     mesh.userData.landlet = landlet;
     scene.add(mesh);
     plotMeshes.push(mesh);
@@ -8929,7 +9107,7 @@ async function loadLandletMap(resolve) {
       shape.getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0)),
     );
     const outline = new THREE.LineLoop(outlineGeometry, plotOutlineMaterial);
-    outline.position.set(landlet.center.x, landlet.center.y, 0.06);
+    outline.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.06);
     scene.add(outline);
     plotOutlines.push(outline);
   }
@@ -8995,7 +9173,8 @@ async function loadLandletMap(resolve) {
     }
     const outlinePoints = shapeForLandlet(landlet).getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0));
     selectionOutline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outlinePoints), selectionOutlineMaterial);
-    selectionOutline.position.set(landlet.center.x, landlet.center.y, 0.07);
+    const curvedSelectionCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
+    selectionOutline.position.set(curvedSelectionCenter.x, curvedSelectionCenter.y, curvedSelectionCenter.z + 0.07);
     selectionOutline.renderOrder = 2;
     scene.add(selectionOutline);
     claimFlyover.selectionOutline = selectionOutline;
