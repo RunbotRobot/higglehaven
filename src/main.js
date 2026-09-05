@@ -72,7 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { footprintScaleAtHeight } from '../worker/earthCurvature.js';
+import { footprintScaleAtHeight, curvedPosition } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -8821,13 +8821,102 @@ function shapeForLandlet(landlet) {
 // claim-map flyover and the real 3D world it's picking a plot in agree.
 const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
 
+// docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
+// earthCurvature.js) applied to this flyover — the one place in this app
+// that currently renders many landlets across a real fraction of the
+// world's own radius at once. A single landlet's own ~31.6m ground plane
+// (Build/Shop mode's flat ground meshes, deliberately left untouched)
+// sags by a fraction of a millimeter at Earth's real radius — genuinely
+// imperceptible, the same "correct architecture, imperceptible at this
+// scale" tradeoff docs/SPEC.md §3 already makes for the buildable-volume
+// cone (see clampToLandlet/footprintScaleAtHeight above). This flyover's
+// own radius (the world's current growth radius) is the only distance
+// this app deals with that's large enough for that sag to eventually
+// matter, so it's the one ground mesh actually worth curving today.
+//
+// Builds a triangulated disc — ringCount concentric rings (plus a center
+// point) of angularSegments vertices each — with every vertex run through
+// curvedPosition, rather than THREE.CircleGeometry's flat single-ring fan
+// (which has no interior vertices to displace at all). Reused for both
+// the ground fill (a full disc from r=0) and the world-boundary ring
+// (innerRadius > 0, an annulus with no center fan) via buildCurvedRingBand
+// below.
+function buildCurvedDiscGeometry(radius, ringCount, angularSegments) {
+  const positions = [];
+  const center = curvedPosition({ x: 0, y: 0, z: 0 });
+  positions.push(center.x, center.y, center.z);
+  const ringStart = [];
+  for (let ring = 1; ring <= ringCount; ring++) {
+    ringStart[ring] = positions.length / 3;
+    const r = (radius * ring) / ringCount;
+    for (let a = 0; a < angularSegments; a++) {
+      const theta = (a / angularSegments) * Math.PI * 2;
+      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
+      positions.push(point.x, point.y, point.z);
+    }
+  }
+  const indices = [];
+  for (let a = 0; a < angularSegments; a++) {
+    const next = (a + 1) % angularSegments;
+    indices.push(0, ringStart[1] + a, ringStart[1] + next);
+  }
+  for (let ring = 1; ring < ringCount; ring++) {
+    const inner = ringStart[ring];
+    const outer = ringStart[ring + 1];
+    for (let a = 0; a < angularSegments; a++) {
+      const next = (a + 1) % angularSegments;
+      indices.push(inner + a, outer + a, outer + next);
+      indices.push(inner + a, outer + next, inner + next);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+// A thin curved annulus between innerRadius and outerRadius — the same
+// per-vertex curvedPosition treatment as buildCurvedDiscGeometry, just two
+// rings with no center fan (this map's world-boundary line never reaches
+// r=0). ringCount lets a wide band (unused here, innerRadius/outerRadius
+// are close together for this map's own thin boundary line) still curve
+// smoothly instead of interpolating flat between just two curved rings.
+function buildCurvedRingBand(innerRadius, outerRadius, ringCount, angularSegments) {
+  const positions = [];
+  const ringStart = [];
+  for (let ring = 0; ring <= ringCount; ring++) {
+    ringStart[ring] = positions.length / 3;
+    const r = innerRadius + ((outerRadius - innerRadius) * ring) / ringCount;
+    for (let a = 0; a < angularSegments; a++) {
+      const theta = (a / angularSegments) * Math.PI * 2;
+      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
+      positions.push(point.x, point.y, point.z);
+    }
+  }
+  const indices = [];
+  for (let ring = 0; ring < ringCount; ring++) {
+    const inner = ringStart[ring];
+    const outer = ringStart[ring + 1];
+    for (let a = 0; a < angularSegments; a++) {
+      const next = (a + 1) % angularSegments;
+      indices.push(inner + a, outer + a, outer + next);
+      indices.push(inner + a, outer + next, inner + next);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
 // A navigable overhead flyover: an orbit-controlled camera looking down at
-// a flat rendering of the whole world circle and every landlet in it, each
-// shape/position/color drawn straight from real world data (no separate 2D
-// projection math — a landlet's plot sits at its own center_x_m/center_y_m
-// on the same X/Y ground plane the builder scene itself uses). Tapping a
-// plot previews it below regardless of status; only an available
-// (greenbelt) one enables the Claim button.
+// a curved rendering (see buildCurvedDiscGeometry above) of the whole world
+// circle and every landlet in it, each shape/position/color drawn straight
+// from real world data (no separate 2D projection math — a landlet's plot
+// sits at its own center_x_m/center_y_m, run through curvedPosition, on
+// the same ground the builder scene itself uses). Tapping a plot previews
+// it below regardless of status; only an available (greenbelt) one enables
+// the Claim button.
 async function loadLandletMap(resolve) {
   const myLoadToken = ++claimMapLoadToken;
   claimStatusEl.textContent = 'Loading the world…';
@@ -8871,13 +8960,13 @@ async function loadLandletMap(resolve) {
   scene.add(sun);
 
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(radiusM * 1.4, 64),
+    buildCurvedDiscGeometry(radiusM * 1.4, 16, 64),
     new THREE.MeshBasicMaterial({ color: 0xa8d98a }),
   );
   scene.add(ground);
 
   const boundary = new THREE.Mesh(
-    new THREE.RingGeometry(radiusM * 0.99, radiusM * 1.01, 128),
+    buildCurvedRingBand(radiusM * 0.99, radiusM * 1.01, 2, 128),
     new THREE.MeshBasicMaterial({ color: 0x16240a, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
   );
   boundary.position.z = 0.02;
@@ -8898,7 +8987,15 @@ async function loadLandletMap(resolve) {
     const geometry = new THREE.ShapeGeometry(shape);
     const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(landlet.center.x, landlet.center.y, 0.05);
+    // The plot's own polygon (shape, above) stays flat — only its
+    // placement moves to the real curved position. Tilting the polygon
+    // itself to lie tangent to the curve would be more "correct," but at
+    // one landlet's own ~31.6m span the tilt is imperceptible (the same
+    // reasoning this map's own ground curve comment gives), so it's left
+    // flat rather than adding a tangent-plane rotation with no visible
+    // payoff yet.
+    const curvedCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
+    mesh.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.05);
     mesh.userData.landlet = landlet;
     scene.add(mesh);
     plotMeshes.push(mesh);
@@ -8907,7 +9004,7 @@ async function loadLandletMap(resolve) {
       shape.getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0)),
     );
     const outline = new THREE.LineLoop(outlineGeometry, plotOutlineMaterial);
-    outline.position.set(landlet.center.x, landlet.center.y, 0.06);
+    outline.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.06);
     scene.add(outline);
     plotOutlines.push(outline);
   }
@@ -8973,7 +9070,8 @@ async function loadLandletMap(resolve) {
     }
     const outlinePoints = shapeForLandlet(landlet).getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0));
     selectionOutline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outlinePoints), selectionOutlineMaterial);
-    selectionOutline.position.set(landlet.center.x, landlet.center.y, 0.07);
+    const curvedSelectionCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
+    selectionOutline.position.set(curvedSelectionCenter.x, curvedSelectionCenter.y, curvedSelectionCenter.z + 0.07);
     selectionOutline.renderOrder = 2;
     scene.add(selectionOutline);
     claimFlyover.selectionOutline = selectionOutline;
