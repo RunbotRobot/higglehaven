@@ -72,7 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { footprintScaleAtHeight } from '../worker/earthCurvature.js';
+import { curvedPosition, flatPosition, footprintScaleAtHeight } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -969,6 +969,38 @@ const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
 sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
 
+// docs/SPEC.md §1's Earth-curvature coordinate system (issue #135): bends
+// a flat ground geometry's vertices onto the sphere via worker/
+// earthCurvature.js's curvedPosition, treating the mesh's own local origin
+// (0,0,0) as the tangent point on Earth's surface — correct for Build
+// mode, which always renders a landlet in its own local scene regardless
+// of that landlet's true position out in the wider world (unlike Shop
+// mode's shared-world view, where curvature between landlets, not just
+// within one, matters — a separate, larger piece of #133 this doesn't
+// attempt). Genuinely imperceptible at a landlet's ~31.6m scale (see
+// clampToLandlet's own comment on this) — this is about the underlying
+// geometry being correct, not a visible effect, per #135's own note not
+// to over-build visual fidelity here.
+function curveGroundGeometry(geometry) {
+  const position = geometry.attributes.position;
+  for (let i = 0; i < position.count; i++) {
+    const curved = curvedPosition({ x: position.getX(i), y: position.getY(i), z: position.getZ(i) });
+    position.setXYZ(i, curved.x, curved.y, curved.z);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+}
+
+// curveGroundGeometry's own inverse for a raycast hit: `landlet`'s
+// geometry is now the curved surface, so a hit against it lands on that
+// curve rather than the flat plane every other coordinate in this file
+// (placement, measuring, clamping) still assumes — convert back via
+// flatPosition before any of that math ever sees the point.
+function flatGroundHitPoint(hit) {
+  const flat = flatPosition(hit.point);
+  return new THREE.Vector3(flat.x, flat.y, flat.z);
+}
+
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
 // square is only a placeholder shown before bootstrap() resolves which
@@ -977,6 +1009,7 @@ scene.add(sunLight);
 // raycasting target at line ~1343ish) has to exist immediately, since
 // ground-click placement can happen before that fetch resolves.
 const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
+curveGroundGeometry(landletGeometry);
 // DoubleSide so the plane stays visible from below during dev orbiting;
 // the finished game will never let a shopper get under the ground plane.
 const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
@@ -990,6 +1023,7 @@ scene.add(landlet);
 function applyLandletShape(landletRecord) {
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
+  curveGroundGeometry(landlet.geometry);
   oldGeometry.dispose();
 }
 
@@ -4434,7 +4468,7 @@ function resolveMeasurePoint() {
   if (productHits.length > 0 && (groundHits.length === 0 || productHits[0].distance < groundHits[0].distance)) {
     return productHits[0].point;
   }
-  if (groundHits.length > 0) return groundHits[0].point;
+  if (groundHits.length > 0) return flatGroundHitPoint(groundHits[0]);
   return null;
 }
 
@@ -5345,7 +5379,7 @@ async function handlePlacementClick() {
     point = productHits[0].point;
     supportingMesh = findRootProduct(productHits[0].object);
   } else if (groundHits.length > 0) {
-    point = groundHits[0].point;
+    point = flatGroundHitPoint(groundHits[0]);
   } else {
     return; // tapped empty sky — nothing to place onto, leave placement pending
   }
