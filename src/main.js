@@ -63,6 +63,7 @@ import {
   deleteProductReview,
   startAuction,
   fetchAuctions,
+  fetchAllAuctions,
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
@@ -4051,7 +4052,10 @@ async function renderAuctionsSettingsSection() {
     auctionList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let auctions;
     try {
-      auctions = await fetchAuctions({ status: 'active' });
+      // The world's full active-auction list, not one landlet's own — use
+      // the paginating fetch so this doesn't silently truncate past 100
+      // simultaneously active auctions (#190, same shape as #186).
+      auctions = await fetchAllAuctions({ status: 'active' });
     } catch (err) {
       auctionList.innerHTML = '';
       const errNote = document.createElement('div');

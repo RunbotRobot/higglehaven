@@ -591,6 +591,29 @@ export async function fetchAuctions({ status, landletId } = {}) {
   return auctions;
 }
 
+// Pages through every matching auction regardless of how many are active
+// at once — unlike fetchAuctions above (one page, drops nextCursor).
+// Mirrors fetchAllLandlets's own pattern (#186 fixed this same silent-
+// truncation shape for the Land Cap panel): a caller browsing the world's
+// full active-auction list, not just one landlet's own, needs the true
+// total rather than an arbitrary first 100.
+export async function fetchAllAuctions(params = {}) {
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined) query.set(key, value);
+    }
+    query.set('limit', '100');
+    if (cursor) query.set('cursor', cursor);
+    const { auctions, nextCursor } = await requestJson(`/auctions?${query.toString()}`);
+    all.push(...auctions);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
+}
+
 export async function fetchAuction(auctionId) {
   const { auction } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}`);
   return auction;
