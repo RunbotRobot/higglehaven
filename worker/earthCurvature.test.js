@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { curvedPosition, DEFAULT_EARTH_RADIUS_M, flatPosition } from './earthCurvature.js';
+import {
+  curvatureDropM,
+  curvedPosition,
+  DEFAULT_EARTH_RADIUS_M,
+  flatPosition,
+  surfaceUpDirection,
+} from './earthCurvature.js';
 
 // A small, easy-to-verify radius rather than DEFAULT_EARTH_RADIUS_M's real
 // scale — the math is identical either way (every function takes the
@@ -89,5 +95,40 @@ describe('earth curvature', () => {
     // correctly-signed value, not a silently-flat placeholder.
     expect(point.z).toBeLessThan(0);
     expect(point.z).toBeGreaterThan(-1e-3);
+  });
+
+  it('surfaceUpDirection points straight up at the origin', () => {
+    expect(surfaceUpDirection(0, 0, R)).toEqual({ x: 0, y: 0, z: 1 });
+  });
+
+  it('surfaceUpDirection tilts away from straight up farther from the origin, staying a unit vector', () => {
+    const up = surfaceUpDirection(500, 0, R);
+    expect(up.z).toBeLessThan(1);
+    expect(up.x).toBeGreaterThan(0);
+    expect(up.y).toBeCloseTo(0, 9);
+    expect(Math.hypot(up.x, up.y, up.z)).toBeCloseTo(1, 9);
+  });
+
+  it('surfaceUpDirection matches the direction curvedPosition actually moves along for a height change', () => {
+    const up = surfaceUpDirection(200, -150, R);
+    const low = curvedPosition({ x: 200, y: -150, z: 0 }, R);
+    const high = curvedPosition({ x: 200, y: -150, z: 10 }, R);
+    const delta = { x: high.x - low.x, y: high.y - low.y, z: high.z - low.z };
+    const deltaLength = Math.hypot(delta.x, delta.y, delta.z);
+    expect(deltaLength).toBeCloseTo(10, 6);
+    expect(delta.x / deltaLength).toBeCloseTo(up.x, 6);
+    expect(delta.y / deltaLength).toBeCloseTo(up.y, 6);
+    expect(delta.z / deltaLength).toBeCloseTo(up.z, 6);
+  });
+
+  it('curvatureDropM is zero at the origin and grows with distance, matching curvedPosition\'s own z', () => {
+    expect(curvatureDropM(0, R)).toBe(0);
+    const near = curvatureDropM(10, R);
+    const far = curvatureDropM(100, R);
+    expect(near).toBeGreaterThan(0);
+    expect(far).toBeGreaterThan(near);
+    expect(curvedPosition({ x: 10, y: 0, z: 0 }, R).z).toBeCloseTo(-near, 9);
+    // Sagitta approximation (d^2 / 2R) should be very close at this range.
+    expect(near).toBeCloseTo(100 / (2 * R), 6);
   });
 });
