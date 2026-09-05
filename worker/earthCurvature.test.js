@@ -5,6 +5,7 @@ import {
   DEFAULT_EARTH_RADIUS_M,
   flatPosition,
   footprintScaleAtHeight,
+  relativeCurvatureDropM,
   surfaceUpDirection,
 } from './earthCurvature.js';
 
@@ -158,5 +159,43 @@ describe('footprintScaleAtHeight', () => {
     const scale = footprintScaleAtHeight(10, DEFAULT_EARTH_RADIUS_M);
     expect(scale).toBeGreaterThan(1);
     expect(scale).toBeCloseTo(1, 5);
+  });
+});
+
+describe('relativeCurvatureDropM', () => {
+  it('is exactly zero at the reference point itself', () => {
+    expect(relativeCurvatureDropM(300, -200, 300, -200, R)).toBe(0);
+    expect(relativeCurvatureDropM(0, 0, 0, 0, R)).toBe(0);
+  });
+
+  it('is negative for a point farther from the origin than the reference (sits lower)', () => {
+    // Reference sits closer to the origin than (x, y) — the far point
+    // should read as sitting below the reference's own tangent plane.
+    expect(relativeCurvatureDropM(100, 0, 10, 0, R)).toBeLessThan(0);
+  });
+
+  it('is positive for a point closer to the origin than the reference (sits higher)', () => {
+    expect(relativeCurvatureDropM(10, 0, 100, 0, R)).toBeGreaterThan(0);
+  });
+
+  it('is antisymmetric — swapping the point and reference negates the result', () => {
+    const a = relativeCurvatureDropM(250, 40, 60, -80, R);
+    const b = relativeCurvatureDropM(60, -80, 250, 40, R);
+    expect(a).toBeCloseTo(-b, 12);
+  });
+
+  it('matches curvatureDropM directly for a reference at the origin', () => {
+    expect(relativeCurvatureDropM(120, 0, 0, 0, R)).toBeCloseTo(-curvatureDropM(120, R), 12);
+  });
+
+  it('is a genuinely tiny differential across one lándlet\'s own real-world span', () => {
+    // A lándlet is ~31.6m across (LANDLET_SIDE_M in src/main.js) — a point
+    // at one edge relative to the opposite edge, 1000m out from the world
+    // origin at DEFAULT_EARTH_RADIUS_M, sags only a few millimeters: the
+    // "architecturally correct, practically imperceptible during ordinary
+    // play" scale this whole module's header promises, not a visible dip.
+    const drop = relativeCurvatureDropM(1000 + 31.6, 0, 1000, 0, DEFAULT_EARTH_RADIUS_M);
+    expect(Math.abs(drop)).toBeGreaterThan(0);
+    expect(Math.abs(drop)).toBeLessThan(0.01);
   });
 });

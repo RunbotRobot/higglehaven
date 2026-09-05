@@ -72,7 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { footprintScaleAtHeight } from '../worker/earthCurvature.js';
+import { footprintScaleAtHeight, relativeCurvatureDropM } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -8498,8 +8498,10 @@ async function enterShopMode() {
   // this used to be a much darker forest green that read as a heavy,
   // ominous swath across an otherwise bright scene once every visible
   // landlet resolves against it.
+  const wildGroundGeometry = new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64);
+  applyGroundCurvature(wildGroundGeometry, 0, 0); // this mesh's own local origin *is* the world origin
   const wildGround = new THREE.Mesh(
-    new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64),
+    wildGroundGeometry,
     new THREE.MeshStandardMaterial({ color: 0x6ca42e }),
   );
   scene.add(wildGround);
@@ -8552,8 +8554,10 @@ async function enterShopMode() {
 
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
+    const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
+    applyGroundCurvature(groundGeometry, record.center.x, record.center.y);
     const groundMesh = new THREE.Mesh(
-      new THREE.ShapeGeometry(shapeForLandlet(record)),
+      groundGeometry,
       new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
     );
     groundMesh.position.z = 0.02;
@@ -8803,6 +8807,32 @@ function shapeForLandlet(landlet) {
   shape.lineTo(-half, half);
   shape.closePath();
   return shape;
+}
+
+// #135 (docs/SPEC.md §1's "Earth-curvature coordinate system from day
+// one"): a flat ShapeGeometry's vertices lie exactly in its own XY plane
+// (z = 0 everywhere) — this nudges each one to where it actually sits on
+// a curved Earth, relative to (worldCenterX, worldCenterY): the mesh's own
+// local origin (e.g. a lándlet's own center) stays at z = 0 exactly, and
+// every other vertex gets the tiny extra sag or rise relativeCurvatureDropM
+// says it should have relative to that. Z-only — real curvature also
+// foreshortens the horizontal (x, y) span slightly, and a mesh whose own
+// local frame doesn't tilt to match its true surface normal can't blend
+// seamlessly with a neighboring one right at their shared edge, but both
+// are genuinely imperceptible at a single ground plate's real-world scale
+// (see earthCurvature.js's own module comment) — carved out as later
+// follow-up work under #135, not attempted here. Called once right after
+// building a ground mesh's geometry, before it's ever added to the scene.
+function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
+  const position = geometry.attributes.position;
+  for (let i = 0; i < position.count; i++) {
+    const localX = position.getX(i);
+    const localY = position.getY(i);
+    const drop = relativeCurvatureDropM(worldCenterX + localX, worldCenterY + localY, worldCenterX, worldCenterY);
+    position.setZ(i, position.getZ(i) + drop);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
 }
 
 // Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the

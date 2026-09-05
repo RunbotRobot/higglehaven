@@ -131,6 +131,29 @@ export function curvatureDropM(flatDistanceM, earthRadiusM = DEFAULT_EARTH_RADIU
   return earthRadiusM * (1 - Math.cos(phi));
 }
 
+// #135's own ground-mesh z-offset: how much lower (x, y) sits than
+// (referenceX, referenceY) once curvature applies, both measured against
+// the same flat tangent plane at the single world origin. Meant for a
+// mesh whose own local frame is already anchored at the reference point
+// (e.g. a lándlet's ground plate, translated to the lándlet's own world
+// center) — feeding this per-vertex leaves the reference point itself at
+// z = 0 exactly (curvatureDropM(d) - curvatureDropM(d) = 0 when x = y =
+// referenceX = referenceY) and adds only the *differential* sag across
+// the mesh's own small span, without needing to re-orient the mesh's
+// local frame to match its own true surface normal — a real, correct
+// curvature effect, just measured relative to a nearby point instead of
+// the single global origin every other function here uses. That's a
+// deliberate scope cut, not an oversight: reorienting each mesh's frame
+// (so curvature also shows up in the *horizontal* plane, and lines up
+// seamlessly across lándlet boundaries) is real, harder work carved out
+// for #135's own "blend curvature across boundaries" follow-up, not
+// needed for a single ground plate at MVP scale to sag correctly.
+export function relativeCurvatureDropM(x, y, referenceX, referenceY, earthRadiusM = DEFAULT_EARTH_RADIUS_M) {
+  const d = Math.hypot(x, y);
+  const dRef = Math.hypot(referenceX, referenceY);
+  return curvatureDropM(dRef, earthRadiusM) - curvatureDropM(d, earthRadiusM);
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
