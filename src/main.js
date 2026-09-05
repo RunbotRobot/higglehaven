@@ -6830,6 +6830,18 @@ const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
+// This binary load/unload distance is the only "chunk loading" that exists
+// today — docs/SPEC.md §1's fuller near/middle-LOD/far-panoramic-backdrop
+// banding (see #133/#137) isn't built, so there's no per-band curvature
+// concern to check yet. And even if it were: worker/earthCurvature.js's
+// curvatureDropM says the real curved surface sags a mere ~0.3-0.6mm below
+// the flat plane at these two radii, ~2cm even out at 500m, and still only
+// ~8cm at a hypothetical 1km world radius (this world starts at ~31.6m and
+// grows just 10m per expansion, so reaching even 500m is already a very
+// mature world) — all comfortably imperceptible against a 60m-tall wall/
+// dome backdrop and typical camera distances. Revisit only once a real
+// chunked LOD/backdrop system actually exists to hang a per-band decision
+// on; there's nothing here today for curvature to change.
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
