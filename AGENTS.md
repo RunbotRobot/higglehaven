@@ -14,46 +14,56 @@
 - Run `npm test`, `npm run build`, and `git diff --check`.
 - Commit each completed change.
 
-## Branch: always `higglehaven2`
+## Branch: always your own Claude Code session's name
 
-All work happens on one single branch, always named exactly
-`higglehaven2` — never a different or numbered name
-(`higglehaven1`, `higglehaven3`, `session-2`, etc.). Those other names
-are not reserved for anything in particular; `higglehaven2` is simply
-the one name to use, every time, regardless of what the work is.
+Multiple Claude Code sessions work on this repo at once, each with a
+fixed session name assigned by the project owner — `higglehaven1`
+through `higglehaven12` as of writing, with more (`higglehaven13`, ...)
+likely to be added later. **Always work from the git branch whose name
+is exactly your own session's name — never a different session's name,
+and never a name you invent.** With N sessions running, there are N
+branches active at once, one per session, by construction never
+colliding with each other.
+
+If you don't already know your own session's name: call
+`mcp__Claude_Code_Remote__get_session` with no `session_id` (it
+describes the calling session) and read its `title`.
 
 The cycle, every time you're asked to make a change:
 
-1. Update `higglehaven2` to match the current `main` (if `higglehaven2`
+1. Update your session-name branch to match the current `main` (if it
    doesn't exist yet, or was already merged and is now stale, recreate/
    reset it from `main`'s current tip — don't build on top of an old,
    already-merged version of itself).
-2. Make your changes as commits on `higglehaven2`.
-3. Open a PR from `higglehaven2` into `main`, wait for CI to pass, and
-   merge it yourself.
-4. When asked for the next change, repeat from step 1 — update
-   `higglehaven2` to match `main` again before starting.
+2. Make your changes as commits on your session-name branch.
+3. Open a PR from it into `main`, wait for CI to pass, and merge it
+   yourself.
+4. When asked for the next change, repeat from step 1 — update your
+   branch to match `main` again before starting.
 
 `main` is the durable, ever-growing version history — every merge into
-it is permanent, and nothing is ever lost from it. `higglehaven2` is a
-reusable staging branch, not a growing log of its own: it gets reset to
-match `main` at the start of each cycle, so its tip only ever reflects
-"`main` plus whatever's currently in progress," never a cumulative
-record. Once a `higglehaven2` cycle's PR is merged, that branch name is
-free to reuse immediately for the next cycle — merging preserves its
+it is permanent, and nothing is ever lost from it. Your session-name
+branch is a reusable staging branch, not a growing log of its own: it
+gets reset to match `main` at the start of each cycle, so its tip only
+ever reflects "`main` plus whatever's currently in progress," never a
+cumulative record. Once a cycle's PR is merged, that branch name is free
+to reuse immediately for your own next cycle — merging preserves its
 commits inside `main` forever regardless of what happens to the branch
 pointer afterward.
 
 Only ever run `wrangler deploy` or `wrangler d1 migrations apply
---remote` from `main`, after merging — never from `higglehaven2` before
-its PR has merged.
+--remote` from `main`, after merging — never from your own session
+branch before its PR has merged.
 
-A previous version of this file documented a different scheme —
-numbered branches (`higglehaven1`, `higglehaven2`, ...) for running many
-sessions in parallel, coordinated via a GitHub Issue. That was a
-misunderstanding of the intended convention, not something to revive:
-don't create numbered branches, and don't invent a parallel-session
-coordination scheme.
+This file has been wrong about this twice before, so don't re-derive
+the convention from old commit history or guess: (1) an early version
+had numbered branches with an ad-hoc, self-assign-via-GitHub-Issue
+coordination scheme — a misunderstanding; (2) a later version said
+*every* session should share one literal branch named `higglehaven2` —
+also a misunderstanding, over-generalized from the fact that the
+session that happened to write it was itself named `higglehaven2`. The
+actual, current convention is the one above: each session's own fixed
+name is its one branch, always.
 
 ### Backlog exploration — file everything you find, not just one issue
 
@@ -89,8 +99,8 @@ before starting to code:
    `issue_write`'s `create` method with `parent_issue_number` set to the
    tracking issue, or `sub_issue_write` (`method: "add"`) to attach an
    issue you already created. Each sub-issue should be independently
-   implementable and mergeable on its own, through the same `higglehaven2`
-   cycle described above.
+   implementable and mergeable on its own, through the same
+   own-session-branch cycle described above.
 3. **Recurse.** If a sub-issue is still big enough that landing it risks a
    painful merge or a multi-day session, break *it* into its own
    sub-issues the same way. Keep nesting until every leaf task is roughly
