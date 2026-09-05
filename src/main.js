@@ -72,7 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { footprintScaleAtHeight } from '../worker/earthCurvature.js';
+import { footprintScaleAtHeight, curvedPosition, surfaceUpDirection } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -8551,7 +8551,18 @@ async function enterShopMode() {
     if (distanceFromOrigin - SHOP_LANDLET_CULL_MARGIN_M > world.radiusM) continue;
 
     const group = new THREE.Group();
-    group.position.set(record.center.x, record.center.y, 0);
+    // #135: each landlet is a small flat tangent patch on the curved Earth
+    // (worker/earthCurvature.js) — position/orient the whole group rather
+    // than distorting its polygon vertex-by-vertex, since per-landlet
+    // curvature is imperceptible at this world's real scale. Children added
+    // later (ground mesh below, plus placed products/signs/calendars — see
+    // loadShopLandletInstances) inherit this transform automatically.
+    // record.center itself stays untouched — everything reasoning about
+    // landlet positions in flat world coordinates is unaffected.
+    const curvedCenter = curvedPosition({ x: record.center.x, y: record.center.y, z: 0 });
+    group.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z);
+    const up = surfaceUpDirection(record.center.x, record.center.y);
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(up.x, up.y, up.z));
     const groundMesh = new THREE.Mesh(
       new THREE.ShapeGeometry(shapeForLandlet(record)),
       new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
