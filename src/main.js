@@ -400,6 +400,17 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // here — below-ground levels (where the spec says the cone narrows
 // instead) depend on a vertical-construction/digging feature this app
 // doesn't have yet (see #136's own scoping note).
+//
+// Widening around THIS lándlet's own local center, rather than around the
+// single shared point (Earth's center, projected as the world origin) a
+// true fixed-angular cone widens from, isn't exactly gap/overlap-free
+// against a neighboring lándlet doing the same (issue #170) —
+// worker/earthCurvature.js's neighborAdjacencyErrorM quantifies exactly
+// how far off, and its own tests show it's the same order of magnitude as
+// #135's already-accepted vertical sag at today's scale. Build mode never
+// renders two lándlets' buildable volumes together to make this visible
+// anyway; the real fix is the same reprojection-from-Earth's-center #166
+// already defers, not something to half-solve here.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = meshDimensions(mesh);
   const clampedZ = THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2);

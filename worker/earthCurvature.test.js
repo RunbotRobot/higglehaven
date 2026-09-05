@@ -5,6 +5,7 @@ import {
   DEFAULT_EARTH_RADIUS_M,
   flatPosition,
   footprintScaleAtHeight,
+  neighborAdjacencyErrorM,
   relativeCurvatureDropM,
   surfaceUpDirection,
 } from './earthCurvature.js';
@@ -132,6 +133,50 @@ describe('earth curvature', () => {
     expect(curvedPosition({ x: 10, y: 0, z: 0 }, R).z).toBeCloseTo(-near, 9);
     // Sagitta approximation (d^2 / 2R) should be very close at this range.
     expect(near).toBeCloseTo(100 / (2 * R), 6);
+  });
+});
+
+describe('neighborAdjacencyErrorM', () => {
+  it('is exactly zero at ground level, regardless of how far apart the two centers are', () => {
+    expect(neighborAdjacencyErrorM(0, 0, 500, -300, 0, R)).toBe(0);
+    expect(neighborAdjacencyErrorM(-1000, 1000, 1000, -1000, 0, R)).toBe(0);
+  });
+
+  it('is exactly zero when both centers coincide, at any height', () => {
+    expect(neighborAdjacencyErrorM(200, 300, 200, 300, 50, R)).toBe(0);
+  });
+
+  it("doesn't depend on which of the two centers is A vs. B", () => {
+    const forward = neighborAdjacencyErrorM(10, 20, 300, -50, 40, R);
+    const swapped = neighborAdjacencyErrorM(300, -50, 10, 20, 40, R);
+    expect(swapped).toBeCloseTo(forward, 9);
+  });
+
+  it('matches the hand-derived closed form: distance between centers × (scale - 1)', () => {
+    const z = 25;
+    const distance = 1234.5;
+    const expected = distance * (footprintScaleAtHeight(z, R) - 1);
+    expect(neighborAdjacencyErrorM(0, 0, distance, 0, z, R)).toBeCloseTo(expected, 9);
+  });
+
+  it('grows with height and with how far apart the two centers are', () => {
+    const near = neighborAdjacencyErrorM(0, 0, 50, 0, 10, R);
+    const far = neighborAdjacencyErrorM(0, 0, 500, 0, 10, R);
+    expect(far).toBeGreaterThan(near);
+
+    const shallow = neighborAdjacencyErrorM(0, 0, 50, 0, 10, R);
+    const deep = neighborAdjacencyErrorM(0, 0, 50, 0, 100, R);
+    expect(deep).toBeGreaterThan(shallow);
+  });
+
+  it('is genuinely tiny for two adjacent lándlets at today\'s real-world scale', () => {
+    // Two lándlet centers ~31.6m apart (touching square lándlets), at
+    // LANDLET_HEIGHT_M (src/main.js) — real Earth radius. Sub-millimeter,
+    // same order of magnitude as #135's already-accepted vertical sag —
+    // not zero, but not a reason to fix this ahead of #166 either.
+    const error = neighborAdjacencyErrorM(0, 0, 31.6, 0, 10, DEFAULT_EARTH_RADIUS_M);
+    expect(Math.abs(error)).toBeGreaterThan(0);
+    expect(Math.abs(error)).toBeLessThan(1e-3);
   });
 });
 
