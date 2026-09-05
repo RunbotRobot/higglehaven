@@ -77,6 +77,24 @@ export function flatPosition({ x, y, z }, earthRadiusM = DEFAULT_EARTH_RADIUS_M)
   };
 }
 
+// docs/SPEC.md §3's buildable-volume correction: "a fixed-angular-footprint
+// lándlet extended radially through the Earth is a cone converging on
+// Earth's center, not a cylinder... each level above ground consumes
+// increasingly more land cap per level (cross-sectional area grows moving
+// away from Earth's center); each level below ground consumes increasingly
+// less (area shrinks toward the center)." A fixed *angular* footprint's
+// linear cross-section scales linearly with distance from Earth's center —
+// the same radiusFromCenter = earthRadiusM + z that curvedPosition already
+// uses — so this is that ratio isolated as its own reusable factor: 1 at
+// ground level (z = 0), > 1 above ground, < 1 below ground. Squaring it
+// gives the area ratio the spec describes; callers that only need to widen/
+// narrow a horizontal (x, y) span (e.g. #136's buildable-volume clamp) want
+// the linear factor itself, not the area, so this returns the linear one
+// and leaves squaring to whichever caller actually needs area.
+export function footprintScaleAtHeight(z, earthRadiusM = DEFAULT_EARTH_RADIUS_M) {
+  return (earthRadiusM + z) / earthRadiusM;
+}
+
 // The local "up" direction (unit vector, in the same ground-tangent-at-
 // the-origin frame curvedPosition/flatPosition use) at a given flat
 // (x, y) — the direction z actually extends along at that position once
