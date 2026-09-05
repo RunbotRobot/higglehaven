@@ -3261,9 +3261,10 @@ converging on Earth's center, not a cylinder... each level above ground
 consumes increasingly more land cap per level (cross-sectional area grows
 moving away from Earth's center); each level below ground consumes
 increasingly less (area shrinks toward the center)." This is the data
-model + API for that (issue #168, sub-issue of #167's tracking issue) —
-the depth/footprint limits, the Build-mode UI, and cross-lándlet cone
-boundary continuity are deliberately separate, still-open sub-issues.
+model + API for that, plus the two hard limits on digging down §3 also
+specifies (issues #168/#164, sub-issues of #167's tracking issue) — the
+Build-mode UI and cross-lándlet cone boundary continuity are deliberately
+separate, still-open sub-issues.
 
 `migrations/0063_landlet_levels.sql` adds a `landlet_levels` table.
 Level `0` (the ground level every lándlet already has, accounted for by
@@ -3300,6 +3301,15 @@ Requires the session-authenticated owner of the lándlet. Body:
 the current range in that direction (from `0` if none exist yet) and
 recomputes the owning builder's land cap. Errors: `401` no session, `403`
 not the owner, `400` invalid/missing `direction`, `404` lándlet not found.
+
+Digging down (never up — the cone only narrows in that direction) is
+capped by docs/SPEC.md §3's two hard limits, both `409`: the new level's
+own cross-sectional area (the same `capConsumedM2` calculation above)
+falling below a 10 m² minimum footprint, and reaching Earth's center
+(`levelIndex * LEVEL_HEIGHT_M <= -earthRadiusM`) — in practice the 10 m²
+floor always binds first for any lándlet with a positive area, so the
+center-of-Earth check exists mainly to satisfy the spec's literal "hard
+depth limit: Earth's radius" requirement as its own explicit guard.
 
 ### `DELETE /api/landlets/:landletId/levels/:levelIndex`
 
