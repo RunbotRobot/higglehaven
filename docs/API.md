@@ -3734,7 +3734,7 @@ anything below.
 
 Movement is real ground-based walking, not free flight: the move joystick
 changes `shopAvatarPosition` (the avatar's own feet position, clamped to
-the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/2.2
+the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/2.7
 m/s, docs/SPEC.md §2's confirmed speeds) rather than moving the camera
 directly. There's no separate run input — the joystick's own deflection
 (0..1) doubles as intensity, linearly interpolating between the two
