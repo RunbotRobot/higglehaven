@@ -4180,6 +4180,54 @@ describe('Landlet levels', () => {
       .bind('levels-delete-landlet').all();
     expect(results).toHaveLength(0);
   });
+
+  it('rejects digging down once the level footprint would fall below the 10m² minimum', async () => {
+    const owner = await signupBuilder('levels-min-footprint-owner');
+    // Small enough that even the very first level down already dips under
+    // the 10m² floor — a realistic-sized (~1000m²) lándlet would need to
+    // dig hundreds of thousands of levels deep to ever reach this, so a
+    // tiny lándlet is the only practical way to exercise the check at all.
+    // Going up is unaffected either way (the cone only narrows going down).
+    await createGreenbeltLandletWithArea('levels-min-footprint-landlet', 5);
+    await claim('levels-min-footprint-landlet', owner);
+
+    const down = await api('/landlets/levels-min-footprint-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'down' }),
+    }));
+    expect(down.response.status).toBe(409);
+    expect(down.body.error).toContain('10m²');
+
+    const up = await api('/landlets/levels-min-footprint-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up.response.status).toBe(201);
+
+    const list = await api('/landlets/levels-min-footprint-landlet/levels');
+    expect(list.body.levels.map((level) => level.levelIndex)).toEqual([1]);
+  });
+
+  it('rejects digging down past Earth\'s center even for a hypothetically enormous lándlet', async () => {
+    // Directly seeds a level one step short of the hard depth floor —
+    // reaching it by actually POSTing one level at a time (LEVEL_HEIGHT_M
+    // at a time, down to -earthRadiusM) would take hundreds of thousands
+    // of requests, same practical problem as the 10m² test above. This
+    // isolates the depth check itself, which the 10m² floor otherwise
+    // always trips first for any real (positive-area) lándlet — see
+    // MIN_LEVEL_FOOTPRINT_M2's own comment in worker/index.js.
+    const owner = await signupBuilder('levels-earth-center-owner');
+    await createGreenbeltLandletWithArea('levels-earth-center-landlet', 1000);
+    await claim('levels-earth-center-landlet', owner);
+    const secondToLastLevelIndex = Math.round(DEFAULT_EARTH_RADIUS_M / LEVEL_HEIGHT_M) - 1;
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('levels-earth-center-seed', 'levels-earth-center-landlet', -secondToLastLevelIndex, 0.01).run();
+
+    const down = await api('/landlets/levels-earth-center-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'down' }),
+    }));
+    expect(down.response.status).toBe(409);
+    expect(down.body.error).toMatch(/center/i);
+  });
 });
 
 describe('Simulated purchases', () => {
