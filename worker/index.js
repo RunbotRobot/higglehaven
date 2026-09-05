@@ -1231,6 +1231,37 @@ async function handleBuilders(request, db, route) {
         WHERE landlet_id = ?
       `).bind(landletId),
     ]);
+
+    // Deleting this builder cascades (migrations/0045_auctions.sql,
+    // seller_builder_id ON DELETE CASCADE) straight through any auction
+    // where they're the seller, taking every bidder's auction_bids row
+    // with it (auction_bids.auction_id ON DELETE CASCADE) — silently, with
+    // no notification, even for a live auction with real bids on it.
+    // Losing the row itself to the cascade is an accepted dev-mode
+    // simplification, same as pioneer ranks/claimed land above — there's
+    // no owner left for it to belong to, and docs/API.md's auctions
+    // section already treats "no cancelled state, always runs its full
+    // course" as describing the normal timed lifecycle, not this
+    // edge case. What's missing is just telling the bidders their bid
+    // is about to vanish instead of leaving that to an invisible FK
+    // cascade — so notify before the batch's final DELETE cascades it
+    // away. The land itself doesn't need separate handling here — it's
+    // still status='claimed'/owned by this builder throughout an active
+    // auction (see handleStartAuction), so it's already covered by the
+    // greenbelt release above.
+    const { results: sellingAuctions } = await db.prepare(`
+      SELECT * FROM auctions WHERE seller_builder_id = ? AND status = 'active'
+    `).bind(route[1]).all();
+    for (const auction of sellingAuctions) {
+      const { results: bidders } = await db.prepare(`
+        SELECT DISTINCT bidder_builder_id FROM auction_bids WHERE auction_id = ?
+      `).bind(auction.auction_id).all();
+      for (const { bidder_builder_id: bidderBuilderId } of bidders) {
+        statements.push(notificationStatement(db, bidderBuilderId,
+          `The auction for ${auction.landlet_id} was called off because the seller's account was deleted — your bid is void.`));
+      }
+    }
+
     statements.push(db.prepare('DELETE FROM builders WHERE builder_id = ?').bind(route[1]));
     await db.batch(statements);
     return json({ deleted: true, releasedLandletIds: landletIds });

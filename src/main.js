@@ -149,8 +149,10 @@ const LANDLET_HEIGHT_M = 10;
 
 const canvas = document.getElementById('app');
 
-document.getElementById('build-info').textContent =
-  `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
+// Shown in Settings' General tab (renderGeneralSettingsSection) rather than
+// an always-on-screen HUD overlay — decluttering the main view, now that
+// it's the only way to read/copy exactly which commit is deployed.
+const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
@@ -3599,6 +3601,17 @@ function renderGeneralSettingsSection() {
   }
   field.appendChild(radioRow);
   settingsSectionEl.appendChild(field);
+
+  const versionField = document.createElement('div');
+  versionField.className = 'settings-field';
+  const versionLabel = document.createElement('span');
+  versionLabel.textContent = 'Version';
+  versionField.appendChild(versionLabel);
+  const versionValue = document.createElement('div');
+  versionValue.className = 'settings-empty-note';
+  versionValue.textContent = BUILD_INFO_TEXT;
+  versionField.appendChild(versionValue);
+  settingsSectionEl.appendChild(versionField);
 }
 
 // Land cap (docs/SPEC.md §3, docs/API.md's "Land cap") — a builder-account
@@ -6709,6 +6722,21 @@ const SHOP_AVATAR_ARM_LENGTH_M = 0.6;
 const SHOP_AVATAR_ARM_RADIUS_M = 0.055;
 const SHOP_AVATAR_SHOULDER_WIDTH_M = 0.23;
 const SHOP_AVATAR_HEAD_RADIUS_M = 0.14;
+// docs/SPEC.md §2's collision numbers ("a 2-foot-diameter hard barrier"),
+// reused here for shopper-vs-placed-item collision (the item-collision half
+// of "Shopper collision still prevents walking through items" — Build
+// mode's own item-vs-item collision, above, never covered this since Shop
+// mode's multi-landlet shopLandlets map isn't part of productMeshes).
+// Approximated as a small square rather than a true circle so the existing
+// footprintCorners/footprintsOverlap SAT helpers (built for box-vs-box) can
+// be reused as-is instead of writing separate circle-vs-polygon math.
+const SHOP_AVATAR_COLLISION_HALF_M = 0.3;
+const SHOP_AVATAR_HEIGHT_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2;
+// How fast the avatar's body turns to face its own movement direction
+// (see updateShopMovement) — high enough to read as responsive, not
+// instant, similar to every other "ease toward a target per second"
+// treatment in this file (e.g. SHOP_AVATAR_SWING_EASE_PER_S).
+const SHOP_AVATAR_TURN_EASE_PER_S = 12;
 // Where the third-person camera orbits around — roughly head height, not
 // the very top of the head, so looking straight ahead frames the avatar
 // low in frame rather than staring at the back of its skull.
@@ -7035,6 +7063,13 @@ function growShopDomeIfNeeded(object) {
 
 let shopYaw = 0;
 let shopPitch = -0.12;
+// The avatar's own facing (docs/SPEC.md §2) — deliberately separate from
+// shopYaw (the camera's look direction, right-stick-driven): the left
+// stick turns the avatar to face wherever it's actually walking, while the
+// right stick free-looks independently, the standard third-person control
+// scheme. Only updated while moving (see updateShopMovement) — standing
+// still and looking around doesn't spin the avatar in place.
+let shopAvatarFacing = 0;
 // -1..1 each, driven continuously by joystick deflection (see
 // bindShopJoystick below) and consumed every animate() frame in
 // updateShopMovement — not per-pointer-move deltas like the old
@@ -7164,7 +7199,21 @@ bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
 // pair — shopVerticalInput/bindShopVerticalButton, +1 while Up is held,
 // -1 while Down, consumed every frame in updateShopFlight exactly like
 // shopMoveX/Y already are for the move joystick.
+//
+// Each button's own held-state is tracked independently (shopUpHeld/
+// shopDownHeld) rather than shopVerticalInput itself recording "who's
+// holding" — holding both and releasing just one used to silently stick
+// the other off, since the second press's pointerdown would overwrite the
+// first's contribution to the one shared variable, and the first button's
+// own pointerup only ever cleared it if it still matched that button's own
+// direction. Deriving shopVerticalInput as a sum of both held-flags means
+// either button's press/release only ever touches its own flag.
+let shopUpHeld = false;
+let shopDownHeld = false;
 let shopVerticalInput = 0;
+function updateShopVerticalInput() {
+  shopVerticalInput = (shopUpHeld ? 1 : 0) + (shopDownHeld ? -1 : 0);
+}
 function bindShopVerticalButton(el, direction) {
   let pointerId = null;
   el.addEventListener('pointerdown', (event) => {
@@ -7173,13 +7222,17 @@ function bindShopVerticalButton(el, direction) {
     pointerId = event.pointerId;
     el.setPointerCapture(pointerId);
     el.classList.add('active');
-    shopVerticalInput = direction;
+    if (direction === 1) shopUpHeld = true;
+    else shopDownHeld = true;
+    updateShopVerticalInput();
   });
   const end = (event) => {
     if (event.pointerId !== pointerId) return;
     pointerId = null;
     el.classList.remove('active');
-    if (shopVerticalInput === direction) shopVerticalInput = 0;
+    if (direction === 1) shopUpHeld = false;
+    else shopDownHeld = false;
+    updateShopVerticalInput();
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
@@ -7559,6 +7612,62 @@ function positionShopCamera() {
   clampShopRadius(camera.position);
 }
 
+// Shopper-vs-placed-item collision (docs/SPEC.md §3's "Shopper collision
+// still prevents walking through items") — reuses the same rotated-
+// rectangle SAT test Build mode's own item-vs-item collision already uses
+// (footprintCorners/footprintsOverlap, near the top of this file),
+// approximating the avatar's own footprint as a small square (see
+// SHOP_AVATAR_COLLISION_HALF_M) rather than writing separate circle-vs-
+// polygon math. Only checks *loaded* landlets' objects (entry.objects) —
+// exactly the ones close enough to matter (see updateShopProximity). Each
+// object's position is landlet-local (see loadShopLandletInstances), so
+// it's translated into world space by adding the landlet group's own
+// position before testing.
+function shopAvatarFootprintCorners(x, y) {
+  const half = SHOP_AVATAR_COLLISION_HALF_M;
+  return [
+    [x + half, y + half],
+    [x + half, y - half],
+    [x - half, y - half],
+    [x - half, y + half],
+  ];
+}
+
+function shopPositionBlocked(x, y, z) {
+  const avatarCorners = shopAvatarFootprintCorners(x, y);
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const mesh of entry.objects) {
+      const worldX = entry.group.position.x + mesh.position.x;
+      const worldY = entry.group.position.y + mesh.position.y;
+      const { height } = meshDimensions(mesh);
+      const itemZMin = mesh.position.z - height / 2;
+      const itemZMax = mesh.position.z + height / 2;
+      if (z + SHOP_AVATAR_HEIGHT_M < itemZMin || z > itemZMax) continue; // no vertical overlap — e.g. flying above it
+      if (footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) return true;
+    }
+  }
+  return false;
+}
+
+// Tries the full requested move first; if that's blocked, slides along
+// whichever single axis is still open (the same axis-separated collision
+// response resolveByAxis/sweepAxis use for Build mode) so grazing a wall
+// at an angle slows the shopper down rather than stopping them dead.
+function moveShopAvatarWithCollision(dx, dy) {
+  const { x, y, z } = shopAvatarPosition;
+  if (!shopPositionBlocked(x + dx, y + dy, z)) {
+    shopAvatarPosition.x += dx;
+    shopAvatarPosition.y += dy;
+    return;
+  }
+  if (!shopPositionBlocked(x + dx, y, z)) {
+    shopAvatarPosition.x += dx;
+  } else if (!shopPositionBlocked(x, y + dy, z)) {
+    shopAvatarPosition.y += dy;
+  }
+}
+
 function updateShopMovement(now) {
   if (shopLastFrameTime === null) {
     shopLastFrameTime = now;
@@ -7606,7 +7715,25 @@ function updateShopMovement(now) {
       .addScaledVector(shopRight, shopMoveX);
     if (shopMoveDir.lengthSq() > 1e-6) {
       shopMoveDir.normalize();
-      shopAvatarPosition.addScaledVector(shopMoveDir, speed * dt);
+      moveShopAvatarWithCollision(shopMoveDir.x * speed * dt, shopMoveDir.y * speed * dt);
+      // Turn to face the actual movement direction (left stick), independent
+      // of the right stick's camera-look yaw (shopYaw) — the signed angle
+      // between shopForward (the world direction shopYaw currently faces)
+      // and shopMoveDir gives the facing delta without needing to know the
+      // avatar mesh's own local-forward convention. Eased rather than
+      // snapped (see SHOP_AVATAR_TURN_EASE_PER_S), and via the shortest
+      // angular distance so a near-180-degree reversal doesn't spin the
+      // long way around.
+      const facingDelta = Math.atan2(
+        shopForward.x * shopMoveDir.y - shopForward.y * shopMoveDir.x,
+        shopForward.x * shopMoveDir.x + shopForward.y * shopMoveDir.y,
+      );
+      const targetFacing = shopYaw + facingDelta;
+      const turnDelta = Math.atan2(
+        Math.sin(targetFacing - shopAvatarFacing),
+        Math.cos(targetFacing - shopAvatarFacing),
+      );
+      shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
     clampShopRadius(shopAvatarPosition);
   }
@@ -7620,13 +7747,12 @@ function updateShopMovement(now) {
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
   updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
-  // The avatar always faces the way the camera looks (horizontally), plus
-  // a small idle weight-shift offset when standing still — this control
-  // scheme's forward/back/strafe are already relative to that facing, so
-  // turning the look joystick turns the avatar's body along with the
-  // camera around it, exactly like a standard third-person shoulder-cam
-  // rig.
-  shopAvatar.group.rotation.z = shopYaw + shopIdleSwayYawOffset;
+  // The avatar faces its own movement direction (shopAvatarFacing, turned
+  // by the left stick above), not the camera's look direction (shopYaw,
+  // the right stick) — a standard third-person rig where free-look and
+  // facing are independent. Plus a small idle weight-shift offset when
+  // standing still.
+  shopAvatar.group.rotation.z = shopAvatarFacing + shopIdleSwayYawOffset;
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
@@ -8400,12 +8526,15 @@ async function enterShopMode() {
   shopFlightState = 'grounded';
   shopFlightTransitionElapsedS = 0;
   shopFlightAltitudeM = 0;
+  shopUpHeld = false;
+  shopDownHeld = false;
   shopVerticalInput = 0;
   document.body.classList.remove('shop-flying');
   shopFlyBtn.classList.remove('active');
 
   shopYaw = 0;
   shopPitch = -0.12;
+  shopAvatarFacing = 0;
   applyShopCameraOrientation();
   positionShopCamera();
   setShopFov(camera.fov); // re-clamp in case a previous Shop session left it zoomed
