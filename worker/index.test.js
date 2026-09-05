@@ -4590,8 +4590,18 @@ describe('Simulated purchases', () => {
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
+    // This is also the observable contract #192's fix protects under real
+    // concurrency (two requests racing on a stale refunded_at read): this
+    // test pool's single-threaded workerd runtime can't force genuine
+    // interleaving between the guard read and the guard write, so this
+    // sequential case is what's actually exercisable here — the fix
+    // itself (an atomic `WHERE refunded_at IS NULL` + meta.changes check,
+    // not batched with the balance mutation) mirrors handleAuctionBids's
+    // already-proven-safe conditional-insert pattern in this same file.
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+    const afterSecondAttempt = await builderRow(seller.builderId);
+    expect(afterSecondAttempt.dallers_balance_cents).toBe(after.dallers_balance_cents);
   });
 
   it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
