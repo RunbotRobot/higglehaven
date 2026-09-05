@@ -4132,13 +4132,20 @@ const undoStack = [];
 const redoStack = [];
 const UNDO_HISTORY_LIMIT = 50;
 
+// restoreSnapshot below does async mesh rebuilding plus a batch of network
+// sync calls — without this, a rapid second click on Undo/Redo before that
+// resolves would pop another snapshot and start a second, concurrent
+// restoreSnapshot mutating the same shared productMeshes/selectedMeshes/
+// undoStack/redoStack and firing overlapping batch requests.
+let undoRedoBusy = false;
+
 function captureSnapshot() {
   return productMeshes.map((mesh) => instanceFromMesh(mesh));
 }
 
 function updateUndoRedoButtons() {
-  undoBtn.disabled = undoStack.length === 0;
-  redoBtn.disabled = redoStack.length === 0;
+  undoBtn.disabled = undoRedoBusy || undoStack.length === 0;
+  redoBtn.disabled = undoRedoBusy || redoStack.length === 0;
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -4212,19 +4219,31 @@ async function restoreSnapshot(snapshot) {
 }
 
 async function undo() {
-  if (undoStack.length === 0) return;
-  const previous = undoStack.pop();
-  redoStack.push(captureSnapshot());
-  await restoreSnapshot(previous);
+  if (undoRedoBusy || undoStack.length === 0) return;
+  undoRedoBusy = true;
   updateUndoRedoButtons();
+  try {
+    const previous = undoStack.pop();
+    redoStack.push(captureSnapshot());
+    await restoreSnapshot(previous);
+  } finally {
+    undoRedoBusy = false;
+    updateUndoRedoButtons();
+  }
 }
 
 async function redo() {
-  if (redoStack.length === 0) return;
-  const next = redoStack.pop();
-  undoStack.push(captureSnapshot());
-  await restoreSnapshot(next);
+  if (undoRedoBusy || redoStack.length === 0) return;
+  undoRedoBusy = true;
   updateUndoRedoButtons();
+  try {
+    const next = redoStack.pop();
+    undoStack.push(captureSnapshot());
+    await restoreSnapshot(next);
+  } finally {
+    undoRedoBusy = false;
+    updateUndoRedoButtons();
+  }
 }
 
 undoBtn.addEventListener('click', undo);
