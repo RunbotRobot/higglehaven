@@ -6399,10 +6399,10 @@ function showAuthView(view) {
   setAuthStatus('');
   // Back to masked every time this view is (re)entered — form.reset()
   // (called after a successful signup) only resets values, not the type
-  // attribute a Show tap changes, so without this the field could still
+  // attribute a toggle tap changes, so without this the field could still
   // read as plain-text on a later visit despite being empty again.
-  authSignupPasswordInput.type = 'password';
-  authSignupPasswordToggleBtn.textContent = 'Show';
+  setPasswordToggleState(authSignupPasswordInput, authSignupPasswordToggleBtn, false);
+  setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
 }
 
 function refreshAccountAuthUI() {
@@ -6468,19 +6468,39 @@ for (const btn of authTabBtns) {
 document.getElementById('auth-forgot-btn').addEventListener('click', () => showAuthView('forgot'));
 document.getElementById('auth-forgot-back-btn').addEventListener('click', () => showAuthView('login'));
 
-// Lets a builder double-check what they actually typed while choosing a
-// password at signup, rather than trusting a masked field with no way to
-// catch a typo before submitting. Only on signup — login's password field
-// isn't where a typo would go unnoticed (a wrong one just fails to log in
-// and can be retried), and reset's new-password field is short-lived
-// enough not to need it either.
+// Lets a builder double-check what they actually typed into a password
+// field, rather than trusting a masked field with no way to catch a typo
+// before submitting — an eye/eye-off icon (not a text label, so it reads
+// the same regardless of the field's own current language) toggles the
+// field between masked and plain text. On login and signup; not on
+// reset's new-password field, which is short-lived enough not to need it.
+const EYE_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/>'
+  + '<circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.16 13.16 0 0 0 1 11s4 7 11 7a9.16 9.16 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/>'
+  + '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+function setPasswordToggleState(input, btn, showing) {
+  input.type = showing ? 'text' : 'password';
+  btn.innerHTML = showing ? EYE_OFF_ICON_SVG : EYE_ICON_SVG;
+  const label = showing ? 'Hide password' : 'Show password';
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+}
+
+function bindPasswordToggle(input, btn) {
+  setPasswordToggleState(input, btn, false);
+  btn.addEventListener('click', () => setPasswordToggleState(input, btn, input.type === 'password'));
+}
+
 const authSignupPasswordInput = document.getElementById('auth-signup-password');
 const authSignupPasswordToggleBtn = document.getElementById('auth-signup-password-toggle');
-authSignupPasswordToggleBtn.addEventListener('click', () => {
-  const showing = authSignupPasswordInput.type === 'text';
-  authSignupPasswordInput.type = showing ? 'password' : 'text';
-  authSignupPasswordToggleBtn.textContent = showing ? 'Show' : 'Hide';
-});
+bindPasswordToggle(authSignupPasswordInput, authSignupPasswordToggleBtn);
+
+const authLoginPasswordInput = document.getElementById('auth-login-password');
+const authLoginPasswordToggleBtn = document.getElementById('auth-login-password-toggle');
+bindPasswordToggle(authLoginPasswordInput, authLoginPasswordToggleBtn);
 
 // A brief press flash (see .pressed in index.html) on every auth form's
 // submit button — these all wait on a network round-trip before anything

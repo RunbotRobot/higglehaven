@@ -1756,10 +1756,10 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
-      /* Wraps the signup password field so a Show/Hide toggle can sit right
-         next to it — lets someone check what they actually typed before
-         submitting, rather than trusting a masked field with no way to
-         double back on a typo. */
+      /* Wraps a password field so a show/hide toggle can sit right next to
+         it — lets someone check what they actually typed before submitting,
+         rather than trusting a masked field with no way to double back on a
+         typo. Used on both login and signup. */
       .auth-password-field {
         display: flex;
         gap: 6px;
@@ -1771,12 +1771,20 @@
       }
       .auth-password-toggle-btn {
         flex-shrink: 0;
-        padding: 7px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
         border-radius: 8px;
         border: 1px solid rgb(var(--ink-rgb) / 0.25);
         background: rgb(var(--ink-rgb) / 0.1);
         color: var(--pill-text-soft);
-        font: 13px/1.4 sans-serif;
+      }
+      .auth-password-toggle-btn svg {
+        width: 16px;
+        height: 16px;
       }
       .auth-form > button[type='submit'] {
         padding: 9px 16px;
@@ -2714,7 +2722,12 @@
 
           <form id="auth-login-form" class="auth-form">
             <label>Email<input type="email" id="auth-login-email" required autocomplete="email" /></label>
-            <label>Password<input type="password" id="auth-login-password" required autocomplete="current-password" /></label>
+            <label>Password
+              <div class="auth-password-field">
+                <input type="password" id="auth-login-password" required autocomplete="current-password" />
+                <button type="button" id="auth-login-password-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
             <button type="submit">Log In</button>
             <button type="button" id="auth-forgot-btn" class="auth-link-btn">Forgot password?</button>
           </form>
@@ -2725,7 +2738,7 @@
             <label>Password (8+ characters)
               <div class="auth-password-field">
                 <input type="password" id="auth-signup-password" required autocomplete="new-password" minlength="8" />
-                <button type="button" id="auth-signup-password-toggle" class="auth-password-toggle-btn">Show</button>
+                <button type="button" id="auth-signup-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
             <button type="submit">Sign Up</button>
