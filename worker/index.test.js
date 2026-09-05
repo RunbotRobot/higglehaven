@@ -2856,6 +2856,77 @@ describe('Builders', () => {
     expect(auction.body.auction.status).toBe('active');
   });
 
+  it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
+    const seller = await signupBuilder('multi-auction-seller-deleted');
+    const donor = await signupBuilder('multi-auction-donor');
+    const bidderOne = await signupBuilder('multi-auction-bidder-one');
+    const bidderTwo = await signupBuilder('multi-auction-bidder-two');
+
+    // A builder can only ever *claim* one greenbelt landlet directly, but
+    // docs/SPEC.md §0/§5's auctions let them acquire additional
+    // already-claimed land on top of that (see "resolves a winning
+    // auction even when the bidder already owns a claimed landlet" above)
+    // — so the seller ends up owning two landlets this way, the only way
+    // one builder can ever be running more than one active auction at
+    // once and actually exercise this batching.
+    await createGreenbeltLandlet('multi-auction-landlet-a');
+    await api('/landlets/multi-auction-landlet-a/claim', seller.session({ method: 'POST' }));
+    await createGreenbeltLandlet('multi-auction-landlet-b');
+    await api('/landlets/multi-auction-landlet-b/claim', donor.session({ method: 'POST' }));
+    const donorAuction = await api('/landlets/multi-auction-landlet-b/auction', donor.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const donorAuctionId = donorAuction.body.auction.auctionId;
+    await api(`/auctions/${donorAuctionId}/bids`, seller.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(donorAuctionId).run();
+    await api(`/auctions/${donorAuctionId}/resolve`, { method: 'POST' });
+    const wonLandlet = await api('/landlets/multi-auction-landlet-b');
+    expect(wonLandlet.body.landlet.ownerBuilderId).toBe(seller.builderId);
+
+    const startedA = await api('/landlets/multi-auction-landlet-a/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const startedB = await api('/landlets/multi-auction-landlet-b/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionIdA = startedA.body.auction.auctionId;
+    const auctionIdB = startedB.body.auction.auctionId;
+
+    // Auction A gets two distinct bidders, auction B gets one — exercises
+    // the grouped-by-auction_id batching, not just a single auction/bidder.
+    await api(`/auctions/${auctionIdA}/bids`, bidderOne.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${auctionIdA}/bids`, bidderTwo.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
+    }));
+    await api(`/auctions/${auctionIdB}/bids`, bidderOne.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-auction-landlet-a', 'multi-auction-landlet-b']);
+
+    const noticesOne = await api('/notifications', bidderOne.session());
+    const messagesOne = noticesOne.body.notifications.map((n) => n.message);
+    expect(messagesOne).toEqual(expect.arrayContaining([
+      expect.stringContaining('multi-auction-landlet-a'),
+      expect.stringContaining('multi-auction-landlet-b'),
+    ]));
+
+    const noticesTwo = await api('/notifications', bidderTwo.session());
+    expect(noticesTwo.body.notifications).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('multi-auction-landlet-a'),
+    }));
+    // bidderTwo never bid on landlet-b's auction — shouldn't hear about it.
+    expect(noticesTwo.body.notifications.map((n) => n.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('multi-auction-landlet-b')]),
+    );
+  });
+
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
     // Earlier tests in this file already claimed landlets, so some
     // builders very likely already hold ranks by this point — reset

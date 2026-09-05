@@ -1254,13 +1254,27 @@ async function handleBuilders(request, db, route) {
     const { results: sellingAuctions } = await db.prepare(`
       SELECT * FROM auctions WHERE seller_builder_id = ? AND status = 'active'
     `).bind(route[1]).all();
-    for (const auction of sellingAuctions) {
-      const { results: bidders } = await db.prepare(`
-        SELECT DISTINCT bidder_builder_id FROM auction_bids WHERE auction_id = ?
-      `).bind(auction.auction_id).all();
-      for (const { bidder_builder_id: bidderBuilderId } of bidders) {
-        statements.push(notificationStatement(db, bidderBuilderId,
-          `The auction for ${auction.landlet_id} was called off because the seller's account was deleted — your bid is void.`));
+    // One grouped query for every bidder across all of this builder's
+    // active auctions, instead of one query per auction (an N+1 —
+    // #33/#35/#46's same shape, just found in a mutation handler's cleanup
+    // logic instead of a GET list endpoint) — mirrors auctionsFromRowsBatch
+    // below.
+    if (sellingAuctions.length > 0) {
+      const auctionIds = sellingAuctions.map((auction) => auction.auction_id);
+      const placeholders = auctionIds.map(() => '?').join(', ');
+      const { results: bidderRows } = await db.prepare(`
+        SELECT DISTINCT auction_id, bidder_builder_id FROM auction_bids WHERE auction_id IN (${placeholders})
+      `).bind(...auctionIds).all();
+      const biddersByAuction = new Map();
+      for (const { auction_id: auctionId, bidder_builder_id: bidderBuilderId } of bidderRows) {
+        if (!biddersByAuction.has(auctionId)) biddersByAuction.set(auctionId, []);
+        biddersByAuction.get(auctionId).push(bidderBuilderId);
+      }
+      for (const auction of sellingAuctions) {
+        for (const bidderBuilderId of biddersByAuction.get(auction.auction_id) ?? []) {
+          statements.push(notificationStatement(db, bidderBuilderId,
+            `The auction for ${auction.landlet_id} was called off because the seller's account was deleted — your bid is void.`));
+        }
       }
     }
 
