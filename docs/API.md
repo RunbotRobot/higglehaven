@@ -3801,6 +3801,16 @@ here are pure altitude ramps, no fade — there's no one else to fade for)
 and "occupied landing spots offset to nearest open space" (nothing exists
 yet to occupy a spot with).
 
+**First-ever-visit spawn** (docs/SPEC.md §1: "new users spawn zoomed-out in
+flight mode above the world") — a genuinely first-ever Shop-mode entry on
+this device (`enterShopMode` in `src/main.js`, gated by a
+`localStorage.higglehaven.shopVisitedBefore` flag, since Shop mode itself
+needs no login to track this against an account) spawns straight into
+`'flying'` at a fixed starting altitude, skipping the `'takingOff'` ramp
+entirely — that ramp is for a player-initiated toggle mid-session, not this
+one-time spawn. Every later Shop-mode entry (same device, flag now set)
+starts `'grounded'` as before.
+
 ## Frontend-only avatar idle animation
 
 Idle animation (docs/SPEC.md §2: "context-aware idle state machine (sit,
