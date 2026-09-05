@@ -190,15 +190,23 @@ export async function fetchLandlet(landletId) {
   return landlet;
 }
 
-// Pages through every landlet regardless of world size — unlike
-// fetchLandlets above (which returns one page and drops nextCursor), Shop
-// mode needs the whole world's ground shapes up front, not just the first
-// 100.
-export async function fetchAllLandlets() {
+// Pages through every matching landlet regardless of world size — unlike
+// fetchLandlets above (which returns one page and drops nextCursor). Shop
+// mode needs the whole world's ground shapes up front (no params, every
+// landlet); a caller that needs a true total across a filtered subset
+// (e.g. everything one builder owns, for the Land Cap panel) passes the
+// same status/ownerBuilderId params fetchLandlets takes — otherwise a
+// builder past the 100-per-page limit reads a silently undercounted total
+// (#186).
+export async function fetchAllLandlets(params = {}) {
   const all = [];
   let cursor;
   for (;;) {
-    const query = new URLSearchParams({ limit: '100' });
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined) query.set(key, value);
+    }
+    query.set('limit', '100');
     if (cursor) query.set('cursor', cursor);
     const { landlets, nextCursor } = await requestJson(`/landlets?${query.toString()}`);
     all.push(...landlets);

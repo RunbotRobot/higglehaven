@@ -3695,9 +3695,14 @@ async function renderLandCapField() {
   field.appendChild(status);
   settingsSectionEl.appendChild(field);
   try {
+    // fetchAllLandlets pages through every one of this builder's owned
+    // landlets, not just fetchLandlets's own first 100 — auctions place no
+    // hard ceiling on how many a builder can accumulate, and the backend's
+    // own land-cap formula sums all of them, so a single-page read here
+    // would silently undercount past that point (#186).
     const [builders, ownedLandlets] = await Promise.all([
       fetchBuilders(),
-      fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 100 }),
+      fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId }),
     ]);
     const me = builders.find((b) => b.builderId === builderId);
     const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
