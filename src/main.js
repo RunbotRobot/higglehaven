@@ -72,7 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { curvedPosition, flatPosition, footprintScaleAtHeight } from '../worker/earthCurvature.js';
+import { curvedPosition, flatPosition, footprintScaleAtHeight, relativeCurvatureDropM } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -8622,8 +8622,10 @@ async function enterShopMode() {
   // this used to be a much darker forest green that read as a heavy,
   // ominous swath across an otherwise bright scene once every visible
   // landlet resolves against it.
+  const wildGroundGeometry = new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64);
+  applyGroundCurvature(wildGroundGeometry, 0, 0); // this mesh's own local origin *is* the world origin
   const wildGround = new THREE.Mesh(
-    new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64),
+    wildGroundGeometry,
     new THREE.MeshStandardMaterial({ color: 0x6ca42e }),
   );
   scene.add(wildGround);
@@ -8932,6 +8934,35 @@ function shapeForLandlet(landlet) {
   shape.lineTo(-half, half);
   shape.closePath();
   return shape;
+}
+
+// #135 (docs/SPEC.md §1's "Earth-curvature coordinate system from day
+// one"): a flat CircleGeometry's vertices lie exactly in its own XY plane
+// (z = 0 everywhere) — this nudges each one to where it actually sits on a
+// curved Earth, relative to (worldCenterX, worldCenterY): the mesh's own
+// local origin stays at z = 0 exactly, and every other vertex gets the
+// extra sag or rise relativeCurvatureDropM says it should have relative to
+// that. Z-only, and doesn't reorient the mesh's own local frame to match
+// its true surface normal at each vertex — fine for this function's only
+// call site, wildGround's single, scene-origin-anchored fill circle:
+// sagging visibly toward the rim over real world-radius distances is
+// exactly the effect wanted, and there's no neighboring mesh it needs to
+// blend with at a shared edge. (Per-landlet ground curvature isn't done
+// this way — see #135/#166 — a landlet's own polygon is small enough that
+// positioning/orienting its whole THREE.Group is both simpler and
+// visually indistinguishable from a true per-vertex curve.) Called once
+// right after building a ground mesh's geometry, before it's ever added
+// to the scene.
+function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
+  const position = geometry.attributes.position;
+  for (let i = 0; i < position.count; i++) {
+    const localX = position.getX(i);
+    const localY = position.getY(i);
+    const drop = relativeCurvatureDropM(worldCenterX + localX, worldCenterY + localY, worldCenterX, worldCenterY);
+    position.setZ(i, position.getZ(i) + drop);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
 }
 
 // Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
