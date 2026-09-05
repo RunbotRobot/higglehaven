@@ -6715,6 +6715,19 @@ const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
 const SHOP_FLIGHT_VERTICAL_SPEED_M_S = 8; // ascend/descend rate once actually flying (the up/down buttons)
 const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
+// docs/SPEC.md §1: "New users spawn zoomed-out in flight mode above the
+// world" — a one-time first-ever-visit spawn, distinct from every later
+// Shop-mode entry's ordinary grounded start (see enterShopMode). Below the
+// initial flight ceiling (SHOP_WALL_HEIGHT_M + SHOP_DOME_INITIAL_RISE_M -
+// SHOP_DOME_CLEARANCE_MARGIN_M = 115 at launch) with real clearance to
+// spare, comfortably above "building height" (SHOP_FLIGHT_SPEED_REF_
+// ALTITUDE_M, 10) so the view actually reads as "above the world," not just
+// a slightly-elevated hover.
+const SHOP_NEW_VISITOR_START_ALTITUDE_M = 80;
+// Shop mode itself needs no login (unlike Build/Sell), so "new" here can
+// only be tracked per-device, not per-account — the same lightweight,
+// no-real-accounts-yet convention shopperLabel() already uses nearby.
+const SHOP_VISITED_BEFORE_KEY = 'higglehaven.shopVisitedBefore';
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
 // governing rule, "each doubling of altitude ≈ 50% more max ground speed."
@@ -8564,14 +8577,28 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
-  shopFlightState = 'grounded';
+  // First-ever Shop-mode visit on this device spawns already flying, above
+  // the world (docs/SPEC.md §1) — every later visit starts grounded as
+  // before. Skips the takingOff ramp entirely (that's for a player-
+  // initiated toggle mid-session, not this one-time spawn), landing in
+  // 'flying' directly the same way toggleShopFlight's own takingOff path
+  // eventually would.
+  const isFirstShopVisit = !localStorage.getItem(SHOP_VISITED_BEFORE_KEY);
+  if (isFirstShopVisit) localStorage.setItem(SHOP_VISITED_BEFORE_KEY, '1');
+  shopFlightState = isFirstShopVisit ? 'flying' : 'grounded';
   shopFlightTransitionElapsedS = 0;
-  shopFlightAltitudeM = 0;
+  shopFlightAltitudeM = isFirstShopVisit ? SHOP_NEW_VISITOR_START_ALTITUDE_M : 0;
+  // Normally kept in sync every frame by the update loop (see
+  // shopFlightAltitudeM's own comment) — set once here too so the
+  // positionShopCamera() call below (synchronous, before that loop's first
+  // tick) doesn't position the camera against the stale z=0 this function's
+  // own shopAvatarPosition.set(0, 0, 0) just above left it at.
+  shopAvatarPosition.z = shopFlightAltitudeM;
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
-  document.body.classList.remove('shop-flying');
-  shopFlyBtn.classList.remove('active');
+  document.body.classList.toggle('shop-flying', isFirstShopVisit);
+  shopFlyBtn.classList.toggle('active', isFirstShopVisit);
 
   shopYaw = 0;
   shopPitch = -0.12;
