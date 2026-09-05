@@ -2798,6 +2798,63 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
+  it('notifies bidders before their bid vanishes when the seller deletes their account mid-auction', async () => {
+    const seller = await signupBuilder('auction-seller-deleted');
+    const bidder = await signupBuilder('auction-seller-deleted-bidder');
+    await createGreenbeltLandlet('auction-seller-deleted-landlet');
+    await api('/landlets/auction-seller-deleted-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/auction-seller-deleted-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    const bid = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(bid.response.status).toBe(201);
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-landlet']);
+
+    // The FK cascade on seller_builder_id still removes the auction (and
+    // its bids) outright, same as before this fix — that part is an
+    // accepted dev-mode simplification (see the handler's own comment).
+    // What's new is the bidder actually being told, instead of their bid
+    // just silently disappearing.
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.response.status).toBe(404);
+
+    const notices = await api('/notifications', bidder.session());
+    expect(notices.body.notifications).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('called off because the seller\'s account was deleted'),
+    }));
+
+    // The land itself still goes back to greenbelt for someone else to claim.
+    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    expect(landlet.body.landlet.status).toBe('greenbelt');
+  });
+
+  it('does not touch an unrelated active auction when a different builder is deleted', async () => {
+    const seller = await signupBuilder('auction-unrelated-seller');
+    const bidder = await signupBuilder('auction-unrelated-bidder');
+    const bystander = await signupBuilder('auction-unrelated-bystander');
+    await createGreenbeltLandlet('auction-unrelated-landlet');
+    await api('/landlets/auction-unrelated-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/auction-unrelated-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+
+    const deleted = await api(`/builders/${bystander.builderId}`, bystander.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.body.auction.status).toBe('active');
+  });
+
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
     // Earlier tests in this file already claimed landlets, so some
     // builders very likely already hold ranks by this point — reset

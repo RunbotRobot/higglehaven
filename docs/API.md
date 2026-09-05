@@ -561,6 +561,16 @@ builder (migrations/0062) — the purchase is a different party's (the
 product's seller's) sales-history record too, so it survives; see
 "Refunds" below for how a refund handles a null `builderId`.
 
+If this builder is the seller on an active auction, every bidder on it is
+notified their bid is void before the deletion goes through — otherwise
+`auctions.seller_builder_id`'s `ON DELETE CASCADE`
+(`migrations/0045_auctions.sql`) removes that auction row, and every bid on
+it, with no trace and no warning. Unlike purchases above, the auction/bid
+rows themselves are *not* preserved — losing them to the cascade is an
+accepted simplification here (same reasoning as pioneer ranks, above), the
+fix is only that bidders get told first. The auctioned landlet still comes
+back via the release path described above, same as any other claimed land.
+
 Response:
 
 ```json
@@ -2981,7 +2991,10 @@ neither has anywhere to attach to in this dev-mode backend yet:
 they can never drift out of sync with the actual bid rows the way a
 denormalized counter could. `status` is `active` or `ended`; there's no
 `cancelled` state — a voluntary auction, once started, always runs its
-full course.
+full course. The one exception isn't a status at all: if the seller
+deletes their account mid-auction, the auction row (and its bids) are
+removed outright by a DB-level cascade, not transitioned to `ended` — see
+`DELETE /api/builders/:builderId` above.
 
 ### `POST /api/landlets/:landletId/auction`
 
