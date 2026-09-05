@@ -1773,6 +1773,19 @@ async function handleStartAuction(request, db, landletId) {
 // stacked directly on the previous one.
 const LEVEL_HEIGHT_M = 10;
 
+// docs/SPEC.md §3's two hard limits on digging down (issue #164): a
+// downward level is blocked once its own cross-sectional area (the cone
+// narrowing toward Earth's center) would fall below this floor, and dead-
+// center itself (footprintScaleAtHeight hits exactly 0 there) is the
+// absolute floor no level can ever reach or pass. In practice the area
+// cutoff always binds first for any landlet with a positive area — solving
+// levelCapConsumedM2 for area = 0 requires the same z = -earthRadiusM the
+// depth check already guards, so the depth check mostly exists to satisfy
+// the spec's own explicit "hard depth limit: Earth's radius" requirement
+// as an independent, literal guard rather than relying on the area check
+// alone to imply it.
+const MIN_LEVEL_FOOTPRINT_M2 = 10;
+
 // A level's own cap cost, computed at the level's outer boundary from
 // ground (the strictest point within it, since the cone's cross-section
 // only shrinks/grows monotonically across one level's height) — level
@@ -1819,7 +1832,17 @@ async function handleLandletLevels(request, db, route) {
     const levelIndex = input.direction === 'up'
       ? Math.max(0, ...levels.map((level) => level.level_index)) + 1
       : Math.min(0, ...levels.map((level) => level.level_index)) - 1;
+    if (input.direction === 'down' && levelIndex * LEVEL_HEIGHT_M <= -DEFAULT_EARTH_RADIUS_M) {
+      throw new HttpError('Cannot dig any deeper — reached Earth\'s center', 409);
+    }
     const capConsumedM2 = levelCapConsumedM2(landlet.area_m2, levelIndex);
+    if (input.direction === 'down' && capConsumedM2 < MIN_LEVEL_FOOTPRINT_M2) {
+      throw new HttpError(
+        `Cannot dig any deeper — this level's footprint (${capConsumedM2.toFixed(2)}m²) `
+        + `would fall below the ${MIN_LEVEL_FOOTPRINT_M2}m² minimum`,
+        409,
+      );
+    }
     const levelId = `level-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
