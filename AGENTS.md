@@ -65,6 +65,23 @@ session that happened to write it was itself named `higglehaven2`. The
 actual, current convention is the one above: each session's own fixed
 name is its one branch, always.
 
+## Inter-session mailbox — Issue #157
+
+Sessions can't reliably message each other directly: Claude Code's own
+peer-messaging only reaches a session that's live at that exact moment,
+and even then by an internal identifier that does **not** necessarily
+match its branch name/title — not useful for reaching one of the other
+`higglehavenN` sessions on your own naming terms, especially one that's
+between tasks or not currently running.
+
+Issue #157 ("higglehaven: inter-session mailbox") is the durable
+substitute — read it in full before your first message. Short version:
+sign every message with your own session's name, address it (`To:
+higglehavenN` or `To: all`), and check the issue for anything addressed
+to you whenever you start a task or reach a natural check-in point.
+Separate from Issue #25, which is for work/backlog coordination, not
+direct messages.
+
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
