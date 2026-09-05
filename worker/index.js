@@ -3,6 +3,7 @@ import {
 } from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
+import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -1223,6 +1224,7 @@ async function handleBuilders(request, db, route) {
     const statements = landletIds.flatMap((landletId) => [
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(landletId),
+      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(landletId),
       db.prepare(`
         UPDATE landlets
         SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
@@ -1765,6 +1767,98 @@ async function handleStartAuction(request, db, landletId) {
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
+// docs/SPEC.md §1's vertical construction (issue #167/#168): matches
+// LANDLET_HEIGHT_M in src/main.js, the height of the single buildable
+// level that already exists — each additional level is the same height,
+// stacked directly on the previous one.
+const LEVEL_HEIGHT_M = 10;
+
+// A level's own cap cost, computed at the level's outer boundary from
+// ground (the strictest point within it, since the cone's cross-section
+// only shrinks/grows monotonically across one level's height) — level
+// 1's boundary sits at z = LEVEL_HEIGHT_M, level -1's at z = -LEVEL_HEIGHT_M,
+// and so on. footprintScaleAtHeight gives the linear cross-section ratio
+// at that height; squaring it converts to the area ratio docs/SPEC.md §1
+// actually describes ("cross-sectional area grows/shrinks"), then scales
+// the lándlet's own ground-level area by it.
+function levelCapConsumedM2(landletAreaM2, levelIndex) {
+  const z = levelIndex * LEVEL_HEIGHT_M;
+  const scale = footprintScaleAtHeight(z, DEFAULT_EARTH_RADIUS_M);
+  return landletAreaM2 * scale * scale;
+}
+
+// Levels stack directly on each other with no gaps — level 2 can't exist
+// without level 1, in either direction — so "add" only ever extends the
+// current range by exactly one, and "remove" only ever removes the
+// outermost level still standing. Returns the full current set (ordered
+// nearest-to-ground first, both directions) for callers that need to find
+// the current extent in a given direction.
+async function landletLevels(db, landletId) {
+  const { results } = await db.prepare(`
+    SELECT * FROM landlet_levels WHERE landlet_id = ? ORDER BY level_index
+  `).bind(landletId).all();
+  return results;
+}
+
+async function handleLandletLevels(request, db, route) {
+  const landletId = route[1];
+  if (request.method === 'GET' && route.length === 3) {
+    const levels = await landletLevels(db, landletId);
+    return json({ levels: levels.map(levelFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 3) {
+    const landlet = await requireLandlet(db, landletId);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    const input = await readJson(request);
+    if (input.direction !== 'up' && input.direction !== 'down') {
+      throw new HttpError('direction must be "up" or "down"', 400);
+    }
+    const levels = await landletLevels(db, landletId);
+    const levelIndex = input.direction === 'up'
+      ? Math.max(0, ...levels.map((level) => level.level_index)) + 1
+      : Math.min(0, ...levels.map((level) => level.level_index)) - 1;
+    const capConsumedM2 = levelCapConsumedM2(landlet.area_m2, levelIndex);
+    const levelId = `level-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind(levelId, landletId, levelIndex, capConsumedM2).run();
+    await recomputeLandCap(db, landlet.owner_builder_id);
+    const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
+    return json({ level: levelFromRow(row) }, 201);
+  }
+
+  if (request.method === 'DELETE' && route.length === 4) {
+    const landlet = await requireLandlet(db, landletId);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    const levelIndex = integerValue(route[3], 'levelIndex');
+    const levels = await landletLevels(db, landletId);
+    const outermost = levelIndex > 0
+      ? Math.max(0, ...levels.map((level) => level.level_index))
+      : Math.min(0, ...levels.map((level) => level.level_index));
+    if (levelIndex === 0 || outermost !== levelIndex) {
+      throw new HttpError('Only the outermost existing level can be removed', 409);
+    }
+    await db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ? AND level_index = ?').bind(landletId, levelIndex).run();
+    await recomputeLandCap(db, landlet.owner_builder_id);
+    return json({ deleted: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function levelFromRow(row) {
+  return {
+    levelId: row.level_id,
+    landletId: row.landlet_id,
+    levelIndex: row.level_index,
+    capConsumedM2: row.cap_consumed_m2,
+    createdAt: row.created_at,
+  };
+}
+
 async function handleAuctions(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     await resolveDueAuctions(db);
@@ -1967,14 +2061,22 @@ async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return LAND_CAP_STARTER_M2;
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const earningsRow = await db.prepare(`
-    SELECT COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
-    WHERE builder_id = ? AND created_at >= ?
-  `).bind(builderId, windowStart).first();
-  const ownedRow = await db.prepare(`
-    SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
-  `).bind(builderId).first();
-  const nextCap = computeNextLandCap(builder.land_cap_m2, earningsRow.total, ownedRow.total);
+  const [earningsRow, ownedRow, levelsRow] = await Promise.all([
+    db.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      WHERE builder_id = ? AND created_at >= ?
+    `).bind(builderId, windowStart).first(),
+    db.prepare(`
+      SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
+    `).bind(builderId).first(),
+    db.prepare(`
+      SELECT COALESCE(SUM(ll.cap_consumed_m2), 0) AS total FROM landlet_levels ll
+      JOIN landlets l ON l.landlet_id = ll.landlet_id
+      WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+    `).bind(builderId).first(),
+  ]);
+  const ownedAreaM2 = ownedRow.total + levelsRow.total;
+  const nextCap = computeNextLandCap(builder.land_cap_m2, earningsRow.total, ownedAreaM2);
   if (nextCap !== builder.land_cap_m2) {
     await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
   }
@@ -1992,7 +2094,7 @@ async function recomputeLandCap(db, builderId) {
 async function recomputeLandCapsBatch(db, rows) {
   if (rows.length === 0) return;
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const [earnings, owned] = await Promise.all([
+  const [earnings, owned, levels] = await Promise.all([
     db.prepare(`
       SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
       WHERE created_at >= ? GROUP BY builder_id
@@ -2001,16 +2103,24 @@ async function recomputeLandCapsBatch(db, rows) {
       SELECT owner_builder_id AS builder_id, COALESCE(SUM(area_m2), 0) AS total FROM landlets
       WHERE owner_builder_id IS NOT NULL AND status = 'claimed' GROUP BY owner_builder_id
     `).all(),
+    db.prepare(`
+      SELECT l.owner_builder_id AS builder_id, COALESCE(SUM(ll.cap_consumed_m2), 0) AS total
+      FROM landlet_levels ll
+      JOIN landlets l ON l.landlet_id = ll.landlet_id
+      WHERE l.owner_builder_id IS NOT NULL AND l.status = 'claimed' GROUP BY l.owner_builder_id
+    `).all(),
   ]);
   const earningsByBuilder = new Map(earnings.results.map((row) => [row.builder_id, row.total]));
   const ownedByBuilder = new Map(owned.results.map((row) => [row.builder_id, row.total]));
+  const levelsByBuilder = new Map(levels.results.map((row) => [row.builder_id, row.total]));
 
   const updates = [];
   for (const row of rows) {
+    const ownedAreaM2 = (ownedByBuilder.get(row.builder_id) ?? 0) + (levelsByBuilder.get(row.builder_id) ?? 0);
     const nextCap = computeNextLandCap(
       row.land_cap_m2,
       earningsByBuilder.get(row.builder_id) ?? 0,
-      ownedByBuilder.get(row.builder_id) ?? 0,
+      ownedAreaM2,
     );
     if (nextCap !== row.land_cap_m2) {
       row.land_cap_m2 = nextCap;
@@ -2075,6 +2185,7 @@ async function resolveAuction(db, auction) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare(`
         UPDATE landlets
         SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -2103,6 +2214,7 @@ async function resolveAuction(db, auction) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
+      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare(`
         UPDATE landlets
         SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
@@ -2810,6 +2922,10 @@ async function handleLandlets(request, db, route, url) {
 
   if (route.length === 3 && route[2] === 'auction') {
     return handleStartAuction(request, db, route[1]);
+  }
+
+  if (route.length >= 3 && route[2] === 'levels') {
+    return handleLandletLevels(request, db, route);
   }
 
   if (route.length === 3 && route[2] === 'draft') {
@@ -4975,6 +5091,12 @@ function ratioNumber(value, field) {
 function positiveInteger(value, field) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
+  return number;
+}
+
+function integerValue(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) throw new HttpError(`${field} must be an integer`, 400);
   return number;
 }
 

@@ -3,6 +3,7 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker from './index.js';
+import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 
 // Shared across every test that needs to act as an admin (world/land-
 // candidate tooling — see requireAdmin in worker/index.js) — one admin
@@ -4026,6 +4027,158 @@ describe('Land cap', () => {
     const claimed = await claim('land-cap-starter-landlet', builder);
     expect(claimed.response.status).toBe(200);
     expect(claimed.body.landlet.ownerBuilderId).toBe(builder.builderId);
+  });
+});
+
+describe('Landlet levels', () => {
+  const LEVEL_HEIGHT_M = 10; // matches worker/index.js's own LEVEL_HEIGHT_M / src/main.js's LANDLET_HEIGHT_M
+
+  async function createGreenbeltLandletWithArea(landletId, areaM2) {
+    return api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
+    }));
+  }
+
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  function expectedCapConsumedM2(areaM2, levelIndex) {
+    const scale = footprintScaleAtHeight(levelIndex * LEVEL_HEIGHT_M, DEFAULT_EARTH_RADIUS_M);
+    return areaM2 * scale * scale;
+  }
+
+  it('lists no levels for a fresh lándlet', async () => {
+    await createGreenbeltLandletWithArea('levels-fresh-landlet', 1000);
+    const list = await api('/landlets/levels-fresh-landlet/levels');
+    expect(list.response.status).toBe(200);
+    expect(list.body.levels).toEqual([]);
+  });
+
+  it('requires a session and ownership to add a level', async () => {
+    const owner = await signupBuilder('levels-auth-owner');
+    const stranger = await signupBuilder('levels-auth-stranger');
+    await createGreenbeltLandletWithArea('levels-auth-landlet', 1000);
+    await claim('levels-auth-landlet', owner);
+
+    const unauthenticated = await api('/landlets/levels-auth-landlet/levels', {
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const notOwner = await api('/landlets/levels-auth-landlet/levels', stranger.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(notOwner.response.status).toBe(403);
+
+    const invalidDirection = await api('/landlets/levels-auth-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'sideways' }),
+    }));
+    expect(invalidDirection.response.status).toBe(400);
+  });
+
+  it('adds sequential levels above and below ground, each costing the correct asymmetric cap', async () => {
+    const owner = await signupBuilder('levels-sequential-owner');
+    await createGreenbeltLandletWithArea('levels-sequential-landlet', 1000);
+    await claim('levels-sequential-landlet', owner);
+
+    const up1 = await api('/landlets/levels-sequential-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up1.response.status).toBe(201);
+    expect(up1.body.level).toMatchObject({ landletId: 'levels-sequential-landlet', levelIndex: 1 });
+    // Above ground costs strictly more than the ground-level baseline area.
+    expect(up1.body.level.capConsumedM2).toBeGreaterThan(1000);
+    expect(up1.body.level.capConsumedM2).toBeCloseTo(expectedCapConsumedM2(1000, 1), 9);
+
+    const up2 = await api('/landlets/levels-sequential-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up2.body.level.levelIndex).toBe(2);
+    // Each level up costs more than the one below it (cone widening outward).
+    expect(up2.body.level.capConsumedM2).toBeGreaterThan(up1.body.level.capConsumedM2);
+
+    const down1 = await api('/landlets/levels-sequential-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'down' }),
+    }));
+    expect(down1.body.level.levelIndex).toBe(-1);
+    // Below ground costs strictly less than the ground-level baseline area.
+    expect(down1.body.level.capConsumedM2).toBeLessThan(1000);
+    expect(down1.body.level.capConsumedM2).toBeCloseTo(expectedCapConsumedM2(1000, -1), 9);
+
+    const list = await api('/landlets/levels-sequential-landlet/levels');
+    expect(list.body.levels.map((level) => level.levelIndex)).toEqual([-1, 1, 2]);
+  });
+
+  it('only lets the outermost level be removed, in either direction', async () => {
+    const owner = await signupBuilder('levels-remove-owner');
+    const stranger = await signupBuilder('levels-remove-stranger');
+    await createGreenbeltLandletWithArea('levels-remove-landlet', 1000);
+    await claim('levels-remove-landlet', owner);
+    for (const direction of ['up', 'up', 'down']) {
+      await api('/landlets/levels-remove-landlet/levels', owner.session({
+        method: 'POST', body: JSON.stringify({ direction }),
+      }));
+    }
+    // Levels 1, 2 (up) and -1 (down) now exist.
+
+    const removeGround = await api('/landlets/levels-remove-landlet/levels/0', owner.session({ method: 'DELETE' }));
+    expect(removeGround.response.status).toBe(409);
+
+    const removeInner = await api('/landlets/levels-remove-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removeInner.response.status).toBe(409);
+
+    const notOwnerRemove = await api('/landlets/levels-remove-landlet/levels/2', stranger.session({ method: 'DELETE' }));
+    expect(notOwnerRemove.response.status).toBe(403);
+
+    const removeOutermost = await api('/landlets/levels-remove-landlet/levels/2', owner.session({ method: 'DELETE' }));
+    expect(removeOutermost.response.status).toBe(200);
+    expect(removeOutermost.body.deleted).toBe(true);
+
+    // Now level 1 is the outermost up level and can be removed.
+    const removeNowOutermost = await api('/landlets/levels-remove-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removeNowOutermost.response.status).toBe(200);
+
+    const list = await api('/landlets/levels-remove-landlet/levels');
+    expect(list.body.levels.map((level) => level.levelIndex)).toEqual([-1]);
+  });
+
+  it('folds level cap consumption into the owning builder\'s land cap growth formula', async () => {
+    const owner = await signupBuilder('levels-cap-owner');
+    await createGreenbeltLandletWithArea('levels-cap-landlet', 1000);
+    await claim('levels-cap-landlet', owner);
+    await api('/landlets/levels-cap-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+
+    // $40 trailing earnings, normalized against (1000 ground + the level's
+    // own consumed area) instead of just 1000 — a strictly smaller land
+    // cap increase than the plain "1000 m² owned" Land cap formula test
+    // above gets from the same $40, proving the level's own area was
+    // actually folded into the normalization.
+    await env.DB.prepare(`
+      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind('levels-cap-earning', owner.builderId, 4000).run();
+    const afterAdd = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId).landCapM2;
+    const expectedIncrease = Math.floor((40 / ((1000 + levelCapM2) / 1000)) * 100);
+    expect(afterAdd).toBe(1000 + expectedIncrease);
+    expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
+  });
+
+  it('cascades landlet_levels cleanup on builder deletion, same as placed_instances/landlet_versions', async () => {
+    const owner = await signupBuilder('levels-delete-owner');
+    await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);
+    await claim('levels-delete-landlet', owner);
+    await api('/landlets/levels-delete-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    await api(`/builders/${owner.builderId}`, owner.session({ method: 'DELETE' }));
+    const { results } = await env.DB.prepare('SELECT * FROM landlet_levels WHERE landlet_id = ?')
+      .bind('levels-delete-landlet').all();
+    expect(results).toHaveLength(0);
   });
 });
 

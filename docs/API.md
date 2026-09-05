@@ -3252,6 +3252,73 @@ a bid exceeding cap is **not** rejected, confirming the tracking-only
 decision is what's actually shipped rather than a leftover TODO.
 `e2e/land-cap.test.mjs` covers the Settings display through the real UI.
 
+## Vertical construction — levels
+
+docs/SPEC.md §1: vertical construction is "tied to land cap, not a
+separate resource," with asymmetric per-level cost — "a fixed-angular-
+footprint lándlet extended radially through the Earth is a cone
+converging on Earth's center, not a cylinder... each level above ground
+consumes increasingly more land cap per level (cross-sectional area grows
+moving away from Earth's center); each level below ground consumes
+increasingly less (area shrinks toward the center)." This is the data
+model + API for that (issue #168, sub-issue of #167's tracking issue) —
+the depth/footprint limits, the Build-mode UI, and cross-lándlet cone
+boundary continuity are deliberately separate, still-open sub-issues.
+
+`migrations/0063_landlet_levels.sql` adds a `landlet_levels` table.
+Level `0` (the ground level every lándlet already has, accounted for by
+its own `areaM2`) never gets a row — this table only tracks *additional*
+levels beyond that baseline. Positive `levelIndex` is above ground,
+negative is below. Levels stack with no gaps: level 2 can't exist without
+level 1 already existing in the same direction, so `POST` always extends
+the current range by exactly one and `DELETE` always removes the
+outermost level still standing (`409` otherwise) — a builder can't leave
+a floating, disconnected level partway up or down.
+
+Each level's `capConsumedM2` is computed once at creation (not
+recomputed live) via `worker/earthCurvature.js`'s `footprintScaleAtHeight`,
+sampled at the level's own outer boundary from ground (`levelIndex *
+LEVEL_HEIGHT_M`, matching `LANDLET_HEIGHT_M` in `src/main.js` — the
+height of the one buildable level that exists today) — the strictest
+point within that level, since the cone's cross-section only shrinks or
+grows monotonically across one level's height. `recomputeLandCap`/
+`recomputeLandCapsBatch` now fold every owned lándlet's levels into the
+same "owned area" figure the land-cap growth formula already normalizes
+against, so building up or down genuinely counts as more area owned, the
+same as claiming more lándlets horizontally does.
+
+### `GET /api/landlets/:landletId/levels`
+
+Public, no session required (matches `GET /api/landlets/:landletId`'s own
+unauthenticated read access). Returns every level on the lándlet, ordered
+ground-outward in both directions.
+
+### `POST /api/landlets/:landletId/levels`
+
+Requires the session-authenticated owner of the lándlet. Body:
+`{ "direction": "up" | "down" }` — adds exactly one new level extending
+the current range in that direction (from `0` if none exist yet) and
+recomputes the owning builder's land cap. Errors: `401` no session, `403`
+not the owner, `400` invalid/missing `direction`, `404` lándlet not found.
+
+### `DELETE /api/landlets/:landletId/levels/:levelIndex`
+
+Requires the session-authenticated owner. Only the outermost existing
+level (in whichever direction `levelIndex` is on) can be removed —
+`409` otherwise, or if `levelIndex` is `0` (never a real row) or the
+lándlet has no levels at all. Frees the level's `capConsumedM2`
+immediately by recomputing the owning builder's land cap afterward.
+
+### Ownership-change cleanup
+
+A lándlet's levels are reset (`DELETE FROM landlet_levels`) everywhere
+its build already gets cleared on an ownership change — the builder-
+deletion release-to-greenbelt path and both `resolveAuction` branches
+(transfer to a winning bidder, release to greenbelt on an unsold `$0`
+auction) — matching the existing "a new owner gets the land, not the
+previous owner's stuff on it" reasoning already applied to
+`placed_instances`/`landlet_versions` there.
+
 ## Simulated purchases
 
 Land cap's own commentary above flags the actual gap directly: this
