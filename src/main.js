@@ -72,6 +72,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
+import { footprintScaleAtHeight } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -383,17 +384,32 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 }
 
 // Ground footprint (X/Y) clamped to the landlet's bounds; vertical (Z)
-// clamped between the ground and the placeholder cuboid volume's ceiling —
-// see LANDLET_HEIGHT_M. Collision with other products (resolveByAxis,
-// above) is applied separately, after this.
+// clamped between the ground and the buildable volume's ceiling — see
+// LANDLET_HEIGHT_M. Collision with other products (resolveByAxis, above)
+// is applied separately, after this.
+//
+// docs/SPEC.md §3's radial-cone correction (issue #136): a fixed *angular*
+// footprint's cross-section grows moving away from Earth's center, not the
+// flat-cylinder assumption a constant halfSpanX/halfSpanY would make. Z is
+// clamped first, then that height feeds footprintScaleAtHeight
+// (worker/earthCurvature.js) to widen the X/Y bounds by exactly the same
+// factor a real fixed-angular-footprint lándlet would have at that height —
+// genuinely tiny at this scale (LANDLET_HEIGHT_M=10 against Earth's ~6.371
+// million meter radius is a ~0.00016% change), but the correct shape rather
+// than a flat placeholder. Only the above-ground case exists to correct
+// here — below-ground levels (where the spec says the cone narrows
+// instead) depend on a vertical-construction/digging feature this app
+// doesn't have yet (see #136's own scoping note).
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = meshDimensions(mesh);
-  const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
-  const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+  const clampedZ = THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2);
+  const footprintScale = footprintScaleAtHeight(clampedZ);
+  const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
+  const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
   return {
     x: THREE.MathUtils.clamp(x, -halfSpanX, halfSpanX),
     y: THREE.MathUtils.clamp(y, -halfSpanY, halfSpanY),
-    z: THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2),
+    z: clampedZ,
   };
 }
 

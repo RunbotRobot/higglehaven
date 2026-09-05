@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { curvedPosition, DEFAULT_EARTH_RADIUS_M, flatPosition } from './earthCurvature.js';
+import { curvedPosition, DEFAULT_EARTH_RADIUS_M, flatPosition, footprintScaleAtHeight } from './earthCurvature.js';
 
 // A small, easy-to-verify radius rather than DEFAULT_EARTH_RADIUS_M's real
 // scale — the math is identical either way (every function takes the
@@ -89,5 +89,32 @@ describe('earth curvature', () => {
     // correctly-signed value, not a silently-flat placeholder.
     expect(point.z).toBeLessThan(0);
     expect(point.z).toBeGreaterThan(-1e-3);
+  });
+});
+
+describe('footprintScaleAtHeight', () => {
+  it('is exactly 1 at ground level, regardless of radius', () => {
+    expect(footprintScaleAtHeight(0, R)).toBe(1);
+    expect(footprintScaleAtHeight(0, DEFAULT_EARTH_RADIUS_M)).toBe(1);
+  });
+
+  it('is greater than 1 above ground and less than 1 below ground', () => {
+    expect(footprintScaleAtHeight(10, R)).toBeGreaterThan(1);
+    expect(footprintScaleAtHeight(-10, R)).toBeLessThan(1);
+  });
+
+  it('scales linearly with height, matching curvedPosition\'s own radiusFromCenter', () => {
+    expect(footprintScaleAtHeight(100, R)).toBeCloseTo(1.1, 9);
+    expect(footprintScaleAtHeight(-100, R)).toBeCloseTo(0.9, 9);
+    expect(footprintScaleAtHeight(R, R)).toBeCloseTo(2, 9); // a full radius up: double distance from center
+  });
+
+  it('is genuinely close to 1 (imperceptible) at an actual lándlet\'s real-world scale', () => {
+    // LANDLET_HEIGHT_M (src/main.js) is 10 — the same "architecturally
+    // correct, practically invisible" scale as curvedPosition's own ground-
+    // drop at landlet width, per this module's header comment.
+    const scale = footprintScaleAtHeight(10, DEFAULT_EARTH_RADIUS_M);
+    expect(scale).toBeGreaterThan(1);
+    expect(scale).toBeCloseTo(1, 5);
   });
 });
