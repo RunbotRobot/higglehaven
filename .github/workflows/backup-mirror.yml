@@ -1,0 +1,33 @@
+name: Backup mirror to GitLab
+
+# Keeps an independent, off-GitHub copy of this repo in sync — insurance
+# against GitHub-account-level disasters (a bad force-push wiping history,
+# a repo/branch deletion, account lockout), not against ordinary git
+# mistakes, which GitHub's own commit-immutability already protects
+# against. Runs on its own nightly schedule, deliberately not on every
+# push, so it never competes with ci.yml's own runner-pool usage.
+#
+# Fast-forward only, on purpose: this pushes each ref individually
+# (`refs/heads/*:refs/heads/*`, `refs/tags/*:refs/tags/*`) with no
+# `--force` and never `git push --mirror` (which forces by default). A
+# normal push creates new branches and fast-forwards existing ones fine,
+# but simply fails if a branch's history was ever rewritten backwards
+# (a force-push) — so a disaster on GitHub can't get silently copied over
+# and overwrite the one clean copy sitting on GitLab.
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror-clone from GitHub
+        run: git clone --mirror https://github.com/${{ github.repository }}.git mirror.git
+
+      - name: Fast-forward-only push to GitLab
+        working-directory: mirror.git
+        run: |
+          git push "https://oauth2:${{ secrets.GITLAB_BACKUP_TOKEN }}@gitlab.com/higglehaven-group/higglehaven.git" \
+            'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
