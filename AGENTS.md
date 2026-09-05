@@ -82,6 +82,47 @@ to you whenever you start a task or reach a natural check-in point.
 Separate from Issue #25, which is for work/backlog coordination, not
 direct messages.
 
+### Claiming a task — narrow the race window
+
+Each session having its own branch prevents git-branch collisions, but
+it does nothing to stop two sessions from independently picking up the
+*same* Issue #25 backlog item at nearly the same time — that's a
+separate race, and it has happened more than once (#86 fixed twice on
+the same day this convention was still numbered branches; #126
+fixed twice again after the switch to per-session-name branches,
+forcing one PR to be closed as a duplicate and its branch reset).
+Switching branch models didn't touch this problem at all — it's about
+which issue two sessions decide to work on, not which branch either of
+them commits to. None of the following eliminates the race (self-
+assigning a GitHub Issue and commenting on #25 are both advisory, not
+atomic), but each shrinks the window or lowers the cost when it happens
+anyway:
+
+- **Self-assign before you investigate, not after.** The gap between
+  reading an issue and claiming it is where collisions happen — don't
+  spend several minutes reading code or planning a fix before calling
+  `issue_write` to self-assign. Claim first, investigate second.
+- **Claim one issue at a time.** Bundling several small unclaimed issues
+  into a single session/PR means one collision on any of them forces
+  rework on the whole PR, not just that item. Prefer separate claims —
+  and splitting into separate commits/PRs if a collision does turn up
+  mid-way — over one bundled claim.
+- **Re-check right before you publish, not just before you start.** A
+  claim made minutes ago can be stale by the time you push — someone
+  else's PR for the same issue may already have merged. Re-fetch the
+  issue's state immediately before pushing or opening a PR, not only at
+  claim time; catching a collision here is far cheaper than discovering
+  it from a merge conflict on an already-open PR.
+- **Treat the issue's `assignees` field as the authoritative check, not
+  just #25's comment thread.** Comments are what everyone actually skims
+  in practice, but a fast-moving thread can bury or delay a "Starting X"
+  comment; `assignees` is a single fact you can check directly on the
+  issue itself before adding yourself to it.
+
+If a collision happens anyway: whoever notices second stands down
+immediately (comment noting the duplicate, drop the redundant work)
+rather than finishing in parallel.
+
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
