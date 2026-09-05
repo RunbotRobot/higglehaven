@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchAllLandlets } from './api.js';
+import { fetchAllAuctions, fetchAllLandlets } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
@@ -66,5 +66,29 @@ describe('fetchAllLandlets', () => {
     const urls = mockPaginatedFetch([{ landlets: [], nextCursor: null }]);
     await fetchAllLandlets({ status: 'claimed', ownerBuilderId: undefined });
     expect(urls[0]).not.toContain('ownerBuilderId');
+  });
+});
+
+describe('fetchAllAuctions', () => {
+  // #190: same silent-truncation shape #186 fixed for fetchAllLandlets —
+  // the browse-auctions panel used the single-page fetchAuctions instead
+  // of a paginating fetch, so this proves the fix follows nextCursor and
+  // threads filter params onto every page.
+  it('follows nextCursor across multiple pages, accumulating every result', async () => {
+    const urls = mockPaginatedFetch([
+      { auctions: [{ auctionId: 'a' }], nextCursor: 'cursor-1' },
+      { auctions: [{ auctionId: 'b' }], nextCursor: null },
+    ]);
+    const all = await fetchAllAuctions({ status: 'active' });
+    expect(all).toEqual([{ auctionId: 'a' }, { auctionId: 'b' }]);
+    expect(urls[0]).toContain('status=active');
+    expect(urls[1]).toContain('status=active');
+    expect(urls[1]).toContain('cursor=cursor-1');
+  });
+
+  it('returns every auction from a single page with no params', async () => {
+    mockPaginatedFetch([{ auctions: [{ auctionId: 'a' }], nextCursor: null }]);
+    const all = await fetchAllAuctions();
+    expect(all).toEqual([{ auctionId: 'a' }]);
   });
 });
