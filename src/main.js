@@ -4137,9 +4137,18 @@ function captureSnapshot() {
   return productMeshes.map((mesh) => instanceFromMesh(mesh));
 }
 
+// Set for the duration of restoreSnapshot's own await (mesh rebuilding plus
+// the batch create/update/delete network calls) — without it, a second
+// rapid click (a trackpad double-click, or just an eager user) before the
+// first restoreSnapshot resolves would pop another snapshot and start a
+// second, concurrent restoreSnapshot mutating the same shared
+// productMeshes/selectedMeshes/undoStack/redoStack and firing overlapping
+// batch requests, potentially for the same instance IDs.
+let undoRedoBusy = false;
+
 function updateUndoRedoButtons() {
-  undoBtn.disabled = undoStack.length === 0;
-  redoBtn.disabled = redoStack.length === 0;
+  undoBtn.disabled = undoRedoBusy || undoStack.length === 0;
+  redoBtn.disabled = undoRedoBusy || redoStack.length === 0;
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -4213,19 +4222,31 @@ async function restoreSnapshot(snapshot) {
 }
 
 async function undo() {
-  if (undoStack.length === 0) return;
-  const previous = undoStack.pop();
-  redoStack.push(captureSnapshot());
-  await restoreSnapshot(previous);
+  if (undoStack.length === 0 || undoRedoBusy) return;
+  undoRedoBusy = true;
   updateUndoRedoButtons();
+  try {
+    const previous = undoStack.pop();
+    redoStack.push(captureSnapshot());
+    await restoreSnapshot(previous);
+  } finally {
+    undoRedoBusy = false;
+    updateUndoRedoButtons();
+  }
 }
 
 async function redo() {
-  if (redoStack.length === 0) return;
-  const next = redoStack.pop();
-  undoStack.push(captureSnapshot());
-  await restoreSnapshot(next);
+  if (redoStack.length === 0 || undoRedoBusy) return;
+  undoRedoBusy = true;
   updateUndoRedoButtons();
+  try {
+    const next = redoStack.pop();
+    undoStack.push(captureSnapshot());
+    await restoreSnapshot(next);
+  } finally {
+    undoRedoBusy = false;
+    updateUndoRedoButtons();
+  }
 }
 
 undoBtn.addEventListener('click', undo);
