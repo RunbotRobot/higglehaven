@@ -3886,11 +3886,14 @@ function formatPriceCents(cents) {
 // Mirrors worker/index.js's own DIGITAL_GOOD_DISCLAIMER_TEXT (docs/SPEC.md
 // §4's "clear higglehaven-controlled disclaimer") — kept as a second copy
 // here rather than fetched from the server, since it's small, static, and
-// needed synchronously while building each seller-row's DOM.
+// needed synchronously while building each seller-row's DOM. Keep the full
+// sentences, not an abbreviation: this same constant backs productInfoText's
+// shopper-facing disclaimer (the actual compliance surface this section of
+// spec is about), not just the seller-panel dropdown label below.
 const DIGITAL_GOOD_DISCLAIMER_TEXT = {
-  'gift-card': 'Digital gift card to a real business',
-  'art-file': 'Digital art or print file',
-  'software-tool': 'higglehaven-ecosystem software tool',
+  'gift-card': 'This is a digital gift card to a real business, delivered as a code — not a physical item.',
+  'art-file': 'This is a digital art or print file, delivered as a download — not a physical item.',
+  'software-tool': 'This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item.',
 };
 
 function formatAuctionTimeRemaining(isoString) {
