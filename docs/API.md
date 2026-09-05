@@ -2100,14 +2100,26 @@ Response:
 
 ## Notifications
 
-Builder-facing notifications — currently produced by exactly one thing: a
-seller changing a placed template's real-world dimensions (see "Editing a
-product's size" under "Managing extensibility — the Seller modal" above).
-The table is deliberately generic (a plain `message` string, not a typed
-"dimension change" event) so future notification kinds don't need their own
-table or endpoints. There's no pagination cursor — one builder's outstanding
-count is expected to stay small — and no `DELETE`, since a read notification
-is still useful history ("wait, when did that change?").
+Builder-facing notifications. The table is deliberately generic (a plain
+`message` string, not a typed event per notification kind) so new sources
+can be added without their own table or endpoints — current sources are:
+
+- A seller changing a placed template's real-world dimensions (see "Editing
+  a product's size" under "Managing extensibility — the Seller modal"
+  above) — the original and only source with a `templateId` set (below).
+- Land acquisition auctions (see "Land acquisition auctions" below): a new
+  bid (seller notified), being outbid (previous highest bidder notified),
+  an auction selling (seller and winning bidder both notified), an auction
+  ending with no bids (seller notified either way — kept the land, or
+  released to greenbelt if it had a $0 starting bid), and an auction voided
+  because the seller's account was deleted (every bidder notified).
+- A product sale or its refund (see "Simulated purchases" below): the
+  builder hosting the sold instance is notified of the commission earned,
+  or clawed back on refund.
+
+There's no pagination cursor — one builder's outstanding count is expected
+to stay small — and no `DELETE`, since a read notification is still useful
+history ("wait, when did that change?").
 
 ### Notification object
 
