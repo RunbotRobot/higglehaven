@@ -845,6 +845,68 @@ describe('Worker API', () => {
     expect(unauthenticated.response.status).toBe(401);
   });
 
+  // #218 (docs/SPEC.md §1's "Water cannot be owned"): a landlet's landType
+  // is a separate, orthogonal concept from its lifecycle status — this
+  // confirms the claim endpoint actually enforces it, not just that the
+  // field round-trips.
+  it('rejects claiming a water landlet even while it is otherwise greenbelt and unowned', async () => {
+    const created = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'water-landlet',
+        name: 'Test water landlet',
+        areaM2: 1000,
+        status: 'greenbelt',
+        landType: 'water',
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.landlet.landType).toBe('water');
+
+    const builder = await signupBuilder('water-claim-builder');
+    const claimed = await api('/landlets/water-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(409);
+    expect(claimed.body).toEqual({ error: 'Water cannot be claimed' });
+  });
+
+  it('defaults landType to buildable and rejects an invalid value', async () => {
+    const defaulted = await createGreenbeltLandlet('default-land-type-landlet');
+    expect(defaulted.body.landlet.landType).toBe('buildable');
+
+    const invalid = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-land-type-landlet',
+        name: 'Invalid land type',
+        areaM2: 1000,
+        landType: 'lava',
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
+  });
+
+  it('excludes water landlets from the greenbelt count/ratio but includes them in total', async () => {
+    const before = (await api('/world')).body.world.landletCounts;
+
+    await createGreenbeltLandlet('water-count-buildable-landlet');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'water-count-water-landlet',
+        name: 'Water count water landlet',
+        areaM2: 1000,
+        status: 'greenbelt',
+        landType: 'water',
+      }),
+    }));
+
+    const after = (await api('/world')).body.world.landletCounts;
+    expect(after.total).toBe(before.total + 2);
+    expect(after.greenbelt).toBe(before.greenbelt + 1);
+    expect(after.water).toBe((before.water || 0) + 1);
+  });
+
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
     const malformedJson = await api('/landlets', adminSession({
       method: 'POST',
