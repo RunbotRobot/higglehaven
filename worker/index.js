@@ -1550,16 +1550,28 @@ async function handleFriendships(request, db, route, url) {
     }
     await assertReferenceExists(db, 'builders', 'builder_id', requesterBuilderId, 'requesterBuilderId');
     await assertReferenceExists(db, 'builders', 'builder_id', recipientBuilderId, 'recipientBuilderId');
-    const existing = await db.prepare(`
-      SELECT 1 FROM friendships
-      WHERE (requester_builder_id = ? AND recipient_builder_id = ?)
-         OR (requester_builder_id = ? AND recipient_builder_id = ?)
-    `).bind(requesterBuilderId, recipientBuilderId, recipientBuilderId, requesterBuilderId).first();
-    if (existing) throw new HttpError('A friendship or pending request already exists between these builders', 409);
+    // Folding the duplicate-pair check into the INSERT's own WHERE NOT
+    // EXISTS makes the check-and-insert one atomic statement — a separate
+    // SELECT-then-INSERT would let two concurrent requests for the same
+    // pair (e.g. A and B both sending a request to each other at once)
+    // both pass the check before either INSERT commits, same idiom
+    // product_reviews/auction_bids already use for this exact race shape.
     const friendshipId = `friendship-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)
-    `).bind(friendshipId, requesterBuilderId, recipientBuilderId).run();
+    const inserted = await db.prepare(`
+      INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id)
+      SELECT ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM friendships
+        WHERE (requester_builder_id = ? AND recipient_builder_id = ?)
+           OR (requester_builder_id = ? AND recipient_builder_id = ?)
+      )
+    `).bind(
+      friendshipId, requesterBuilderId, recipientBuilderId,
+      requesterBuilderId, recipientBuilderId, recipientBuilderId, requesterBuilderId,
+    ).run();
+    if (inserted.meta.changes === 0) {
+      throw new HttpError('A friendship or pending request already exists between these builders', 409);
+    }
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
