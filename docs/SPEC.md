@@ -41,6 +41,11 @@
 
 **Geographic authenticity rule:** recreate natural pre-human Earth geology (exclude man-made terraforming like canals/mining pits) but populate with **present-day flora** including non-native species — no historical reconstruction. Canonical example: Lake Washington and Puget Sound render as their actual pre-1916 separate water bodies (before the man-made Montlake Cut) — an intentional discoverable detail.
 
+**Earth model and real-world anchor — resolved (#138), owner decision:**
+- **A plain sphere, not a real ellipsoid.** Earth's actual equatorial bulge (from its own rotation) is real, but the difference is imperceptible at any near-term realistic scale — the same simplification §1's vertical-construction cap rule already accepts for above/below-ground asymmetry. Confirms `worker/earthCurvature.js`'s existing model rather than changing it.
+- **Radius: the IUGG mean Earth radius, 6,371,000 m** — already `DEFAULT_EARTH_RADIUS_M` in `worker/earthCurvature.js`. The natural choice for a single-radius spherical model (an ellipsoid's own two radii don't apply once the sphere decision above is made), and the standard "average the planet" figure for approximating a real-world region onto it.
+- **Real-world coordinate anchor: 2066 McGilvra Blvd E, Seattle, WA 98112 (47.638887°N, 122.280433°W).** This is the real-world point the world's own (0, 0) origin maps to, and the point §2's 210-degree rotational offset applies around. Sits directly on Lake Washington's shore — reinforcing this section's own Lake Washington/Puget Sound geographic-authenticity detail rather than an arbitrary pick.
+
 **Vertical construction — tied to land cap, not a separate resource. Correction (P143): cap consumption is asymmetric, not identical above/below ground.**
 - The earlier "below-ground levels count identically to above-ground levels" rule was flat-world thinking and is **wrong at the geometric level** once Earth curvature (already a confirmed §1 world-architecture decision) is taken seriously. A fixed-angular-footprint lánd extended radially through the Earth is a **cone converging on Earth's center**, not a cylinder.
 - **Correct model:** each level **above** ground consumes *increasingly more* land cap per level (cross-sectional area grows moving away from Earth's center); each level **below** ground consumes *increasingly less* land cap per level (area shrinks toward the center).
@@ -78,7 +83,7 @@
 - **Flight:** double-tap jump (mobile) / double-press spacebar (desktop). Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
 - Altitude/speed: **logarithmic** — each doubling of altitude ≈ 50% more max ground speed, diminishing at extremes. ~10x walking speed near building-height, up to ~100x at max altitude (~500m).
 - Flying avatars are invisible to other users.
-- **210-degree rotational offset** applied once during real-world-to-higglehaven coordinate mapping — permanent, zero-cost, thematically resonant detail.
+- **210-degree rotational offset** applied once during real-world-to-higglehaven coordinate mapping, around the §1 world-origin anchor (#138, resolved) — permanent, zero-cost, thematically resonant detail.
 
 **Collision (crowding) — confirmed numbers:** a **2-foot-diameter hard barrier** (avatars cannot overlap closer than this) surrounded by a **1-foot-diameter zone of increasing push-back resistance** as an avatar moves further into it — soft at the outer edge, firmer approaching the hard barrier. (~0.6m hard barrier + ~0.3m soft zone in the platform's internal meter-based units.)
 

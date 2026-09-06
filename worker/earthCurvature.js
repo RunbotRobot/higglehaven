@@ -9,11 +9,11 @@
 // imperceptible simplification at this scale" call docs/SPEC.md §3 already
 // makes for above/below-ground cap asymmetry ("the difference is
 // imperceptible at any near-term realistic scale, but the underlying world
-// architecture must be built correctly from the start"). DEFAULT_EARTH_RADIUS_M
-// is a placeholder pending #138's owner decision (sphere vs. real ellipsoid,
-// exact radius constant) — every function below takes earthRadiusM as an
-// explicit parameter for exactly that reason: swapping in #138's real
-// answer later never touches this module's logic, and tests can use small,
+// architecture must be built correctly from the start"). Confirmed as final
+// by the project owner's #138 decision (docs/SPEC.md §1's "Earth model and
+// real-world anchor") — sphere over a real ellipsoid, DEFAULT_EARTH_RADIUS_M
+// the IUGG mean radius, not a placeholder. Every function below still takes
+// earthRadiusM as an explicit parameter regardless, so tests can use small,
 // easy-to-verify radii instead of a real-world-scale one.
 //
 // Coordinate convention: inputs/outputs are WORLD-flat coordinates — the
@@ -39,7 +39,7 @@
 // either picture, only where "up" points and how a straight line curves
 // changes.
 
-export const DEFAULT_EARTH_RADIUS_M = 6371000; // IUGG mean Earth radius — see #138.
+export const DEFAULT_EARTH_RADIUS_M = 6371000; // IUGG mean Earth radius — final per #138's owner decision.
 
 // True 3D position (same units, ground-tangent-at-the-origin frame) for a
 // point given in flat map coordinates. Rendering can consume this
