@@ -1767,11 +1767,6 @@ async function handleStartAuction(request, db, landletId) {
   if (landlet.status !== 'claimed' || landlet.owner_builder_id !== builderId) {
     throw new HttpError('Only the current owner of a claimed landlet can start an auction on it', 400);
   }
-  const alreadyActive = await db.prepare(`
-    SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
-  `).bind(landletId).first();
-  if (alreadyActive) throw new HttpError('This landlet already has an active auction', 409);
-
   const startingBidCents = input.startingBidCents === undefined ? 0 : nonnegativeInteger(input.startingBidCents, 'startingBidCents');
   // "Default 24-hour duration for inactivity-triggered listings; builder-
   // initiated voluntary auctions may set custom duration" — every auction
@@ -1785,10 +1780,23 @@ async function handleStartAuction(request, db, landletId) {
 
   const auctionId = `auction-${crypto.randomUUID()}`;
   const endsAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
-  await db.prepare(`
+  // Folding the "no active auction yet" check into the INSERT's own WHERE
+  // NOT EXISTS makes the check-and-insert one atomic statement — a
+  // separate SELECT-then-INSERT would let two concurrent starts for the
+  // same landlet both pass the check before either INSERT commits,
+  // leaving two simultaneously-active auctions that would later both
+  // independently resolve and double-transfer the same land (#265). Same
+  // idiom already used for product_reviews/auction_bids/friendships.
+  const inserted = await db.prepare(`
     INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt).run();
+    SELECT ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
+    )
+  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt, landletId).run();
+  if (inserted.meta.changes === 0) {
+    throw new HttpError('This landlet already has an active auction', 409);
+  }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }

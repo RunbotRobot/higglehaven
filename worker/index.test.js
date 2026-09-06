@@ -3110,6 +3110,23 @@ describe('Auctions', () => {
     expect(secondAttempt.response.status).toBe(409);
   });
 
+  it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
+    const owner = await signupBuilder('auction-start-race-owner');
+    await createGreenbeltLandlet('auction-start-race-landlet');
+    await claim('auction-start-race-landlet', owner);
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no active auction yet",
+    // both pass the check, and both land as separate active auctions on
+    // the same landlet, which would later each independently resolve and
+    // double-transfer the same land (#265).
+    const [first, second] = await Promise.all([
+      api('/landlets/auction-start-race-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) })),
+      api('/landlets/auction-start-race-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
+  });
+
   it('accepts a custom starting bid and duration', async () => {
     const owner = await signupBuilder('custom-auction-owner');
     await createGreenbeltLandlet('auction-custom-landlet');
