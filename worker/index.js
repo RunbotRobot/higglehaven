@@ -4832,6 +4832,12 @@ async function assertReferencesExist(db, table, column, values, field) {
   if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
 }
 
+// Shared by assertCropWithinTemplateBounds and assertValidExtensible below
+// — the same x/width, y/depth, z/height mapping src/main.js's own
+// AXIS_DIMENSION_KEY uses, so a template's extensible axes and its crop
+// bounds are always checked against the same dimension.
+const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' };
+
 // Confirms every instance's crop overrides actually reference an axis the
 // instance's template declared extensible (via metadata.extensible, see
 // validateTemplate) and fall within that axis's [minM, template's own max
@@ -4847,7 +4853,7 @@ async function assertCropWithinTemplateBounds(db, instances) {
     `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
   ).bind(...templateIds).all();
   const templatesById = new Map(results.map((row) => [row.template_id, templateFromRow(row)]));
-  const dimensionKeyByAxis = { x: 'width', y: 'depth', z: 'height' };
+  const dimensionKeyByAxis = EXTENSIBLE_DIMENSION_KEY_BY_AXIS;
   for (const instance of withCrop) {
     const template = templatesById.get(instance.templateId);
     if (!template) continue;
@@ -4998,6 +5004,38 @@ function assertValidDomesticOnly(metadata) {
   }
 }
 
+// Per-axis crop-floor declaration for extensible (croppable) templates
+// (docs/API.md's crop/trim feature, `assertCropWithinTemplateBounds`
+// above) — same single-key-in-metadata pattern as the siblings above, but
+// unlike those flat booleans/enums this one had no server-side validation
+// at all until now. The frontend (src/main.js's extensibility-panel save
+// handler) already enforces finite/positive/`minM < maxLength` before
+// saving, but nothing stopped a PATCH bypassing that UI from writing a
+// non-numeric, negative, or missing minM — which assertCropWithinTemplateBounds's
+// `length < extensible.minM` check then silently fails to enforce, since
+// JS's numeric comparison makes `anything < undefined` and `anything < NaN`
+// both false. Mirrors the frontend's own checks exactly.
+function assertValidExtensible(metadata, dimensions) {
+  if (metadata.extensible === undefined) return;
+  if (typeof metadata.extensible !== 'object' || metadata.extensible === null || Array.isArray(metadata.extensible)) {
+    throw new HttpError('metadata.extensible must be an object', 400);
+  }
+  for (const [axis, entry] of Object.entries(metadata.extensible)) {
+    const dimensionKey = EXTENSIBLE_DIMENSION_KEY_BY_AXIS[axis];
+    if (!dimensionKey) {
+      throw new HttpError(`metadata.extensible key "${axis}" must be one of: ${Object.keys(EXTENSIBLE_DIMENSION_KEY_BY_AXIS).join(', ')}`, 400);
+    }
+    const minM = entry?.minM;
+    const maxLength = dimensions[dimensionKey];
+    if (!Number.isFinite(minM) || minM <= 0) {
+      throw new HttpError(`metadata.extensible.${axis}.minM must be a positive number`, 400);
+    }
+    if (minM >= maxLength) {
+      throw new HttpError(`metadata.extensible.${axis}.minM must be less than this template's own ${dimensionKey}`, 400);
+    }
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -5021,6 +5059,7 @@ function validateTemplate(input, fallbackId) {
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
+  assertValidExtensible(template.metadata, template.dimensions);
   return template;
 }
 
