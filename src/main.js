@@ -7896,7 +7896,21 @@ function updateShopMovement(now) {
     }
     clampShopRadius(shopAvatarPosition);
   }
-  shopAvatarPosition.z = shopFlightAltitudeM;
+  // #166's avatar-movement leaf: shopFlightAltitudeM is height above the
+  // *real* curved ground, not the flat tangent plane — wildGround itself
+  // already sags below that plane by relativeCurvatureDropM at this (x, y)
+  // (see applyGroundCurvature, PR #175), so the avatar's feet need the same
+  // offset or they'd float above/sink below ground by that amount as it
+  // moves away from the origin. Deliberately world-origin-relative, matching
+  // wildGround's own frame — matching a specific claimed lándlet's own
+  // locally-curved ground (a different, landlet-center-relative frame per
+  // #135/#179) once the avatar is standing on one is the harder seam-
+  // continuity problem #166 itself defers; the gap between the two frames
+  // is the same sub-millimeter order #170/#182 already quantified, so using
+  // the wildGround frame everywhere is a correct, honest simplification at
+  // today's scale, not a hidden shortcut.
+  shopAvatarPosition.z = shopFlightAltitudeM
+    - relativeCurvatureDropM(shopAvatarPosition.x, shopAvatarPosition.y, 0, 0);
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
   // a plain neutral pose instead (a real flight pose, arms/legs extended,
