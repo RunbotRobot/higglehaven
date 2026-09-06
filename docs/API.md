@@ -3653,10 +3653,13 @@ every subsequent request — nothing is stored server-side, so rotating the
 passphrase secret instantly invalidates every existing session).
 
 This is a shared-passphrase gate for "let a few people see the preview," not
-a real authentication system — everyone behind it shares one passphrase and
-one session shape, and it has no concept of the `ownerBuilderId`/builder
-identity used elsewhere in this API. See the note below: this doesn't change
-the fact that the API itself still has no per-user auth or authorization.
+a replacement for the real per-user authentication described in
+"Authentication" and "Authorization model" above — everyone behind it shares
+one passphrase and one session shape, and it has no concept of the
+`ownerBuilderId`/builder identity used elsewhere in this API. It's a
+coarser, all-or-nothing layer that sits in front of that real system, not a
+substitute for it: once past the gate, every route still enforces its own
+per-user auth exactly as documented elsewhere in this file.
 
 This depends on `wrangler.jsonc`'s `assets.run_worker_first: true`. Without
 it, Cloudflare serves static files (`/`, `/assets/*`) directly from the
