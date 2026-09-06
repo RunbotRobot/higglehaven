@@ -5261,6 +5261,64 @@ describe('Authentication', () => {
     expect(dupe.response.status).toBe(409);
   });
 
+  // Issue #200 (owner decision): "+tag" sub-addressing is a de facto
+  // standard most major providers honor, not a Gmail-only quirk, so it's
+  // stripped for every domain — one real inbox can't back unlimited
+  // accounts by cycling through fresh tags.
+  it('rejects a "+tag" variant of an already-registered email, regardless of domain', async () => {
+    const base = crypto.randomUUID();
+    const email = `auth-plus-${base}@example.com`;
+    await signup(email, 'first password here');
+    const dupe = await signup(`auth-plus-${base}+anything@example.com`, 'second password here');
+    expect(dupe.response.status).toBe(409);
+  });
+
+  // Gmail's dot-insensitivity ("first.last" and "firstlast" are the same
+  // inbox) is genuinely Gmail-specific — no other mainstream provider
+  // folds dots this way — so this only applies to gmail.com/googlemail.com.
+  it('rejects a dotted variant of an already-registered gmail.com email', async () => {
+    const base = crypto.randomUUID().replace(/-/g, '');
+    await signup(`auth.dots.${base}@gmail.com`, 'first password here');
+    const dupe = await signup(`authdots${base}@gmail.com`, 'second password here');
+    expect(dupe.response.status).toBe(409);
+  });
+
+  // The flip side of the above: dot-folding must NOT apply to a non-Gmail
+  // domain, where two dotted variants are genuinely different addresses
+  // (and, in practice, almost always different real inboxes) — a blanket
+  // dot-fold would incorrectly block legitimate distinct signups.
+  it('does NOT fold dots on a non-Gmail domain — dotted variants are distinct accounts', async () => {
+    const base = crypto.randomUUID().replace(/-/g, '');
+    const first = await signup(`auth.dots.${base}@example.com`, 'first password here');
+    expect(first.response.status).toBe(201);
+    const second = await signup(`authdots${base}@example.com`, 'second password here');
+    expect(second.response.status).toBe(201);
+  });
+
+  it('an already-registered "+tag" account (created before #200) still logs in by its exact literal address', async () => {
+    const base = crypto.randomUUID();
+    const email = `auth-legacy-plus-${base}+test1@example.com`;
+    await signup(email, 'a fine long password here');
+    const loggedIn = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'a fine long password here' }),
+    });
+    expect(loggedIn.response.status).toBe(200);
+  });
+
+  it('accepts only one of two concurrent signups for "+tag" variants of the same email, not both', async () => {
+    const base = crypto.randomUUID();
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no existing account"
+    // and both land as separate rows for what should collide as one
+    // canonical email (#200, same race shape as #259's friendships fix).
+    const [first, second] = await Promise.all([
+      signup(`auth-plus-race-${base}+a@example.com`, 'first password here'),
+      signup(`auth-plus-race-${base}+b@example.com`, 'second password here'),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
+  });
+
   it('rate-limits repeated signup attempts against the same email', async () => {
     const email = `auth-ratelimit-signup-${crypto.randomUUID()}@example.com`;
     // First succeeds; the next 4 hit the ordinary "already registered" 409
