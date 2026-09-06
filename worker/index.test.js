@@ -2601,6 +2601,39 @@ describe('Community calendar', () => {
     const triggerOnMissing = await api('/instances/calendar-trigger-instance/events/event-does-not-exist/trigger', { method: 'POST' });
     expect(triggerOnMissing.response.status).toBe(404);
   });
+
+  // #270: two callers hitting the endpoint sequentially (the test above)
+  // can't exercise the actual race — by the time the second call runs, the
+  // early `event.triggered_at` check already short-circuits it before it
+  // ever reaches the UPDATE. Real concurrent calls both pass that check
+  // first, so this is the only way to catch a regression back to deciding
+  // `triggered` from a re-SELECT instead of the UPDATE's own row count.
+  it('reports triggered:true to exactly one caller when two requests race the same due event', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-race-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 12,
+        y: 12,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const created = await api('/instances/calendar-race-instance/events', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    });
+    const eventId = created.body.event.eventId;
+    await env.DB.prepare(`UPDATE calendar_events SET scheduled_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?`).bind(eventId).run();
+
+    const [first, second] = await Promise.all([
+      api(`/instances/calendar-race-instance/events/${eventId}/trigger`, { method: 'POST' }),
+      api(`/instances/calendar-race-instance/events/${eventId}/trigger`, { method: 'POST' }),
+    ]);
+    const triggeredFlags = [first.body.triggered, second.body.triggered];
+    expect(triggeredFlags.filter(Boolean)).toHaveLength(1);
+  });
 });
 
 describe('Product reviews', () => {
