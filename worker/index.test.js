@@ -4127,6 +4127,11 @@ describe('Landlet levels', () => {
     expect(list.body.levels).toEqual([]);
   });
 
+  it('404s listing levels for a lándlet that does not exist, matching GET /landlets/:id', async () => {
+    const missing = await api('/landlets/levels-does-not-exist/levels');
+    expect(missing.response.status).toBe(404);
+  });
+
   it('requires a session and ownership to add a level', async () => {
     const owner = await signupBuilder('levels-auth-owner');
     const stranger = await signupBuilder('levels-auth-stranger');
