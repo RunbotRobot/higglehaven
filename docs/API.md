@@ -571,6 +571,20 @@ accepted simplification here (same reasoning as pioneer ranks, above), the
 fix is only that bidders get told first. The auctioned landlet still comes
 back via the release path described above, same as any other claimed land.
 
+If this builder currently holds the *highest* bid on someone else's
+still-active auction, deletion is rejected outright (`409`) instead —
+`auction_bids.bidder_builder_id`'s own `ON DELETE CASCADE` would otherwise
+silently erase that bid. A leading bid actively deters every other bidder
+from bidding (a new bid must strictly exceed it) for as long as it stands,
+so letting it vanish via self-deletion — at zero cost, since a fresh
+builder profile is auto-provisioned for the same logged-in user on their
+next request — would let a bidder walk back a commitment that already
+shaped how others bid. There's no bid-withdrawal feature, so a placed bid
+is exactly as binding as it already implicitly is for a builder who
+doesn't delete their account. A bid that's since been outbid, or that was
+on an auction which has already ended (whether or not it won), doesn't
+block deletion.
+
 Response:
 
 ```json

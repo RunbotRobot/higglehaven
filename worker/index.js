@@ -1208,6 +1208,32 @@ async function handleBuilders(request, db, route) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
+    // #263: without this, deleting the builder cascades straight through
+    // auction_bids.bidder_builder_id (ON DELETE CASCADE) and silently
+    // erases whichever bid this builder currently holds — including one
+    // that's the *current highest* on someone else's still-active auction.
+    // A new bid must strictly exceed the current highest (see
+    // handleAuctionBids' own comment), so a leading bid actively deters
+    // every other bidder for as long as it stands; deleting it right
+    // before the auction resolves lets a real bidder walk back a
+    // commitment that shaped how others bid, at zero cost (a fresh,
+    // unrestricted builder profile is auto-provisioned for the same
+    // logged-in user on their very next request). There's no bid-
+    // withdrawal feature in this app, so a placed bid should be exactly as
+    // binding as it already implicitly is for a builder who doesn't
+    // delete their account — block the deletion instead of notifying
+    // after the fact, since nothing can undo the chilling effect the
+    // now-vanished bid already had on other bidders.
+    const leadingBid = await db.prepare(`
+      SELECT a.auction_id FROM auctions a
+      JOIN auction_bids b ON b.auction_id = a.auction_id
+      WHERE a.status = 'active' AND b.bidder_builder_id = ?
+        AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+      LIMIT 1
+    `).bind(route[1]).first();
+    if (leadingBid) {
+      throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
+    }
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not
