@@ -6483,7 +6483,18 @@ function friendLocationText(friendship) {
   return `${name} (${center.x.toFixed(0)}, ${center.y.toFixed(0)})`;
 }
 
+// #257: same missing-re-entrancy-guard shape as #244/#245 —
+// renderFriends() is called from many places in quick succession (opening
+// the panel, accepting/declining/cancelling a request, closing/reopening
+// via friendsCloseBtn's own refreshFriendsBadge()), and each of those
+// awaits fetchFriendships() before touching the DOM. An earlier call's
+// now-stale response would otherwise append duplicate rows on top of a
+// later call's fresh ones once it resolves. Same monotonic-token fix as
+// axisPreviewLoadToken/notificationsLoadToken.
+let friendsLoadToken = 0;
+
 async function renderFriends() {
+  const myLoadToken = ++friendsLoadToken;
   friendsIncomingListEl.innerHTML = '';
   friendsOutgoingListEl.innerHTML = '';
   friendsAcceptedListEl.innerHTML = '';
@@ -6492,10 +6503,12 @@ async function renderFriends() {
   try {
     friendships = await fetchFriendships();
   } catch (err) {
+    if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
     friendsStatusEl.textContent = err.message || 'Could not load friends.';
     friendsStatusEl.classList.add('error');
     return;
   }
+  if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
   const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
   const outgoing = friendships.filter((f) => f.direction === 'outgoing' && f.status === 'pending');
   const accepted = friendships.filter((f) => f.status === 'accepted');
