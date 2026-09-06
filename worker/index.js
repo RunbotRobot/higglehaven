@@ -4520,18 +4520,20 @@ async function handleCalendarEventTrigger(db, instanceId, eventId) {
   if (!event.scheduled_at || event.triggered_at || event.scheduled_at > new Date().toISOString()) {
     return json({ event: calendarEventFromRow(event), triggered: false });
   }
-  await db.prepare(`
+  // #270: the WHERE ... triggered_at IS NULL guard is what makes this safe
+  // against a race (two callers both passing the earlier check at once) —
+  // but only whichever UPDATE actually lands first changes any rows. A
+  // losing caller's own UPDATE affects zero rows, yet a later re-SELECT
+  // would still see the winner's non-null triggered_at and wrongly report
+  // triggered: true too. Reading the result of this exact UPDATE (rather
+  // than re-querying) is what actually distinguishes the one winner from
+  // every loser.
+  const result = await db.prepare(`
     UPDATE calendar_events SET triggered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE event_id = ? AND triggered_at IS NULL
   `).bind(eventId).run();
   const updated = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
-  // The WHERE ... triggered_at IS NULL guard above is what actually makes
-  // this safe against a race (two callers both passing the earlier check
-  // at once): only whichever UPDATE actually lands first flips the row,
-  // and event.triggered_at is guaranteed null here (the early return
-  // above already handled the already-triggered case), so a non-null
-  // updated.triggered_at means this call is the one that just fired it.
-  return json({ event: calendarEventFromRow(updated), triggered: updated.triggered_at !== null });
+  return json({ event: calendarEventFromRow(updated), triggered: result.meta.changes === 1 });
 }
 
 function calendarEventFromRow(row) {
