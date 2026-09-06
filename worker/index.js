@@ -2218,6 +2218,25 @@ async function resolveAuction(db, auction) {
     SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
   `).bind(auction.auction_id).first();
 
+  // Three separate call sites can all reach this for the same overdue
+  // auction (resolveDueAuctions' sweep, resolveAuctionIfDue's per-request
+  // check, and the explicit /resolve endpoint) — each on its own stale
+  // read of the row. This conditional UPDATE is the actual atomic guard:
+  // run alone, before any of the balance/ownership/notification
+  // statements below, since D1's db.batch can't skip later statements
+  // based on an earlier one's row count within the same call. Whichever
+  // caller loses the race affects 0 rows here and returns the
+  // already-resolved auction as-is — a harmless no-op, matching this
+  // function's existing "resolving twice" contract, never double-running
+  // the money-mutating side effects below.
+  const guard = await db.prepare(`
+    UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE auction_id = ? AND status = 'active'
+  `).bind(highest ? highest.bid_id : null, auction.auction_id).run();
+  if (guard.meta.changes === 0) {
+    return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+  }
+
   const statements = [];
   if (highest) {
     statements.push(
@@ -2239,10 +2258,6 @@ async function resolveAuction(db, auction) {
       db.prepare(`
         INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
       `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
-      db.prepare(`
-        UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE auction_id = ?
-      `).bind(highest.bid_id, auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your dállers balance.`),
       notificationStatement(db, highest.bidder_builder_id,
@@ -2259,13 +2274,11 @@ async function resolveAuction(db, auction) {
             claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ?
       `).bind(auction.landlet_id),
-      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
     );
   } else {
     statements.push(
-      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`),
     );

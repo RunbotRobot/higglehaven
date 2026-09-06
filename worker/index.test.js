@@ -3245,11 +3245,21 @@ describe('Auctions', () => {
     expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
 
     // Resolving again is a harmless no-op, not an error — it just returns
-    // the already-ended auction's current (unchanged) state. The 409 case
-    // is specifically "not due yet," covered by the next test.
+    // the already-ended auction's current (unchanged) state, and must not
+    // re-run the money-mutating side effects (double-crediting the
+    // seller's balance — #229) even though nothing here is a real
+    // concurrent race. The 409 case is specifically "not due yet,"
+    // covered by the next test.
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+    const buildersAfterSecondResolve = await api('/builders');
+    const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
+    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
   });
 
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
