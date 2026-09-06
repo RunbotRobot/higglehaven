@@ -2018,6 +2018,21 @@ let uploadModelUrl = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
+// handleUploadFileStep runs a long async chain (optimize -> upload ->
+// measure -> showUploadDimensionPreview) before committing to the shared
+// state above and advancing uploadStep. uploadCancelBtn stays enabled
+// throughout, and reopening the modal force-resets uploadSubmitBtn's
+// disabled state — so without a guard, canceling mid-upload (or a fast
+// cancel-then-reopen, or reopen-and-resubmit) could let a stale call's
+// awaits resolve later and silently resurrect/overwrite a canceled or
+// superseded upload's UI state. Same monotonic load-token pattern already
+// used for this exact bug shape elsewhere in this file (loadLandletMap,
+// commit 80625ff; showAxisPreview, issue #205): bumped both when a new
+// handleUploadFileStep call starts and whenever resetUploadModalToFileStep
+// runs (cancel or reopen), checked after every await, with a superseded
+// call bailing out before touching shared state further.
+let uploadFlowToken = 0;
+
 function setUploadStatus(text, isError) {
   uploadStatusEl.textContent = text;
   uploadStatusEl.classList.toggle('error', Boolean(isError));
@@ -2049,6 +2064,7 @@ function disposeUploadDimensionPreview() {
 }
 
 function resetUploadModalToFileStep() {
+  uploadFlowToken++; // invalidate any in-flight handleUploadFileStep call
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadOriginalDimensions = null;
@@ -2176,6 +2192,7 @@ function makeDimensionLabelSprite(text, colorHex) {
 // every possible edit renders identically, so only the label text needs
 // to change as the seller types (see updateUploadDimensionLabels).
 async function showUploadDimensionPreview(modelUrl) {
+  const myFlowToken = uploadFlowToken;
   disposeUploadDimensionPreview();
 
   const canvas = document.createElement('canvas');
@@ -2189,6 +2206,7 @@ async function showUploadDimensionPreview(modelUrl) {
   scene.add(sun);
 
   const previewObject = await loadModelInstance(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
 
   const box = new THREE.Box3().setFromObject(previewObject);
@@ -2260,6 +2278,7 @@ async function handleUploadFileStep() {
     return;
   }
 
+  const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
   try {
     let uploadable = file;
@@ -2279,10 +2298,13 @@ async function handleUploadFileStep() {
       console.warn('Client-side model optimization failed, uploading original file:', err);
       setUploadStatus('Could not auto-reduce the model — uploading as-is…');
     }
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
     const { modelUrl } = await uploadModelFile(uploadable);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while measuring
     uploadModelUrl = modelUrl;
     uploadOriginalDimensions = dimensions;
     setUploadDimensionInputs(dimensions);
@@ -2290,6 +2312,7 @@ async function handleUploadFileStep() {
 
     setUploadStatus('Loading preview…');
     await showUploadDimensionPreview(modelUrl);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
 
     uploadStep = 'dimensions';
     uploadModalTitleEl.textContent = 'Confirm Dimensions';
@@ -2298,10 +2321,11 @@ async function handleUploadFileStep() {
     uploadSubmitBtn.textContent = 'Create Product';
     setUploadStatus('');
   } catch (err) {
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product upload failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
   } finally {
-    uploadSubmitBtn.disabled = false;
+    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
 }
 
