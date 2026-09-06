@@ -3719,10 +3719,6 @@ function renderSettingsSection() {
     renderBuildSettingsSection();
     return;
   }
-  if (activeSettingsTab === 'auctions') {
-    renderAuctionsSettingsSection();
-    return;
-  }
 
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
@@ -3815,6 +3811,7 @@ async function renderLandCapField() {
 // there's no landlet to publish from there).
 function renderBuildSettingsSection() {
   renderLandCapField();
+  renderAuctionSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -4015,13 +4012,14 @@ function formatAuctionSummary(auction) {
 }
 
 // Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
-// acquisition auctions") — its own Settings tab, reachable regardless of
-// mode, since bidding on someone else's landlet isn't a "your own Build
-// session" action the way Publish/Version History is. Covers both
-// starting a voluntary auction on whatever landlet this identity
-// currently owns and browsing/bidding on every other active auction in
-// the world.
-async function renderAuctionsSettingsSection() {
+// acquisition auctions") — lives in the Build settings tab, alongside Land
+// Cap (#197: auctioning a landlet is a Build-mode concern, not a Sell one,
+// per the project owner directly). Covers both starting a voluntary
+// auction on whatever landlet this identity currently owns and
+// browsing/bidding on every other active auction in the world — the
+// latter isn't tied to currentLandletId, so it still renders here even
+// outside an active Build session, same as Land Cap above it.
+async function renderAuctionSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
