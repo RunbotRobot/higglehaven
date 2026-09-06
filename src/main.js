@@ -73,7 +73,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { curvedPosition, flatPosition, footprintScaleAtHeight, relativeCurvatureDropM } from '../worker/earthCurvature.js';
+import { curvatureDropM, curvedPosition, flatPosition, footprintScaleAtHeight, relativeCurvatureDropM } from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -7017,6 +7017,22 @@ let shopWorldRadiusM = null;
 let shopDomeMesh = null;
 let shopWallMesh = null;
 let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
+// #203 (docs/SPEC.md §1, sub-issue of #166): the flat tangent plane's
+// z = 0 stops being "ground level" once shopWorldRadiusM is large enough
+// for curvature to matter — the real curved ground at that radius sits
+// curvatureDropM(shopWorldRadiusM) lower. The wall/dome are built to sit
+// on the ground at exactly that radius (a full circle at shopWorldRadiusM
+// on a sphere is itself a horizontal circle, so this needs only a z shift,
+// not a reshape), so this is that offset, set once in enterShopMode
+// alongside shopWorldRadiusM and reused wherever the wall/dome's own base
+// height is assumed to be flat z = 0 (their own position.z below, and
+// growShopDomeIfNeeded's clearance check). Reprojecting the wall/dome's
+// own curved *shape* (a real sphere's "circle at fixed radius" has a
+// slightly smaller circumference than a flat one, and its own local "up"
+// tilts inward — see earthCurvature.js's surfaceUpDirection) is the
+// harder frame-tilting work #166 already named and deliberately deferred
+// at MVP scale, not redone here.
+let shopWallBaseZM = 0;
 let shopSkyMaterial = null; // shared by both wall and dome — see createShopSkyMaterial
 let shopSkyClockStart = null;
 
@@ -7209,7 +7225,7 @@ function updateShopSky(now) {
 function growShopDomeIfNeeded(object) {
   if (!shopDomeMesh) return;
   const box = new THREE.Box3().setFromObject(object);
-  const neededRise = box.max.z - SHOP_WALL_HEIGHT_M + SHOP_DOME_CLEARANCE_MARGIN_M;
+  const neededRise = box.max.z - (shopWallBaseZM + SHOP_WALL_HEIGHT_M) + SHOP_DOME_CLEARANCE_MARGIN_M;
   if (neededRise <= shopDomeRiseM) return;
   shopDomeRiseM = neededRise;
   shopDomeMesh.scale.y = shopDomeRiseM;
@@ -8643,6 +8659,7 @@ async function enterShopMode() {
   // The wall sits at the largest gap-free radius, not the administrative
   // world radius itself — see computeGaplessWorldRadius's doc comment.
   shopWorldRadiusM = computeGaplessWorldRadius(allLandlets, world.radiusM);
+  shopWallBaseZM = -curvatureDropM(shopWorldRadiusM);
 
   // The visible world stops at the wall — no glimpse of "wild ground" that
   // isn't actually any land's own polygon. A thin overlap keeps the ground
@@ -8673,7 +8690,7 @@ async function enterShopMode() {
   shopSkyClockStart = null;
   const wall = new THREE.Mesh(wallGeometry, shopSkyMaterial);
   wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
-  wall.position.z = SHOP_WALL_HEIGHT_M / 2;
+  wall.position.z = shopWallBaseZM + SHOP_WALL_HEIGHT_M / 2;
   scene.add(wall);
   shopWorldObjects.push(wall);
   shopWallMesh = wall;
@@ -8693,7 +8710,7 @@ async function enterShopMode() {
   shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
   shopDomeMesh = new THREE.Mesh(domeGeometry, shopSkyMaterial);
   shopDomeMesh.rotation.x = Math.PI / 2;
-  shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M;
+  shopDomeMesh.position.z = shopWallBaseZM + SHOP_WALL_HEIGHT_M;
   shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
   scene.add(shopDomeMesh);
   shopWorldObjects.push(shopDomeMesh);

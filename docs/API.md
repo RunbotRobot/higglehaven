@@ -3772,6 +3772,18 @@ texture, so the seam between the two meshes is exactly continuous rather
 than approximately matched. The intent is a horizon that recedes into
 atmospheric haze and open sky, not a wall the world visibly stops at.
 
+The wall/dome's own base sits at `curvatureDropM(wallRadius)` below flat
+z = 0 (`worker/earthCurvature.js`, #203), not literally at z = 0 — the real
+curved ground at the wall's radius sags by exactly that much, so this keeps
+the wall's base flush with the ground mesh's own sag at the same radius
+instead of floating above or sinking below it. Reprojecting the wall/dome's
+own curved shape (their local "up" tilting inward, a fixed-radius circle on
+a sphere being fractionally smaller than the flat one) is deliberately not
+done here — a real, mathematically necessary correction (just like every
+other #135/#166 vertical-sag treatment) so tiny at any world radius reached
+so far that it's genuinely imperceptible; #166 already named and deferred
+that harder frame-tilting work.
+
 The dome's rise above the wall is independent of the wall's own radius (a
 non-uniform mesh scale, not a geometry rebuild) and grows on its own if
 anything loaded anywhere in the world is ever discovered taller than it
