@@ -73,6 +73,7 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
+import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -2437,6 +2438,20 @@ sellerPreviewHintEl.className = 'seller-preview-hint';
 const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
 let axisPreview = null;
 
+// showAxisPreview awaits a model load (createMeshForInstance) before
+// building its scene; if it's invoked again — e.g. a seller toggling two
+// extensibility-axis checkboxes back-to-back — before that await resolves,
+// disposeAxisPreview() at the new call's start is a no-op (axisPreview is
+// still whatever it was before either call started), so without this guard
+// both calls would go on to build their own WebGLRenderer/OrbitControls
+// bound to the same shared sellerPreviewCanvas and race to overwrite the
+// shared axisPreview — the same bug shape already fixed once in
+// loadLandletMap (commit 80625ff, issue #125). Each call captures the
+// token's value before it starts awaiting, then checks it's still the
+// latest afterward; a superseded call bails out quietly instead of
+// building anything.
+let axisPreviewLoadToken = 0;
+
 function mountPreviewInto(container) {
   container.appendChild(sellerPreviewCanvas);
   container.appendChild(sellerPreviewHintEl);
@@ -2492,6 +2507,7 @@ function makeAxisLabelSprite(text, colorHex) {
 // X/Y/Z legend (nothing checked yet); a non-empty one turns those axes
 // bright yellow and mutes the rest to gray.
 async function showAxisPreview(template, container, highlightAxes) {
+  const myLoadToken = ++axisPreviewLoadToken;
   disposeAxisPreview();
   mountPreviewInto(container);
 
@@ -2511,6 +2527,7 @@ async function showAxisPreview(template, container, highlightAxes) {
     rotationX: 0, rotationY: 0, rotationZ: 0,
     crop: {},
   });
+  if (myLoadToken !== axisPreviewLoadToken) return; // superseded while loading — a newer call owns the preview now
   if (!previewObject) return;
   scene.add(previewObject);
 
@@ -7284,6 +7301,24 @@ let nearestActiveReview = null;
 // showing them on approach still reads as "you can act here," not clutter.
 let shopTappedProduct = null;
 
+// Sustained view-attention tracking (#215, sub-issue of #207 — docs/SPEC.md
+// §2's item-handling animations trigger "on sustained view-attention," not
+// just proximity). Distinct from updateShopProximity's nearest-in-range
+// pattern above (throttled, and only over the curated sign/calendar/review
+// lists): this runs every frame over every currently-loaded placed item —
+// the same set shopPositionBlocked already walks for collision — and
+// additionally requires the avatar to actually be looking toward the item,
+// not merely standing near it. No consumer yet (that's #216); this only
+// exposes the primitive.
+const SHOP_ATTENTION_RADIUS_M = 4; // matches SIGN_FADE_NEAR_M's own "close enough to interact" scale
+const SHOP_ATTENTION_FOV_COS = Math.cos(THREE.MathUtils.degToRad(20)); // within ~20 degrees of dead-center
+const SHOP_ATTENTION_DWELL_S = 1.5; // how long a target must hold attention before it counts as "sustained"
+let shopAttentionTarget = null; // mesh currently accumulating attention, or null
+let shopAttentionElapsedS = 0; // seconds shopAttentionTarget has held it, continuously — reset the instant the target changes
+const scratchAttentionWorldPos = new THREE.Vector3();
+const scratchAttentionToItem = new THREE.Vector3();
+const scratchAttentionForward = new THREE.Vector3();
+
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
 // yaw (world Z) and pitch (local X) directly on top of that default, with
@@ -7960,6 +7995,41 @@ function updateShopMovement(now) {
     checkScheduledCalendarEvents();
   }
   updateConfettiBursts(dt);
+  updateShopAttention(dt);
+}
+
+// Every frame's own nearest-in-view-and-range placed item, with how long
+// it's continuously held that spot — see shopAttentionTarget's own comment
+// above for why this is separate from updateShopProximity/updateXFade's
+// nearest-in-range-only pattern. "In view" is a plain FOV cone test (the
+// vector from the camera to the item's world position falls within
+// SHOP_ATTENTION_FOV_COS of the camera's own forward direction), not a
+// real occlusion/raycast check — deliberately cheap, and good enough for
+// "is the shopper roughly looking this way," which is all sustained
+// attention actually needs.
+function updateShopAttention(dt) {
+  camera.getWorldDirection(scratchAttentionForward);
+  const candidates = [];
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const mesh of entry.objects) {
+      const world = mesh.getWorldPosition(scratchAttentionWorldPos);
+      const distanceM = world.distanceTo(camera.position);
+      if (distanceM > SHOP_ATTENTION_RADIUS_M) continue; // cheap reject before the normalize/dot below
+      scratchAttentionToItem.copy(world).sub(camera.position).normalize();
+      candidates.push({ id: mesh, distanceM, dot: scratchAttentionToItem.dot(scratchAttentionForward) });
+    }
+  }
+  const candidateId = pickNearestInRange(candidates, { radiusM: SHOP_ATTENTION_RADIUS_M, fovCos: SHOP_ATTENTION_FOV_COS });
+  shopAttentionElapsedS = nextAttentionElapsedS(candidateId, shopAttentionTarget, shopAttentionElapsedS, dt);
+  shopAttentionTarget = candidateId;
+}
+
+// The actual trigger #216's item-handling animations (and any future
+// consumer) should check, rather than reaching into shopAttentionTarget/
+// shopAttentionElapsedS's raw values directly.
+function hasSustainedShopAttention() {
+  return hasSustainedAttention(shopAttentionTarget, shopAttentionElapsedS, SHOP_ATTENTION_DWELL_S);
 }
 
 function updateShopProximity() {
