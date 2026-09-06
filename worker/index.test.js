@@ -189,6 +189,55 @@ describe('Worker API', () => {
     expect(limited.status).toBe(429);
   });
 
+  it('accepts only one of two concurrent uploads that would jointly overrun the storage cap, not both', async () => {
+    const storage = await api('/models/storage', adminSession());
+    const usedBytes = storage.body.usedBytes;
+    const capBytes = 8 * 1024 * 1024 * 1024;
+    // Seed a fake in-flight reservation directly (mirrors how the
+    // vertical-construction-levels tests seed landlet_levels directly —
+    // actually filling the real 8GB cap via uploads would take hundreds
+    // of requests) so only a sliver of real headroom remains: room for
+    // one 28-byte test upload, not two fired concurrently.
+    const headroomBytes = 30;
+    await env.DB.prepare(`
+      INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES (?, ?, ?)
+    `).bind(`test-reservation-${crypto.randomUUID()}`, capBytes - usedBytes - headroomBytes, Date.now()).run();
+
+    const headers = { 'cf-connecting-ip': `storage-race-${crypto.randomUUID()}` };
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "usage is under the
+    // cap" before either R2 put lands, jointly overrunning the cap
+    // (#264). Each file has distinct content so neither short-circuits
+    // via the dedup-by-hash path before ever reaching the reservation
+    // check.
+    const formA = new FormData();
+    formA.set('file', glbFile({ json: '{"a":1}' }));
+    const formB = new FormData();
+    formB.set('file', glbFile({ json: '{"b":1}' }));
+    const [first, second] = await Promise.all([
+      SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: formA, headers }),
+      SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: formB, headers }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([201, 507]);
+
+    // The rejected upload's would-be reservation must not linger —
+    // otherwise the storage cap would ratchet down permanently every time
+    // a race (or any ordinary rejection) occurs. Only the fake row seeded
+    // above should remain; the winner's own reservation is freed once its
+    // R2 put lands.
+    const remaining = await env.DB.prepare('SELECT COUNT(*) AS count FROM model_upload_reservations').first();
+    expect(remaining.count).toBe(1);
+
+    // Clean up both the fake reservation and the winning upload itself —
+    // otherwise this test would leave a permanent, unreferenced model
+    // sitting in R2 that later tests (e.g. the orphan-cleanup one below)
+    // don't expect to find.
+    await env.DB.prepare('DELETE FROM model_upload_reservations').run();
+    const winner = first.status === 201 ? first : second;
+    const { modelUrl } = await winner.json();
+    await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+  });
+
   it('deletes only unreferenced uploaded models', async () => {
     const missingModel = await api('/catalog', {
       method: 'POST',
