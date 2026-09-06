@@ -3167,6 +3167,17 @@ async function handleLandlets(request, db, route, url) {
     if (landlet.ownerBuilderId !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+    } else if (landlet.status === 'claimed') {
+      // The same "claimed implies non-null owner" invariant PUT/PATCH
+      // already protects (see that handler's own comment, and #224) —
+      // without this, the ownerBuilderId check above is a no-op for an
+      // anonymous request that sets status:'claimed' but simply omits
+      // ownerBuilderId: it sails through as "unowned creation," leaving a
+      // landlet permanently stuck (un-claimable via POST .../claim, and
+      // not eligible for DELETE's owned-land protection either) with no
+      // way back. Unlike PUT/PATCH there's no existing row to silently pin
+      // this back to, so this rejects outright instead.
+      throw new HttpError('A claimed landlet must have an ownerBuilderId', 400);
     }
     await db.prepare(`
       INSERT INTO landlets
