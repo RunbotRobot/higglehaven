@@ -2648,6 +2648,41 @@ function normalizeEmail(value) {
   return stringValue(value, 'email').toLowerCase();
 }
 
+// Issue #200's owner decision: one real account per email, closing the
+// sybil vector plain lowercasing leaves open — someone can otherwise
+// register unlimited distinct accounts against one real inbox
+// (`you+tag@gmail.com`, or Gmail's own dot-insensitivity:
+// `first.last@gmail.com`/`firstlast@gmail.com` are the same inbox), which
+// matters here specifically because of the one-claimed-landlet-per-builder
+// fairness invariant and the pioneer-cohort ranking. Deliberately only
+// used to *detect* a collision at signup (see handleSignup) — the actual
+// `email` column stays the plain lowercased address forever, so this
+// never touches login, password reset, or any already-stored row.
+//
+// "+tag" stripping applies to every domain (a general catch, not
+// Gmail-specific — the owner's own framing: "if those apply to emails
+// other than Gmail as well, then we need a general catch"), since "+"
+// sub-addressing is a de facto standard most major providers honor
+// (Gmail, Outlook/Office365, Yahoo, FastMail, ProtonMail...), not a
+// Gmail-only quirk. Dot-removal, by contrast, IS Gmail-specific — no
+// other mainstream provider folds dots this way — so it's scoped to
+// gmail.com and its googlemail.com alias only, rather than applied
+// universally where it would incorrectly collide real distinct inboxes
+// on every other domain.
+function canonicalizeEmail(value) {
+  const email = normalizeEmail(value);
+  const atIndex = email.lastIndexOf('@');
+  if (atIndex === -1) return email;
+  const domain = email.slice(atIndex + 1);
+  let local = email.slice(0, atIndex);
+  const plusIndex = local.indexOf('+');
+  if (plusIndex !== -1) local = local.slice(0, plusIndex);
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    local = local.replaceAll('.', '');
+  }
+  return `${local}@${domain}`;
+}
+
 // Deliberately permissive — "does this look roughly like an email" rather
 // than a fully RFC-5322-correct pattern (famously not worth chasing; the
 // only real validation of an email address is actually receiving mail at
@@ -2850,19 +2885,39 @@ async function handleSignup(request, env, db, url) {
 
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
 
-  const existingEmail = await db.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first();
-  if (existingEmail) throw new HttpError('Email is already registered', 409);
-  // COLLATE NOCASE on users.username (see migrations/0056) already makes
-  // "Ada" and "ada" the same value at the DB level; checked here too so
-  // the conflict gets this friendly message instead of a raw constraint
-  // error, mirroring the email check just above.
-  const existingUsername = await db.prepare('SELECT user_id FROM users WHERE username = ?').bind(username).first();
-  if (existingUsername) throw new HttpError('Username is already taken', 409);
-
+  // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
+  // registered address the same way a literal duplicate is caught —
+  // nothing about *why* it collides is any of an unauthenticated caller's
+  // business, so it gets the exact same message as a literal email
+  // conflict below, not called out as its own case.
+  const emailCanonical = canonicalizeEmail(email);
+  // Folds all three duplicate checks (email, canonical email, username —
+  // COLLATE NOCASE on users.username, migrations/0056, already makes
+  // "Ada"/"ada" collide at the column level) into the INSERT's own WHERE
+  // NOT EXISTS, the same atomic idiom this file already uses for
+  // friendships/product_reviews/auction_bids — a separate SELECT-then-
+  // INSERT here would let two concurrent signups (e.g. racing "+tag"
+  // variants of the same address) both pass every check before either
+  // INSERT commits, silently creating two accounts issue #200 is
+  // specifically meant to prevent.
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
-  await db.prepare('INSERT INTO users (user_id, email, password_hash, username) VALUES (?, ?, ?, ?)')
-    .bind(userId, email, passwordHash, username).run();
+  const inserted = await db.prepare(`
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical)
+    SELECT ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
+  `).bind(
+    userId, email, passwordHash, username, emailCanonical,
+    email, emailCanonical, username,
+  ).run();
+  if (inserted.meta.changes === 0) {
+    // The atomic insert above already refused to happen — reading again
+    // here only decides which friendly message to show, it can't itself
+    // let a duplicate through.
+    const emailConflict = await db.prepare('SELECT 1 FROM users WHERE email = ? OR email_canonical = ?').bind(email, emailCanonical).first();
+    if (emailConflict) throw new HttpError('Email is already registered', 409);
+    throw new HttpError('Username is already taken', 409);
+  }
 
   // docs/SPEC.md §3: "every user is automatically a builder — no separate
   // account types." A seller profile stays deliberately lazy instead (see

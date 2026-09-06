@@ -213,8 +213,20 @@ is actually receiving mail at it, which email verification already does.
 `409` if that email is already registered (revealing a duplicate email
 here is common, accepted practice — unlike the password-reset-request
 endpoint below, which deliberately stays silent about whether an account
-exists). `429` after 5 attempts against the same email within 15 minutes
-(see "Rate limiting" above). `password` must be 8–200 characters.
+exists). Also `409`, with the same message, if a **canonicalized** form of
+the email collides with an existing account (issue #200): a `+tag` suffix
+is stripped for every domain (a de facto standard most major providers
+honor, not just Gmail), and — Gmail/`googlemail.com` specifically, since
+this is genuinely a Gmail-only quirk, not a general one — dots in the
+local part are also folded (`first.last@gmail.com` and
+`firstlast@gmail.com` are the same inbox there). This only ever blocks a
+*new* signup from colliding with an existing account; it's a one-way gate,
+not a retroactive merge — accounts already registered before this existed
+(under the old lowercase-only normalization) are untouched and keep
+logging in/resetting exactly as before, matched by the same literal
+address they always have been. `429` after 5 attempts against the same
+email within 15 minutes (see "Rate limiting" above). `password` must be
+8–200 characters.
 `username` is required (how
 users identify each other, not a cosmetic label), at most 40 characters,
 and must be unique — `409` if it's already taken, case-insensitively
