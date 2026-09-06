@@ -3892,6 +3892,24 @@ describe('Friendships', () => {
     expect(reverseDirection.response.status).toBe(409);
   });
 
+  it('accepts only one of two concurrent requests between the same pair, not both', async () => {
+    const a = await signupBuilder('friendship-race-a');
+    const b = await signupBuilder('friendship-race-b');
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no existing friendship",
+    // both pass the check, and both land as separate rows for the same
+    // unordered pair, even though only one should ever exist (#259).
+    const [first, second] = await Promise.all([
+      api('/friendships', a.session({ method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }) })),
+      api('/friendships', b.session({ method: 'POST', body: JSON.stringify({ recipientBuilderId: a.builderId }) })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
+
+    const aList = await api('/friendships', a.session());
+    expect(aList.body.friendships).toHaveLength(1);
+  });
+
   it('lets a request be declined (deleted while pending) or an accepted friendship removed', async () => {
     const a = await signupBuilder('friendship-decline-a');
     const b = await signupBuilder('friendship-decline-b');
