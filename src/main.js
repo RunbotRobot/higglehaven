@@ -799,6 +799,29 @@ let trimAxis = null;
 let trimStartLength = 0;
 let trimStartScale = 1;
 
+// A trim commit (drag-release below, or a typed length in the axis-length
+// fields further down) calls replaceMeshWithCrop, which awaits a full
+// model rebuild before swapping the result into productMeshes/scene/
+// selectedMeshes. Two commits close enough together — e.g. tabbing from
+// one axis field to another, or a fast second drag, before the first
+// rebuild resolves — would otherwise both read the *same* pre-edit mesh
+// and crop, race to swap it in, and leave one commit's result an orphaned
+// mesh: visible in the scene but never written into productMeshes, so
+// unreachable by undo/redo, persistLayout, or syncUpdate, while silently
+// losing that commit's crop change. Funneling every trim commit through
+// this single promise chain serializes them — each waits for the
+// previous one's full swap to finish before it starts — and
+// queueTrimEdit's callers re-resolve the *current* mesh by instanceId
+// from productMeshes right before building on it, rather than closing
+// over a mesh reference that may already be stale by the time its turn
+// comes up.
+let trimEditQueue = Promise.resolve();
+function queueTrimEdit(task) {
+  const run = trimEditQueue.then(task, task);
+  trimEditQueue = run.catch((err) => console.error('Trim edit failed:', err));
+  return run;
+}
+
 // Converts the gizmo's live (still-unclamped, still just a raw multiplier
 // of trimStartLength) scale factor into the actual crop length it
 // represents right now. Dividing out trimStartScale cancels any
@@ -911,7 +934,7 @@ trimControls.addEventListener('objectChange', () => {
   }, RESIZE_PREVIEW_THROTTLE_MS);
 });
 
-trimControls.addEventListener('dragging-changed', async (event) => {
+trimControls.addEventListener('dragging-changed', (event) => {
   controls.enabled = !event.value;
   const object = trimControls.object;
   if (!object) return;
@@ -961,16 +984,22 @@ trimControls.addEventListener('dragging-changed', async (event) => {
   }
   if (!trimAxis) return; // an invalid grab (see above) never hid the object or started a preview to undo
   const clampedLength = currentDragCropLength(object);
+  const axis = trimAxis;
+  const instanceId = object.userData.instanceId;
   clearTrimPreview(object);
   object.scale.set(1, 1, 1);
-  const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [trimAxis]: clampedLength });
-  const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-  updated.position.set(clamped.x, clamped.y, clamped.z);
-  updated.userData.safePosition = updated.position.clone();
-  trimControls.attach(updated);
-  persistLayout();
-  syncUpdate(updated);
-  updateTrimLengthInput();
+  queueTrimEdit(async () => {
+    const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
+    if (!current) return; // deleted, or otherwise gone, since this drag ended
+    const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+    updated.position.set(clamped.x, clamped.y, clamped.z);
+    updated.userData.safePosition = updated.position.clone();
+    trimControls.attach(updated);
+    persistLayout();
+    syncUpdate(updated);
+    updateTrimLengthInput();
+  });
 });
 
 // Fixed bright daylight, always — no day-night cycle (docs/SPEC.md §1's
@@ -4720,7 +4749,7 @@ modeTrimBtn.addEventListener('click', () => {
 for (const field of trimAxisFieldEls) {
   const axis = field.dataset.trimAxis;
   const input = field.querySelector('.trim-length-input');
-  input.addEventListener('change', async () => {
+  input.addEventListener('change', () => {
     if (selectedMeshes.size !== 1) return;
     const [mesh] = selectedMeshes;
     const template = mesh.userData.template;
@@ -4743,15 +4772,20 @@ for (const field of trimAxisFieldEls) {
     const requestedLength = fromDisplayLength(requestedDisplayLength);
     const clampedRealLength = THREE.MathUtils.clamp(requestedLength, extensible.minM * scale, maxLength * scale);
     const clampedLength = clampedRealLength / scale;
+    const instanceId = mesh.userData.instanceId;
     pushUndoSnapshot();
-    const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [axis]: clampedLength });
-    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-    updated.position.set(clamped.x, clamped.y, clamped.z);
-    updated.userData.safePosition = updated.position.clone();
-    trimControls.attach(updated);
-    persistLayout();
-    syncUpdate(updated);
-    updateTrimLengthInput();
+    queueTrimEdit(async () => {
+      const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
+      if (!current) return; // deleted, or otherwise gone, since this edit was queued
+      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+      updated.position.set(clamped.x, clamped.y, clamped.z);
+      updated.userData.safePosition = updated.position.clone();
+      trimControls.attach(updated);
+      persistLayout();
+      syncUpdate(updated);
+      updateTrimLengthInput();
+    });
   });
 }
 
