@@ -33,6 +33,13 @@ const GLB_JSON_CHUNK = 0x4e4f534a;
 // static assets, not R2 objects, so they never count against this).
 const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
 
+// Generous bound on how long a model_upload_reservations row can outlive
+// its own request before being treated as abandoned (the request crashed
+// or the Worker was killed mid-upload, before its own cleanup ran) — see
+// migrations/0065_model_upload_reservations.sql. Comfortably above how
+// long even a slow connection needs to finish uploading MAX_MODEL_BYTES.
+const MODEL_UPLOAD_RESERVATION_TIMEOUT_MS = 5 * 60 * 1000;
+
 async function getStorageUsage(bucket) {
   let usedBytes = 0;
   let objectCount = 0;
@@ -428,15 +435,48 @@ async function handleModelUpload(request, env) {
   }
 
   const usage = await getStorageUsage(env.MODELS);
-  const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes;
-  if (file.size > remainingBudget) {
+
+  // R2 has no primitive for "put only if some byte budget elsewhere still
+  // allows it," so the actual cap enforcement has to happen in D1 instead:
+  // prune any reservation old enough to be an abandoned one (a crashed
+  // request that never reached its own cleanup below), then fold this
+  // upload's own reservation into one atomic INSERT ... WHERE, same idiom
+  // checkRateLimit uses for its check-then-act race. `usage.usedBytes` is
+  // a snapshot (R2 can't be read inside the same atomic statement), but
+  // any other upload racing this one reads its own snapshot at essentially
+  // the same real R2 state, so the SUM of not-yet-landed reservations —
+  // computed atomically alongside this insert — is what actually closes
+  // the race between concurrent requests (#264).
+  const reservationId = `reservation-${crypto.randomUUID()}`;
+  const now = Date.now();
+  await env.DB.prepare(`
+    DELETE FROM model_upload_reservations WHERE created_at < ?
+  `).bind(now - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS).run();
+  const reserved = await env.DB.prepare(`
+    INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at)
+    SELECT ?, ?, ?
+    WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
+  `).bind(reservationId, file.size, now, usage.usedBytes, file.size, MAX_TOTAL_STORAGE_BYTES).run();
+  if (reserved.meta.changes === 0) {
+    const reservedBytes = await env.DB.prepare(`
+      SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
+    `).first();
+    const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
     throw new HttpError(
       `File is ${formatBytes(file.size)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
       507,
     );
   }
 
-  await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
+  try {
+    await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
+  } finally {
+    // The reservation's job is done either way: on success it's now
+    // reflected in R2 itself (the next getStorageUsage will see it); on
+    // failure the budget it held should be freed back up immediately
+    // rather than waiting out MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
+    await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
+  }
   return json({
     modelUrl: `/uploads/${key}`,
     sourceName: file.name || 'model.glb',
@@ -2544,6 +2584,12 @@ async function pruneExpiredAuthState(db) {
     db.prepare("DELETE FROM sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM email_verification_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
     db.prepare("DELETE FROM password_reset_tokens WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"),
+    // Defense-in-depth alongside handleModelUpload's own inline prune —
+    // covers the case where a reservation is abandoned (a crashed
+    // request) and no further upload ever arrives to trigger that inline
+    // cleanup itself.
+    db.prepare('DELETE FROM model_upload_reservations WHERE created_at < ?')
+      .bind(Date.now() - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS),
   ]);
 }
 
