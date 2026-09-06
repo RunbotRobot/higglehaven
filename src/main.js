@@ -1052,7 +1052,14 @@ trimControls.addEventListener('dragging-changed', (event) => {
     const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
     updated.position.set(clamped.x, clamped.y, clamped.z);
     updated.userData.safePosition = updated.position.clone();
-    trimControls.attach(updated);
+    // The await above is a real gap a builder can select a different item
+    // across — only re-attach the trim gizmo here if `updated` is still
+    // that selection (replaceMeshWithCrop itself already made that same
+    // call for selectedMeshes/its outline; this mirrors it for the
+    // gizmo). Otherwise whatever's actually selected now already has its
+    // own correct gizmo attached, and forcing this one back on would
+    // silently swap it out from under the builder mid-edit.
+    if (selectedMeshes.has(updated)) trimControls.attach(updated);
     persistLayout();
     syncUpdate(updated);
     updateTrimLengthInput();
@@ -4959,7 +4966,10 @@ for (const field of trimAxisFieldEls) {
       const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
       updated.position.set(clamped.x, clamped.y, clamped.z);
       updated.userData.safePosition = updated.position.clone();
-      trimControls.attach(updated);
+      // Same stale-selection guard as the drag-release handler above — see
+      // its own comment. The typed-value path awaits the same
+      // replaceMeshWithCrop model rebuild, so the same race applies here.
+      if (selectedMeshes.has(updated)) trimControls.attach(updated);
       persistLayout();
       syncUpdate(updated);
       updateTrimLengthInput();

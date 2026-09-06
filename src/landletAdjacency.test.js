@@ -7,10 +7,12 @@ describe('landletReachM', () => {
     expect(landletReachM([], 200)).toBeCloseTo(Math.sqrt(200 / 2), 10);
   });
 
+  // {x, y} objects, matching every real polygon this app ever produces
+  // (src/main.js's worldPoints/landlet-generation code) — not [x, y]
+  // tuples, which #250 found this function crashed on in production
+  // (destructuring a plain object as an array throws "object is not
+  // iterable").
   it('uses the farthest polygon vertex from center when a polygon is given', () => {
-    // {x, y} objects, matching the real shape every actual caller stores
-    // (src/main.js's landletWorldPolygon/shapeForLandlet) — not a [x, y]
-    // tuple, which landletReachM used to (incorrectly) destructure.
     const polygon = [
       { x: 1, y: 0 },
       { x: 0, y: 3 },
