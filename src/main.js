@@ -8692,6 +8692,14 @@ async function enterShopMode() {
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
 
+  // The wall's own ring sits at (essentially) one fixed distance from the
+  // origin all the way around, so — unlike wildGround's per-vertex
+  // applyGroundCurvature above, needed because that mesh spans every
+  // distance from 0 out to shopWorldRadiusM — a single z offset lines its
+  // base up with the already-curved ground it should be resting on instead
+  // of the flat z=0 plane (#166, #203). Shared by the dome below, whose own
+  // base sits on top of the wall's rim.
+  const wallGroundDropM = curvatureDropM(shopWorldRadiusM);
   const wallGeometry = new THREE.CylinderGeometry(shopWorldRadiusM, shopWorldRadiusM, SHOP_WALL_HEIGHT_M, 64, 1, true);
   paintVerticalGradient(wallGeometry, (localY, out) => {
     const t = THREE.MathUtils.clamp((localY + SHOP_WALL_HEIGHT_M / 2) / SHOP_WALL_HEIGHT_M, 0, 1);
@@ -8705,7 +8713,7 @@ async function enterShopMode() {
   shopSkyClockStart = null;
   const wall = new THREE.Mesh(wallGeometry, shopSkyMaterial);
   wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
-  wall.position.z = SHOP_WALL_HEIGHT_M / 2;
+  wall.position.z = SHOP_WALL_HEIGHT_M / 2 - wallGroundDropM;
   scene.add(wall);
   shopWorldObjects.push(wall);
   shopWallMesh = wall;
@@ -8725,7 +8733,7 @@ async function enterShopMode() {
   shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
   shopDomeMesh = new THREE.Mesh(domeGeometry, shopSkyMaterial);
   shopDomeMesh.rotation.x = Math.PI / 2;
-  shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M;
+  shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M - wallGroundDropM;
   shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
   scene.add(shopDomeMesh);
   shopWorldObjects.push(shopDomeMesh);
