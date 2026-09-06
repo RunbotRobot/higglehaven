@@ -6934,6 +6934,20 @@ const SHOP_JOYSTICK_DEADZONE_PX = 6;
 // on; there's nothing here today for curvature to change.
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
+// docs/SPEC.md §1's "vertical chunk-loading uses the same near/middle/far
+// LOD banding as horizontal distance" (#171, sub-issue of #167's vertical-
+// construction tracking) has nothing to hang a per-band decision on yet,
+// same reasoning as the horizontal case just above: the horizontal scheme
+// it's meant to mirror doesn't itself have real near/middle-LOD/far-
+// backdrop banding built (just this one binary load/unload distance), and
+// separately, there's no frontend rendering of a lándlet's own levels at
+// all yet — worker/index.js's landlet_levels (#168) is a real data model
+// with real cap accounting, but #169 (the Build-mode UI to actually add/
+// remove/view a level) hasn't landed, so no level ever has geometry to
+// apply a LOD band to in the first place. Revisit once both exist: #169
+// gives levels something to render, and a real horizontal LOD system
+// gives this a banding scheme to reuse a vertical distance metric in,
+// rather than inventing one from scratch here.
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
 // shopper-authored posts fade in as the camera approaches a sign and back
