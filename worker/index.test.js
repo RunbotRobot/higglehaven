@@ -4971,6 +4971,40 @@ describe('Authentication', () => {
     expect(lockedOut.response.status).toBe(423);
   });
 
+  it('increments failed_login_attempts atomically in SQL, not from a stale application-level read', async () => {
+    // The bug this guards against only shows up under real concurrency
+    // (two requests both reading the same stale failed_login_attempts
+    // before either writes back) -- this test pool's single-threaded
+    // workerd runtime can't force that genuine interleaving, the same
+    // limitation noted on the refund double-spend regression test above.
+    // What's checked here instead: the atomic `failed_login_attempts + 1`
+    // SQL expression (and its CASE-based lockout threshold) is correct on
+    // its own terms, one attempt at a time, starting from a
+    // pre-seeded non-zero count -- the exact expression that makes
+    // concurrent requests safe, rather than the concurrency itself.
+    const email = `auth-lockout-atomic-${crypto.randomUUID()}@example.com`;
+    const password = 'the real correct password';
+    const signedUp = await signup(email, password);
+    await env.DB.prepare(
+      'UPDATE users SET failed_login_attempts = 4 WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).run();
+
+    const fifthFailure = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'wrong' }),
+    });
+    expect(fifthFailure.response.status).toBe(401);
+
+    const row = await env.DB.prepare(
+      'SELECT failed_login_attempts, locked_until FROM users WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).first();
+    expect(row.failed_login_attempts).toBe(5);
+    expect(row.locked_until).toBeTruthy();
+
+    const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    expect(lockedOut.response.status).toBe(423);
+  });
+
   it('verifies email with a valid token, and rejects an invalid or reused one', async () => {
     const email = `auth-verify-${crypto.randomUUID()}@example.com`;
     const signedUp = await signup(email, 'a fine long password');

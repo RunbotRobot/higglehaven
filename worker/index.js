@@ -2819,15 +2819,28 @@ async function handleLogin(request, db, url) {
 
   const valid = await verifyPassword(password, row.password_hash);
   if (!valid) {
-    const attempts = row.failed_login_attempts + 1;
-    const lockedUntil = attempts >= FAILED_LOGIN_LOCK_THRESHOLD
-      ? new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString()
-      : null;
+    // The increment itself has to be the atomic operation, not a value
+    // computed from the stale `row` read above and written back separately
+    // — otherwise concurrent requests all compute the same
+    // `attempts = row.failed_login_attempts + 1` from the same starting
+    // count and each writes that same small number back, so the lockout
+    // threshold is never actually reached no matter how many guesses run
+    // in parallel. `failed_login_attempts + 1` here (both in SET and in
+    // the CASE) refers to this row's own pre-update value, same as any
+    // single UPDATE statement's SET list — safe against lost updates the
+    // same way `handlePurchaseRefund`'s `WHERE refunded_at IS NULL` guard
+    // is, just via an atomic increment instead of an atomic guard.
     await db.prepare(`
-      UPDATE users SET failed_login_attempts = ?, locked_until = ?,
+      UPDATE users SET
+        failed_login_attempts = failed_login_attempts + 1,
+        locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE user_id = ?
-    `).bind(attempts, lockedUntil, row.user_id).run();
+    `).bind(
+      FAILED_LOGIN_LOCK_THRESHOLD,
+      new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString(),
+      row.user_id,
+    ).run();
     throw invalidCredentials();
   }
 
