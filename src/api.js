@@ -215,6 +215,36 @@ export async function fetchAllLandlets(params = {}) {
   }
 }
 
+// docs/API.md's "Vertical construction — levels" (issue #168/#169). Public,
+// no session required — matches fetchLandlet's own unauthenticated read.
+export async function fetchLandletLevels(landletId) {
+  const { levels } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels`);
+  return levels;
+}
+
+// Extends the lándlet's current level range by exactly one in `direction`
+// ('up' or 'down') — the server infers *which* new levelIndex that is from
+// the lándlet's own existing levels, never a client-supplied index. Throws
+// (via requestJson) with the server's own message on a 409 — reaching the
+// hard depth limit or the 10m² minimum footprint going down — for the
+// caller to show inline rather than silently failing.
+export async function addLandletLevel(landletId, direction) {
+  const { level } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ direction }),
+  });
+  return level;
+}
+
+// Only the outermost existing level (in whichever direction levelIndex is
+// on) can actually be removed — a 409 (surfaced via requestJson) otherwise.
+export async function deleteLandletLevel(landletId, levelIndex) {
+  await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
+    method: 'DELETE',
+  });
+}
+
 // builderId is never sent — the server derives "who's claiming" from the
 // session cookie, never from a client-supplied field.
 export async function claimLandlet(landletId) {
