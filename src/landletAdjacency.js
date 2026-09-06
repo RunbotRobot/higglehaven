@@ -21,7 +21,7 @@
 
 export function landletReachM(polygon, areaM2) {
   if (polygon && polygon.length >= 3) {
-    return polygon.reduce((max, [x, y]) => Math.max(max, Math.hypot(x, y)), 0);
+    return polygon.reduce((max, p) => Math.max(max, Math.hypot(p.x, p.y)), 0);
   }
   // No stored polygon — landletContainsPoint's own default square
   // fallback (half the diagonal of a square with this area).
