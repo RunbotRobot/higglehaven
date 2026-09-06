@@ -6166,17 +6166,35 @@ function formatNotificationTime(isoString) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }
 
+// #245: renderNotifications awaits fetchNotifications() before populating
+// the panel; if it's invoked again (e.g. the bell clicked twice in quick
+// succession) before that await resolves, the second call's own
+// `innerHTML = ''` clears whatever the first call is about to append,
+// but nothing then stops the first call's now-stale fetch from appending
+// its rows on top of the second call's fresh ones once it resolves —
+// duplicate rows, the same missing-re-entrancy-guard shape #244 already
+// fixed for renderSignPosts/renderCalendarEvents (lower severity here:
+// this always renders the same session-wide list, never a per-click
+// target that could show the wrong object's data). Each call captures the
+// token's value before it starts awaiting, then checks it's still the
+// latest afterward; a superseded call bails out quietly instead of
+// rendering anything.
+let notificationsLoadToken = 0;
+
 async function renderNotifications() {
+  const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
   if (!builderId) return;
   let notifications;
   try {
     notifications = await fetchNotifications();
   } catch (err) {
+    if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
     notificationsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
   notificationsEmptyEl.hidden = notifications.length > 0;
   for (const notification of notifications) {
     const row = document.createElement('div');
