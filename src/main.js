@@ -73,7 +73,13 @@ import {
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { curvatureDropM, curvedPosition, flatPosition, footprintScaleAtHeight, relativeCurvatureDropM } from '../worker/earthCurvature.js';
+import {
+  curvatureDropM,
+  curvedPosition,
+  flatPosition,
+  footprintScaleAtHeight,
+  relativeCurvatureDropM,
+} from '../worker/earthCurvature.js';
 
 // The API (worker/index.js + D1) is authoritative when reachable; the
 // catalog.js constants above are only used if fetching it fails. This is
@@ -6934,6 +6940,20 @@ const SHOP_JOYSTICK_DEADZONE_PX = 6;
 // on; there's nothing here today for curvature to change.
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
+// docs/SPEC.md §1's "vertical chunk-loading uses the same near/middle/far
+// LOD banding as horizontal distance" (#171, sub-issue of #167's vertical-
+// construction tracking) has nothing to hang a per-band decision on yet,
+// same reasoning as the horizontal case just above: the horizontal scheme
+// it's meant to mirror doesn't itself have real near/middle-LOD/far-
+// backdrop banding built (just this one binary load/unload distance), and
+// separately, there's no frontend rendering of a lándlet's own levels at
+// all yet — worker/index.js's landlet_levels (#168) is a real data model
+// with real cap accounting, but #169 (the Build-mode UI to actually add/
+// remove/view a level) hasn't landed, so no level ever has geometry to
+// apply a LOD band to in the first place. Revisit once both exist: #169
+// gives levels something to render, and a real horizontal LOD system
+// gives this a banding scheme to reuse a vertical distance metric in,
+// rather than inventing one from scratch here.
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
 // shopper-authored posts fade in as the camera approaches a sign and back
@@ -7593,7 +7613,7 @@ let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERV
 // there's no need to track anything beyond "which transition, how far in."
 let shopFlightState = 'grounded';
 let shopFlightTransitionElapsedS = 0;
-let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors this every frame
+let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors this (offset by ground curvature) every frame
 let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
 let shopLastSpacePressAt = -Infinity;
 let shopLastFlyBtnTapAt = -Infinity;
@@ -7912,7 +7932,19 @@ function updateShopMovement(now) {
     }
     clampShopRadius(shopAvatarPosition);
   }
-  shopAvatarPosition.z = shopFlightAltitudeM;
+  // shopFlightAltitudeM is height above *local* ground (unchanged meaning —
+  // takeoff/landing, the flight ceiling, and the speed curve all still
+  // reason in these terms); the ground itself already sags below the flat
+  // z=0 plane by curvatureDropM(distance from origin) everywhere else in
+  // this app (landlet ground meshes, the Shop-mode wildGround fill circle —
+  // see worker/earthCurvature.js), so the avatar's actual z needs that same
+  // term added or it (and the camera anchored to it) floats above ground
+  // that's visibly curving away underneath it as it moves outward. z-only,
+  // deliberately not reprojecting x/y here too — same "differential sag,
+  // not a full re-projection" scope cut relativeCurvatureDropM already
+  // documents for ground meshes; see #166.
+  shopAvatarPosition.z =
+    shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
   // a plain neutral pose instead (a real flight pose, arms/legs extended,
@@ -8766,7 +8798,8 @@ async function enterShopMode() {
   // positionShopCamera() call below (synchronous, before that loop's first
   // tick) doesn't position the camera against the stale z=0 this function's
   // own shopAvatarPosition.set(0, 0, 0) just above left it at.
-  shopAvatarPosition.z = shopFlightAltitudeM;
+  shopAvatarPosition.z =
+    shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
