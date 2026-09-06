@@ -2993,6 +2993,81 @@ describe('Builders', () => {
     expect(auction.body.auction.status).toBe('active');
   });
 
+  // #263: without this guard, deleting the builder would cascade through
+  // auction_bids.bidder_builder_id and silently erase a bid that was
+  // actively deterring every other bidder from bidding — at zero cost,
+  // since a fresh builder profile is auto-provisioned on the next request.
+  it('rejects deleting a builder while they hold the leading bid on an active auction', async () => {
+    const seller = await signupBuilder('leading-bid-seller');
+    const bidder = await signupBuilder('leading-bid-bidder');
+    await createGreenbeltLandlet('leading-bid-landlet');
+    await api('/landlets/leading-bid-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/leading-bid-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+
+    const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while holding the leading bid on an active auction',
+    });
+
+    // Nothing was touched — the bid and the builder row both still exist.
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(bidder.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder whose bid on an active auction has since been outbid', async () => {
+    const seller = await signupBuilder('outbid-deletion-seller');
+    const firstBidder = await signupBuilder('outbid-deletion-first-bidder');
+    const secondBidder = await signupBuilder('outbid-deletion-second-bidder');
+    await createGreenbeltLandlet('outbid-deletion-landlet');
+    await api('/landlets/outbid-deletion-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/outbid-deletion-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, firstBidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${auctionId}/bids`, secondBidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+
+    const deleted = await api(`/builders/${firstBidder.builderId}`, firstBidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    // The auction itself, and the still-leading bidder, are unaffected.
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids.map((b) => b.bidderBuilderId)).toEqual([secondBidder.builderId]);
+  });
+
+  it('allows deleting a builder whose leading bid was on an auction that already ended', async () => {
+    const seller = await signupBuilder('ended-auction-deletion-seller');
+    const bidder = await signupBuilder('ended-auction-deletion-bidder');
+    await createGreenbeltLandlet('ended-auction-deletion-landlet');
+    await api('/landlets/ended-auction-deletion-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/ended-auction-deletion-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+
+    const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+  });
+
   it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
