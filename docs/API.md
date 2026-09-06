@@ -1718,6 +1718,18 @@ builder legitimately ends up owning more than one claimed landlet once they
 win a land-acquisition auction (docs/SPEC.md §0/§5) on top of their starter
 one, and the DB-level version blocked that too.
 
+A claimed landlet with its own **active** auction on it doesn't count
+against this lock once the seller has committed to giving it up (#199): a
+`startingBidCents: 0` auction is that commitment from the instant it
+starts (see "Land acquisition auctions" below), so it stops locking
+immediately; any other starting bid becomes the same commitment as soon as
+the auction's first bid lands, since a bid guarantees the land eventually
+transfers either way. The seller keeps nominal ownership (and the landlet
+stays `status: "claimed"`, owned by them) for build/display purposes until
+the auction actually resolves — this only changes *claim eligibility*, computed
+live from the auction/bid data already on hand (`LANDLET_RELEASED_VIA_AUCTION_SQL`
+in `worker/index.js`), not anything stored on the landlet itself.
+
 Returns the newly claimed landlet. Errors are:
 
 - `401` when nobody is logged in.
@@ -3049,6 +3061,11 @@ outcome, read directly off the stored value at resolution time rather
 than a separate flag: **"$0 = explicit willingness to relinquish for free
 if no bids arrive. ≥$0.01 = wants to retain if unsold."**
 
+Starting a `$0` auction also frees the seller's own "one claimed landlet"
+claim-eligibility lock immediately, rather than waiting for resolution —
+see `POST /api/landlets/:landletId/claim` above and "Claim-lock release
+timing" below (#199).
+
 ### `GET /api/auctions`
 
 Lists auctions, cursor-paginated like every other list endpoint in this
@@ -3083,6 +3100,10 @@ the minimum acceptable amount:
 - At least one bid already: must be strictly greater than the current
   highest.
 
+A reserved (`> $0` starting bid) auction's first accepted bid also frees
+the seller's claim-eligibility lock immediately — see "Claim-lock release
+timing" below (#199).
+
 ### `POST /api/auctions/:auctionId/resolve`
 
 Resolves this auction if it's currently due (`ends_at` has passed);
@@ -3111,6 +3132,44 @@ lazily or via the explicit endpoint:
 - **No bids, `startingBidCents` was `> 0`:** the landlet stays exactly as
   it was — the seller wanted to retain it if unsold, so nothing about
   ownership or the build changes, only `auctions.status` becomes `ended`.
+
+### Claim-lock release timing
+
+Project-owner design decision (#199), replacing an earlier idea of a
+separate "relinquish land" action: starting a voluntary auction is itself
+that relinquish action, so the seller's "one claimed landlet" claim-
+eligibility lock (`POST /api/landlets/:landletId/claim`'s `NOT EXISTS`
+check) frees up the moment they've genuinely committed to giving the land
+up, not only once the auction actually resolves:
+
+- **`startingBidCents: 0`** — freed the instant the auction starts. A `$0`
+  starting bid is itself "willing to give this up for nothing," so there's
+  nothing left to wait for.
+- **Any other starting bid** — freed the instant the first bid lands
+  (`POST /api/auctions/:auctionId/bids`). A bid guarantees the land
+  eventually transfers to *someone* either way (a higher bid, or this one
+  if it stands), so the same commitment exists from that point on.
+
+The landlet itself doesn't change at all — it keeps `status: "claimed"`
+and its current `ownerBuilderId` for build/display purposes exactly as
+before, right up until `resolveAuction` actually runs. Only claim
+*eligibility* changes, computed live rather than stored: the claim
+endpoint's lock query excludes any of the builder's claimed landlets that
+have an active auction meeting either condition above
+(`LANDLET_RELEASED_VIA_AUCTION_SQL` in `worker/index.js`, shared with
+`explainClaimConflict`'s error-message check so the two stay in sync). No
+new landlet status or column — deliberately, since both conditions are
+fully derivable from `auctions`/`auction_bids` rows that already exist,
+and the landlet's real state genuinely doesn't change yet.
+
+One consequence: a builder can end up owning several claimed landlets at
+once this way (their original one, mid-auction-and-released, plus a newly
+claimed one) — already possible via winning an auction (`migrations/
+0058`), just reachable now from the seller side too. Land cap (see "Land
+cap" below) is the intended long-run check on this kind of accumulation,
+but per its own "Deliberate scope boundary" note it's deliberately
+tracking-only and not enforced yet — not something this issue's scope
+extended to changing.
 
 ### Notifications
 
