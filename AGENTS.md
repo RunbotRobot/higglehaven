@@ -65,22 +65,97 @@ session that happened to write it was itself named `higglehaven2`. The
 actual, current convention is the one above: each session's own fixed
 name is its one branch, always.
 
-## Inter-session mailbox — Issue #157
+## The control room — status, direction, and questions
 
-Sessions can't reliably message each other directly: Claude Code's own
-peer-messaging only reaches a session that's live at that exact moment,
-and even then by an internal identifier that does **not** necessarily
-match its branch name/title — not useful for reaching one of the other
-`higglehavenN` sessions on your own naming terms, especially one that's
-between tasks or not currently running.
+**Issue #25 and Issue #157 are retired as of 2026-09-06.** Their history
+is worth reading once for context, but stop posting new comments to
+either — status updates, inter-session messages, and owner direction all
+moved to one place: the **Higglehaven Control Room**, a published
+Artifact with a live shared database, at
+`https://claude.ai/code/artifact/ec1068bb-c339-43c5-bd29-d7bc861472ee`.
 
-Issue #157 ("higglehaven: inter-session mailbox") is the durable
-substitute — read it in full before your first message. Short version:
-sign every message with your own session's name, address it (`To:
-higglehavenN` or `To: all`), and check the issue for anything addressed
-to you whenever you start a task or reach a natural check-in point.
-Separate from Issue #25, which is for work/backlog coordination, not
-direct messages.
+This replaces the GitHub-comment-thread version of both issues because a
+160-comment thread that everyone has to skim to find what's addressed to
+them was exactly the friction this exists to remove — the owner
+shouldn't have to open GitHub *and* the Claude app to stay in the loop,
+and neither should you. GitHub Issues themselves are unaffected: file,
+self-assign, and close backlog items exactly as before — only the
+running commentary moves.
+
+You don't need a browser to use it — call it the same way you'd call any
+other tool, using the Artifact tool's `read_db`/`write_db` actions
+against the URL above:
+
+- **`tasks` collection**, one doc per issue/PR you touch, id
+  `issue-<N>` or `pr-<N>`. Fields: `number`, `kind` (`"issue"`|`"pr"`),
+  `title`, `status` (`"queued"`|`"in_progress"`|`"done"`), `session`
+  (your own session name), `url`, `updatedAt` (ISO timestamp). Write or
+  update your own task's doc the moment you self-assign, when you open a
+  PR, and when you merge — this is what replaces "post on #25 when you
+  start/finish."
+- **`messages` collection**, one doc per message, fields `kind`
+  (`"feedback"`|`"question"`), `from` (your session name, or `"owner"`),
+  `text`, `answer` (`null` until answered), `resolved` (bool),
+  `createdAt`. Check it — `where("resolved", "==", false)` — whenever you
+  look for your next task; the owner's direction (`from: "owner"`)
+  lands here via the page's textarea. If you have a genuine blocking
+  question of your own, `add` a `kind: "question"` doc instead of just
+  stopping — see "Continuing without a prompt" below for how to wait on
+  it without going idle.
+
+Read `db.d.ts`'s call contract (linked from the `artifact-capabilities`
+skill) if you need anything beyond simple reads/writes — `where`/`limit`
+queries, batched writes, etc.
+
+### Continuing without a prompt
+
+The owner would rather you keep working through the backlog than sit
+idle between their check-ins — so don't wait for one. When you finish a
+task (merged, control room updated), immediately look for your next one
+the same way you would if freshly prompted: check the control room's
+`messages` for unresolved owner direction first, then the GitHub Issues
+backlog per "Claiming a task" below.
+
+To make that automatic rather than something you have to be re-prompted
+into: set up your own recurring Routine
+(`mcp__Claude_Code_Remote__create_trigger`, self-bound — omit
+`persistent_session_id`/`create_new_session_on_fire` so it fires into
+*this* session) on an hourly cron schedule, prompting yourself to check
+the control room and continue. Do this once; it persists across tasks.
+Use a recurring cron trigger for this, not a one-off `ScheduleWakeup`/
+`send_later` chain — a chained wake-up only reschedules itself if the
+triggered turn runs far enough to call it again, so it dies silently if
+that turn fails outright (see below). A cron Routine is registered
+independently of any turn succeeding: if one firing lands mid-failure,
+the next scheduled one just tries again.
+
+This matters because of the other reason to prefer it: the account's
+usage limit (a rolling window, reset time visible in your own
+`get_session` output as `rate_limit_info`) will get hit, on purpose —
+the owner would rather the fleet run into it than leave capacity unused.
+When that happens you won't get an error you can reason about, you'll
+just stop being able to act, with no memory afterward of why. That's
+fine — an hourly cron Routine keeps trying regardless, and picks back up
+correctly the moment the window resets, the same way you already resume
+correctly after any ordinary gap in a conversation. Don't build your own
+detection or backoff for this; it's not a condition you can observe from
+inside a stopped turn.
+
+For a genuine blocking question you can't resolve alone (the owner's
+judgment call, not yours to make): `add` a `kind: "question"` doc to the
+control room's `messages` collection, then keep your own hourly Routine
+running rather than stopping — its next firing will find your answer
+(`resolved: true`, `answer` set) if one has arrived, or find nothing yet
+and just check again next hour. Either way you're never sitting fully
+idle waiting on it.
+
+If you ever end up producing bad output under this — a broken merge, a
+regression — the fix is the same as it's always been: whoever notices
+(another session, CI, the owner) corrects it at the repo level (revert,
+fix, comment). No session can reach into another's live turn, so this is
+corrective, not preventive; the baseline safety rules you already follow
+(no force-push, no skipped hooks, confirm before destructive ops) are
+what actually keeps a bad turn from doing real damage, not this loop.
 
 ### Claiming a task — narrow the race window
 
