@@ -1380,19 +1380,21 @@ async function loadCroppedModelInstance(template, instance) {
   // Cropping only the +axis end leaves the remaining geometry's true
   // center drifting toward -axis as cropLength shrinks — but every
   // consumer of a placed mesh's own position (collision, landlet-bounds
-  // clamping, ...) assumes position IS the center. Recentering the
-  // geometry and pushing the same offset onto this inner group (rather
-  // than the outer group createMeshForInstance still needs to freely
-  // position) keeps that invariant intact without moving anything the
-  // builder actually sees: the untouched -axis end still lands in
-  // exactly the same spot it would have without this compensation. Each
-  // cropped axis's own offset is independent of the others (they're
-  // different vector components), so accumulating them into one shift
-  // and applying it once, after every axis has been cropped, is
-  // equivalent to applying each axis's own shift right after its own
+  // clamping, ...) assumes position IS the center, the same convention
+  // the box-fallback and uniformly-Resize-scaled cases already follow by
+  // construction. Translating the geometry back by that same drift
+  // restores that invariant: `position` continues to mark the true
+  // center of whatever's actually rendered, exactly like every other
+  // item type. (#272: this used to also push an equal-and-opposite
+  // offset onto this inner group, which canceled the translate below
+  // back out to a no-op — leaving a cropped real model's rendered
+  // footprint silently off-center from what collision/landlet-bounds
+  // clamping assumed.) Each cropped axis's own offset is independent of
+  // the others (different vector components), so accumulating them into
+  // one shift and applying it once, after every axis has been cropped,
+  // is equivalent to applying each axis's own shift right after its own
   // crop — simpler to just do once at the end.
   const shift = [0, 0, 0];
-  const groupOffset = [0, 0, 0];
   for (const axis of croppedAxes) {
     const axisIndex = { x: 0, y: 1, z: 2 }[axis];
     const dimensionKey = AXIS_DIMENSION_KEY[axis];
@@ -1400,7 +1402,6 @@ async function loadCroppedModelInstance(template, instance) {
     const cropLength = effectiveLength(template, instance, axis, dimensionKey);
     const recenterOffset = (cropLength - fullLength) / 2;
     shift[axisIndex] = -recenterOffset;
-    groupOffset[axisIndex] = recenterOffset;
   }
 
   // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
@@ -1457,7 +1458,6 @@ async function loadCroppedModelInstance(template, instance) {
     const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
     inner.add(new THREE.Mesh(geometry, [originalMaterial, backingMaterial]));
   }
-  inner.position.set(groupOffset[0], groupOffset[1], groupOffset[2]);
   const result = new THREE.Group();
   result.add(inner);
   return result;
