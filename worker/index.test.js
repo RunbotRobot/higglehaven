@@ -4769,6 +4769,71 @@ describe('Simulated purchases', () => {
     expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
+  it('lets the product\'s own seller refund a purchase, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-refund-owner-seller');
+    const otherSeller = await signupSeller('purchase-refund-other-seller');
+    const builder = await signupBuilder('purchase-refund-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-refund-owner-landlet', 1000);
+    await claim('purchase-refund-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-refund-owner-template',
+        name: 'Seller-owned refund product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 3000,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-refund-owner-instance', 'purchase-refund-owner-landlet', 'purchase-refund-owner-template', builder);
+
+    const purchased = await api('/instances/purchase-refund-owner-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const wrongSeller = await api(`/purchases/${purchaseId}/refund`, otherSeller.session({ method: 'POST' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, owningSeller.session({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  it('lets the product\'s own seller list its sales via GET /purchases?templateId=, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-list-owner-seller');
+    const otherSeller = await signupSeller('purchase-list-other-seller');
+    const builder = await signupBuilder('purchase-list-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-list-owner-landlet', 1000);
+    await claim('purchase-list-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-list-owner-template',
+        name: 'Seller-owned listing product',
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 1500,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-list-owner-instance', 'purchase-list-owner-landlet', 'purchase-list-owner-template', builder);
+    const purchased = await api('/instances/purchase-list-owner-instance/purchase', { method: 'POST' });
+
+    const noSession = await api('/purchases?templateId=purchase-list-owner-template');
+    expect(noSession.response.status).toBe(401);
+
+    const wrongSeller = await api('/purchases?templateId=purchase-list-owner-template', otherSeller.session());
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listed = await api('/purchases?templateId=purchase-list-owner-template', owningSeller.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.purchases).toContainEqual(
+      expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId }),
+    );
+  });
+
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
     const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
