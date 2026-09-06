@@ -2109,6 +2109,47 @@ describe('Landlet updates', () => {
     expect(renamed.body.landlet.name).toBe('Renamed by admin tooling');
     expect(renamed.body.landlet.status).toBe('greenbelt');
   });
+
+  // Same "claimed implies non-null owner" invariant as the PUT/PATCH test
+  // above (#224), but on the create path instead — an anonymous POST that
+  // sets status:'claimed' while simply omitting ownerBuilderId used to sail
+  // straight through the ownerBuilderId-spoofing check (#65/#69) as if it
+  // were ordinary unowned world-generation housekeeping, leaving a landlet
+  // permanently stuck: un-claimable via POST .../claim (no longer
+  // greenbelt) and not eligible for DELETE's owned-land protection either.
+  it('rejects creating a claimed landlet with no owner via POST', async () => {
+    const rejected = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-claimed-create-landlet',
+        name: 'Should never exist',
+        areaM2: 1000,
+        status: 'claimed',
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body).toEqual({ error: 'A claimed landlet must have an ownerBuilderId' });
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-claimed-create-landlet').first();
+    expect(stored).toBeNull();
+  });
+
+  it('still allows unauthenticated creation of unowned greenbelt/generating landlets via POST', async () => {
+    const greenbelt = await createGreenbeltLandlet('unowned-create-greenbelt-landlet');
+    expect(greenbelt.response.status).toBe(201);
+    expect(greenbelt.body.landlet).toMatchObject({ status: 'greenbelt', ownerBuilderId: null });
+
+    const generating = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-create-generating-landlet', name: 'Still generating', areaM2: 4, status: 'generating',
+      }),
+    });
+    expect(generating.response.status).toBe(201);
+    expect(generating.body.landlet).toMatchObject({ status: 'generating', ownerBuilderId: null });
+  });
 });
 
 describe('Community signs', () => {
