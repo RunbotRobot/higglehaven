@@ -3143,11 +3143,15 @@ a row landed in the table).
 
 ### Frontend wiring
 
-Settings' own "Auctions" tab (`renderAuctionsSettingsSection` in
-`src/main.js`) — its own tab rather than folded into the Build tab
-alongside Publish/Version History, since bidding on someone *else's*
-landlet isn't a "your own Build session" action the way publishing is;
-this tab is reachable regardless of mode. Two independent sections:
+Settings' Build tab, alongside Land Cap (`renderAuctionSection` in
+`src/main.js`, called from `renderBuildSettingsSection` — #197: auctioning
+a landlet is a Build-mode concern, not a Sell one, per the project owner
+directly, so it moved out of a standalone "Auctions" tab rather than
+staying separate on the theory that bidding on someone *else's* landlet
+isn't a "your own Build session" action the way publishing is). Neither
+section is gated on `currentLandletId`, so both still render even outside
+an active Build session — same as Land Cap above them. Two independent
+sections:
 
 - **Sell Your Land** — if the active identity currently owns a claimed
   landlet with no active auction on it, a small form (starting bid in

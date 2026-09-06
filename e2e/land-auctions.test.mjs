@@ -1,5 +1,5 @@
 // Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
-// acquisition auctions") — Settings' own Auctions tab. Two independent
+// acquisition auctions") — Settings' Build tab, alongside Land Cap. Two independent
 // browser pages stand in for two different builders, the same pattern
 // e2e/bundle-sharing.test.mjs already uses, since bidding is inherently a
 // two-party interaction. Covers starting a voluntary auction, placing a
@@ -28,7 +28,7 @@ await claimLandlet(sellerPage);
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
+await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForTimeout(500);
 
 const startForm = sellerPage.locator('.auction-start-form');
@@ -60,7 +60,7 @@ await claimLandlet(bidderPage);
 await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
 await bidderPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await bidderPage.click('.settings-tab-btn[data-section="auctions"]');
+await bidderPage.click('.settings-tab-btn[data-section="build"]');
 // Sell Your Land is itself gated behind an async fetch (a "Loading…"
 // placeholder until it resolves — see renderStartSection in src/main.js) —
 // wait for the actual form rather than guessing a fixed delay, the same
@@ -102,7 +102,7 @@ console.log('auction after a too-low bid attempt (should still say $15.00, not $
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
+await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('$15.00'),
   { timeout: 10000 },
