@@ -8,10 +8,13 @@ describe('landletReachM', () => {
   });
 
   it('uses the farthest polygon vertex from center when a polygon is given', () => {
+    // {x, y} objects, matching the real shape every actual caller stores
+    // (src/main.js's landletWorldPolygon/shapeForLandlet) — not a [x, y]
+    // tuple, which landletReachM used to (incorrectly) destructure.
     const polygon = [
-      [1, 0],
-      [0, 3],
-      [-1, -1],
+      { x: 1, y: 0 },
+      { x: 0, y: 3 },
+      { x: -1, y: -1 },
     ];
     expect(landletReachM(polygon, 999)).toBeCloseTo(3, 10);
   });
@@ -58,5 +61,22 @@ describe('bordersWater', () => {
   it('ignores itself even if somehow present in the candidate list', () => {
     const self = { ...buildable };
     expect(bordersWater(self, [self])).toBe(false);
+  });
+
+  it('does not crash on real, generated {x, y}-shaped polygons (regression: landletReachM used to destructure [x, y] tuples)', () => {
+    const squarePolygon = (half) => [
+      { x: -half, y: -half },
+      { x: half, y: -half },
+      { x: half, y: half },
+      { x: -half, y: half },
+    ];
+    const waterWithPolygon = {
+      landletId: 'w2', landType: 'water', center: { x: 5, y: 0 }, areaM2: 50, polygon: squarePolygon(3),
+    };
+    const buildableWithPolygon = {
+      landletId: 'b3', landType: 'buildable', center: { x: 0, y: 0 }, areaM2: 1000, polygon: squarePolygon(15),
+    };
+    expect(() => bordersWater(buildableWithPolygon, [waterWithPolygon])).not.toThrow();
+    expect(bordersWater(buildableWithPolygon, [waterWithPolygon])).toBe(true);
   });
 });
