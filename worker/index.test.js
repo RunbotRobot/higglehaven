@@ -2077,6 +2077,40 @@ describe('Worker API', () => {
   });
 });
 
+describe('Landlet updates', () => {
+  it('does not let an unowned landlet be flipped to claimed with no owner via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('unowned-status-flip-landlet');
+    const hijacked = await api('/landlets/unowned-status-flip-landlet', {
+      method: 'PATCH', body: JSON.stringify({ status: 'claimed' }),
+    });
+    expect(hijacked.response.status).toBe(200);
+    // The request's status is silently ignored, the same way ownerBuilderId
+    // already is — the landlet stays available to claim normally instead of
+    // being permanently stuck as claimed-with-no-owner.
+    expect(hijacked.body.landlet.status).toBe('greenbelt');
+    expect(hijacked.body.landlet.ownerBuilderId).toBeNull();
+
+    const stored = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-status-flip-landlet').first();
+    expect(stored.status).toBe('greenbelt');
+    expect(stored.owner_builder_id).toBeNull();
+
+    const stillClaimable = await api('/landlets/unowned-status-flip-landlet/claim', (await signupBuilder('status-flip-claimer')).session({ method: 'POST' }));
+    expect(stillClaimable.response.status).toBe(200);
+  });
+
+  it('still allows other field updates on an unowned landlet via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('unowned-rename-landlet');
+    const renamed = await api('/landlets/unowned-rename-landlet', {
+      method: 'PATCH', body: JSON.stringify({ name: 'Renamed by admin tooling' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.landlet.name).toBe('Renamed by admin tooling');
+    expect(renamed.body.landlet.status).toBe('greenbelt');
+  });
+});
+
 describe('Community signs', () => {
   // A single claimed landlet, shared by every test below, to host the
   // instances they place — placing/toggling/deleting an instance now
