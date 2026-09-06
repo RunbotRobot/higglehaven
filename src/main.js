@@ -6879,7 +6879,20 @@ const shopLandletInfoEl = document.getElementById('shop-landlet-info');
 // bit of chrome uses. A warm tan instead reads as cleared/settled ground
 // (tilled earth, a building's footprint) while staying clearly distinct
 // from greenbelt's green and generating's amber.
-const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f };
+const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f, water: 0x4a9bd1 };
+
+// #220 (sub-issue of #206, docs/SPEC.md §1's "Water cannot be owned"): a
+// landlet's landType (worker/earthCurvature.js's sibling module,
+// worker/index.js's #218) is orthogonal to its lifecycle status — a water
+// landlet still carries status: 'greenbelt' (see migrations/0064's own
+// comment for why) so it never falls through either palette's lookup as
+// "unknown," but it must never render or behave like ordinary available
+// greenbelt. Every per-plot color/affordance lookup goes through this
+// instead of reading `.status` directly, so a water landlet always resolves
+// to each palette's own 'water' entry regardless of its underlying status.
+function plotColorKeyForLandlet(landlet) {
+  return landlet.landType === 'water' ? 'water' : landlet.status;
+}
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.7 m/s
 // (~6 mph, v16 — raised from the original 2.2 m/s for a run that actually
 // reads as one) running. There's no separate run input (a run key/button)
@@ -8965,7 +8978,7 @@ async function enterShopMode() {
     group.position.set(record.center.x, record.center.y, 0);
     const groundMesh = new THREE.Mesh(
       new THREE.ShapeGeometry(shapeForLandlet(record)),
-      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
+      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKeyForLandlet(record)] ?? 0x4caf50 }),
     );
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
@@ -9253,7 +9266,7 @@ function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
 
 // Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
 // claim-map flyover and the real 3D world it's picking a plot in agree.
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
+const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, water: 0x4a9bd1 };
 
 // docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
 // earthCurvature.js) applied to this flyover — the one place in this app
@@ -9416,10 +9429,10 @@ async function loadLandletMap(resolve) {
   const plotOutlines = [];
   let anyAvailable = false;
   for (const landlet of landlets) {
-    if (landlet.status === 'greenbelt') anyAvailable = true;
+    if (landlet.status === 'greenbelt' && landlet.landType !== 'water') anyAvailable = true;
     const shape = shapeForLandlet(landlet);
     const geometry = new THREE.ShapeGeometry(shape);
-    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
+    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff });
     const mesh = new THREE.Mesh(geometry, material);
     // The plot's own polygon (shape, above) stays flat — only its
     // placement moves to the real curved position. Tilting the polygon
@@ -9490,13 +9503,14 @@ async function loadLandletMap(resolve) {
     const landlet = mesh.userData.landlet;
 
     if (selectedMesh) {
-      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[selectedMesh.userData.landlet.status] ?? 0xffffff);
+      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(selectedMesh.userData.landlet)] ?? 0xffffff);
     }
     selectedMesh = mesh;
     // Lighten toward white rather than using a fixed highlight color, so
     // the highlighted plot still visibly carries its own status color
-    // (available vs. claimed) instead of every selection looking the same.
-    mesh.material.color.setHex(CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
+    // (available vs. claimed vs. water) instead of every selection looking
+    // the same.
+    mesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
 
     if (selectionOutline) {
       scene.remove(selectionOutline);
@@ -9510,16 +9524,18 @@ async function loadLandletMap(resolve) {
     scene.add(selectionOutline);
     claimFlyover.selectionOutline = selectionOutline;
 
-    const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
+    const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
     // #221: shoreline scarcity is meant to be organically discovered, not
     // mechanically boosted (docs/SPEC.md §1) — this only surfaces the fact
     // a builder could otherwise only notice by eyeballing the map, computed
     // fresh from the same landlets this flyover already fetched rather than
     // a stored flag. See src/landletAdjacency.js for why a bounding-circle
-    // approximation is good enough here.
+    // approximation is good enough here. Never fires for a water landlet
+    // itself (bordersWater's own contract) — that case already gets its own
+    // "Water" statusLabel above.
     const waterNote = bordersWater(landlet, landlets) ? ' · Borders water' : '';
     claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}${waterNote}`;
-    claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
+    claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
 

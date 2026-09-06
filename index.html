@@ -2443,6 +2443,10 @@
       .claim-swatch.claimed {
         background: rgb(var(--ink-rgb) / 0.28);
       }
+      .claim-swatch.water {
+        /* Matches CLAIM_PLOT_COLORS.water in src/main.js (#220). */
+        background: #4a9bd1;
+      }
       #claim-selection-panel {
         display: flex;
         align-items: center;
@@ -2779,6 +2783,7 @@
         <div id="claim-legend">
           <span class="claim-legend-item"><span class="claim-swatch available"></span>Available</span>
           <span class="claim-legend-item"><span class="claim-swatch claimed"></span>Claimed</span>
+          <span class="claim-legend-item"><span class="claim-swatch water"></span>Water</span>
         </div>
         <div id="claim-selection-panel">
           <div id="claim-selection-name">No plot selected</div>
