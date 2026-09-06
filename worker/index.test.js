@@ -845,6 +845,68 @@ describe('Worker API', () => {
     expect(unauthenticated.response.status).toBe(401);
   });
 
+  // #218 (docs/SPEC.md §1's "Water cannot be owned"): a landlet's landType
+  // is a separate, orthogonal concept from its lifecycle status — this
+  // confirms the claim endpoint actually enforces it, not just that the
+  // field round-trips.
+  it('rejects claiming a water landlet even while it is otherwise greenbelt and unowned', async () => {
+    const created = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'water-landlet',
+        name: 'Test water landlet',
+        areaM2: 1000,
+        status: 'greenbelt',
+        landType: 'water',
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.landlet.landType).toBe('water');
+
+    const builder = await signupBuilder('water-claim-builder');
+    const claimed = await api('/landlets/water-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(409);
+    expect(claimed.body).toEqual({ error: 'Water cannot be claimed' });
+  });
+
+  it('defaults landType to buildable and rejects an invalid value', async () => {
+    const defaulted = await createGreenbeltLandlet('default-land-type-landlet');
+    expect(defaulted.body.landlet.landType).toBe('buildable');
+
+    const invalid = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-land-type-landlet',
+        name: 'Invalid land type',
+        areaM2: 1000,
+        landType: 'lava',
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
+  });
+
+  it('excludes water landlets from the greenbelt count/ratio but includes them in total', async () => {
+    const before = (await api('/world')).body.world.landletCounts;
+
+    await createGreenbeltLandlet('water-count-buildable-landlet');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'water-count-water-landlet',
+        name: 'Water count water landlet',
+        areaM2: 1000,
+        status: 'greenbelt',
+        landType: 'water',
+      }),
+    }));
+
+    const after = (await api('/world')).body.world.landletCounts;
+    expect(after.total).toBe(before.total + 2);
+    expect(after.greenbelt).toBe(before.greenbelt + 1);
+    expect(after.water).toBe((before.water || 0) + 1);
+  });
+
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
     const malformedJson = await api('/landlets', adminSession({
       method: 'POST',
@@ -2015,6 +2077,40 @@ describe('Worker API', () => {
   });
 });
 
+describe('Landlet updates', () => {
+  it('does not let an unowned landlet be flipped to claimed with no owner via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('unowned-status-flip-landlet');
+    const hijacked = await api('/landlets/unowned-status-flip-landlet', {
+      method: 'PATCH', body: JSON.stringify({ status: 'claimed' }),
+    });
+    expect(hijacked.response.status).toBe(200);
+    // The request's status is silently ignored, the same way ownerBuilderId
+    // already is — the landlet stays available to claim normally instead of
+    // being permanently stuck as claimed-with-no-owner.
+    expect(hijacked.body.landlet.status).toBe('greenbelt');
+    expect(hijacked.body.landlet.ownerBuilderId).toBeNull();
+
+    const stored = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-status-flip-landlet').first();
+    expect(stored.status).toBe('greenbelt');
+    expect(stored.owner_builder_id).toBeNull();
+
+    const stillClaimable = await api('/landlets/unowned-status-flip-landlet/claim', (await signupBuilder('status-flip-claimer')).session({ method: 'POST' }));
+    expect(stillClaimable.response.status).toBe(200);
+  });
+
+  it('still allows other field updates on an unowned landlet via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('unowned-rename-landlet');
+    const renamed = await api('/landlets/unowned-rename-landlet', {
+      method: 'PATCH', body: JSON.stringify({ name: 'Renamed by admin tooling' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.landlet.name).toBe('Renamed by admin tooling');
+    expect(renamed.body.landlet.status).toBe('greenbelt');
+  });
+});
+
 describe('Community signs', () => {
   // A single claimed landlet, shared by every test below, to host the
   // instances they place — placing/toggling/deleting an instance now
@@ -3149,11 +3245,21 @@ describe('Auctions', () => {
     expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
 
     // Resolving again is a harmless no-op, not an error — it just returns
-    // the already-ended auction's current (unchanged) state. The 409 case
-    // is specifically "not due yet," covered by the next test.
+    // the already-ended auction's current (unchanged) state, and must not
+    // re-run the money-mutating side effects (double-crediting the
+    // seller's balance — #229) even though nothing here is a real
+    // concurrent race. The 409 case is specifically "not due yet,"
+    // covered by the next test.
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+    const buildersAfterSecondResolve = await api('/builders');
+    const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
+    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
   });
 
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
@@ -4595,8 +4701,18 @@ describe('Simulated purchases', () => {
     expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
+    // This is also the observable contract #192's fix protects under real
+    // concurrency (two requests racing on a stale refunded_at read): this
+    // test pool's single-threaded workerd runtime can't force genuine
+    // interleaving between the guard read and the guard write, so this
+    // sequential case is what's actually exercisable here — the fix
+    // itself (an atomic `WHERE refunded_at IS NULL` + meta.changes check,
+    // not batched with the balance mutation) mirrors handleAuctionBids's
+    // already-proven-safe conditional-insert pattern in this same file.
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
+    const afterSecondAttempt = await builderRow(seller.builderId);
+    expect(afterSecondAttempt.dallers_balance_cents).toBe(after.dallers_balance_cents);
   });
 
   it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
@@ -4860,6 +4976,40 @@ describe('Authentication', () => {
       });
       expect(attempt.response.status).toBe(401);
     }
+
+    const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    expect(lockedOut.response.status).toBe(423);
+  });
+
+  it('increments failed_login_attempts atomically in SQL, not from a stale application-level read', async () => {
+    // The bug this guards against only shows up under real concurrency
+    // (two requests both reading the same stale failed_login_attempts
+    // before either writes back) -- this test pool's single-threaded
+    // workerd runtime can't force that genuine interleaving, the same
+    // limitation noted on the refund double-spend regression test above.
+    // What's checked here instead: the atomic `failed_login_attempts + 1`
+    // SQL expression (and its CASE-based lockout threshold) is correct on
+    // its own terms, one attempt at a time, starting from a
+    // pre-seeded non-zero count -- the exact expression that makes
+    // concurrent requests safe, rather than the concurrency itself.
+    const email = `auth-lockout-atomic-${crypto.randomUUID()}@example.com`;
+    const password = 'the real correct password';
+    const signedUp = await signup(email, password);
+    await env.DB.prepare(
+      'UPDATE users SET failed_login_attempts = 4 WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).run();
+
+    const fifthFailure = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'wrong' }),
+    });
+    expect(fifthFailure.response.status).toBe(401);
+
+    const row = await env.DB.prepare(
+      'SELECT failed_login_attempts, locked_until FROM users WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).first();
+    expect(row.failed_login_attempts).toBe(5);
+    expect(row.locked_until).toBeTruthy();
 
     const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     expect(lockedOut.response.status).toBe(423);

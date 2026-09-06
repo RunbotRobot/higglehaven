@@ -1235,6 +1235,7 @@ forever.
     "greenbelt": 0,
     "claimed": 1,
     "generating": 0,
+    "water": 0,
     "greenbeltRatio": 0
   },
   "metadata": {},
@@ -1246,6 +1247,11 @@ forever.
 ### `GET /api/world`
 
 Fetches the singleton world settings object and aggregate landlet status counts.
+`water` counts landlets with `landType: "water"` (#218,
+docs/SPEC.md §1's "Water cannot be owned") — included in `total` (it's real,
+generated world content) but excluded from `greenbelt` and therefore from
+`greenbeltRatio`'s numerator, since that ratio specifically means "available
+to claim," not "not currently claimed."
 
 ### `PUT /api/world`
 ### `PATCH /api/world`
@@ -1586,6 +1592,7 @@ state can build on a stable backend shape.
   "status": "claimed",
   "ownerBuilderId": null,
   "landClass": 1,
+  "landType": "buildable",
   "polygon": [],
   "generatedAt": null,
   "claimableAt": null,
@@ -1650,6 +1657,7 @@ Request body example:
   "status": "greenbelt",
   "ownerBuilderId": null,
   "landClass": 1,
+  "landType": "buildable",
   "polygon": [
     { "x": -15.811, "y": -15.811 },
     { "x": 15.811, "y": -15.811 },
@@ -1674,6 +1682,14 @@ Validation notes:
 - `status` defaults to `greenbelt` and must be `greenbelt`, `claimed`, or
   `generating`.
 - `landClass` defaults to `1` and must be a positive integer.
+- `landType` defaults to `buildable` and must be `buildable` or `water`.
+  Deliberately a separate field from `status` (see migrations/0064's own
+  comment for why) — a `'water'` landlet still goes through the ordinary
+  `generating` -> `greenbelt` lifecycle for rendering/geometry purposes
+  (docs/SPEC.md §1's "Macro-geography"), it just can never become `claimed`
+  (`POST .../claim` rejects it with `409`, see below). Nothing in world
+  generation produces a `'water'` landlet yet — this field exists so the
+  claim system and data model are ready for whenever it does.
 - `polygon` defaults to an empty array. When present, each point must contain
   finite `x` and `y` values in meters.
 
@@ -1690,8 +1706,11 @@ changing `status` and `ownerBuilderId` independently with the generic update
 endpoint.
 
 The claim is a conditional database update: the landlet must still have
-`status: "greenbelt"`, must have no owner, and the builder must not already own
-a claimed landlet. This preserves the MVP rule that each builder can claim one
+`status: "greenbelt"`, must have no owner, must have `landType: "buildable"`
+(a `"water"` landlet — docs/SPEC.md §1's "Water cannot be owned" — always
+`409`s with a dedicated message, checked before the generic conflict
+reasons), and the builder must not already own a claimed landlet. This
+preserves the MVP rule that each builder can claim one
 free *starter* landlet even when two requests arrive close together — it's
 purely an application-level check now (migration 0058 dropped the partial
 unique D1 index that used to enforce it for every write path), because a
@@ -1732,7 +1751,12 @@ landlet before validation, except `ownerBuilderId`: that field is always
 force-preserved at its existing value regardless of what the request body
 sends, the same way `PUT /api/catalog/:templateId` never reassigns
 `sellerId` — reassigning ownership only happens through claim or auction
-resolution.
+resolution. For the same reason, on an unowned landlet `status` is also
+force-preserved at its existing value regardless of what the request body
+sends — otherwise an unauthenticated caller could flip a landlet to
+`status: "claimed"` with no owner ever assigned, permanently removing it
+from the claimable pool with no way back. Claimed-state transitions only
+ever happen through claim or auction resolution too.
 
 ### `DELETE /api/landlets/:landletId`
 

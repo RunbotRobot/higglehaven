@@ -1,0 +1,33 @@
+-- #218 (sub-issue of #206, docs/SPEC.md §1's "Macro-geography": "Water
+-- cannot be owned"): gives a landlet a way to represent permanently
+-- non-ownable land (water, eventually other terrain) alongside its existing
+-- lifecycle status.
+--
+-- Deliberately an *additive column*, not a new `landlets.status` value
+-- (`'greenbelt' | 'claimed' | 'generating'`, migrations/0001's CHECK
+-- constraint) even though a new status value reads as the more obvious
+-- design: SQLite/D1 can't add a value to an existing CHECK constraint
+-- without rebuilding the table, and migration 0056's own header comment
+-- documents that rebuild genuinely failing against real Cloudflare D1 (not
+-- just local SQLite) when other tables hold a foreign key into the table
+-- being rebuilt — exactly landlets' situation today (catalog_templates,
+-- landlet_versions, auctions, and landlet_levels all
+-- `REFERENCES landlets(landlet_id)`). `ALTER TABLE ... ADD COLUMN` with its
+-- own self-contained CHECK needs no rebuild (already used this way in
+-- migrations/0012-0014) and is fully backward compatible: every existing
+-- row becomes 'buildable', the same as if this column had always existed.
+--
+-- Orthogonal to `status` on purpose: a water landlet still goes through the
+-- ordinary generating -> greenbelt lifecycle for rendering/geometry
+-- purposes, it just never becomes 'claimed' (enforced in worker/index.js's
+-- claim endpoint, not the schema, the same "app-boundary enforcement"
+-- precedent migration 0056 already established for a rebuild-shaped rule).
+--
+-- Nothing produces a 'water' landlet yet — that's #219 (real-world
+-- hydrology data ingestion, blocked on #138's coordinate-anchor decision)
+-- and #220 (rendering). This issue only makes the data model capable of
+-- representing it, the same "primitive before any consumer" order
+-- worker/earthCurvature.js's own introduction followed.
+ALTER TABLE landlets ADD COLUMN land_type TEXT NOT NULL DEFAULT 'buildable' CHECK (land_type IN ('buildable', 'water'));
+
+CREATE INDEX IF NOT EXISTS idx_landlets_land_type ON landlets(land_type);

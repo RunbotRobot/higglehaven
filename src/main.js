@@ -74,6 +74,8 @@ import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
+import { bordersWater } from './landletAdjacency.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -3632,7 +3634,23 @@ function renderSellerList() {
 // ensureSellerIdentity() first. Backing out of that picker (Close) means
 // there's still no seller identity — just leave the Seller modal unopened
 // rather than showing it with nothing to filter its list by.
+//
+// Also waits on bootstrapPromise first (see its own declaration) — Sell is
+// reachable the instant the page loads or right after switching Shop<->
+// Build (#mode-nav's own click handler opens it directly, no reload, even
+// though switching modes themselves reload the whole page), racing
+// whichever bootstrap() call is currently populating activeCatalog. Build
+// mode's own chain (auth -> builder identity -> landlet resolution -> the
+// catalog fetch) is considerably longer than Shop's (fetches catalog
+// almost immediately), so clicking Sell right after Build was reliably
+// catching activeCatalog still at its plain FALLBACK_CATALOG default —
+// myProducts() then filtered against catalog entries that all have no
+// seller at all, showing "No custom products yet" for an account that
+// genuinely has some. Confirmed via direct testing: an artificial 50ms
+// delay between clicking Build and Sell reproduced this every time;
+// waiting for Build's bootstrap to actually finish first did not.
 async function openSellerModal() {
+  await bootstrapPromise;
   const id = await ensureSellerIdentity();
   if (!id) {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
@@ -7366,8 +7384,8 @@ let shopTappedProduct = null;
 // lists): this runs every frame over every currently-loaded placed item —
 // the same set shopPositionBlocked already walks for collision — and
 // additionally requires the avatar to actually be looking toward the item,
-// not merely standing near it. No consumer yet (that's #216); this only
-// exposes the primitive.
+// not merely standing near it. Consumed by updateShopItemHandling below
+// (#216).
 const SHOP_ATTENTION_RADIUS_M = 4; // matches SIGN_FADE_NEAR_M's own "close enough to interact" scale
 const SHOP_ATTENTION_FOV_COS = Math.cos(THREE.MathUtils.degToRad(20)); // within ~20 degrees of dead-center
 const SHOP_ATTENTION_DWELL_S = 1.5; // how long a target must hold attention before it counts as "sustained"
@@ -7376,6 +7394,31 @@ let shopAttentionElapsedS = 0; // seconds shopAttentionTarget has held it, conti
 const scratchAttentionWorldPos = new THREE.Vector3();
 const scratchAttentionToItem = new THREE.Vector3();
 const scratchAttentionForward = new THREE.Vector3();
+
+// Item-handling animations (#216, sub-issue of #207 — docs/SPEC.md §2:
+// "pick-up-and-turn for small items, walk-around for furniture-scale"),
+// triggered by hasSustainedShopAttention() above. Both are pose-only —
+// deliberately not moving shopAvatarPosition at all (no orbiting toward
+// the item, no real "walking"): actually relocating the avatar
+// autonomously is real, riskier scope (camera/collision/player-control
+// interplay) this pass isn't taking on — see updateShopItemHandling's own
+// comment. shopHandlingTarget is captured once when a play starts and
+// held steady through that whole play (including its ease-out), rather
+// than tracking shopAttentionTarget live — so a play already in progress
+// can't stutter if the avatar's own animation briefly nudges it out of
+// updateShopAttention's FOV cone.
+const SHOP_ITEM_SMALL_MAX_DIMENSION_M = 0.5; // at/under this on every axis: pick-up-and-turn; above: walk-around
+const SHOP_HANDLING_MAX_DURATION_S = 4; // caps any single play — see shouldEndItemHandling's own comment
+const SHOP_HANDLING_BLEND_PER_S = 4; // ease in/out of the handling pose — matches SHOP_IDLE_BLEND_PER_S's own feel
+const SHOP_HANDLING_ARM_RAISE_RAD = 1.1; // pick-up-and-turn: how far the arms lift toward a chest-height "holding" pose
+const SHOP_HANDLING_TURN_AMPLITUDE_RAD = 0.5; // pick-up-and-turn: how far the "turning it over" yaw sway swings each way
+const SHOP_HANDLING_TURN_PERIOD_S = 2.4; // pick-up-and-turn: one full back-and-forth cycle
+const SHOP_HANDLING_SPIN_PERIOD_S = 5; // walk-around: one full circling rotation
+let shopHandlingActive = false; // true while a play is running (not yet ended, even if still easing in)
+let shopHandlingTarget = null; // mesh the current/fading-out play is about, or null once fully eased out
+let shopHandlingElapsedS = 0; // seconds since this play started — see SHOP_HANDLING_MAX_DURATION_S
+let shopHandlingBlend = 0; // 0..1, eased toward 1 while playing, 0 otherwise
+let shopHandlingPhase = 0; // radians — see nextPhase's own comment for how each kind uses it
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -8031,6 +8074,7 @@ function updateShopMovement(now) {
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
   updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
+  updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // The avatar faces its own movement direction (shopAvatarFacing, turned
   // by the left stick above), not the camera's look direction (shopYaw,
   // the right stick) — a standard third-person rig where free-look and
@@ -8088,6 +8132,52 @@ function updateShopAttention(dt) {
 // shopAttentionElapsedS's raw values directly.
 function hasSustainedShopAttention() {
   return hasSustainedAttention(shopAttentionTarget, shopAttentionElapsedS, SHOP_ATTENTION_DWELL_S);
+}
+
+// Called every frame right after updateShopAvatarPose/updateShopAvatarIdle,
+// whose arm/yaw values it adds on top of — see shopHandlingTarget's own
+// comment above for why this doesn't touch shopAvatarPosition at all.
+// Starting a play requires being grounded and not already moving (walking
+// and item-handling are mutually exclusive, the same rule
+// updateShopAvatarIdle's own comment already documents for idle); once
+// started, shouldEndItemHandling decides when it stops.
+function updateShopItemHandling(dt, moveMagnitude, airborne) {
+  if (!shopHandlingActive && !airborne && moveMagnitude === 0 && hasSustainedShopAttention()) {
+    shopHandlingActive = true;
+    shopHandlingTarget = shopAttentionTarget;
+    shopHandlingElapsedS = 0;
+    shopHandlingPhase = 0;
+  }
+  if (shopHandlingActive) {
+    shopHandlingElapsedS += dt;
+    if (shouldEndItemHandling({ airborne, moveMagnitude, elapsedS: shopHandlingElapsedS, maxDurationS: SHOP_HANDLING_MAX_DURATION_S })) {
+      shopHandlingActive = false;
+    }
+  }
+
+  shopHandlingBlend = nextHandlingBlend(shopHandlingBlend, shopHandlingActive, SHOP_HANDLING_BLEND_PER_S, dt);
+  if (shopHandlingBlend < 1e-3) {
+    shopHandlingTarget = null;
+    return;
+  }
+
+  const { width, depth, height } = meshDimensions(shopHandlingTarget);
+  const kind = classifyHandlingKind(Math.max(width, depth, height), SHOP_ITEM_SMALL_MAX_DIMENSION_M);
+
+  if (kind === 'pick-up-and-turn') {
+    shopHandlingPhase = nextPhase(shopHandlingPhase, SHOP_HANDLING_TURN_PERIOD_S, dt);
+    const raise = SHOP_HANDLING_ARM_RAISE_RAD * shopHandlingBlend;
+    shopAvatar.armPivotL.rotation.x -= raise;
+    shopAvatar.armPivotR.rotation.x -= raise;
+    shopIdleSwayYawOffset += Math.sin(shopHandlingPhase) * SHOP_HANDLING_TURN_AMPLITUDE_RAD * shopHandlingBlend;
+  } else {
+    // walk-around: a continuous one-direction spin (phase used directly as
+    // a yaw angle, not run through sin like the back-and-forth sway
+    // above) — reads as circling the item to view every side, purely
+    // through body rotation. No arm raise: nothing's being held.
+    shopHandlingPhase = nextPhase(shopHandlingPhase, SHOP_HANDLING_SPIN_PERIOD_S, dt);
+    shopIdleSwayYawOffset += shopHandlingPhase * shopHandlingBlend;
+  }
 }
 
 function updateShopProximity() {
@@ -9423,7 +9513,14 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    // #221: shoreline scarcity is meant to be organically discovered, not
+    // mechanically boosted (docs/SPEC.md §1) — this only surfaces the fact
+    // a builder could otherwise only notice by eyeballing the map, computed
+    // fresh from the same landlets this flyover already fetched rather than
+    // a stored flag. See src/landletAdjacency.js for why a bounding-circle
+    // approximation is good enough here.
+    const waterNote = bordersWater(landlet, landlets) ? ' · Borders water' : '';
+    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}${waterNote}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
@@ -9545,11 +9642,11 @@ async function bootstrap() {
   // there's no reason to load them one at a time.
   await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
 
-  // "Sell" from Shop mode routes through the ordinary Build-mode load (the
-  // Seller modal only actually needs builderId + activeCatalog, but there's
-  // no lighter-weight bootstrap path than this one) and opens straight into
-  // My Products once it's ready, rather than landing the builder on an
-  // empty Build scene they didn't ask to see.
-  if (startMode === 'sell') openSellerModal();
 }
-bootstrap();
+// Captured so openSellerModal() (see its own comment) can await whichever
+// bootstrap this page load is running before trusting activeCatalog — a
+// dead 'sell' startMode branch used to live here for the same reason
+// (nothing ever actually set START_MODE_KEY to 'sell', so it never ran),
+// removed since awaiting this promise from inside bootstrap() itself,
+// while bootstrap() is still running towards producing it, would deadlock.
+const bootstrapPromise = bootstrap();

@@ -2218,6 +2218,25 @@ async function resolveAuction(db, auction) {
     SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
   `).bind(auction.auction_id).first();
 
+  // Three separate call sites can all reach this for the same overdue
+  // auction (resolveDueAuctions' sweep, resolveAuctionIfDue's per-request
+  // check, and the explicit /resolve endpoint) — each on its own stale
+  // read of the row. This conditional UPDATE is the actual atomic guard:
+  // run alone, before any of the balance/ownership/notification
+  // statements below, since D1's db.batch can't skip later statements
+  // based on an earlier one's row count within the same call. Whichever
+  // caller loses the race affects 0 rows here and returns the
+  // already-resolved auction as-is — a harmless no-op, matching this
+  // function's existing "resolving twice" contract, never double-running
+  // the money-mutating side effects below.
+  const guard = await db.prepare(`
+    UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE auction_id = ? AND status = 'active'
+  `).bind(highest ? highest.bid_id : null, auction.auction_id).run();
+  if (guard.meta.changes === 0) {
+    return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+  }
+
   const statements = [];
   if (highest) {
     statements.push(
@@ -2239,10 +2258,6 @@ async function resolveAuction(db, auction) {
       db.prepare(`
         INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
       `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
-      db.prepare(`
-        UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE auction_id = ?
-      `).bind(highest.bid_id, auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your dállers balance.`),
       notificationStatement(db, highest.bidder_builder_id,
@@ -2259,13 +2274,11 @@ async function resolveAuction(db, auction) {
             claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ?
       `).bind(auction.landlet_id),
-      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
     );
   } else {
     statements.push(
-      db.prepare(`UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auction.auction_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`),
     );
@@ -2819,15 +2832,28 @@ async function handleLogin(request, db, url) {
 
   const valid = await verifyPassword(password, row.password_hash);
   if (!valid) {
-    const attempts = row.failed_login_attempts + 1;
-    const lockedUntil = attempts >= FAILED_LOGIN_LOCK_THRESHOLD
-      ? new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString()
-      : null;
+    // The increment itself has to be the atomic operation, not a value
+    // computed from the stale `row` read above and written back separately
+    // — otherwise concurrent requests all compute the same
+    // `attempts = row.failed_login_attempts + 1` from the same starting
+    // count and each writes that same small number back, so the lockout
+    // threshold is never actually reached no matter how many guesses run
+    // in parallel. `failed_login_attempts + 1` here (both in SET and in
+    // the CASE) refers to this row's own pre-update value, same as any
+    // single UPDATE statement's SET list — safe against lost updates the
+    // same way `handlePurchaseRefund`'s `WHERE refunded_at IS NULL` guard
+    // is, just via an atomic increment instead of an atomic guard.
     await db.prepare(`
-      UPDATE users SET failed_login_attempts = ?, locked_until = ?,
+      UPDATE users SET
+        failed_login_attempts = failed_login_attempts + 1,
+        locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE user_id = ?
-    `).bind(attempts, lockedUntil, row.user_id).run();
+    `).bind(
+      FAILED_LOGIN_LOCK_THRESHOLD,
+      new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString(),
+      row.user_id,
+    ).run();
     throw invalidCredentials();
   }
 
@@ -3056,6 +3082,7 @@ async function handleLandlets(request, db, route, url) {
       WHERE landlet_id = ?
         AND status = 'greenbelt'
         AND owner_builder_id IS NULL
+        AND land_type != 'water'
         AND NOT EXISTS (
           SELECT 1 FROM landlets
           WHERE owner_builder_id = ? AND status = 'claimed'
@@ -3105,8 +3132,8 @@ async function handleLandlets(request, db, route, url) {
     await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         polygon_json, generated_at, claimable_at, metadata_json, land_type, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet))).run();
     return json({ landlet }, 201);
   }
@@ -3131,6 +3158,18 @@ async function handleLandlets(request, db, route, url) {
       assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     }
     const input = await readJson(request);
+    // `status` needs the same pinning as `ownerBuilderId` above, for the
+    // same reason: an unowned landlet's `status` is otherwise settable to
+    // `'claimed'` by anyone, with no owner ever assigned — the exact
+    // "claimed implies non-null owner" invariant every other call site in
+    // this file relies on (recomputeLandCap, explainClaimConflict, ...),
+    // broken with no login and no way back (a `'claimed'` landlet never
+    // matches `explainClaimConflict`'s available-greenbelt check again).
+    // Claimed-state transitions only ever happen through the dedicated
+    // claim/auction endpoints, same as ownership transfer itself.
+    if (existing.owner_builder_id === null) {
+      input.status = existing.status;
+    }
     const landlet = validateLandlet(
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
@@ -3139,13 +3178,13 @@ async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          max_world_radius_m = ?,
+          land_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ?
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
-      landlet.claimableAt, JSON.stringify(landlet.metadata),
+      landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
     ).run();
     return json({ landlet });
@@ -3824,9 +3863,10 @@ async function getLandletCounts(db) {
   return db.prepare(`
     SELECT
       COUNT(*) AS total,
-      SUM(CASE WHEN status = 'greenbelt' THEN 1 ELSE 0 END) AS greenbelt,
+      SUM(CASE WHEN status = 'greenbelt' AND land_type != 'water' THEN 1 ELSE 0 END) AS greenbelt,
       SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
-      SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating
+      SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating,
+      SUM(CASE WHEN land_type = 'water' THEN 1 ELSE 0 END) AS water
     FROM landlets
   `).first();
 }
@@ -4031,8 +4071,11 @@ function candidateMaterializationStatements(db, candidates) {
 }
 
 async function explainClaimConflict(db, landletId, builderId) {
-  const landlet = await db.prepare('SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+  const landlet = await db.prepare('SELECT status, owner_builder_id, land_type FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!landlet) throw new HttpError('Landlet not found', 404);
+  if (landlet.land_type === 'water') {
+    throw new HttpError('Water cannot be claimed', 409);
+  }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
     throw new HttpError('Landlet is not available to claim', 409);
   }
@@ -4570,24 +4613,34 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
+  // The refunded_at read above is a fast-path only — two concurrent refund
+  // requests (a double-click, or a client retry) can both pass it before
+  // either write lands. This conditional UPDATE is the actual atomic
+  // guard: run alone, not batched with the balance/notification statements
+  // below, since D1's db.batch doesn't support skipping later statements
+  // based on an earlier one's row count within the same call. Whichever
+  // request's UPDATE loses the race affects 0 rows and gets rejected here
+  // before it can touch the builder's balance at all.
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ? AND refunded_at IS NULL`,
+  ).bind(purchaseId).run();
+  if (guard.meta.changes === 0) {
+    throw new HttpError('This purchase has already been refunded', 400);
+  }
+
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
   // notifications.builder_id is itself NOT NULL, so skip both statements
   // rather than crediting/notifying a builder that no longer exists.
-  const statements = [
-    db.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
-      .bind(purchaseId),
-  ];
   if (purchase.builder_id) {
-    statements.push(
+    await db.batch([
       db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
         .bind(purchase.builder_share_cents, purchase.builder_id),
       notificationStatement(db, purchase.builder_id,
         `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-    );
+    ]);
   }
-  await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row) });
@@ -4855,6 +4908,7 @@ function validateLandlet(input, fallbackId) {
     status: landletStatus(input.status || 'greenbelt'),
     ownerBuilderId: input.ownerBuilderId || null,
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
+    landType: landletLandType(input.landType || 'buildable'),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: input.generatedAt || null,
     claimableAt: input.claimableAt || null,
@@ -4948,7 +5002,7 @@ function instanceParams(instance) {
 }
 
 function landletParams(landlet) {
-  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata)];
+  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType];
 }
 
 function templateFromRow(row) {
@@ -4999,6 +5053,7 @@ function landletFromRow(row) {
     status: row.status,
     ownerBuilderId: row.owner_builder_id,
     landClass: row.land_class ?? 1,
+    landType: row.land_type ?? 'buildable',
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -5094,6 +5149,7 @@ function worldFromRow(row, counts) {
       greenbelt: greenbeltLandlets,
       claimed: counts.claimed || 0,
       generating: counts.generating || 0,
+      water: counts.water || 0,
       greenbeltRatio: totalLandlets === 0 ? 0 : greenbeltLandlets / totalLandlets,
     } : undefined,
     metadata: JSON.parse(row.metadata_json || '{}'),
@@ -5105,6 +5161,17 @@ function worldFromRow(row, counts) {
 function landletStatus(value) {
   if (!['greenbelt', 'claimed', 'generating'].includes(value)) {
     throw new HttpError('status must be greenbelt, claimed, or generating', 400);
+  }
+  return value;
+}
+
+// #218: whether this landlet can ever be claimed at all — separate from
+// (and orthogonal to) its lifecycle `status` above. See migrations/0064's
+// own comment for why this is a distinct column rather than a third status
+// value.
+function landletLandType(value) {
+  if (!['buildable', 'water'].includes(value)) {
+    throw new HttpError('landType must be buildable or water', 400);
   }
   return value;
 }
