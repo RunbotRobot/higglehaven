@@ -3056,6 +3056,7 @@ async function handleLandlets(request, db, route, url) {
       WHERE landlet_id = ?
         AND status = 'greenbelt'
         AND owner_builder_id IS NULL
+        AND land_type != 'water'
         AND NOT EXISTS (
           SELECT 1 FROM landlets
           WHERE owner_builder_id = ? AND status = 'claimed'
@@ -3105,8 +3106,8 @@ async function handleLandlets(request, db, route, url) {
     await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         polygon_json, generated_at, claimable_at, metadata_json, land_type, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet))).run();
     return json({ landlet }, 201);
   }
@@ -3139,13 +3140,13 @@ async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          max_world_radius_m = ?,
+          land_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ?
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
-      landlet.claimableAt, JSON.stringify(landlet.metadata),
+      landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
     ).run();
     return json({ landlet });
@@ -3824,9 +3825,10 @@ async function getLandletCounts(db) {
   return db.prepare(`
     SELECT
       COUNT(*) AS total,
-      SUM(CASE WHEN status = 'greenbelt' THEN 1 ELSE 0 END) AS greenbelt,
+      SUM(CASE WHEN status = 'greenbelt' AND land_type != 'water' THEN 1 ELSE 0 END) AS greenbelt,
       SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
-      SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating
+      SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating,
+      SUM(CASE WHEN land_type = 'water' THEN 1 ELSE 0 END) AS water
     FROM landlets
   `).first();
 }
@@ -4031,8 +4033,11 @@ function candidateMaterializationStatements(db, candidates) {
 }
 
 async function explainClaimConflict(db, landletId, builderId) {
-  const landlet = await db.prepare('SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+  const landlet = await db.prepare('SELECT status, owner_builder_id, land_type FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!landlet) throw new HttpError('Landlet not found', 404);
+  if (landlet.land_type === 'water') {
+    throw new HttpError('Water cannot be claimed', 409);
+  }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
     throw new HttpError('Landlet is not available to claim', 409);
   }
@@ -4855,6 +4860,7 @@ function validateLandlet(input, fallbackId) {
     status: landletStatus(input.status || 'greenbelt'),
     ownerBuilderId: input.ownerBuilderId || null,
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
+    landType: landletLandType(input.landType || 'buildable'),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: input.generatedAt || null,
     claimableAt: input.claimableAt || null,
@@ -4948,7 +4954,7 @@ function instanceParams(instance) {
 }
 
 function landletParams(landlet) {
-  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata)];
+  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType];
 }
 
 function templateFromRow(row) {
@@ -4999,6 +5005,7 @@ function landletFromRow(row) {
     status: row.status,
     ownerBuilderId: row.owner_builder_id,
     landClass: row.land_class ?? 1,
+    landType: row.land_type ?? 'buildable',
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -5094,6 +5101,7 @@ function worldFromRow(row, counts) {
       greenbelt: greenbeltLandlets,
       claimed: counts.claimed || 0,
       generating: counts.generating || 0,
+      water: counts.water || 0,
       greenbeltRatio: totalLandlets === 0 ? 0 : greenbeltLandlets / totalLandlets,
     } : undefined,
     metadata: JSON.parse(row.metadata_json || '{}'),
@@ -5105,6 +5113,17 @@ function worldFromRow(row, counts) {
 function landletStatus(value) {
   if (!['greenbelt', 'claimed', 'generating'].includes(value)) {
     throw new HttpError('status must be greenbelt, claimed, or generating', 400);
+  }
+  return value;
+}
+
+// #218: whether this landlet can ever be claimed at all — separate from
+// (and orthogonal to) its lifecycle `status` above. See migrations/0064's
+// own comment for why this is a distinct column rather than a third status
+// value.
+function landletLandType(value) {
+  if (!['buildable', 'water'].includes(value)) {
+    throw new HttpError('landType must be buildable or water', 400);
   }
   return value;
 }
