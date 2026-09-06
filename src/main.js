@@ -6343,6 +6343,15 @@ const notificationsCloseBtn = document.getElementById('notifications-close-btn')
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+// #245 — same re-entrancy shape already fixed at axisPreviewLoadToken:
+// opening the notifications modal twice in quick succession (e.g. a fast
+// close/reopen) starts a second renderNotifications() before the first's
+// fetch resolves; without this guard, whichever resolves last wins and can
+// append its own rows on top of (rather than instead of) the other's,
+// producing duplicate rows. Lower severity than #244's sign/calendar guards
+// (this always renders the same global list, not a per-click target that
+// can change between two overlapping calls), but the same fix.
+let notificationsLoadToken = 0;
 
 async function refreshNotificationsBadge() {
   if (!builderId) return;
@@ -6361,16 +6370,19 @@ function formatNotificationTime(isoString) {
 }
 
 async function renderNotifications() {
+  const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
   if (!builderId) return;
   let notifications;
   try {
     notifications = await fetchNotifications();
   } catch (err) {
+    if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
     notificationsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
   notificationsEmptyEl.hidden = notifications.length > 0;
   for (const notification of notifications) {
     const row = document.createElement('div');
