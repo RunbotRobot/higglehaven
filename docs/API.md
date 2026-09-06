@@ -1732,7 +1732,12 @@ landlet before validation, except `ownerBuilderId`: that field is always
 force-preserved at its existing value regardless of what the request body
 sends, the same way `PUT /api/catalog/:templateId` never reassigns
 `sellerId` — reassigning ownership only happens through claim or auction
-resolution.
+resolution. For the same reason, on an unowned landlet `status` is also
+force-preserved at its existing value regardless of what the request body
+sends — otherwise an unauthenticated caller could flip a landlet to
+`status: "claimed"` with no owner ever assigned, permanently removing it
+from the claimable pool with no way back. Claimed-state transitions only
+ever happen through claim or auction resolution too.
 
 ### `DELETE /api/landlets/:landletId`
 

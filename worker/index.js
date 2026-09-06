@@ -3131,6 +3131,18 @@ async function handleLandlets(request, db, route, url) {
       assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     }
     const input = await readJson(request);
+    // `status` needs the same pinning as `ownerBuilderId` above, for the
+    // same reason: an unowned landlet's `status` is otherwise settable to
+    // `'claimed'` by anyone, with no owner ever assigned — the exact
+    // "claimed implies non-null owner" invariant every other call site in
+    // this file relies on (recomputeLandCap, explainClaimConflict, ...),
+    // broken with no login and no way back (a `'claimed'` landlet never
+    // matches `explainClaimConflict`'s available-greenbelt check again).
+    // Claimed-state transitions only ever happen through the dedicated
+    // claim/auction endpoints, same as ownership transfer itself.
+    if (existing.owner_builder_id === null) {
+      input.status = existing.status;
+    }
     const landlet = validateLandlet(
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
