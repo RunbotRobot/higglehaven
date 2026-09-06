@@ -2437,6 +2437,20 @@ sellerPreviewHintEl.className = 'seller-preview-hint';
 const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
 let axisPreview = null;
 
+// showAxisPreview awaits a model load (createMeshForInstance) before
+// building its scene; if it's invoked again — e.g. a seller toggling two
+// extensibility-axis checkboxes back-to-back — before that await resolves,
+// disposeAxisPreview() at the new call's start is a no-op (axisPreview is
+// still whatever it was before either call started), so without this guard
+// both calls would go on to build their own WebGLRenderer/OrbitControls
+// bound to the same shared sellerPreviewCanvas and race to overwrite the
+// shared axisPreview — the same bug shape already fixed once in
+// loadLandletMap (commit 80625ff, issue #125). Each call captures the
+// token's value before it starts awaiting, then checks it's still the
+// latest afterward; a superseded call bails out quietly instead of
+// building anything.
+let axisPreviewLoadToken = 0;
+
 function mountPreviewInto(container) {
   container.appendChild(sellerPreviewCanvas);
   container.appendChild(sellerPreviewHintEl);
@@ -2492,6 +2506,7 @@ function makeAxisLabelSprite(text, colorHex) {
 // X/Y/Z legend (nothing checked yet); a non-empty one turns those axes
 // bright yellow and mutes the rest to gray.
 async function showAxisPreview(template, container, highlightAxes) {
+  const myLoadToken = ++axisPreviewLoadToken;
   disposeAxisPreview();
   mountPreviewInto(container);
 
@@ -2511,6 +2526,7 @@ async function showAxisPreview(template, container, highlightAxes) {
     rotationX: 0, rotationY: 0, rotationZ: 0,
     crop: {},
   });
+  if (myLoadToken !== axisPreviewLoadToken) return; // superseded while loading — a newer call owns the preview now
   if (!previewObject) return;
   scene.add(previewObject);
 
