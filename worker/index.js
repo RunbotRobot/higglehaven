@@ -2979,6 +2979,24 @@ async function handleResetPassword(request, db) {
   return json({ reset: true });
 }
 
+// #199: a seller's claimed landlet (aliased `owned` by every caller of
+// this fragment) stops locking their "one claimed landlet" slot the
+// moment they've committed to giving it up — a $0-starting auction is
+// that commitment from the instant it starts; any other starting bid
+// becomes the same commitment as soon as the first bid lands, since a bid
+// guarantees the land eventually transfers either way (docs/SPEC.md §5).
+// Purely derived from auctions/auction_bids already on hand, no new
+// landlet state — ownership itself doesn't move until the auction
+// actually resolves (resolveAuction), so this only changes claim
+// eligibility, never who currently owns/builds on the landlet.
+const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
+  SELECT 1 FROM auctions
+  WHERE auctions.landlet_id = owned.landlet_id AND auctions.status = 'active'
+    AND (auctions.starting_bid_cents = 0 OR EXISTS (
+      SELECT 1 FROM auction_bids WHERE auction_bids.auction_id = auctions.auction_id
+    ))
+)`;
+
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
     return handleLandletVersions(request, db, route, url);
@@ -3084,8 +3102,9 @@ async function handleLandlets(request, db, route, url) {
         AND owner_builder_id IS NULL
         AND land_type != 'water'
         AND NOT EXISTS (
-          SELECT 1 FROM landlets
-          WHERE owner_builder_id = ? AND status = 'claimed'
+          SELECT 1 FROM landlets AS owned
+          WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+            AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
         )
     `).bind(builderId, route[1], builderId).run();
 
@@ -4080,7 +4099,12 @@ async function explainClaimConflict(db, landletId, builderId) {
     throw new HttpError('Landlet is not available to claim', 409);
   }
 
-  const owned = await db.prepare("SELECT landlet_id FROM landlets WHERE owner_builder_id = ? AND status = 'claimed' LIMIT 1").bind(builderId).first();
+  const owned = await db.prepare(`
+    SELECT landlet_id FROM landlets AS owned
+    WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+      AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+    LIMIT 1
+  `).bind(builderId).first();
   if (owned) throw new HttpError('Builder already owns a claimed landlet', 409);
 
   throw new HttpError('Landlet could not be claimed', 409);

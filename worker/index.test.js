@@ -3495,6 +3495,61 @@ describe('Auctions', () => {
     // stuck resolving the same subset forever.
     expect(dueAfterSecondCall.count).toBe(0);
   });
+
+  it('frees a $0-starting-bid seller to claim another landlet immediately, before the auction resolves', async () => {
+    const seller = await signupBuilder('release-zero-seller');
+    await createGreenbeltLandlet('release-zero-landlet-a');
+    await createGreenbeltLandlet('release-zero-landlet-b');
+    await claim('release-zero-landlet-a', seller);
+
+    // Before starting an auction, the ordinary one-claimed-landlet lock
+    // still applies.
+    const beforeAuction = await claim('release-zero-landlet-b', seller);
+    expect(beforeAuction.response.status).toBe(409);
+
+    await api('/landlets/release-zero-landlet-a/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+
+    // Starting a $0 auction is itself the commitment to give the land up —
+    // the lock frees immediately, with no bid needed and well before the
+    // auction's own end time.
+    const afterAuctionStart = await claim('release-zero-landlet-b', seller);
+    expect(afterAuctionStart.response.status).toBe(200);
+
+    // The original landlet is still nominally theirs (build/display
+    // purposes) until the auction actually resolves.
+    const original = await api('/landlets/release-zero-landlet-a');
+    expect(original.body.landlet.ownerBuilderId).toBe(seller.builderId);
+    expect(original.body.landlet.status).toBe('claimed');
+  });
+
+  it('frees a reserved-bid seller to claim another landlet only once the first bid lands', async () => {
+    const seller = await signupBuilder('release-bid-seller');
+    const bidder = await signupBuilder('release-bid-bidder');
+    await createGreenbeltLandlet('release-bid-landlet-a');
+    await createGreenbeltLandlet('release-bid-landlet-b');
+    await claim('release-bid-landlet-a', seller);
+
+    const started = await api('/landlets/release-bid-landlet-a/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 5000 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    // A reserved (non-$0) auction with no bids yet is not a commitment to
+    // give the land up — still locked.
+    const beforeBid = await claim('release-bid-landlet-b', seller);
+    expect(beforeBid.response.status).toBe(409);
+
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 5000 }),
+    }));
+
+    // The first bid guarantees the land eventually transfers, so the lock
+    // frees now, not at resolution.
+    const afterBid = await claim('release-bid-landlet-b', seller);
+    expect(afterBid.response.status).toBe(200);
+  });
 });
 
 // The Auctions tests above exercise notification creation as a side effect
