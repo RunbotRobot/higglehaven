@@ -75,6 +75,7 @@ import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, for
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
+import { bordersWater } from './landletAdjacency.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -9462,7 +9463,14 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    // #221: shoreline scarcity is meant to be organically discovered, not
+    // mechanically boosted (docs/SPEC.md §1) — this only surfaces the fact
+    // a builder could otherwise only notice by eyeballing the map, computed
+    // fresh from the same landlets this flyover already fetched rather than
+    // a stored flag. See src/landletAdjacency.js for why a bounding-circle
+    // approximation is good enough here.
+    const waterNote = bordersWater(landlet, landlets) ? ' · Borders water' : '';
+    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}${waterNote}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
