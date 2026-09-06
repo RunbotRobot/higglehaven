@@ -74,6 +74,7 @@ import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -2019,6 +2020,21 @@ let uploadModelUrl = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
+// handleUploadFileStep runs a long async chain (optimize -> upload ->
+// measure -> showUploadDimensionPreview) before committing to the shared
+// state above and advancing uploadStep. uploadCancelBtn stays enabled
+// throughout, and reopening the modal force-resets uploadSubmitBtn's
+// disabled state — so without a guard, canceling mid-upload (or a fast
+// cancel-then-reopen, or reopen-and-resubmit) could let a stale call's
+// awaits resolve later and silently resurrect/overwrite a canceled or
+// superseded upload's UI state. Same monotonic load-token pattern already
+// used for this exact bug shape elsewhere in this file (loadLandletMap,
+// commit 80625ff; showAxisPreview, issue #205): bumped both when a new
+// handleUploadFileStep call starts and whenever resetUploadModalToFileStep
+// runs (cancel or reopen), checked after every await, with a superseded
+// call bailing out before touching shared state further.
+let uploadFlowToken = 0;
+
 function setUploadStatus(text, isError) {
   uploadStatusEl.textContent = text;
   uploadStatusEl.classList.toggle('error', Boolean(isError));
@@ -2050,6 +2066,7 @@ function disposeUploadDimensionPreview() {
 }
 
 function resetUploadModalToFileStep() {
+  uploadFlowToken++; // invalidate any in-flight handleUploadFileStep call
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadOriginalDimensions = null;
@@ -2177,6 +2194,7 @@ function makeDimensionLabelSprite(text, colorHex) {
 // every possible edit renders identically, so only the label text needs
 // to change as the seller types (see updateUploadDimensionLabels).
 async function showUploadDimensionPreview(modelUrl) {
+  const myFlowToken = uploadFlowToken;
   disposeUploadDimensionPreview();
 
   const canvas = document.createElement('canvas');
@@ -2190,6 +2208,7 @@ async function showUploadDimensionPreview(modelUrl) {
   scene.add(sun);
 
   const previewObject = await loadModelInstance(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
 
   const box = new THREE.Box3().setFromObject(previewObject);
@@ -2261,6 +2280,7 @@ async function handleUploadFileStep() {
     return;
   }
 
+  const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
   try {
     let uploadable = file;
@@ -2280,10 +2300,13 @@ async function handleUploadFileStep() {
       console.warn('Client-side model optimization failed, uploading original file:', err);
       setUploadStatus('Could not auto-reduce the model — uploading as-is…');
     }
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
     const { modelUrl } = await uploadModelFile(uploadable);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while measuring
     uploadModelUrl = modelUrl;
     uploadOriginalDimensions = dimensions;
     setUploadDimensionInputs(dimensions);
@@ -2291,6 +2314,7 @@ async function handleUploadFileStep() {
 
     setUploadStatus('Loading preview…');
     await showUploadDimensionPreview(modelUrl);
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
 
     uploadStep = 'dimensions';
     uploadModalTitleEl.textContent = 'Confirm Dimensions';
@@ -2299,10 +2323,11 @@ async function handleUploadFileStep() {
     uploadSubmitBtn.textContent = 'Create Product';
     setUploadStatus('');
   } catch (err) {
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product upload failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
   } finally {
-    uploadSubmitBtn.disabled = false;
+    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
 }
 
@@ -7321,8 +7346,8 @@ let shopTappedProduct = null;
 // lists): this runs every frame over every currently-loaded placed item —
 // the same set shopPositionBlocked already walks for collision — and
 // additionally requires the avatar to actually be looking toward the item,
-// not merely standing near it. No consumer yet (that's #216); this only
-// exposes the primitive.
+// not merely standing near it. Consumed by updateShopItemHandling below
+// (#216).
 const SHOP_ATTENTION_RADIUS_M = 4; // matches SIGN_FADE_NEAR_M's own "close enough to interact" scale
 const SHOP_ATTENTION_FOV_COS = Math.cos(THREE.MathUtils.degToRad(20)); // within ~20 degrees of dead-center
 const SHOP_ATTENTION_DWELL_S = 1.5; // how long a target must hold attention before it counts as "sustained"
@@ -7331,6 +7356,31 @@ let shopAttentionElapsedS = 0; // seconds shopAttentionTarget has held it, conti
 const scratchAttentionWorldPos = new THREE.Vector3();
 const scratchAttentionToItem = new THREE.Vector3();
 const scratchAttentionForward = new THREE.Vector3();
+
+// Item-handling animations (#216, sub-issue of #207 — docs/SPEC.md §2:
+// "pick-up-and-turn for small items, walk-around for furniture-scale"),
+// triggered by hasSustainedShopAttention() above. Both are pose-only —
+// deliberately not moving shopAvatarPosition at all (no orbiting toward
+// the item, no real "walking"): actually relocating the avatar
+// autonomously is real, riskier scope (camera/collision/player-control
+// interplay) this pass isn't taking on — see updateShopItemHandling's own
+// comment. shopHandlingTarget is captured once when a play starts and
+// held steady through that whole play (including its ease-out), rather
+// than tracking shopAttentionTarget live — so a play already in progress
+// can't stutter if the avatar's own animation briefly nudges it out of
+// updateShopAttention's FOV cone.
+const SHOP_ITEM_SMALL_MAX_DIMENSION_M = 0.5; // at/under this on every axis: pick-up-and-turn; above: walk-around
+const SHOP_HANDLING_MAX_DURATION_S = 4; // caps any single play — see shouldEndItemHandling's own comment
+const SHOP_HANDLING_BLEND_PER_S = 4; // ease in/out of the handling pose — matches SHOP_IDLE_BLEND_PER_S's own feel
+const SHOP_HANDLING_ARM_RAISE_RAD = 1.1; // pick-up-and-turn: how far the arms lift toward a chest-height "holding" pose
+const SHOP_HANDLING_TURN_AMPLITUDE_RAD = 0.5; // pick-up-and-turn: how far the "turning it over" yaw sway swings each way
+const SHOP_HANDLING_TURN_PERIOD_S = 2.4; // pick-up-and-turn: one full back-and-forth cycle
+const SHOP_HANDLING_SPIN_PERIOD_S = 5; // walk-around: one full circling rotation
+let shopHandlingActive = false; // true while a play is running (not yet ended, even if still easing in)
+let shopHandlingTarget = null; // mesh the current/fading-out play is about, or null once fully eased out
+let shopHandlingElapsedS = 0; // seconds since this play started — see SHOP_HANDLING_MAX_DURATION_S
+let shopHandlingBlend = 0; // 0..1, eased toward 1 while playing, 0 otherwise
+let shopHandlingPhase = 0; // radians — see nextPhase's own comment for how each kind uses it
 
 // THREE's camera looks down its own local -Z by default, with +Y as local
 // "up" — a convention for a Y-up world, not this app's Z-up one. Composing
@@ -7986,6 +8036,7 @@ function updateShopMovement(now) {
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
   updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
+  updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // The avatar faces its own movement direction (shopAvatarFacing, turned
   // by the left stick above), not the camera's look direction (shopYaw,
   // the right stick) — a standard third-person rig where free-look and
@@ -8043,6 +8094,52 @@ function updateShopAttention(dt) {
 // shopAttentionElapsedS's raw values directly.
 function hasSustainedShopAttention() {
   return hasSustainedAttention(shopAttentionTarget, shopAttentionElapsedS, SHOP_ATTENTION_DWELL_S);
+}
+
+// Called every frame right after updateShopAvatarPose/updateShopAvatarIdle,
+// whose arm/yaw values it adds on top of — see shopHandlingTarget's own
+// comment above for why this doesn't touch shopAvatarPosition at all.
+// Starting a play requires being grounded and not already moving (walking
+// and item-handling are mutually exclusive, the same rule
+// updateShopAvatarIdle's own comment already documents for idle); once
+// started, shouldEndItemHandling decides when it stops.
+function updateShopItemHandling(dt, moveMagnitude, airborne) {
+  if (!shopHandlingActive && !airborne && moveMagnitude === 0 && hasSustainedShopAttention()) {
+    shopHandlingActive = true;
+    shopHandlingTarget = shopAttentionTarget;
+    shopHandlingElapsedS = 0;
+    shopHandlingPhase = 0;
+  }
+  if (shopHandlingActive) {
+    shopHandlingElapsedS += dt;
+    if (shouldEndItemHandling({ airborne, moveMagnitude, elapsedS: shopHandlingElapsedS, maxDurationS: SHOP_HANDLING_MAX_DURATION_S })) {
+      shopHandlingActive = false;
+    }
+  }
+
+  shopHandlingBlend = nextHandlingBlend(shopHandlingBlend, shopHandlingActive, SHOP_HANDLING_BLEND_PER_S, dt);
+  if (shopHandlingBlend < 1e-3) {
+    shopHandlingTarget = null;
+    return;
+  }
+
+  const { width, depth, height } = meshDimensions(shopHandlingTarget);
+  const kind = classifyHandlingKind(Math.max(width, depth, height), SHOP_ITEM_SMALL_MAX_DIMENSION_M);
+
+  if (kind === 'pick-up-and-turn') {
+    shopHandlingPhase = nextPhase(shopHandlingPhase, SHOP_HANDLING_TURN_PERIOD_S, dt);
+    const raise = SHOP_HANDLING_ARM_RAISE_RAD * shopHandlingBlend;
+    shopAvatar.armPivotL.rotation.x -= raise;
+    shopAvatar.armPivotR.rotation.x -= raise;
+    shopIdleSwayYawOffset += Math.sin(shopHandlingPhase) * SHOP_HANDLING_TURN_AMPLITUDE_RAD * shopHandlingBlend;
+  } else {
+    // walk-around: a continuous one-direction spin (phase used directly as
+    // a yaw angle, not run through sin like the back-and-forth sway
+    // above) — reads as circling the item to view every side, purely
+    // through body rotation. No arm raise: nothing's being held.
+    shopHandlingPhase = nextPhase(shopHandlingPhase, SHOP_HANDLING_SPIN_PERIOD_S, dt);
+    shopIdleSwayYawOffset += shopHandlingPhase * shopHandlingBlend;
+  }
 }
 
 function updateShopProximity() {
