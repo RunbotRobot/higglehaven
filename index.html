@@ -676,6 +676,69 @@
         flex-direction: column-reverse;
         gap: 8px;
       }
+      /* Vertical construction (issue #169) — bottom-center, clear of
+         #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
+         right), the same "always in the DOM, hidden from Shop mode only
+         via SHOP_HIDDEN_BUILDER_UI_IDS" convention as every other
+         Build-only panel here (see main.js). */
+      #level-controls {
+        position: fixed;
+        bottom: 44px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      #level-nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #level-nav button {
+        border: none;
+        background: none;
+        color: inherit;
+        font: inherit;
+        padding: 0 4px;
+      }
+      #level-nav button:disabled {
+        opacity: 0.35;
+      }
+      #level-label {
+        min-width: 5.5em;
+        text-align: center;
+      }
+      #level-build-btn, #level-dig-btn, #level-remove-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #level-remove-btn {
+        background: var(--danger);
+        color: #fff;
+      }
+      #level-status:not(:empty) {
+        font-size: 13px;
+        color: var(--pill-text);
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 6px 14px;
+        border-radius: 999px;
+      }
+      #level-status.error {
+        color: #fff;
+        background: var(--danger);
+      }
       #add-item-btn {
         padding: 8px 16px;
         border-radius: 999px;
@@ -2558,6 +2621,17 @@
       <button id="toggle-community-sign" type="button">Community Sign</button>
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="delete-item" type="button">Delete</button>
+    </div>
+    <div id="level-controls">
+      <div id="level-nav">
+        <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
+        <span id="level-label">Ground</span>
+        <button id="level-up-btn" type="button" aria-label="Level up">&#9650;</button>
+      </div>
+      <button id="level-build-btn" type="button">Build Level Above</button>
+      <button id="level-dig-btn" type="button">Dig Level Below</button>
+      <button id="level-remove-btn" type="button" hidden>Remove This Level</button>
+      <div id="level-status"></div>
     </div>
     <div id="add-item-panel">
       <button id="add-item-btn" type="button">+ Add Item</button>

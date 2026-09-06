@@ -29,6 +29,9 @@ import {
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
+  fetchLandletLevels,
+  addLandletLevel,
+  deleteLandletLevel,
   fetchWorld,
   fetchBuilders,
   fetchMyBuilder,
@@ -158,6 +161,43 @@ const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
 // using a flat plane instead of a curved one for the ground right now — get
 // the mechanic working, model the real geometry later.
 const LANDLET_HEIGHT_M = 10;
+
+// Vertical construction (issue #167/#168/#169): the current lándlet's own
+// ground-level area (needed to preview a level's cap cost client-side
+// before committing, matching worker/index.js's levelCapConsumedM2 exactly)
+// and its already-built levels beyond ground (worker/index.js's
+// landlet_levels, fetched alongside landletRecord in bootstrap() — see
+// fetchLandletLevels). currentLevelIndex is which one Build mode is
+// currently viewing/editing — 0 is the ground level every lándlet already
+// has (never a real landlet_levels row); see renderLevelControls. Levels
+// stack directly with no gaps (matching the backend's own assumption),
+// each occupying [levelIndex * LANDLET_HEIGHT_M, (levelIndex + 1) *
+// LANDLET_HEIGHT_M) — level 0 is exactly today's existing [0, 10) range.
+let currentLandletAreaM2 = LANDLET_AREA_M2;
+let currentLandletLevels = [];
+let currentLevelIndex = 0;
+
+function levelFloorZ(levelIndex) {
+  return levelIndex * LANDLET_HEIGHT_M;
+}
+
+// Mirrors worker/index.js's own levelCapConsumedM2 exactly (same formula,
+// same sampling point) so the cost this previews before a builder commits
+// to a new level is never off from what the server will actually charge.
+function levelCapConsumedM2(landletAreaM2, levelIndex) {
+  const scale = footprintScaleAtHeight(levelIndex * LANDLET_HEIGHT_M);
+  return landletAreaM2 * scale * scale;
+}
+
+function levelExtent() {
+  const indices = currentLandletLevels.map((level) => level.levelIndex);
+  return { top: Math.max(0, ...indices), bottom: Math.min(0, ...indices) };
+}
+
+function levelLabel(levelIndex) {
+  if (levelIndex === 0) return 'Ground';
+  return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
+}
 
 const canvas = document.getElementById('app');
 
@@ -421,9 +461,22 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // renders two lándlets' buildable volumes together to make this visible
 // anyway; the real fix is the same reprojection-from-Earth's-center #166
 // already defers, not something to half-solve here.
+//
+// issue #169: the floor/ceiling used to be hardcoded to ground level's own
+// [0, LANDLET_HEIGHT_M) — now taken from whichever level Build mode is
+// currently viewing/editing (currentLevelIndex/levelFloorZ), so an item
+// placed while looking at Level +1 or Level -1 clamps into *that* level's
+// own 10m slab instead of always snapping back into ground's. z itself
+// stays an absolute height above ground throughout (matching how a level
+// is identified purely by z falling in its own range — see
+// currentLandletLevels' own comment), so footprintScaleAtHeight below still
+// gets the real, correct height for the cone's cross-section at that
+// point, continuously, exactly as it always has for ground level.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = meshDimensions(mesh);
-  const clampedZ = THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2);
+  const floorZ = levelFloorZ(currentLevelIndex);
+  const ceilingZ = floorZ + LANDLET_HEIGHT_M;
+  const clampedZ = THREE.MathUtils.clamp(z, floorZ + height / 2, ceilingZ - height / 2);
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -691,8 +744,10 @@ translateControls.addEventListener('objectChange', () => {
       maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
       minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
       maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
-      minOffsetZ = Math.max(minOffsetZ, height / 2 - start.z);
-      maxOffsetZ = Math.min(maxOffsetZ, LANDLET_HEIGHT_M - height / 2 - start.z);
+      // issue #169: bounded by whichever level is currently being viewed/
+      // edited, same as clampToLandlet's own single-item case.
+      minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
+      maxOffsetZ = Math.min(maxOffsetZ, levelFloorZ(currentLevelIndex) + LANDLET_HEIGHT_M - height / 2 - start.z);
     }
     const offset = new THREE.Vector3(
       THREE.MathUtils.clamp(totalOffset.x, minOffsetX, maxOffsetX),
@@ -4260,6 +4315,113 @@ const pasteBtn = document.getElementById('paste-btn');
 const undoBtn = document.getElementById('undo-btn');
 const redoBtn = document.getElementById('redo-btn');
 
+// Vertical construction (issue #169) — Build-mode controls for digging
+// down/building up a level and navigating between whichever ones already
+// exist on this lándlet. See LANDLET_HEIGHT_M's own block comment above for
+// currentLevelIndex/currentLandletLevels/levelFloorZ/levelCapConsumedM2.
+const levelLabelEl = document.getElementById('level-label');
+const levelDownBtn = document.getElementById('level-down-btn');
+const levelUpBtn = document.getElementById('level-up-btn');
+const levelBuildBtn = document.getElementById('level-build-btn');
+const levelDigBtn = document.getElementById('level-dig-btn');
+const levelRemoveBtn = document.getElementById('level-remove-btn');
+const levelStatusEl = document.getElementById('level-status');
+
+function setLevelStatus(message, { isError = false } = {}) {
+  levelStatusEl.textContent = message ?? '';
+  levelStatusEl.classList.toggle('error', isError);
+}
+
+// How far the camera/orbit target have already been shifted for whichever
+// level was last rendered — renderLevelControls applies only the
+// *additional* delta each time, on top of the camera position/orbit
+// target's own value (itself free to have moved via ordinary
+// pinch/drag/scroll since), rather than resetting either outright and
+// discarding wherever the builder was actually looking.
+let lastAppliedLevelFloorZ = 0;
+
+// Re-renders the nav/build/dig/remove controls from currentLevelIndex +
+// currentLandletLevels, and moves the ground mesh to visually sit at
+// whichever level's own floor is now being viewed — a plain vertical
+// translation of the already-curved geometry (see curveGroundGeometry's own
+// comment on why a rigid shift like this doesn't need to redo that curving
+// work: at most a few dozen meters even after digging/building several
+// levels, against Earth's ~6.371 million meter radius, the same
+// "genuinely tiny at this scale" trade-off #135/#136 already accepted).
+// levelBuildBtn/levelDigBtn always preview the cost of extending the
+// lándlet's *true* top/bottom by one — not whichever level currentLevelIndex
+// happens to be viewing — since that's what POSTing 'up'/'down' actually
+// does server-side regardless of where the builder is currently looking.
+function renderLevelControls() {
+  const { top, bottom } = levelExtent();
+  currentLevelIndex = THREE.MathUtils.clamp(currentLevelIndex, bottom, top);
+  levelLabelEl.textContent = levelLabel(currentLevelIndex);
+  levelDownBtn.disabled = currentLevelIndex <= bottom;
+  levelUpBtn.disabled = currentLevelIndex >= top;
+  const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
+  const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
+  levelBuildBtn.textContent = `Build Level Above (${upCostM2.toFixed(2)} m²)`;
+  levelDigBtn.textContent = `Dig Level Below (${downCostM2.toFixed(2)} m²)`;
+  // Only the outermost existing level (in whichever direction it's on) can
+  // actually be removed (worker/index.js's own 409 otherwise) — ground
+  // (index 0) is never a real row and can never be removed at all.
+  levelRemoveBtn.hidden = currentLevelIndex === 0;
+  const floorZ = levelFloorZ(currentLevelIndex);
+  landlet.position.z = floorZ;
+  const cameraDeltaZ = floorZ - lastAppliedLevelFloorZ;
+  if (cameraDeltaZ !== 0) {
+    camera.position.z += cameraDeltaZ;
+    controls.target.z += cameraDeltaZ;
+    controls.update();
+  }
+  lastAppliedLevelFloorZ = floorZ;
+}
+
+function navigateToLevel(levelIndex) {
+  const { top, bottom } = levelExtent();
+  currentLevelIndex = THREE.MathUtils.clamp(levelIndex, bottom, top);
+  setLevelStatus('');
+  renderLevelControls();
+}
+levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex - 1));
+levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
+
+async function addLevel(direction, button, failureMessage) {
+  button.disabled = true;
+  try {
+    const level = await addLandletLevel(currentLandletId, direction);
+    currentLandletLevels.push(level);
+    currentLevelIndex = level.levelIndex;
+    setLevelStatus('');
+    renderLevelControls();
+  } catch (err) {
+    // A 409 here (the two hard limits — depth/10m² footprint — worker/
+    // index.js's handleLandletLevels enforces) is expected, normal input
+    // rejection, not a bug: surfaced inline exactly as the server phrased
+    // it, same as every other builder-facing action's error handling here.
+    setLevelStatus(err.message || failureMessage, { isError: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+levelBuildBtn.addEventListener('click', () => addLevel('up', levelBuildBtn, 'Could not build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', levelDigBtn, 'Could not dig a new level.'));
+
+levelRemoveBtn.addEventListener('click', async () => {
+  levelRemoveBtn.disabled = true;
+  try {
+    await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
+    currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
+    setLevelStatus('');
+    renderLevelControls();
+  } catch (err) {
+    setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
+  } finally {
+    levelRemoveBtn.disabled = false;
+  }
+});
+
 // Snapshot-based rather than per-action command objects: a "snapshot" is
 // just the same plain instance-shape persistLayout()/instanceFromMesh()
 // already produce, so undo/redo is "swap the whole layout for an earlier
@@ -5472,7 +5634,12 @@ async function handlePlacementClick() {
     return; // tapped empty sky — nothing to place onto, leave placement pending
   }
 
-  const supportZ = supportingMesh ? supportingMesh.position.z + meshDimensions(supportingMesh).height / 2 : 0;
+  // issue #169: tapping bare ground (no supporting product beneath the
+  // click) places onto whichever level's own floor is currently being
+  // viewed/edited, not always ground's z=0.
+  const supportZ = supportingMesh
+    ? supportingMesh.position.z + meshDimensions(supportingMesh).height / 2
+    : levelFloorZ(currentLevelIndex);
 
   const pending = pendingPlacement;
   pendingPlacement = null;
@@ -8792,6 +8959,7 @@ function unloadShopLandletInstances(entry) {
 // trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'level-controls',
 ];
 
 async function enterShopMode() {
@@ -9580,26 +9748,34 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles, shared] = await Promise.all([
+    const [catalog, remoteInstances, landletRecord, bundles, shared, levels] = await Promise.all([
       fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
+      fetchLandletLevels(currentLandletId),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
     myBundles = bundles;
     communityBundles = shared;
     applyLandletShape(landletRecord);
+    currentLandletAreaM2 = landletRecord.areaM2;
+    currentLandletLevels = levels;
+    currentLevelIndex = 0;
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
     myBundles = [];
     communityBundles = [];
     currentLandletId = 'starter-landlet';
+    currentLandletAreaM2 = LANDLET_AREA_M2;
+    currentLandletLevels = [];
+    currentLevelIndex = 0;
     // A previously-saved instance list (builder additions/removals/moves)
     // entirely replaces the starter set — not merged with it — since the
     // starter set is just a first-visit default, not content to preserve
     // alongside whatever the builder has actually done.
     instances = loadInstances() ?? DEFAULT_INSTANCES;
   }
+  renderLevelControls();
 
   buildCatalogPickerButtons();
   renderBundlePicker();
