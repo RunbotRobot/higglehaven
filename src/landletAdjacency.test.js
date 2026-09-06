@@ -8,10 +8,14 @@ describe('landletReachM', () => {
   });
 
   it('uses the farthest polygon vertex from center when a polygon is given', () => {
+    // {x, y} objects, matching every real caller's actual polygon shape
+    // (src/main.js) — a tuple-array shape here masked a real production
+    // crash (#250), since destructuring [x, y] out of a plain object
+    // throws instead of iterating.
     const polygon = [
-      [1, 0],
-      [0, 3],
-      [-1, -1],
+      { x: 1, y: 0 },
+      { x: 0, y: 3 },
+      { x: -1, y: -1 },
     ];
     expect(landletReachM(polygon, 999)).toBeCloseTo(3, 10);
   });
@@ -58,5 +62,39 @@ describe('bordersWater', () => {
   it('ignores itself even if somehow present in the candidate list', () => {
     const self = { ...buildable };
     expect(bordersWater(self, [self])).toBe(false);
+  });
+
+  it('does not crash on a real {x, y}-shaped polygon (regression test for #250)', () => {
+    // Every real caller (src/main.js) stores polygon vertices as {x, y}
+    // objects, not [x, y] tuples — every other case in this file uses
+    // polygon: null, so this is the one exercising the actual production
+    // data shape all the way through bordersWater -> areLandletsAdjacent
+    // -> landletReachM.
+    const realBuildable = {
+      landletId: 'real-b1',
+      landType: 'buildable',
+      center: { x: 0, y: 0 },
+      areaM2: 1000,
+      polygon: [
+        { x: -15.8, y: -15.8 },
+        { x: 15.8, y: -15.8 },
+        { x: 15.8, y: 15.8 },
+        { x: -15.8, y: 15.8 },
+      ],
+    };
+    const realWater = {
+      landletId: 'real-w1',
+      landType: 'water',
+      center: { x: 20, y: 0 },
+      areaM2: 50,
+      polygon: [
+        { x: -5, y: -5 },
+        { x: 5, y: -5 },
+        { x: 5, y: 5 },
+        { x: -5, y: 5 },
+      ],
+    };
+    expect(() => bordersWater(realBuildable, [realWater])).not.toThrow();
+    expect(bordersWater(realBuildable, [realWater])).toBe(true);
   });
 });
