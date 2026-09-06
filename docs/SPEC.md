@@ -1,4 +1,4 @@
-# higglehaven — Specification Document (v16)
+# higglehaven — Specification Document (v17)
 
 *Renamed from Shoplándia (v9) after a full IP clearance check (USPTO, WIPO, WA Secretary of State, domain, social/marketplace platforms) found real collision risk with the "Shoplándia" name and confirmed "higglehaven" clean across all checks. Naming convention unchanged: plain "a" internally (code, files, DB, APIs — `land`, `landlet`, `daller`), á reserved for customer-facing display only.*
 
@@ -22,6 +22,8 @@
 **It's a website, wrapped for app stores later** (Capacitor/Electron-style), not a separate native codebase — same strategy Roblox itself uses.
 
 **Scale (corrected):** 1 virtual unit = 1 real **meter** (not foot). A standard 1,000 m² lándlet plot is roughly 31.6×31.6 m if square (irregular puzzle-piece plots vary). World built on an **Earth-curvature coordinate system from day one** (not a flat plane) — avoids a painful future migration.
+
+**Earth model and world-origin anchor (P138, owner decision):** a plain **sphere** (Earth's real, very slightly oblate shape is imperceptible at any near-term realistic scale — not worth the added complexity of a true ellipsoid), using Earth's **IUGG mean radius** (6,371,000 m — `DEFAULT_EARTH_RADIUS_M` in `worker/earthCurvature.js`). The world's local origin `(0, 0)` maps to a real-world anchor point — **2066 McGilvra Blvd E, Seattle, WA 98112** (47.638887°N, 122.280433°W), on the shore of Lake Washington — which is also the pivot §2's 210-degree rotational offset rotates around.
 
 **Coordinates:** floating-point decimal meters (1.0 = 1 meter), not integers.
 

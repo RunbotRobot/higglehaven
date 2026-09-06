@@ -9,12 +9,12 @@
 // imperceptible simplification at this scale" call docs/SPEC.md §3 already
 // makes for above/below-ground cap asymmetry ("the difference is
 // imperceptible at any near-term realistic scale, but the underlying world
-// architecture must be built correctly from the start"). DEFAULT_EARTH_RADIUS_M
-// is a placeholder pending #138's owner decision (sphere vs. real ellipsoid,
-// exact radius constant) — every function below takes earthRadiusM as an
-// explicit parameter for exactly that reason: swapping in #138's real
-// answer later never touches this module's logic, and tests can use small,
-// easy-to-verify radii instead of a real-world-scale one.
+// architecture must be built correctly from the start"). #138's owner
+// decision confirms this (sphere over a real ellipsoid — "I can't imagine a
+// sphere would be problematic") and settles DEFAULT_EARTH_RADIUS_M as final,
+// not a placeholder — every function below still takes earthRadiusM as an
+// explicit parameter regardless, since that costs nothing and lets tests use
+// small, easy-to-verify radii instead of a real-world-scale one.
 //
 // Coordinate convention: inputs/outputs are WORLD-flat coordinates — the
 // single flat (x, y) plane every landlet's own polygon already gets placed
@@ -39,7 +39,22 @@
 // either picture, only where "up" points and how a straight line curves
 // changes.
 
-export const DEFAULT_EARTH_RADIUS_M = 6371000; // IUGG mean Earth radius — see #138.
+export const DEFAULT_EARTH_RADIUS_M = 6371000; // IUGG mean Earth radius — #138's owner decision: mean, not equatorial/polar, since a sphere has no distinction between them and mean is the standard single-number stand-in for a real (very slightly oblate) planet.
+
+// #138's owner decision: the world's local origin (0, 0) — the single fixed
+// point every flat-map coordinate in this module measures distance/bearing
+// from — maps to this real-world point: 2066 McGilvra Blvd E, Seattle, WA
+// 98112, on the shore of Lake Washington (docs/SPEC.md §1's own "actual Lake
+// Washington... pre-1916" detail already anchors this app's macro-geography
+// there). Also the pivot §2's "210-degree rotational offset applied once
+// during real-world-to-higglehaven coordinate mapping" rotates around, per
+// the same decision. Latitude/longitude only — this module's own math never
+// needs them (everything here works in flat world-meters already, per its
+// own coordinate-convention note above); they exist for whatever eventually
+// ingests real-world terrain/hydrology data (#219) and needs to know which
+// real-world point this world's (0, 0) actually corresponds to.
+export const WORLD_ORIGIN_LATITUDE = 47.638887;
+export const WORLD_ORIGIN_LONGITUDE = -122.280433;
 
 // True 3D position (same units, ground-tangent-at-the-origin frame) for a
 // point given in flat map coordinates. Rendering can consume this
