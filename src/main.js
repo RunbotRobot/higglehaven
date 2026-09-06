@@ -5339,6 +5339,14 @@ const signPostsListEl = document.getElementById('sign-posts-list');
 const signPostsEmptyEl = document.getElementById('sign-posts-empty');
 const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
 let signPostsTargetMesh = null;
+// Guards against reopening this modal on a different mesh before an
+// earlier renderSignPosts()'s own await resolves — without it, the
+// earlier call's stale fetch can land after the target has switched and
+// append its rows (with the old instanceId baked into each delete
+// button) onto a list the user now believes belongs to the new mesh.
+// Same pattern as axisPreviewLoadToken/claimMapLoadToken elsewhere in
+// this file.
+let signPostsLoadToken = 0;
 
 function formatSignPostTime(isoString) {
   const date = new Date(isoString);
@@ -5348,15 +5356,18 @@ function formatSignPostTime(isoString) {
 async function renderSignPosts() {
   signPostsListEl.innerHTML = '';
   if (!signPostsTargetMesh) return;
+  const myLoadToken = ++signPostsLoadToken;
   const instanceId = signPostsTargetMesh.userData.instanceId;
   let posts;
   try {
     posts = await fetchSignPosts(instanceId);
   } catch (err) {
+    if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
     signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
     signPostsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== signPostsLoadToken) return; // superseded — a newer call owns the list now
   signPostsEmptyEl.hidden = posts.length > 0;
   for (const post of posts) {
     const row = document.createElement('div');
@@ -5441,6 +5452,9 @@ const calendarEventsListEl = document.getElementById('calendar-events-list');
 const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
 const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
 let calendarEventsTargetMesh = null;
+// See signPostsLoadToken above — same reopen-on-a-different-mesh race,
+// same fix.
+let calendarEventsLoadToken = 0;
 
 function formatCalendarEventTime(isoString) {
   const date = new Date(isoString);
@@ -5450,15 +5464,18 @@ function formatCalendarEventTime(isoString) {
 async function renderCalendarEvents() {
   calendarEventsListEl.innerHTML = '';
   if (!calendarEventsTargetMesh) return;
+  const myLoadToken = ++calendarEventsLoadToken;
   const instanceId = calendarEventsTargetMesh.userData.instanceId;
   let events;
   try {
     events = await fetchCalendarEvents(instanceId);
   } catch (err) {
+    if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
     calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
     calendarEventsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== calendarEventsLoadToken) return; // superseded — a newer call owns the list now
   calendarEventsEmptyEl.hidden = events.length > 0;
   for (const event of events) {
     const row = document.createElement('div');
