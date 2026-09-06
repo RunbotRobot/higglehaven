@@ -1830,6 +1830,7 @@ async function landletLevels(db, landletId) {
 async function handleLandletLevels(request, db, route) {
   const landletId = route[1];
   if (request.method === 'GET' && route.length === 3) {
+    await requireLandlet(db, landletId);
     const levels = await landletLevels(db, landletId);
     return json({ levels: levels.map(levelFromRow) });
   }
