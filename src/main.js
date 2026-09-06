@@ -75,6 +75,7 @@ import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, for
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
+import { bordersWater } from './landletAdjacency.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -3604,7 +3605,23 @@ function renderSellerList() {
 // ensureSellerIdentity() first. Backing out of that picker (Close) means
 // there's still no seller identity — just leave the Seller modal unopened
 // rather than showing it with nothing to filter its list by.
+//
+// Also waits on bootstrapPromise first (see its own declaration) — Sell is
+// reachable the instant the page loads or right after switching Shop<->
+// Build (#mode-nav's own click handler opens it directly, no reload, even
+// though switching modes themselves reload the whole page), racing
+// whichever bootstrap() call is currently populating activeCatalog. Build
+// mode's own chain (auth -> builder identity -> landlet resolution -> the
+// catalog fetch) is considerably longer than Shop's (fetches catalog
+// almost immediately), so clicking Sell right after Build was reliably
+// catching activeCatalog still at its plain FALLBACK_CATALOG default —
+// myProducts() then filtered against catalog entries that all have no
+// seller at all, showing "No custom products yet" for an account that
+// genuinely has some. Confirmed via direct testing: an artificial 50ms
+// delay between clicking Build and Sell reproduced this every time;
+// waiting for Build's bootstrap to actually finish first did not.
 async function openSellerModal() {
+  await bootstrapPromise;
   const id = await ensureSellerIdentity();
   if (!id) {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
@@ -9476,7 +9493,16 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    // #221: shoreline scarcity is meant to be organically discovered, not
+    // mechanically boosted (docs/SPEC.md §1) — this only surfaces the fact
+    // a builder could otherwise only notice by eyeballing the map, computed
+    // fresh from the same landlets this flyover already fetched rather than
+    // a stored flag. See src/landletAdjacency.js for why a bounding-circle
+    // approximation is good enough here. Never fires for a water landlet
+    // itself (bordersWater's own contract) — that case already gets its own
+    // "Water" statusLabel above.
+    const waterNote = bordersWater(landlet, landlets) ? ' · Borders water' : '';
+    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}${waterNote}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
@@ -9598,11 +9624,11 @@ async function bootstrap() {
   // there's no reason to load them one at a time.
   await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
 
-  // "Sell" from Shop mode routes through the ordinary Build-mode load (the
-  // Seller modal only actually needs builderId + activeCatalog, but there's
-  // no lighter-weight bootstrap path than this one) and opens straight into
-  // My Products once it's ready, rather than landing the builder on an
-  // empty Build scene they didn't ask to see.
-  if (startMode === 'sell') openSellerModal();
 }
-bootstrap();
+// Captured so openSellerModal() (see its own comment) can await whichever
+// bootstrap this page load is running before trusting activeCatalog — a
+// dead 'sell' startMode branch used to live here for the same reason
+// (nothing ever actually set START_MODE_KEY to 'sell', so it never ran),
+// removed since awaiting this promise from inside bootstrap() itself,
+// while bootstrap() is still running towards producing it, would deadlock.
+const bootstrapPromise = bootstrap();

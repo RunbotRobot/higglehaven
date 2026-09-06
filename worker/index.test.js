@@ -3245,11 +3245,21 @@ describe('Auctions', () => {
     expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
 
     // Resolving again is a harmless no-op, not an error — it just returns
-    // the already-ended auction's current (unchanged) state. The 409 case
-    // is specifically "not due yet," covered by the next test.
+    // the already-ended auction's current (unchanged) state, and must not
+    // re-run the money-mutating side effects (double-crediting the
+    // seller's balance — #229) even though nothing here is a real
+    // concurrent race. The 409 case is specifically "not due yet,"
+    // covered by the next test.
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+    const buildersAfterSecondResolve = await api('/builders');
+    const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
+    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
   });
 
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
@@ -4759,6 +4769,71 @@ describe('Simulated purchases', () => {
     expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
+  it('lets the product\'s own seller refund a purchase, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-refund-owner-seller');
+    const otherSeller = await signupSeller('purchase-refund-other-seller');
+    const builder = await signupBuilder('purchase-refund-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-refund-owner-landlet', 1000);
+    await claim('purchase-refund-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-refund-owner-template',
+        name: 'Seller-owned refund product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 3000,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-refund-owner-instance', 'purchase-refund-owner-landlet', 'purchase-refund-owner-template', builder);
+
+    const purchased = await api('/instances/purchase-refund-owner-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const wrongSeller = await api(`/purchases/${purchaseId}/refund`, otherSeller.session({ method: 'POST' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, owningSeller.session({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  it('lets the product\'s own seller list its sales via GET /purchases?templateId=, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-list-owner-seller');
+    const otherSeller = await signupSeller('purchase-list-other-seller');
+    const builder = await signupBuilder('purchase-list-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-list-owner-landlet', 1000);
+    await claim('purchase-list-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-list-owner-template',
+        name: 'Seller-owned listing product',
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 1500,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-list-owner-instance', 'purchase-list-owner-landlet', 'purchase-list-owner-template', builder);
+    const purchased = await api('/instances/purchase-list-owner-instance/purchase', { method: 'POST' });
+
+    const noSession = await api('/purchases?templateId=purchase-list-owner-template');
+    expect(noSession.response.status).toBe(401);
+
+    const wrongSeller = await api('/purchases?templateId=purchase-list-owner-template', otherSeller.session());
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listed = await api('/purchases?templateId=purchase-list-owner-template', owningSeller.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.purchases).toContainEqual(
+      expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId }),
+    );
+  });
+
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
     const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
@@ -4966,6 +5041,40 @@ describe('Authentication', () => {
       });
       expect(attempt.response.status).toBe(401);
     }
+
+    const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    expect(lockedOut.response.status).toBe(423);
+  });
+
+  it('increments failed_login_attempts atomically in SQL, not from a stale application-level read', async () => {
+    // The bug this guards against only shows up under real concurrency
+    // (two requests both reading the same stale failed_login_attempts
+    // before either writes back) -- this test pool's single-threaded
+    // workerd runtime can't force that genuine interleaving, the same
+    // limitation noted on the refund double-spend regression test above.
+    // What's checked here instead: the atomic `failed_login_attempts + 1`
+    // SQL expression (and its CASE-based lockout threshold) is correct on
+    // its own terms, one attempt at a time, starting from a
+    // pre-seeded non-zero count -- the exact expression that makes
+    // concurrent requests safe, rather than the concurrency itself.
+    const email = `auth-lockout-atomic-${crypto.randomUUID()}@example.com`;
+    const password = 'the real correct password';
+    const signedUp = await signup(email, password);
+    await env.DB.prepare(
+      'UPDATE users SET failed_login_attempts = 4 WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).run();
+
+    const fifthFailure = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'wrong' }),
+    });
+    expect(fifthFailure.response.status).toBe(401);
+
+    const row = await env.DB.prepare(
+      'SELECT failed_login_attempts, locked_until FROM users WHERE user_id = ?',
+    ).bind(signedUp.body.user.userId).first();
+    expect(row.failed_login_attempts).toBe(5);
+    expect(row.locked_until).toBeTruthy();
 
     const lockedOut = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
     expect(lockedOut.response.status).toBe(423);
