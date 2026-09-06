@@ -4378,6 +4378,93 @@ describe('Shipping', () => {
   });
 });
 
+describe('Extensible products (crop)', () => {
+  // #271: a direct PATCH bypassing the frontend's own Managing-
+  // extensibility form must not be able to set an unenforceable crop
+  // floor — assertCropWithinTemplateBounds's `length < extensible.minM`
+  // would otherwise silently pass for a non-numeric/negative/missing
+  // minM (JS numeric comparisons against undefined/NaN are always false).
+  it('rejects a non-object metadata.extensible', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-bad-shape-template',
+        name: 'Bad extensible shape',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: 'yes' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible must be an object/);
+  });
+
+  it('rejects an unknown axis key', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-bad-axis-template',
+        name: 'Bad extensible axis',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: { w: { minM: 0.1 } } },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/axis "w" must be one of: x, y, z/);
+  });
+
+  it('rejects a non-numeric, negative, or missing minM', async () => {
+    for (const minM of ['not-a-number', -1, 0, undefined]) {
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `extensible-bad-min-template-${String(minM)}`,
+          name: 'Bad extensible minM',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          metadata: { extensible: { x: { minM } } },
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/metadata\.extensible\.x\.minM must be a positive number/);
+    }
+  });
+
+  it('rejects a minM at or above the template\'s own dimension for that axis', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-min-too-large-template',
+        name: 'Extensible minM too large',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible\.x\.minM must be less than this template's own width/);
+  });
+
+  it('accepts a valid metadata.extensible and round-trips it through GET', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-valid-template',
+        name: 'Valid extensible product',
+        color: '#123456',
+        dimensions: { width: 2, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 0.5 } } },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.extensible).toEqual({ x: { minM: 0.5 } });
+
+    const fetched = await api('/catalog/extensible-valid-template');
+    expect(fetched.body.template.metadata.extensible).toEqual({ x: { minM: 0.5 } });
+  });
+});
+
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
 // enforced against auction bids — see worker/index.js's own long comment
 // on recomputeLandCap for why a hard block was tried and reverted (claiming

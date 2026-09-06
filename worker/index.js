@@ -4998,6 +4998,37 @@ function assertValidDomesticOnly(metadata) {
   }
 }
 
+// Per-axis crop-floor declaration (docs/API.md's "Extensible products
+// (crop)") — e.g. `{ x: { minM: 0.4 } }`. The frontend's own Managing-
+// extensibility form (src/main.js) already enforces minM being a finite,
+// positive number strictly less than that axis's own full dimension
+// before saving, but a direct PATCH bypassing that form must not be able
+// to set a non-numeric/negative/missing minM: assertCropWithinTemplateBounds's
+// `length < extensible.minM` check would silently evaluate false for any
+// of those (`5 < undefined` and `5 < NaN` are both false in JS), letting
+// a builder crop that product down to a sliver regardless of what the
+// seller declared as its functional minimum.
+const AXIS_DIMENSION_KEY_FOR_EXTENSIBLE = { x: 'width', y: 'depth', z: 'height' };
+function assertValidExtensible(metadata, dimensions) {
+  if (metadata.extensible === undefined) return;
+  if (typeof metadata.extensible !== 'object' || metadata.extensible === null) {
+    throw new HttpError('metadata.extensible must be an object', 400);
+  }
+  for (const [axis, declared] of Object.entries(metadata.extensible)) {
+    const dimensionKey = AXIS_DIMENSION_KEY_FOR_EXTENSIBLE[axis];
+    if (!dimensionKey) {
+      throw new HttpError(`metadata.extensible axis "${axis}" must be one of: x, y, z`, 400);
+    }
+    const minM = declared?.minM;
+    if (!Number.isFinite(minM) || minM <= 0) {
+      throw new HttpError(`metadata.extensible.${axis}.minM must be a positive number`, 400);
+    }
+    if (minM >= dimensions[dimensionKey]) {
+      throw new HttpError(`metadata.extensible.${axis}.minM must be less than this template's own ${dimensionKey}`, 400);
+    }
+  }
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -5021,6 +5052,7 @@ function validateTemplate(input, fallbackId) {
   assertValidDigitalGoodDisclaimer(template.metadata);
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
+  assertValidExtensible(template.metadata, template.dimensions);
   return template;
 }
 

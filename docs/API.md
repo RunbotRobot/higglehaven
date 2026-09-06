@@ -974,6 +974,12 @@ cut down like real dimensional lumber. The template is uploaded at its
 }
 ```
 
+`minM` is validated when the template itself is created or updated: it must be
+a positive finite number strictly less than that axis's own declared
+dimension, and the axis key must be `x`, `y`, or `z` — the same rule the
+frontend's own Managing-extensibility form already enforces before saving,
+now also enforced against a direct API call bypassing that form.
+
 Axis keys are `x`, `y`, `z`, matching how `dimensions.width` / `.depth` /
 `.height` map onto the scene's local axes. A template can declare any subset
 of the three at once — e.g. a wall resizable in thickness, length, and
