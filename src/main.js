@@ -4441,7 +4441,10 @@ async function renderAuctionSection() {
         bidBtn.textContent = 'Place Bid';
         bidBtn.addEventListener('click', async () => {
           const dollars = Number(bidInput.value);
-          if (!Number.isFinite(dollars) || dollars < 0) return;
+          if (!Number.isFinite(dollars) || dollars < 0) {
+            alert('Enter a bid amount of zero or more.');
+            return;
+          }
           bidBtn.disabled = true;
           try {
             await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
