@@ -3595,6 +3595,12 @@ floor always binds first for any lándlet with a positive area, so the
 center-of-Earth check exists mainly to satisfy the spec's literal "hard
 depth limit: Earth's radius" requirement as its own explicit guard.
 
+Found via backlog audit (#395): the `INSERT` is guarded atomically against
+the lándlet's *current* extent in this direction (not just a plain insert
+off the request-time read) — a second, genuinely concurrent add in the
+same direction gets a clean `409` ("This lándlet's levels changed —
+please retry") instead of a raw D1 constraint-violation `500`.
+
 ### `DELETE /api/landlets/:landletId/levels/:levelIndex`
 
 Requires the session-authenticated owner. Only the outermost existing
@@ -3602,6 +3608,10 @@ level (in whichever direction `levelIndex` is on) can be removed —
 `409` otherwise, or if `levelIndex` is `0` (never a real row) or the
 lándlet has no levels at all. Frees the level's `capConsumedM2`
 immediately by recomputing the owning builder's land cap afterward.
+Found via backlog audit (#395): "still the outermost" is re-checked as
+part of the `DELETE`'s own atomic guard, not just the initial read, so a
+concurrent add extending past this level between the read and the delete
+can't leave a gap in the level sequence.
 
 ### Ownership-change cleanup
 
