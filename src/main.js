@@ -5391,6 +5391,12 @@ measureBtn.addEventListener('click', () => {
   measureMode = !measureMode;
   measureBtn.classList.toggle('active', measureMode);
   if (measureMode) {
+    // Same swallowed-tap problem as enterPlacementMode's own exitMeasureMode
+    // call above, reached from the other direction (#422): a placement
+    // already pending (Add Item/Paste) when Measure turns on would
+    // otherwise sit there un-cancelable, since the canvas click handler
+    // always checks Measure first and swallows every tap into it.
+    if (pendingPlacement) cancelPlacementMode();
     updateSelectionUI(); // hides the gizmo panel; see its own measureMode branch
     updateMeasureInfo();
   } else {
@@ -5754,6 +5760,15 @@ function enterPlacementMode(pending, statusText) {
   // it on would just strand the builder without the ability to rotate the
   // view while lining up where to place/paste.
   exitMultiSelectMode();
+  // Measure repurposes a world tap into placing/moving a ruler point (see
+  // exitMeasureMode's own comment) instead of placing the pending item —
+  // nothing stops it from still being on when a placement flow starts, and
+  // when both are active the canvas click handler always checks Measure
+  // first, silently swallowing every placement tap until Measure is
+  // toggled off (#422). Exiting it here, the same way exitMultiSelectMode
+  // already is, keeps entering a placement flow a clean hand-off away from
+  // every other tap-driven tool.
+  exitMeasureMode();
   modeControlsEl.classList.remove('visible');
   translateControls.detach();
   rotateControls.detach();
