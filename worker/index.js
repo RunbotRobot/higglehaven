@@ -1274,6 +1274,24 @@ async function handleBuilders(request, db, route) {
     if (leadingBid) {
       throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
     }
+    // Owner policy (Control Room, in response to #183/#188): once an
+    // auction has a real bid on it, that commitment can't be revoked —
+    // not by the bidder walking back their leading bid (blocked above),
+    // and not by the seller either, since deleting their own account
+    // would otherwise cascade the auction (and every bid on it) away via
+    // auctions.seller_builder_id's ON DELETE CASCADE, silently voiding
+    // every bidder's commitment. An auction with zero bids has deterred no
+    // one yet, so deletion (and the land-release it triggers) is still
+    // allowed in that case.
+    const sellingAuctionWithBids = await db.prepare(`
+      SELECT a.auction_id FROM auctions a
+      WHERE a.status = 'active' AND a.seller_builder_id = ?
+        AND EXISTS (SELECT 1 FROM auction_bids WHERE auction_id = a.auction_id)
+      LIMIT 1
+    `).bind(route[1]).first();
+    if (sellingAuctionWithBids) {
+      throw new HttpError('Cannot delete this builder while selling an active auction that has bids', 409);
+    }
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not

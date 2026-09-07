@@ -561,20 +561,31 @@ builder (migrations/0062) — the purchase is a different party's (the
 product's seller's) sales-history record too, so it survives; see
 "Refunds" below for how a refund handles a null `builderId`.
 
-If this builder is the seller on an active auction, every bidder on it is
-notified their bid is void before the deletion goes through — otherwise
+If this builder is the seller on an active auction **with no bids on it
+yet**, every bidder (there are none) is trivially "notified," and
 `auctions.seller_builder_id`'s `ON DELETE CASCADE`
-(`migrations/0045_auctions.sql`) removes that auction row, and every bid on
-it, with no trace and no warning. Unlike purchases above, the auction/bid
-rows themselves are *not* preserved — losing them to the cascade is an
-accepted simplification here (same reasoning as pioneer ranks, above), the
-fix is only that bidders get told first. The auctioned landlet still comes
-back via the release path described above, same as any other claimed land.
+(`migrations/0045_auctions.sql`) removes that auction row along with the
+deletion. The auctioned landlet still comes back via the release path
+described above, same as any other claimed land.
+
+If this builder is the seller on an active auction **that already has at
+least one bid**, deletion is rejected outright (`409`) instead — owner
+policy (Control Room, in response to #183/#188): once a real bid exists,
+neither side can revoke the auction. Without this check,
+`auctions.seller_builder_id`'s cascade would silently void every bidder's
+commitment the moment the seller deletes their account — a real
+resign-to-escape path a seller could use to back out of a losing or
+regretted auction at zero cost (a fresh builder profile is auto-provisioned
+for the same logged-in user on their next request). An auction that does
+proceed to cascade via this endpoint therefore never actually has any
+bidders left to notify — the "notify before cascading" logic above is
+consequently only ever a no-op in practice, kept because it's still
+correct for the zero-bid case and costs nothing to leave in place.
 
 If this builder currently holds the *highest* bid on someone else's
-still-active auction, deletion is rejected outright (`409`) instead —
-`auction_bids.bidder_builder_id`'s own `ON DELETE CASCADE` would otherwise
-silently erase that bid. A leading bid actively deters every other bidder
+still-active auction, deletion is rejected outright (`409`) for the
+mirror-image reason — `auction_bids.bidder_builder_id`'s own
+`ON DELETE CASCADE` would otherwise silently erase that bid. A leading bid actively deters every other bidder
 from bidding (a new bid must strictly exceed it) for as long as it stands,
 so letting it vanish via self-deletion — at zero cost, since a fresh
 builder profile is auto-provisioned for the same logged-in user on their

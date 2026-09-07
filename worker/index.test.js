@@ -3018,7 +3018,12 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
-  it('notifies bidders before their bid vanishes when the seller deletes their account mid-auction', async () => {
+  // Owner policy (Control Room, in response to #183/#188's original
+  // "notify bidders before their bid vanishes" mitigation): once an
+  // auction has a real bid, neither side can revoke it — not the bidder
+  // walking back a leading bid (#263, above), and not the seller either,
+  // by deleting their own account out from under a bid-holding auction.
+  it('rejects deleting a builder while selling an active auction that has bids', async () => {
     const seller = await signupBuilder('auction-seller-deleted');
     const bidder = await signupBuilder('auction-seller-deleted-bidder');
     await createGreenbeltLandlet('auction-seller-deleted-landlet');
@@ -3033,24 +3038,44 @@ describe('Builders', () => {
     expect(bid.response.status).toBe(201);
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-landlet']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while selling an active auction that has bids',
+    });
 
-    // The FK cascade on seller_builder_id still removes the auction (and
-    // its bids) outright, same as before this fix — that part is an
-    // accepted dev-mode simplification (see the handler's own comment).
-    // What's new is the bidder actually being told, instead of their bid
-    // just silently disappearing.
+    // Nothing was touched — the auction, its bid, the land, and the seller's
+    // own builder row are all exactly as they were before the attempt.
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.body.auction.status).toBe('active');
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    expect(landlet.body.landlet.status).toBe('claimed');
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(seller.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder selling an active auction that has no bids yet, notifying no one', async () => {
+    const seller = await signupBuilder('auction-seller-deleted-no-bids');
+    await createGreenbeltLandlet('auction-seller-deleted-no-bids-landlet');
+    await api('/landlets/auction-seller-deleted-no-bids-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/auction-seller-deleted-no-bids-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-no-bids-landlet']);
+
+    // The FK cascade on seller_builder_id still removes the auction outright
+    // — an accepted dev-mode simplification (see the handler's own comment)
+    // — but there was no one to notify since it never had a bid.
     const auction = await api(`/auctions/${auctionId}`);
     expect(auction.response.status).toBe(404);
 
-    const notices = await api('/notifications', bidder.session());
-    expect(notices.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('called off because the seller\'s account was deleted'),
-    }));
-
-    // The land itself still goes back to greenbelt for someone else to claim.
-    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    const landlet = await api('/landlets/auction-seller-deleted-no-bids-landlet');
     expect(landlet.body.landlet.status).toBe('greenbelt');
   });
 
@@ -3150,19 +3175,25 @@ describe('Builders', () => {
     expect(deleted.response.status).toBe(200);
   });
 
-  it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
+  // Superseded by the owner's #183/#188 policy call above: a seller can no
+  // longer delete their way past a bid-holding auction at all, so the
+  // batched-notification path this originally exercised (PR #188) can now
+  // only ever fire for auctions with zero bids — nothing left to notify.
+  // What's still worth covering is that the block applies across *all* of
+  // a seller's active auctions, not just whichever one is checked first:
+  // one bid-free auction shouldn't let deletion slip through while another
+  // of the same seller's active auctions still has a live bid on it.
+  it('rejects deleting a builder selling multiple active auctions if any one of them has a bid', async () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
     const bidderOne = await signupBuilder('multi-auction-bidder-one');
-    const bidderTwo = await signupBuilder('multi-auction-bidder-two');
 
     // A builder can only ever *claim* one greenbelt landlet directly, but
     // docs/SPEC.md §0/§5's auctions let them acquire additional
     // already-claimed land on top of that (see "resolves a winning
     // auction even when the bidder already owns a claimed landlet" above)
     // — so the seller ends up owning two landlets this way, the only way
-    // one builder can ever be running more than one active auction at
-    // once and actually exercise this batching.
+    // one builder can ever be running more than one active auction at once.
     await createGreenbeltLandlet('multi-auction-landlet-a');
     await api('/landlets/multi-auction-landlet-a/claim', seller.session({ method: 'POST' }));
     await createGreenbeltLandlet('multi-auction-landlet-b');
@@ -3188,37 +3219,23 @@ describe('Builders', () => {
     const auctionIdA = startedA.body.auction.auctionId;
     const auctionIdB = startedB.body.auction.auctionId;
 
-    // Auction A gets two distinct bidders, auction B gets one — exercises
-    // the grouped-by-auction_id batching, not just a single auction/bidder.
-    await api(`/auctions/${auctionIdA}/bids`, bidderOne.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
-    }));
-    await api(`/auctions/${auctionIdA}/bids`, bidderTwo.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
-    }));
+    // Only auction B gets a bid; auction A stays bid-free.
     await api(`/auctions/${auctionIdB}/bids`, bidderOne.session({
       method: 'POST', body: JSON.stringify({ amountCents: 700 }),
     }));
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-auction-landlet-a', 'multi-auction-landlet-b']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while selling an active auction that has bids',
+    });
 
-    const noticesOne = await api('/notifications', bidderOne.session());
-    const messagesOne = noticesOne.body.notifications.map((n) => n.message);
-    expect(messagesOne).toEqual(expect.arrayContaining([
-      expect.stringContaining('multi-auction-landlet-a'),
-      expect.stringContaining('multi-auction-landlet-b'),
-    ]));
-
-    const noticesTwo = await api('/notifications', bidderTwo.session());
-    expect(noticesTwo.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('multi-auction-landlet-a'),
-    }));
-    // bidderTwo never bid on landlet-b's auction — shouldn't hear about it.
-    expect(noticesTwo.body.notifications.map((n) => n.message)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining('multi-auction-landlet-b')]),
-    );
+    // Both auctions and both landlets are untouched — deletion is all or
+    // nothing, so the bid-free auction doesn't get to proceed on its own.
+    const auctionA = await api(`/auctions/${auctionIdA}`);
+    expect(auctionA.body.auction.status).toBe('active');
+    const auctionB = await api(`/auctions/${auctionIdB}`);
+    expect(auctionB.body.auction.status).toBe('active');
   });
 
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
