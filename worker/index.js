@@ -5052,24 +5052,34 @@ function assertNotProhibitedContent(template) {
 
 // Digital goods (docs/SPEC.md §4: "Digital goods — narrow, conditional
 // exception ... permitted if the listing includes (a) a representative 3D
-// model [already required of every template regardless] and (b) a clear
-// higglehaven-controlled disclaimer of what's actually delivered."). The
-// disclaimer text is platform-controlled, not seller-authored freeform
-// text — a seller picks one of these fixed keys, not their own wording, so
-// `metadata.digitalGoodDisclaimer` only ever stores the key. There is no
-// separate "isDigitalGood" flag: a template is a digital good exactly when
-// this key is present, the same single-flag-in-metadata simplicity as
-// flooring (migrations/0035) and extensibility.
+// model and (b) a clear higglehaven-controlled disclaimer of what's
+// actually delivered."). The disclaimer text is platform-controlled, not
+// seller-authored freeform text — a seller picks one of these fixed keys,
+// not their own wording, so `metadata.digitalGoodDisclaimer` only ever
+// stores the key. There is no separate "isDigitalGood" flag: a template is
+// a digital good exactly when this key is present, the same
+// single-flag-in-metadata simplicity as flooring (migrations/0035) and
+// extensibility.
 const DIGITAL_GOOD_DISCLAIMER_TEXT = {
   'gift-card': 'This is a digital gift card to a real business, delivered as a code — not a physical item.',
   'art-file': 'This is a digital art or print file, delivered as a download — not a physical item.',
   'software-tool': 'This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item.',
 };
 
-function assertValidDigitalGoodDisclaimer(metadata) {
+// Found via backlog audit: `modelUrl` is optional for every *ordinary*
+// template (`validateTemplate` below, `assertUploadedModelExists` no-ops on
+// a null one) — a plain-colored-box fallback is a normal, supported look
+// for a regular product. That's exactly the condition (a) this spec
+// paragraph exempts digital goods *from*, not something they're already
+// covered by: a disclaimer alone was silently sufficient to list a digital
+// good with zero visual representation, satisfying only condition (b).
+function assertValidDigitalGoodDisclaimer(metadata, modelUrl) {
   if (metadata.digitalGoodDisclaimer === undefined) return;
   if (!DIGITAL_GOOD_DISCLAIMER_TEXT[metadata.digitalGoodDisclaimer]) {
     throw new HttpError(`metadata.digitalGoodDisclaimer must be one of: ${Object.keys(DIGITAL_GOOD_DISCLAIMER_TEXT).join(', ')}`, 400);
+  }
+  if (!modelUrl) {
+    throw new HttpError('A digital good must include modelUrl — a representative 3D model', 400);
   }
 }
 
@@ -5154,7 +5164,7 @@ function validateTemplate(input, fallbackId) {
   };
   JSON.stringify(template.metadata);
   assertNotProhibitedContent(template);
-  assertValidDigitalGoodDisclaimer(template.metadata);
+  assertValidDigitalGoodDisclaimer(template.metadata, template.modelUrl);
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
