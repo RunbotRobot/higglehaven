@@ -95,4 +95,27 @@ describe('polygonsOverlap', () => {
   it('does not flag disjoint polygons', () => {
     expect(polygonsOverlap(square(0, 0), square(100, 100))).toBe(false);
   });
+
+  // #412: two adjacent polygons designed to share an edge/vertex almost
+  // never land on bit-identical floats in practice — real generated data
+  // (worker/organicMosaicTemplate.js) has "shared" vertices that differ by
+  // ~1e-14, which used to flip segmentsIntersect's un-tolerant sign test
+  // into reporting a spurious crossing.
+  it('does not flag two squares sharing an edge whose vertices differ by float noise', () => {
+    const noise = 1e-13;
+    const left = square(0, 0);
+    const right = [
+      { x: 2 + noise, y: -2 - noise }, { x: 6, y: -2 }, { x: 6, y: 2 }, { x: 2 - noise, y: 2 + noise },
+    ];
+    expect(polygonsOverlap(left, right)).toBe(false);
+  });
+
+  it('still flags a real overlap even when it barely exceeds the touch epsilon', () => {
+    const left = square(0, 0);
+    // Shifted diagonally (not just along one axis) so the overlap region
+    // isn't bounded by collinear edges — a real corner-clip overlap, just
+    // barely bigger than TOUCH_EPSILON_M, not float noise around it.
+    const right = square(3.9999, 3.9999);
+    expect(polygonsOverlap(left, right)).toBe(true);
+  });
 });

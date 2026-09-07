@@ -1062,8 +1062,8 @@ template declares, all active simultaneously; each still crops exactly one
 axis per drag (see "Dragging the Trim gizmo" below for the multi-handle
 gizmo itself, and "Managing extensibility" for how a seller turns axes on).
 (Trim is the per-axis shortening tool described here — not to be confused
-with the frontend's separate Resize tool, a real uniform scale unrelated to
-extensibility; see "Frontend-only Resize" below.)
+with the now-removed Resize tool, a real uniform scale unrelated to
+extensibility; see "Legacy per-instance Resize scale" below.)
 
 A builder's per-instance override lives on the placed instance itself, not the
 template — see `crop` under Placed instances below. The frontend never
@@ -1250,11 +1250,10 @@ uploaded model:
 - If `modelUrl` starts with `/uploads/` (a real seller-uploaded model, not a
   placeholder box), the actual model file is fetched, rescaled via
   `rescaleModelFile` (the same helper the upload wizard uses when a seller
-  adjusts a freshly-measured size before creating the product — see
-  "Frontend-only Resize" below for why declared dimensions must always
-  exactly match the model's own rendered size), and re-uploaded before the
-  template is patched with both the new `dimensions` and the new
-  `modelUrl` in one request.
+  adjusts a freshly-measured size before creating the product, so declared
+  dimensions always exactly match the model's own rendered size), and
+  re-uploaded before the template is patched with both the new `dimensions`
+  and the new `modelUrl` in one request.
 - If there's no real model (a placeholder-box product), only `dimensions`
   is patched — there's no geometry to rescale.
 
@@ -2114,12 +2113,12 @@ value, or switches `templateId` (even while reusing the same crop values,
 now measured against different bounds), is checked against the template's
 current bounds.
 
-`scale` is a real uniform scale factor, unrelated to `crop` and available on
-any instance regardless of whether its template is extensible — see
-"Frontend-only Resize" for why this exists and where it's applied. `1` (the
-default) means "rendered at the template's own declared size." Validated only
-loosely server-side (must be a positive finite number) — the frontend's own
-Resize control applies the real UX-facing `[0.001, 1000]` bound.
+`scale` is a real uniform scale factor, unrelated to `crop` — see "Legacy
+per-instance Resize scale" for why this field exists and why it's read-only
+from the frontend's perspective now. `1` (the default) means "rendered at
+the template's own declared size." Validated only loosely server-side (must
+be a positive finite number); no UI writes a new value anymore, only the
+now-removed Resize gizmo ever did, bounded then to `[0.001, 1000]`.
 
 `isCommunitySign` flags this one specific placement as a "community sign"
 — see "Community signs" below for the posts API it unlocks and the
@@ -3844,7 +3843,8 @@ The migrations currently create seventeen main backend tables:
   owner IDs.
 - `placed_instances`: objects placed into a landlet from catalog templates,
   including any per-instance crop override (see "Extensible products (crop)")
-  and uniform Resize scale factor (see "Frontend-only Resize").
+  and legacy uniform Resize scale factor (see "Legacy per-instance Resize
+  scale").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
 - `landlet_versions`: immutable layout snapshot metadata.
@@ -4219,39 +4219,24 @@ player's own input. "Sit"/"lean" are still open — both need a real
 interaction-target concept (e.g. a chair prop with an occupancy slot) that
 doesn't exist yet.
 
-## Frontend-only Resize
+## Legacy per-instance Resize scale
 
-A real uniform scale for a placed instance (`mesh.userData.scale`, persisted
-as the instance's `scale` field), entirely separate from Trim's per-axis
-`crop` above — for a model whose own source came in at the wrong physical
-size entirely (an uploaded scan authored many times too large or too small),
-not something limited to templates that declare themselves extensible.
-`#mode-resize` sits alongside Move/Rotate/Trim in the same gizmo-mode row,
-enabled for any single selected item (unlike Trim, which stays disabled for
-anything not extensible).
+Build mode once had a "Resize" gizmo mode — a real uniform scale for a
+placed instance, entirely separate from Trim's per-axis `crop`, for a model
+whose own source came in at the wrong physical size entirely. It's been
+removed (found via backlog audit, #404): the world is meant to be populated
+at each product's real, seller-declared size, not resized ad hoc per
+placement, so there's no `#mode-resize` button, no scale gizmo, and no
+percentage input anywhere in the frontend today.
 
-The gizmo itself is a second `TransformControls` instance (`scaleControls`)
-in `'scale'` mode, with `showX`/`showY`/`showZ` all set `false` so only its
-built-in uniform (center) handle is interactive — a per-axis drag would
-distort the model exactly the way Trim is careful never to, so those handles
-are hidden rather than merely discouraged. A numeric field
-(`#resize-scale-input`, shown as a percentage) offers the same exact-value
-alternative Trim's own length field does.
-
-TransformControls' scale mode scales an object about its own local origin,
-which sits at the object's vertical *center* once placed (see
-`createMeshForInstance`'s "z = height / 2 rests it on ground" convention) —
-left alone, growing the scale would sink the object into whatever it's
-resting on, and shrinking it would lift it into the air, since only the
-geometry grows/shrinks while `position.z` stays fixed. `keepRestingOnScaleChange`
-recomputes `position.z` on every scale change to keep the object's *bottom*
-edge exactly where it was — not assumed to be bare ground, since Snap can
-rest an item on top of another one — so it grows/shrinks in place rather
-than visibly sinking or floating.
-
-`scale` factors into `meshDimensions()` alongside `crop`, so collision,
-landlet-bounds clamping, and stacking all see a resized item's real
-(scaled) footprint rather than its template-declared one.
+`mesh.userData.scale`/the instance's `scale` field still exists purely as a
+read compatibility path: any instance saved *before* the removal that
+carries a non-`1` value keeps rendering at it (`createMeshForInstance`
+applies it via `object.scale.setScalar(...)`), and `scale` still factors
+into `meshDimensions()` alongside `crop` so collision/bounds-clamping/
+stacking see such an instance's real (scaled) footprint. There's no UI path
+left to set a new value — only to keep honoring one an instance already
+has.
 
 ## Frontend-only alignment assist
 
