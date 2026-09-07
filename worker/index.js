@@ -2964,9 +2964,17 @@ async function handleAuth(request, env, db, route, url) {
 // this codebase's existing dev-mode-first, don't-build-what-isn't-needed-
 // yet posture. Revoking admin status has no endpoint either; it's a rare
 // enough operation to do directly against the database.
+// Found via backlog audit (#360): unlike every other secret-bearing auth
+// endpoint in this file (login's failed_login_attempts/locked_until
+// lockout, signup/password-reset's checkRateLimit calls), this one had no
+// brute-force protection at all — and it's the one endpoint that grants
+// admin privilege, not just account access.
+const ADMIN_BOOTSTRAP_RATE_LIMIT_MAX = 10;
+
 async function handleAdminBootstrap(request, env, db) {
   if (!env.ADMIN_BOOTSTRAP_SECRET) throw new HttpError('Admin bootstrap is not configured', 404);
   const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `admin-bootstrap:${clientIp(request)}`, ADMIN_BOOTSTRAP_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const secret = stringValue(input.secret, 'secret');
   if (!timingSafeEqual(secret, env.ADMIN_BOOTSTRAP_SECRET)) {

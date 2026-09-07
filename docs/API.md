@@ -456,7 +456,10 @@ Requires a session (`401` without one). Request body: `{ "secret" }`.
 `404` if the Worker secret `ADMIN_BOOTSTRAP_SECRET` isn't configured in
 this environment at all (local dev's `.dev.vars`, or `wrangler secret put`
 in production — never committed, same pattern `ACCESS_PASSPHRASE`/
-`RESEND_API_KEY` already use). `403` if `secret` doesn't match it exactly.
+`RESEND_API_KEY` already use). Rate-limited per IP (10 attempts per
+window, `429` past that) — the only endpoint that grants admin privilege,
+so it gets the same brute-force protection as signup/password-reset.
+`403` if `secret` doesn't match it exactly.
 On success, promotes the calling account to admin and returns
 `{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
 who currently holds the secret can promote themselves (or, by sharing it
