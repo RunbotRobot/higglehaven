@@ -262,6 +262,120 @@ describe('Auctions', () => {
     expect(earningsCount.n).toBe(1);
   });
 
+  // #415: a draft save's ownership check (at the top of the handler) and
+  // its actual write (a batch several awaits later) used to straddle a
+  // resolving auction's own ownership-transfer-and-wipe batch, the same
+  // shape of race #391/#392 already closed for plain PUT/PATCH — letting
+  // the old owner's stale draft resurrect on the landlet under its new
+  // owner. Fired together (not awaited one at a time) so a real interleave
+  // is possible, the same idiom as the claim-vs-PATCH/DELETE races above.
+  it('does not let a concurrent draft save resurrect the old owner\'s content once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('draft-resolve-race-owner');
+    const bidder = await signupBuilder('draft-resolve-race-bidder');
+    await createGreenbeltLandlet('draft-resolve-race-landlet');
+    await claim('draft-resolve-race-landlet', owner);
+    const started = await api('/landlets/draft-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [drafted] = await Promise.all([
+      api('/landlets/draft-resolve-race-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({
+          instances: [{ instanceId: 'draft-resolve-race-instance', templateId: 'placeholder-tree', x: 1, y: 1 }],
+        }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // Whichever ran first, both landing 200 is impossible — the loser's
+    // write is guarded out with a 409 (the draft) or was simply too late
+    // to matter for the caller to notice (resolve, already idempotent).
+    expect([200, 409]).toContain(drafted.response.status);
+
+    const landlet = await api('/landlets/draft-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    // The transfer's clean-slate guarantee holds either way: the draft
+    // save's own guard rejected it if resolve ran first, and resolve's own
+    // wipe removed it if the draft save ran first — never both landing
+    // such that the old owner's content survives under the new owner.
+    const instances = await api('/instances?landletId=draft-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  // #415: same shape of race as the draft-save one above, for the version-
+  // create endpoint's own ownership-checked-then-later-written batch.
+  it('does not let a concurrent version save land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('version-resolve-race-owner');
+    const bidder = await signupBuilder('version-resolve-race-bidder');
+    await createGreenbeltLandlet('version-resolve-race-landlet');
+    await claim('version-resolve-race-landlet', owner);
+    const started = await api('/landlets/version-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [versioned] = await Promise.all([
+      api('/landlets/version-resolve-race-landlet/versions', owner.session({
+        method: 'POST', body: JSON.stringify({ name: 'Race version' }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    expect([201, 409]).toContain(versioned.response.status);
+
+    // resolveAuction wipes landlet_versions on a real transfer regardless
+    // of ordering, so this must read empty either way: if the version save
+    // won the race it gets wiped right after; if it lost, its own guard
+    // already rejected it.
+    const versions = await api('/landlets/version-resolve-race-landlet/versions');
+    expect(versions.body.versions).toEqual([]);
+  });
+
+  // #415: same shape again, for the activate endpoint — resolveAuction
+  // always resets active_version_id to NULL on a real transfer, so a
+  // concurrent activate must never leave it pointing at a version from
+  // before the transfer.
+  it('does not let a concurrent activate leave a stale active version pointer once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('activate-resolve-race-owner');
+    const bidder = await signupBuilder('activate-resolve-race-bidder');
+    await createGreenbeltLandlet('activate-resolve-race-landlet');
+    await claim('activate-resolve-race-landlet', owner);
+    const versioned = await api('/landlets/activate-resolve-race-landlet/versions', owner.session({
+      method: 'POST', body: JSON.stringify({ name: 'Pre-race version' }),
+    }));
+    const versionId = versioned.body.version.versionId;
+    const started = await api('/landlets/activate-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [activated] = await Promise.all([
+      api(`/landlets/activate-resolve-race-landlet/versions/${versionId}/activate`, owner.session({ method: 'POST' })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 404 is also legitimate here, independent of the ownership guard
+    // itself: activate's own getVersion existence check can race against
+    // resolveAuction's DELETE FROM landlet_versions and lose, the version
+    // it was about to activate having genuinely ceased to exist by then.
+    expect([200, 409, 404]).toContain(activated.response.status);
+
+    const landlet = await api('/landlets/activate-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    expect(landlet.body.landlet.activeVersionId).toBeNull();
+  });
+
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');

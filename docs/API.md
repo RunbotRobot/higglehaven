@@ -1131,8 +1131,8 @@ template declares, all active simultaneously; each still crops exactly one
 axis per drag (see "Dragging the Trim gizmo" below for the multi-handle
 gizmo itself, and "Managing extensibility" for how a seller turns axes on).
 (Trim is the per-axis shortening tool described here — not to be confused
-with the frontend's separate Resize tool, a real uniform scale unrelated to
-extensibility; see "Frontend-only Resize" below.)
+with the now-removed Resize tool, a real uniform scale unrelated to
+extensibility; see "Legacy per-instance Resize scale" below.)
 
 A builder's per-instance override lives on the placed instance itself, not the
 template — see `crop` under Placed instances below. The frontend never
@@ -1319,11 +1319,10 @@ uploaded model:
 - If `modelUrl` starts with `/uploads/` (a real seller-uploaded model, not a
   placeholder box), the actual model file is fetched, rescaled via
   `rescaleModelFile` (the same helper the upload wizard uses when a seller
-  adjusts a freshly-measured size before creating the product — see
-  "Frontend-only Resize" below for why declared dimensions must always
-  exactly match the model's own rendered size), and re-uploaded before the
-  template is patched with both the new `dimensions` and the new
-  `modelUrl` in one request.
+  adjusts a freshly-measured size before creating the product, so declared
+  dimensions always exactly match the model's own rendered size), and
+  re-uploaded before the template is patched with both the new `dimensions`
+  and the new `modelUrl` in one request.
 - If there's no real model (a placeholder-box product), only `dimensions`
   is patched — there's no geometry to rescale.
 
@@ -1932,6 +1931,12 @@ sends — otherwise an unauthenticated caller could flip a landlet to
 from the claimable pool with no way back. Claimed-state transitions only
 ever happen through claim or auction resolution too.
 
+The write itself is guarded on `status`/`ownerBuilderId` still matching what
+this request originally read, so a claim (or auction resolution) landing
+concurrently can't be silently clobbered back to the stale unowned values
+this request pinned them to — a lost race returns `409` instead of the `200`
+it would otherwise report despite having reverted the claim underneath it.
+
 ### `DELETE /api/landlets/:landletId`
 
 Once a landlet has an owner, this always fails with `409` — this raw delete
@@ -1939,7 +1944,9 @@ has no cascade cleanup for placed instances/version history (unlike
 `DELETE /api/builders/:builderId`'s careful release path), so even the true
 owner using it would corrupt data; release land via deleting the builder or
 losing an auction instead. Deletes an unowned landlet outright, with no
-session required (see the note on `PUT`/`PATCH` above for why).
+session required (see the note on `PUT`/`PATCH` above for why) — guarded the
+same way against a concurrent claim landing first, returning `409` instead
+of deleting land out from under its brand-new owner.
 
 Response:
 
@@ -2175,12 +2182,12 @@ value, or switches `templateId` (even while reusing the same crop values,
 now measured against different bounds), is checked against the template's
 current bounds.
 
-`scale` is a real uniform scale factor, unrelated to `crop` and available on
-any instance regardless of whether its template is extensible — see
-"Frontend-only Resize" for why this exists and where it's applied. `1` (the
-default) means "rendered at the template's own declared size." Validated only
-loosely server-side (must be a positive finite number) — the frontend's own
-Resize control applies the real UX-facing `[0.001, 1000]` bound.
+`scale` is a real uniform scale factor, unrelated to `crop` — see "Legacy
+per-instance Resize scale" for why this field exists and why it's read-only
+from the frontend's perspective now. `1` (the default) means "rendered at
+the template's own declared size." Validated only loosely server-side (must
+be a positive finite number); no UI writes a new value anymore, only the
+now-removed Resize gizmo ever did, bounded then to `[0.001, 1000]`.
 
 `isCommunitySign` flags this one specific placement as a "community sign"
 — see "Community signs" below for the posts API it unlocks and the
@@ -3656,6 +3663,12 @@ floor always binds first for any lándlet with a positive area, so the
 center-of-Earth check exists mainly to satisfy the spec's literal "hard
 depth limit: Earth's radius" requirement as its own explicit guard.
 
+Found via backlog audit (#395): the `INSERT` is guarded atomically against
+the lándlet's *current* extent in this direction (not just a plain insert
+off the request-time read) — a second, genuinely concurrent add in the
+same direction gets a clean `409` ("This lándlet's levels changed —
+please retry") instead of a raw D1 constraint-violation `500`.
+
 ### `DELETE /api/landlets/:landletId/levels/:levelIndex`
 
 Requires the session-authenticated owner. Only the outermost existing
@@ -3663,6 +3676,10 @@ level (in whichever direction `levelIndex` is on) can be removed —
 `409` otherwise, or if `levelIndex` is `0` (never a real row) or the
 lándlet has no levels at all. Frees the level's `capConsumedM2`
 immediately by recomputing the owning builder's land cap afterward.
+Found via backlog audit (#395): "still the outermost" is re-checked as
+part of the `DELETE`'s own atomic guard, not just the initial read, so a
+concurrent add extending past this level between the read and the delete
+can't leave a gap in the level sequence.
 
 ### Ownership-change cleanup
 
@@ -3673,6 +3690,21 @@ deletion release-to-greenbelt path and both `resolveAuction` branches
 auction) — matching the existing "a new owner gets the land, not the
 previous owner's stuff on it" reasoning already applied to
 `placed_instances`/`landlet_versions` there.
+
+### Instance placement is bounded by purchased levels (#394)
+
+Every instance create/update path (`POST/PUT/PATCH /api/instances*`,
+including the batch and draft-save endpoints) rejects a `z` outside the
+lándlet's currently *purchased* vertical extent — `400` if `z` falls
+outside `[min(0, ...levelIndices) * LEVEL_HEIGHT_M - LEVEL_HEIGHT_M / 2,
+max(0, ...levelIndices) * LEVEL_HEIGHT_M + LEVEL_HEIGHT_M / 2]` (the half-
+level slack accounts for an instance's own thickness carrying it slightly
+past a level's exact boundary). A lándlet with no `landlet_levels` rows
+still has the implicit ground level at index `0`, so its instances must
+sit within one level's height of the ground. This closes a gap where
+placing an instance directly could build arbitrarily high or deep without
+ever calling `POST /api/landlets/:landletId/levels` — the only place land
+cap is actually charged for going vertical.
 
 ## Simulated purchases
 
@@ -3880,7 +3912,8 @@ The migrations currently create seventeen main backend tables:
   owner IDs.
 - `placed_instances`: objects placed into a landlet from catalog templates,
   including any per-instance crop override (see "Extensible products (crop)")
-  and uniform Resize scale factor (see "Frontend-only Resize").
+  and legacy uniform Resize scale factor (see "Legacy per-instance Resize
+  scale").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
 - `landlet_versions`: immutable layout snapshot metadata.
@@ -4255,39 +4288,24 @@ player's own input. "Sit"/"lean" are still open — both need a real
 interaction-target concept (e.g. a chair prop with an occupancy slot) that
 doesn't exist yet.
 
-## Frontend-only Resize
+## Legacy per-instance Resize scale
 
-A real uniform scale for a placed instance (`mesh.userData.scale`, persisted
-as the instance's `scale` field), entirely separate from Trim's per-axis
-`crop` above — for a model whose own source came in at the wrong physical
-size entirely (an uploaded scan authored many times too large or too small),
-not something limited to templates that declare themselves extensible.
-`#mode-resize` sits alongside Move/Rotate/Trim in the same gizmo-mode row,
-enabled for any single selected item (unlike Trim, which stays disabled for
-anything not extensible).
+Build mode once had a "Resize" gizmo mode — a real uniform scale for a
+placed instance, entirely separate from Trim's per-axis `crop`, for a model
+whose own source came in at the wrong physical size entirely. It's been
+removed (found via backlog audit, #404): the world is meant to be populated
+at each product's real, seller-declared size, not resized ad hoc per
+placement, so there's no `#mode-resize` button, no scale gizmo, and no
+percentage input anywhere in the frontend today.
 
-The gizmo itself is a second `TransformControls` instance (`scaleControls`)
-in `'scale'` mode, with `showX`/`showY`/`showZ` all set `false` so only its
-built-in uniform (center) handle is interactive — a per-axis drag would
-distort the model exactly the way Trim is careful never to, so those handles
-are hidden rather than merely discouraged. A numeric field
-(`#resize-scale-input`, shown as a percentage) offers the same exact-value
-alternative Trim's own length field does.
-
-TransformControls' scale mode scales an object about its own local origin,
-which sits at the object's vertical *center* once placed (see
-`createMeshForInstance`'s "z = height / 2 rests it on ground" convention) —
-left alone, growing the scale would sink the object into whatever it's
-resting on, and shrinking it would lift it into the air, since only the
-geometry grows/shrinks while `position.z` stays fixed. `keepRestingOnScaleChange`
-recomputes `position.z` on every scale change to keep the object's *bottom*
-edge exactly where it was — not assumed to be bare ground, since Snap can
-rest an item on top of another one — so it grows/shrinks in place rather
-than visibly sinking or floating.
-
-`scale` factors into `meshDimensions()` alongside `crop`, so collision,
-landlet-bounds clamping, and stacking all see a resized item's real
-(scaled) footprint rather than its template-declared one.
+`mesh.userData.scale`/the instance's `scale` field still exists purely as a
+read compatibility path: any instance saved *before* the removal that
+carries a non-`1` value keeps rendering at it (`createMeshForInstance`
+applies it via `object.scale.setScalar(...)`), and `scale` still factors
+into `meshDimensions()` alongside `crop` so collision/bounds-clamping/
+stacking see such an instance's real (scaled) footprint. There's no UI path
+left to set a new value — only to keep honoring one an instance already
+has.
 
 ## Frontend-only alignment assist
 
@@ -4616,9 +4634,15 @@ the built-in catalog:
   page's catalog references in one D1 query. The response reports
   `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
   reached the end of the bucket. Objects are collected before the bulk delete
-  so deleting them cannot invalidate an in-progress R2 cursor. Set boolean
-  `dryRun` to `true` to return the same proposed targets and reclaimed-byte
-  total without deleting anything; the response echoes `dryRun`.
+  so deleting them cannot invalidate an in-progress R2 cursor. Immediately
+  before that delete (not only during the earlier per-page scan), the full
+  target set is re-checked against `catalog_templates` in one more query, and
+  any object referenced by a template created in the meantime is dropped
+  from the response and left alone — narrowing (not eliminating; R2 and D1
+  aren't a single transaction) the window for a template creation racing
+  this cleanup. Set boolean `dryRun` to `true` to return the same proposed
+  targets and reclaimed-byte total without deleting anything (including that
+  same final re-check); the response echoes `dryRun`.
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
@@ -4631,7 +4655,10 @@ the built-in catalog:
   upload from R2 so dev model iterations do not permanently consume the
   application storage allowance. Uploads still referenced by a catalog
   template return `409`; delete the catalog template first. Missing uploads
-  return `404`. `GET`/`HEAD` above stay unauthenticated — serving an
+  return `404`. The referenced-model check runs as the very last step before
+  the actual R2 delete (after confirming the object exists), narrowing the
+  window against a template referencing this model being created in
+  between. `GET`/`HEAD` above stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
