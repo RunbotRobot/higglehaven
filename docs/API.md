@@ -2552,9 +2552,12 @@ instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
 ### `POST /api/instances/:instanceId/posts`
 
 Body: `{ "authorLabel", "text" }`, both required, `text` capped at 280
-characters. `400` if the target instance isn't currently flagged
-`isCommunitySign` — a post can't outlive or predate the flag that makes it
-visible at all. `404` if the instance doesn't exist.
+characters and `authorLabel` at 100 (same cap `buyerLabel`/review
+`authorLabel` share, see "Simulated purchases"/"Product reviews" below).
+`400` if the target instance isn't currently flagged `isCommunitySign` —
+a post can't outlive or predate the flag that makes it visible at all.
+`404` if the instance doesn't exist. Unauthenticated and rate-limited per
+client IP, the same as the purchase endpoint below.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
@@ -2783,7 +2786,9 @@ the review's `authorLabel`, case-insensitively (`400` otherwise). An
 anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
-identity system carries everywhere else it's used. Any purchase counts,
+identity system carries everywhere else it's used. `authorLabel` is capped
+at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. Any
+purchase counts,
 refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
 can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
 enforced at the DB level): the purchase gate above is a one-time
@@ -3543,7 +3548,9 @@ POST /api/instances/:instanceId/purchase
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one, anonymously," not a
 400, since a purchase has no other required input beyond which instance is
-being bought. Returns `201` with the created `purchase`:
+being bought. When present, `buyerLabel` is capped at 100 characters, same
+as sign-post/review `authorLabel`. Returns `201` with the created
+`purchase`:
 
 ```json
 {
