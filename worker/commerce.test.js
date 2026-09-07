@@ -329,7 +329,14 @@ describe('Auctions', () => {
       })),
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
-    expect([201, 409]).toContain(versioned.response.status);
+    // #455: handleLandletVersions' POST does an early assertOwner check
+    // (using the landlet fetched just before it) ahead of its own atomic
+    // write. If the transfer commits before that fetch resolves, the check
+    // correctly sees the new owner and rejects with 403 — a legitimate
+    // race outcome distinct from 409 (the write-time atomic-guard
+    // rejection for a transfer landing in the narrower window between the
+    // check and the write, which #415 already closes).
+    expect([201, 403, 409]).toContain(versioned.response.status);
 
     // resolveAuction wipes landlet_versions on a real transfer regardless
     // of ordering, so this must read empty either way: if the version save
