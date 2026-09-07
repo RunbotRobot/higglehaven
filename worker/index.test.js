@@ -5248,6 +5248,34 @@ describe('Simulated purchases', () => {
     expect(byTemplate.body.purchases).toHaveLength(2);
   });
 
+  // The list above is capped at 100 rows with no pagination — reading a
+  // seller's own "N sales" summary straight off that capped list's own
+  // .length (the Seller modal's Sales panel, before this fix) silently
+  // undercounts once a product has passed 100 sales. totalCount is a
+  // dedicated, uncapped COUNT instead (same fix already applied to
+  // notifications' unread badge — see 'reports the true unread count past
+  // the notifications list's own 100-row cap' above).
+  it('reports the true purchase count past the purchases list\'s own 100-row cap, by both builderId and templateId', async () => {
+    const seller = await signupBuilder('purchase-count-seller');
+    await createTemplate('purchase-count-template', { priceCents: 500 });
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO purchases
+          (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity,
+           total_cents, commission_cents, builder_share_cents, platform_share_cents)
+        VALUES (?, 'purchase-count-instance', 'purchase-count-template', ?, 500, 1, 500, 10, 5, 5)
+      `).bind(`purchase-count-${i}`, seller.builderId));
+    await env.DB.batch(statements);
+
+    const byBuilder = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(byBuilder.body.purchases).toHaveLength(100);
+    expect(byBuilder.body.totalCount).toBe(105);
+
+    const byTemplate = await api('/purchases?templateId=purchase-count-template');
+    expect(byTemplate.body.purchases).toHaveLength(100);
+    expect(byTemplate.body.totalCount).toBe(105);
+  });
+
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
     const seller = await signupBuilder('purchase-malformed-seller');
     await createGreenbeltLandletWithArea('purchase-malformed-landlet', 1000);

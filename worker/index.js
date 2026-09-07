@@ -4804,7 +4804,12 @@ async function handlePurchases(request, db, route, url) {
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
-      return json({ purchases: results.map(purchaseFromRow) });
+      // The list above is capped at 100 rows (no pagination) — fine for the
+      // list itself, but a naive .length undercounts once a builder has more
+      // than 100 purchases. A dedicated COUNT has no such cap (same fix
+      // already applied to the notifications unread badge).
+      const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE builder_id = ?').bind(id).first();
+      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
     if (templateId) {
       const id = stringValue(templateId, 'templateId');
@@ -4817,7 +4822,8 @@ async function handlePurchases(request, db, route, url) {
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
-      return json({ purchases: results.map(purchaseFromRow) });
+      const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
+      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
     throw new HttpError('builderId or templateId is required', 400);
   }

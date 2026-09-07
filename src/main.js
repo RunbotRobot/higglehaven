@@ -3625,16 +3625,17 @@ function renderSellerList() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
       let purchases;
+      let totalCount;
       try {
-        purchases = await fetchPurchases({ templateId: template.templateId });
+        ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
-      salesEmptyEl.hidden = purchases.length > 0;
-      if (purchases.length > 0) {
-        salesSummaryEl.textContent = `${purchases.length} sale${purchases.length === 1 ? '' : 's'}`;
+      salesEmptyEl.hidden = totalCount > 0;
+      if (totalCount > 0) {
+        salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
       }
       for (const purchase of purchases) {
         const saleRow = document.createElement('div');
