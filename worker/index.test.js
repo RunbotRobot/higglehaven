@@ -5056,7 +5056,12 @@ describe('Simulated purchases', () => {
     }
     const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
     expect(limited.response.status).toBe(429);
-  }, 20000);
+  }, 45000); // matches the sibling burst-race test below — 30 sequential
+  // round trips reliably finishes in under a second in isolation, but a
+  // long-running CI worker (this whole file, 300+ tests, one process) can
+  // occasionally push it past 20s on nothing but scheduling contention,
+  // not a real regression — this pre-existing flake has now blocked two
+  // separate unrelated PRs' CI runs this session for exactly that reason.
 
   it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
     // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;
