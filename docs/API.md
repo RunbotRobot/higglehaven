@@ -1863,6 +1863,12 @@ sends — otherwise an unauthenticated caller could flip a landlet to
 from the claimable pool with no way back. Claimed-state transitions only
 ever happen through claim or auction resolution too.
 
+The write itself is guarded on `status`/`ownerBuilderId` still matching what
+this request originally read, so a claim (or auction resolution) landing
+concurrently can't be silently clobbered back to the stale unowned values
+this request pinned them to — a lost race returns `409` instead of the `200`
+it would otherwise report despite having reverted the claim underneath it.
+
 ### `DELETE /api/landlets/:landletId`
 
 Once a landlet has an owner, this always fails with `409` — this raw delete
@@ -1870,7 +1876,9 @@ has no cascade cleanup for placed instances/version history (unlike
 `DELETE /api/builders/:builderId`'s careful release path), so even the true
 owner using it would corrupt data; release land via deleting the builder or
 losing an auction instead. Deletes an unowned landlet outright, with no
-session required (see the note on `PUT`/`PATCH` above for why).
+session required (see the note on `PUT`/`PATCH` above for why) — guarded the
+same way against a concurrent claim landing first, returning `409` instead
+of deleting land out from under its brand-new owner.
 
 Response:
 

@@ -3529,19 +3529,32 @@ async function handleLandlets(request, db, route, url) {
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
     );
-    await db.prepare(`
+    // Guarded on status/owner_builder_id still matching what was just read
+    // above — without this, a concurrent claim (or auction resolution)
+    // landing between that read and this write would get silently
+    // clobbered back to the stale values this request pinned status/
+    // ownerBuilderId to, undoing the claim with no trace (this endpoint's
+    // own response would even report success). `IS` rather than `=` so the
+    // owner_builder_id IS NULL case binds correctly. A lost race surfaces
+    // as 409 so the caller knows to refetch, the same shape as every other
+    // concurrent-write guard in this file.
+    const result = await db.prepare(`
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
           land_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
+      WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
       landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
+      existing.status, existing.owner_builder_id,
     ).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ landlet });
   }
 
@@ -3558,7 +3571,14 @@ async function handleLandlets(request, db, route, url) {
     if (existing.owner_builder_id !== null) {
       throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
     }
-    await db.prepare('DELETE FROM landlets WHERE landlet_id = ?').bind(route[1]).run();
+    // Re-checked as part of the DELETE itself, not just the read above — a
+    // claim landing in between would otherwise still get deleted out from
+    // under its new owner, matching the same race the PUT/PATCH guard just
+    // above this now also closes.
+    const result = await db.prepare('DELETE FROM landlets WHERE landlet_id = ? AND owner_builder_id IS NULL').bind(route[1]).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
+    }
     return json({ deleted: true });
   }
 
