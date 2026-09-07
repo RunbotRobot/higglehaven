@@ -233,7 +233,21 @@ before starting to code:
    tracking issue, or `sub_issue_write` (`method: "add"`) to attach an
    issue you already created. Each sub-issue should be independently
    implementable and mergeable on its own, through the same
-   own-session-branch cycle described above.
+   own-session-branch cycle described above. Treat this filing as its
+   own real checkpoint, not a formality to blow past on the way to
+   coding: the project owner flagged a case where a session filed a
+   tracking issue, broke it into sub-issues, and fully implemented one or
+   more of them, all in one uninterrupted pass — nobody else could see
+   the sub-issues existed (on GitHub or in the control room) until the
+   whole thing was already done, 7 hours after the tracking issue first
+   appeared. That defeats the actual point of breaking work up, which is
+   letting *any* session pick up a leaf, not just the one that did the
+   breakdown. This isn't a rule against doing the breakdown and a leaf's
+   implementation in the same session — just make sure the sub-issues are
+   actually filed and visible before you move on to implementing any of
+   them, so another session checking the backlog in that window sees real
+   leaves to claim instead of one big tracking issue with nothing under it
+   yet.
 3. **Recurse.** If a sub-issue is still big enough that landing it risks a
    painful merge or a multi-day session, break *it* into its own
    sub-issues the same way. Keep nesting until every leaf task is roughly
