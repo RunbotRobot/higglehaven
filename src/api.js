@@ -215,6 +215,36 @@ export async function fetchAllLandlets(params = {}) {
   }
 }
 
+// docs/API.md's "Vertical construction — levels" (issue #168/#169). Public,
+// no session required — matches fetchLandlet's own unauthenticated read.
+export async function fetchLandletLevels(landletId) {
+  const { levels } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels`);
+  return levels;
+}
+
+// Extends the lándlet's current level range by exactly one in `direction`
+// ('up' or 'down') — the server infers *which* new levelIndex that is from
+// the lándlet's own existing levels, never a client-supplied index. Throws
+// (via requestJson) with the server's own message on a 409 — reaching the
+// hard depth limit or the 10m² minimum footprint going down — for the
+// caller to show inline rather than silently failing.
+export async function addLandletLevel(landletId, direction) {
+  const { level } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ direction }),
+  });
+  return level;
+}
+
+// Only the outermost existing level (in whichever direction levelIndex is
+// on) can actually be removed — a 409 (surfaced via requestJson) otherwise.
+export async function deleteLandletLevel(landletId, levelIndex) {
+  await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
+    method: 'DELETE',
+  });
+}
+
 // builderId is never sent — the server derives "who's claiming" from the
 // session cookie, never from a client-supplied field.
 export async function claimLandlet(landletId) {
@@ -340,11 +370,21 @@ export async function deleteCatalogTemplate(templateId) {
 // and (without the flag) the full history list.
 // No builderId param — the server derives "whose notifications" from the
 // session cookie, never from a client-supplied field.
-export async function fetchNotifications({ unreadOnly = false } = {}) {
+export async function fetchNotifications({ unreadOnly = false, cursor = null } = {}) {
   const query = new URLSearchParams();
   if (unreadOnly) query.set('unreadOnly', 'true');
-  const { notifications } = await requestJson(`/notifications?${query.toString()}`);
-  return notifications;
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/notifications?${query.toString()}`);
+}
+
+// fetchNotifications' own list is now cursor-paginated (issue #320) — a
+// builder with more than one page of notifications would still make this
+// undercount if it just read that first page's own .length, same shape
+// as the bug #245/#288 already fixed for the unread badge specifically.
+// This hits a dedicated COUNT query instead, with no page cap at all.
+export async function fetchUnreadNotificationCount() {
+  const { count } = await requestJson('/notifications/unread-count');
+  return count;
 }
 
 export async function markNotificationRead(notificationId) {
@@ -526,11 +566,15 @@ export async function fetchCalendarEvents(instanceId) {
   return events;
 }
 
-export async function createCalendarEvent(instanceId, { authorLabel, text, scheduledAt } = {}) {
+// authorLabel is not accepted here — docs/SPEC.md §6 calls calendar events
+// "builder-authored" (unlike sign posts' anonymous shopper authorLabel),
+// so the server derives it from the logged-in, landlet-owning builder's
+// own profile instead of trusting client-supplied free text.
+export async function createCalendarEvent(instanceId, { text, scheduledAt } = {}) {
   const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, text, scheduledAt }),
+    body: JSON.stringify({ text, scheduledAt }),
   });
   return event;
 }
@@ -653,12 +697,16 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}
   return purchase;
 }
 
+// The list is capped at 100 rows server-side (no pagination) — totalCount
+// comes from a dedicated, uncapped COUNT so callers can show the real total
+// even past that cap (same fix already applied to notifications' unread
+// badge — see fetchUnreadNotificationCount above).
 export async function fetchPurchases({ builderId, templateId } = {}) {
   const params = new URLSearchParams();
   if (builderId) params.set('builderId', builderId);
   if (templateId) params.set('templateId', templateId);
-  const { purchases } = await requestJson(`/purchases?${params.toString()}`);
-  return purchases;
+  const { purchases, totalCount } = await requestJson(`/purchases?${params.toString()}`);
+  return { purchases, totalCount };
 }
 
 // Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql).

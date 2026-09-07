@@ -189,6 +189,55 @@ describe('Worker API', () => {
     expect(limited.status).toBe(429);
   });
 
+  it('accepts only one of two concurrent uploads that would jointly overrun the storage cap, not both', async () => {
+    const storage = await api('/models/storage', adminSession());
+    const usedBytes = storage.body.usedBytes;
+    const capBytes = 8 * 1024 * 1024 * 1024;
+    // Seed a fake in-flight reservation directly (mirrors how the
+    // vertical-construction-levels tests seed landlet_levels directly —
+    // actually filling the real 8GB cap via uploads would take hundreds
+    // of requests) so only a sliver of real headroom remains: room for
+    // one 28-byte test upload, not two fired concurrently.
+    const headroomBytes = 30;
+    await env.DB.prepare(`
+      INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES (?, ?, ?)
+    `).bind(`test-reservation-${crypto.randomUUID()}`, capBytes - usedBytes - headroomBytes, Date.now()).run();
+
+    const headers = { 'cf-connecting-ip': `storage-race-${crypto.randomUUID()}` };
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "usage is under the
+    // cap" before either R2 put lands, jointly overrunning the cap
+    // (#264). Each file has distinct content so neither short-circuits
+    // via the dedup-by-hash path before ever reaching the reservation
+    // check.
+    const formA = new FormData();
+    formA.set('file', glbFile({ json: '{"a":1}' }));
+    const formB = new FormData();
+    formB.set('file', glbFile({ json: '{"b":1}' }));
+    const [first, second] = await Promise.all([
+      SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: formA, headers }),
+      SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: formB, headers }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([201, 507]);
+
+    // The rejected upload's would-be reservation must not linger —
+    // otherwise the storage cap would ratchet down permanently every time
+    // a race (or any ordinary rejection) occurs. Only the fake row seeded
+    // above should remain; the winner's own reservation is freed once its
+    // R2 put lands.
+    const remaining = await env.DB.prepare('SELECT COUNT(*) AS count FROM model_upload_reservations').first();
+    expect(remaining.count).toBe(1);
+
+    // Clean up both the fake reservation and the winning upload itself —
+    // otherwise this test would leave a permanent, unreferenced model
+    // sitting in R2 that later tests (e.g. the orphan-cleanup one below)
+    // don't expect to find.
+    await env.DB.prepare('DELETE FROM model_upload_reservations').run();
+    const winner = first.status === 201 ? first : second;
+    const { modelUrl } = await winner.json();
+    await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+  });
+
   it('deletes only unreferenced uploaded models', async () => {
     const missingModel = await api('/catalog', {
       method: 'POST',
@@ -950,6 +999,50 @@ describe('Worker API', () => {
     expect(missingReference.body).toEqual({
       error: 'templateId "missing-template" does not exist',
     });
+  });
+
+  // Found via backlog audit (#318): priceCents had no upper bound and used
+  // Number.isInteger rather than Number.isSafeInteger, letting a value past
+  // MAX_MONEY_CENTS (or past safe-integer range entirely) through — a
+  // seller could set an astronomical priceCents on their own template and
+  // self-purchase it once to mint an outsized dallers_balance_cents credit.
+  it('rejects a priceCents over the money-field cap, and a non-safe-integer value', async () => {
+    const overCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-over-test',
+        name: 'Price cap over test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_001,
+      }),
+    });
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-unsafe-test',
+        name: 'Price cap unsafe test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    });
+    expect(notSafe.response.status).toBe(400);
+
+    const atCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-at-test',
+        name: 'Price cap at test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_000,
+      }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.template.priceCents).toBe(100_000_000);
   });
 
   it('atomically replaces a landlet draft', async () => {
@@ -2109,6 +2202,47 @@ describe('Landlet updates', () => {
     expect(renamed.body.landlet.name).toBe('Renamed by admin tooling');
     expect(renamed.body.landlet.status).toBe('greenbelt');
   });
+
+  // Same "claimed implies non-null owner" invariant as the PUT/PATCH test
+  // above (#224), but on the create path instead — an anonymous POST that
+  // sets status:'claimed' while simply omitting ownerBuilderId used to sail
+  // straight through the ownerBuilderId-spoofing check (#65/#69) as if it
+  // were ordinary unowned world-generation housekeeping, leaving a landlet
+  // permanently stuck: un-claimable via POST .../claim (no longer
+  // greenbelt) and not eligible for DELETE's owned-land protection either.
+  it('rejects creating a claimed landlet with no owner via POST', async () => {
+    const rejected = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-claimed-create-landlet',
+        name: 'Should never exist',
+        areaM2: 1000,
+        status: 'claimed',
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body).toEqual({ error: 'A claimed landlet must have an ownerBuilderId' });
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-claimed-create-landlet').first();
+    expect(stored).toBeNull();
+  });
+
+  it('still allows unauthenticated creation of unowned greenbelt/generating landlets via POST', async () => {
+    const greenbelt = await createGreenbeltLandlet('unowned-create-greenbelt-landlet');
+    expect(greenbelt.response.status).toBe(201);
+    expect(greenbelt.body.landlet).toMatchObject({ status: 'greenbelt', ownerBuilderId: null });
+
+    const generating = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-create-generating-landlet', name: 'Still generating', areaM2: 4, status: 'generating',
+      }),
+    });
+    expect(generating.response.status).toBe(201);
+    expect(generating.body.landlet).toMatchObject({ status: 'generating', ownerBuilderId: null });
+  });
 });
 
 describe('Community signs', () => {
@@ -2204,6 +2338,13 @@ describe('Community signs', () => {
     });
     expect(tooLong.response.status).toBe(400);
 
+    // Found via backlog audit (#337): authorLabel had no length cap at all.
+    const authorLabelTooLong = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), text: 'Hello!' }),
+    });
+    expect(authorLabelTooLong.response.status).toBe(400);
+
     const posted = await api('/instances/sign-with-posts/posts', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
@@ -2255,6 +2396,37 @@ describe('Community signs', () => {
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
     expect(afterDelete.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): unlike every other public, repeatable
+  // mutation in this file, posting to a community sign requires no
+  // session and had no rate limit at all. Synthetic cf-connecting-ip per
+  // the purchase rate-limit test's own approach, so this test's bucket
+  // doesn't collide with any other sign-post test above.
+  it('rate-limits repeated posts from the same client', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-rate-limit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/instances/sign-rate-limit-instance/posts', {
+        method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: `Post ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/sign-rate-limit-instance/posts', {
+      method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
   });
 });
 
@@ -2335,10 +2507,10 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const rejected = await api('/instances/not-a-calendar-instance/events', {
+    const rejected = await api('/instances/not-a-calendar-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/not marked as a community calendar/);
   });
@@ -2360,26 +2532,45 @@ describe('Community calendar', () => {
     expect(emptyList.response.status).toBe(200);
     expect(emptyList.body.events).toEqual([]);
 
-    const missingText = await api('/instances/calendar-with-events/events', {
+    // docs/SPEC.md §6: calendar events are builder-authored, unlike sign
+    // posts — POST requires a session logged in as the hosting landlet's
+    // own owner, unlike GET/the sign-posts POST above.
+    const unauthenticated = await api('/instances/calendar-with-events/events', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder' }),
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
     });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const otherBuilder = await signupBuilder('community-calendar-other-builder');
+    const wrongBuilder = await api('/instances/calendar-with-events/events', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
+    expect(wrongBuilder.response.status).toBe(403);
+
+    const missingText = await api('/instances/calendar-with-events/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
     expect(missingText.response.status).toBe(400);
 
-    const tooLong = await api('/instances/calendar-with-events/events', {
+    const tooLong = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'x'.repeat(281) }),
-    });
+      body: JSON.stringify({ text: 'x'.repeat(281) }),
+    }));
     expect(tooLong.response.status).toBe(400);
 
-    const posted = await api('/instances/calendar-with-events/events', {
+    // authorLabel is not client-supplied — it's derived from the session
+    // builder's own label, even if a client tries to send a different one
+    // (impersonation is exactly the bug this gate closes).
+    const posted = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ authorLabel: 'Someone Else Entirely', text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(posted.response.status).toBe(201);
     expect(posted.body.event).toMatchObject({
       instanceId: 'calendar-with-events',
-      authorLabel: 'A Builder',
+      authorLabel: calendarBuilder.builder.label,
       text: 'Bonfire night, Friday 8pm!',
     });
     expect(posted.body.event.eventId).toMatch(/^event-/);
@@ -2415,10 +2606,10 @@ describe('Community calendar', () => {
         isCommunityCalendar: true,
       }),
     }));
-    await api('/instances/calendar-to-delete/events', {
+    await api('/instances/calendar-to-delete/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Market day' }),
-    });
+      body: JSON.stringify({ text: 'Market day' }),
+    }));
     await api('/instances/calendar-to-delete', calendarBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/calendar-to-delete/events');
@@ -2438,23 +2629,23 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const plain = await api('/instances/calendar-scheduled-instance/events', {
+    const plain = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     expect(plain.body.event.scheduledAt).toBeNull();
     expect(plain.body.event.triggeredAt).toBeNull();
 
-    const invalid = await api('/instances/calendar-scheduled-instance/events', {
+    const invalid = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bad date', scheduledAt: 'not a date' }),
-    });
+      body: JSON.stringify({ text: 'Bad date', scheduledAt: 'not a date' }),
+    }));
     expect(invalid.response.status).toBe(400);
 
-    const scheduled = await api('/instances/calendar-scheduled-instance/events', {
+    const scheduled = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
+    }));
     expect(scheduled.response.status).toBe(201);
     expect(scheduled.body.event.scheduledAt).toBe('2026-08-26T20:00:00.000Z');
     expect(scheduled.body.event.triggeredAt).toBeNull();
@@ -2473,20 +2664,20 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const future = await api('/instances/calendar-trigger-instance/events', {
+    const future = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
     const futureEventId = future.body.event.eventId;
     const notDueYet = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
     expect(notDueYet.response.status).toBe(200);
     expect(notDueYet.body.triggered).toBe(false);
     expect(notDueYet.body.event.triggeredAt).toBeNull();
 
-    const noSchedule = await api('/instances/calendar-trigger-instance/events', {
+    const noSchedule = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     const noScheduleTrigger = await api(`/instances/calendar-trigger-instance/events/${noSchedule.body.event.eventId}/trigger`, { method: 'POST' });
     expect(noScheduleTrigger.body.triggered).toBe(false);
 
@@ -2510,6 +2701,39 @@ describe('Community calendar', () => {
 
     const triggerOnMissing = await api('/instances/calendar-trigger-instance/events/event-does-not-exist/trigger', { method: 'POST' });
     expect(triggerOnMissing.response.status).toBe(404);
+  });
+
+  // #270: two callers hitting the endpoint sequentially (the test above)
+  // can't exercise the actual race — by the time the second call runs, the
+  // early `event.triggered_at` check already short-circuits it before it
+  // ever reaches the UPDATE. Real concurrent calls both pass that check
+  // first, so this is the only way to catch a regression back to deciding
+  // `triggered` from a re-SELECT instead of the UPDATE's own row count.
+  it('reports triggered:true to exactly one caller when two requests race the same due event', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-race-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 12,
+        y: 12,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const created = await api('/instances/calendar-race-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
+    const eventId = created.body.event.eventId;
+    await env.DB.prepare(`UPDATE calendar_events SET scheduled_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?`).bind(eventId).run();
+
+    const [first, second] = await Promise.all([
+      api(`/instances/calendar-race-instance/events/${eventId}/trigger`, { method: 'POST' }),
+      api(`/instances/calendar-race-instance/events/${eventId}/trigger`, { method: 'POST' }),
+    ]);
+    const triggeredFlags = [first.body.triggered, second.body.triggered];
+    expect(triggeredFlags.filter(Boolean)).toHaveLength(1);
   });
 });
 
@@ -2553,6 +2777,16 @@ describe('Product reviews', () => {
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
     });
     expect(rejected.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): authorLabel had no length cap at all.
+  it('rejects a review authorLabel over the length cap', async () => {
+    const templateId = await createTemplate('review-author-label-too-long');
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a review from a shopper who never purchased the product', async () => {
@@ -2774,6 +3008,55 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // DELETE /api/sellers/:sellerId deliberately leaves a template's
+  // seller_id dangling rather than cleaning it up — docs/API.md says
+  // that's "the same as" a template with a null seller_id, which review
+  // moderation and catalog PATCH/DELETE both already leave unrestricted.
+  // Before this test's fix, the plain `if (template.seller_id)` truthiness
+  // check treated that dangling id as still-owned, and since no live
+  // session can ever match an id that no longer exists, moderation became
+  // permanently blocked for everyone, including admins.
+  it('unlocks review moderation, and catalog PATCH/DELETE, once the template\'s seller has since deleted their account', async () => {
+    const seller = await signupSeller('review-moderation-deleted-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-moderation-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+    expect(sellerDeleted.response.status).toBe(200);
+
+    // A dangling seller_id now falls through to the same unrestricted path
+    // a genuinely null seller_id already takes — no session required.
+    const patched = await api(`/catalog/${templateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed after seller deletion' }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.name).toBe('Renamed after seller deletion');
+
+    const reviewDeleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    expect(reviewDeleted.response.status).toBe(200);
+
+    const templateDeleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    expect(templateDeleted.response.status).toBe(200);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
@@ -2849,6 +3132,31 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // #336: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — requireSessionBuilder bumps last_active_at on every real
+  // builder-owned mutation, but not on mere signup/session-check reads
+  // (GET /builders/me goes through getOrCreateBuilderForUser directly,
+  // not requireSessionBuilder), matching the column's own migration
+  // comment on why every pre-existing/never-yet-mutating builder should
+  // read as NULL rather than some backdated guess.
+  it('bumps last_active_at on a real mutation but not on signup/session checks alone', async () => {
+    const builder = await signupBuilder('activity-test-builder');
+    const beforeMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(beforeMutation.last_active_at).toBeNull();
+
+    await createGreenbeltLandlet('activity-test-landlet');
+    const claimed = await api('/landlets/activity-test-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const afterMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(afterMutation.last_active_at).not.toBeNull();
+    expect(new Date(afterMutation.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
+  });
+
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
     const builder = await signupBuilder('release-test-builder');
 
@@ -2895,7 +3203,11 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
-  it('notifies bidders before their bid vanishes when the seller deletes their account mid-auction', async () => {
+  // #279: the owner's stated policy is that once an auction has bids, the
+  // seller can no longer back out of it — including by deleting their own
+  // account. This used to succeed (cascading the auction+bids away and
+  // just notifying the bidder after the fact); it's blocked outright now.
+  it('rejects deleting a builder while their own active auction has bids', async () => {
     const seller = await signupBuilder('auction-seller-deleted');
     const bidder = await signupBuilder('auction-seller-deleted-bidder');
     await createGreenbeltLandlet('auction-seller-deleted-landlet');
@@ -2910,24 +3222,39 @@ describe('Builders', () => {
     expect(bid.response.status).toBe(201);
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-landlet']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    // The FK cascade on seller_builder_id still removes the auction (and
-    // its bids) outright, same as before this fix — that part is an
-    // accepted dev-mode simplification (see the handler's own comment).
-    // What's new is the bidder actually being told, instead of their bid
-    // just silently disappearing.
+    // Nothing was touched — the auction, its bid, and the seller's builder
+    // row all still exist.
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.response.status).toBe(200);
+    expect(auction.body.auction.status).toBe('active');
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(seller.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder whose own active auction has no bids yet', async () => {
+    const seller = await signupBuilder('zero-bid-auction-seller-deleted');
+    await createGreenbeltLandlet('zero-bid-auction-seller-deleted-landlet');
+    await api('/landlets/zero-bid-auction-seller-deleted-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/zero-bid-auction-seller-deleted-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['zero-bid-auction-seller-deleted-landlet']);
+
+    // No bids existed to protect — the auction cascades away same as before.
     const auction = await api(`/auctions/${auctionId}`);
     expect(auction.response.status).toBe(404);
 
-    const notices = await api('/notifications', bidder.session());
-    expect(notices.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('called off because the seller\'s account was deleted'),
-    }));
-
-    // The land itself still goes back to greenbelt for someone else to claim.
-    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    const landlet = await api('/landlets/zero-bid-auction-seller-deleted-landlet');
     expect(landlet.body.landlet.status).toBe('greenbelt');
   });
 
@@ -2952,19 +3279,95 @@ describe('Builders', () => {
     expect(auction.body.auction.status).toBe('active');
   });
 
-  it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
+  // #263: without this guard, deleting the builder would cascade through
+  // auction_bids.bidder_builder_id and silently erase a bid that was
+  // actively deterring every other bidder from bidding — at zero cost,
+  // since a fresh builder profile is auto-provisioned on the next request.
+  it('rejects deleting a builder while they hold the leading bid on an active auction', async () => {
+    const seller = await signupBuilder('leading-bid-seller');
+    const bidder = await signupBuilder('leading-bid-bidder');
+    await createGreenbeltLandlet('leading-bid-landlet');
+    await api('/landlets/leading-bid-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/leading-bid-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+
+    const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while holding the leading bid on an active auction',
+    });
+
+    // Nothing was touched — the bid and the builder row both still exist.
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(bidder.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder whose bid on an active auction has since been outbid', async () => {
+    const seller = await signupBuilder('outbid-deletion-seller');
+    const firstBidder = await signupBuilder('outbid-deletion-first-bidder');
+    const secondBidder = await signupBuilder('outbid-deletion-second-bidder');
+    await createGreenbeltLandlet('outbid-deletion-landlet');
+    await api('/landlets/outbid-deletion-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/outbid-deletion-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, firstBidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${auctionId}/bids`, secondBidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+
+    const deleted = await api(`/builders/${firstBidder.builderId}`, firstBidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    // The auction itself, and the still-leading bidder, are unaffected.
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids.map((b) => b.bidderBuilderId)).toEqual([secondBidder.builderId]);
+  });
+
+  it('allows deleting a builder whose leading bid was on an auction that already ended', async () => {
+    const seller = await signupBuilder('ended-auction-deletion-seller');
+    const bidder = await signupBuilder('ended-auction-deletion-bidder');
+    await createGreenbeltLandlet('ended-auction-deletion-landlet');
+    await api('/landlets/ended-auction-deletion-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/ended-auction-deletion-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+
+    const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+  });
+
+  // #279's guard has to catch a bid on *any* of a seller's active auctions,
+  // not just a single one — this sets up two, with the bid on only the
+  // second, to prove the check isn't limited to "their one auction."
+  it('rejects deleting a builder when only one of their several active auctions has a bid', async () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
-    const bidderOne = await signupBuilder('multi-auction-bidder-one');
-    const bidderTwo = await signupBuilder('multi-auction-bidder-two');
+    const bidder = await signupBuilder('multi-auction-bidder');
 
     // A builder can only ever *claim* one greenbelt landlet directly, but
     // docs/SPEC.md §0/§5's auctions let them acquire additional
     // already-claimed land on top of that (see "resolves a winning
     // auction even when the bidder already owns a claimed landlet" above)
     // — so the seller ends up owning two landlets this way, the only way
-    // one builder can ever be running more than one active auction at
-    // once and actually exercise this batching.
+    // one builder can ever be running more than one active auction at once.
     await createGreenbeltLandlet('multi-auction-landlet-a');
     await api('/landlets/multi-auction-landlet-a/claim', seller.session({ method: 'POST' }));
     await createGreenbeltLandlet('multi-auction-landlet-b');
@@ -2987,40 +3390,22 @@ describe('Builders', () => {
     const startedB = await api('/landlets/multi-auction-landlet-b/auction', seller.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
     }));
-    const auctionIdA = startedA.body.auction.auctionId;
     const auctionIdB = startedB.body.auction.auctionId;
 
-    // Auction A gets two distinct bidders, auction B gets one — exercises
-    // the grouped-by-auction_id batching, not just a single auction/bidder.
-    await api(`/auctions/${auctionIdA}/bids`, bidderOne.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
-    }));
-    await api(`/auctions/${auctionIdA}/bids`, bidderTwo.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
-    }));
-    await api(`/auctions/${auctionIdB}/bids`, bidderOne.session({
+    // Only auction B gets a bid — auction A stays at zero.
+    await api(`/auctions/${auctionIdB}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 700 }),
     }));
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-auction-landlet-a', 'multi-auction-landlet-b']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    const noticesOne = await api('/notifications', bidderOne.session());
-    const messagesOne = noticesOne.body.notifications.map((n) => n.message);
-    expect(messagesOne).toEqual(expect.arrayContaining([
-      expect.stringContaining('multi-auction-landlet-a'),
-      expect.stringContaining('multi-auction-landlet-b'),
-    ]));
-
-    const noticesTwo = await api('/notifications', bidderTwo.session());
-    expect(noticesTwo.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('multi-auction-landlet-a'),
-    }));
-    // bidderTwo never bid on landlet-b's auction — shouldn't hear about it.
-    expect(noticesTwo.body.notifications.map((n) => n.message)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining('multi-auction-landlet-b')]),
-    );
+    // Nothing was touched, including auction A which never had a bid.
+    const auctionAAfter = await api(`/auctions/${startedA.body.auction.auctionId}`);
+    expect(auctionAAfter.body.auction.status).toBe('active');
+    const auctionBAfter = await api(`/auctions/${auctionIdB}`);
+    expect(auctionBAfter.body.auction.status).toBe('active');
   });
 
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
@@ -3110,6 +3495,23 @@ describe('Auctions', () => {
     expect(secondAttempt.response.status).toBe(409);
   });
 
+  it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
+    const owner = await signupBuilder('auction-start-race-owner');
+    await createGreenbeltLandlet('auction-start-race-landlet');
+    await claim('auction-start-race-landlet', owner);
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no active auction yet",
+    // both pass the check, and both land as separate active auctions on
+    // the same landlet, which would later each independently resolve and
+    // double-transfer the same land (#265).
+    const [first, second] = await Promise.all([
+      api('/landlets/auction-start-race-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) })),
+      api('/landlets/auction-start-race-landlet/auction', owner.session({ method: 'POST', body: JSON.stringify({}) })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
+  });
+
   it('accepts a custom starting bid and duration', async () => {
     const owner = await signupBuilder('custom-auction-owner');
     await createGreenbeltLandlet('auction-custom-landlet');
@@ -3124,6 +3526,43 @@ describe('Auctions', () => {
     const createdAt = new Date(started.body.auction.createdAt).getTime();
     expect(endsAt - createdAt).toBeGreaterThan(59 * 60 * 1000);
     expect(endsAt - createdAt).toBeLessThan(61 * 60 * 1000);
+  });
+
+  // Found via backlog audit (#318): startingBidCents/amountCents had no
+  // upper bound and used Number.isInteger rather than Number.isSafeInteger,
+  // letting a value past MAX_MONEY_CENTS (or past safe-integer range
+  // entirely) through to a persisted balance/ledger.
+  it('rejects a startingBidCents or amountCents over the money-field cap, and a non-safe-integer value', async () => {
+    const owner = await signupBuilder('bid-cap-owner');
+    const bidder = await signupBuilder('bid-cap-bidder');
+    await createGreenbeltLandlet('auction-bid-cap-landlet');
+    await claim('auction-bid-cap-landlet', owner);
+
+    const overCap = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_001 }),
+    }));
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: Number.MAX_SAFE_INTEGER + 1 }),
+    }));
+    expect(notSafe.response.status).toBe(400);
+
+    const started = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_000 }),
+    }));
+    expect(started.response.status).toBe(201);
+    const auctionId = started.body.auction.auctionId;
+
+    const bidOverCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_001 }),
+    }));
+    expect(bidOverCap.response.status).toBe(400);
+
+    const bidAtCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+    }));
+    expect(bidAtCap.response.status).toBe(201);
   });
 
   it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
@@ -3245,11 +3684,21 @@ describe('Auctions', () => {
     expect(bidderNotices.body.notifications.some((n) => n.message.includes('You won the auction'))).toBe(true);
 
     // Resolving again is a harmless no-op, not an error — it just returns
-    // the already-ended auction's current (unchanged) state. The 409 case
-    // is specifically "not due yet," covered by the next test.
+    // the already-ended auction's current (unchanged) state, and must not
+    // re-run the money-mutating side effects (double-crediting the
+    // seller's balance — #229) even though nothing here is a real
+    // concurrent race. The 409 case is specifically "not due yet,"
+    // covered by the next test.
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
+    const buildersAfterSecondResolve = await api('/builders');
+    const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
+    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
   });
 
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
@@ -3485,6 +3934,61 @@ describe('Auctions', () => {
     // stuck resolving the same subset forever.
     expect(dueAfterSecondCall.count).toBe(0);
   });
+
+  it('frees a $0-starting-bid seller to claim another landlet immediately, before the auction resolves', async () => {
+    const seller = await signupBuilder('release-zero-seller');
+    await createGreenbeltLandlet('release-zero-landlet-a');
+    await createGreenbeltLandlet('release-zero-landlet-b');
+    await claim('release-zero-landlet-a', seller);
+
+    // Before starting an auction, the ordinary one-claimed-landlet lock
+    // still applies.
+    const beforeAuction = await claim('release-zero-landlet-b', seller);
+    expect(beforeAuction.response.status).toBe(409);
+
+    await api('/landlets/release-zero-landlet-a/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+
+    // Starting a $0 auction is itself the commitment to give the land up —
+    // the lock frees immediately, with no bid needed and well before the
+    // auction's own end time.
+    const afterAuctionStart = await claim('release-zero-landlet-b', seller);
+    expect(afterAuctionStart.response.status).toBe(200);
+
+    // The original landlet is still nominally theirs (build/display
+    // purposes) until the auction actually resolves.
+    const original = await api('/landlets/release-zero-landlet-a');
+    expect(original.body.landlet.ownerBuilderId).toBe(seller.builderId);
+    expect(original.body.landlet.status).toBe('claimed');
+  });
+
+  it('frees a reserved-bid seller to claim another landlet only once the first bid lands', async () => {
+    const seller = await signupBuilder('release-bid-seller');
+    const bidder = await signupBuilder('release-bid-bidder');
+    await createGreenbeltLandlet('release-bid-landlet-a');
+    await createGreenbeltLandlet('release-bid-landlet-b');
+    await claim('release-bid-landlet-a', seller);
+
+    const started = await api('/landlets/release-bid-landlet-a/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 5000 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    // A reserved (non-$0) auction with no bids yet is not a commitment to
+    // give the land up — still locked.
+    const beforeBid = await claim('release-bid-landlet-b', seller);
+    expect(beforeBid.response.status).toBe(409);
+
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 5000 }),
+    }));
+
+    // The first bid guarantees the land eventually transfers, so the lock
+    // frees now, not at resolution.
+    const afterBid = await claim('release-bid-landlet-b', seller);
+    expect(afterBid.response.status).toBe(200);
+  });
 });
 
 // The Auctions tests above exercise notification creation as a side effect
@@ -3533,6 +4037,48 @@ describe('Notifications', () => {
 
     const bidderNotices = await api('/notifications', bidder.session());
     expect(bidderNotices.body.notifications).toHaveLength(0);
+  });
+
+  // Issue #320: the list was hardcoded to LIMIT 100 with no way to page
+  // further — a builder with more notifications than that could never see
+  // or individually mark read anything older than the newest 100.
+  it('paginates the notifications list via cursor, newest first, with no gaps or duplicates', async () => {
+    const owner = await signupBuilder('notif-page-owner');
+    const bidder = await signupBuilder('notif-page-bidder');
+    const landletId = 'notif-page-landlet';
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Three strictly increasing bids — three separate bid notifications
+    // for the owner, enough to exercise a limit=1 page boundary twice.
+    for (const amountCents of [500, 1000, 1500]) {
+      await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents }),
+      }));
+    }
+    const whole = await api('/notifications', owner.session());
+    expect(whole.body.notifications.length).toBeGreaterThanOrEqual(3);
+    expect(whole.body.nextCursor).toBeNull(); // under the default limit — nothing more to page to
+
+    const seenIds = [];
+    let cursor = null;
+    for (let i = 0; i < whole.body.notifications.length; i++) {
+      const page = await api(
+        `/notifications?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        owner.session(),
+      );
+      expect(page.body.notifications).toHaveLength(1);
+      seenIds.push(page.body.notifications[0].notificationId);
+      cursor = page.body.nextCursor;
+    }
+    expect(cursor).toBeNull(); // exhausted after exactly as many pages as there are rows
+    expect(seenIds).toEqual(whole.body.notifications.map((n) => n.notificationId)); // same order, one row at a time
+
+    const invalidCursor = await api('/notifications?cursor=not-base64', owner.session());
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
   it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
@@ -3598,6 +4144,48 @@ describe('Notifications', () => {
     }));
     const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
     expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
+  });
+
+  // Found via backlog audit: GET /notifications has no pagination, just a
+  // flat LIMIT 100 — fine for the history list, but the unread badge used
+  // to read straight off that capped list's own length
+  // (refreshNotificationsBadge in src/main.js), silently undercounting
+  // once a builder passed 100 unread (e.g. a popular auction's worth of
+  // bid notifications). unread-count is a dedicated COUNT query instead.
+  it('reports the true unread count past the notifications list\'s own 100-row cap', async () => {
+    const owner = await signupBuilder('notif-count-owner');
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare('INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)')
+        .bind(`notif-count-${i}`, owner.builderId, `Test notification ${i}`));
+    await env.DB.batch(statements);
+
+    const listed = await api('/notifications?unreadOnly=true', owner.session());
+    expect(listed.body.notifications).toHaveLength(100);
+
+    const count = await api('/notifications/unread-count', owner.session());
+    expect(count.response.status).toBe(200);
+    expect(count.body).toEqual({ count: 105 });
+
+    // Marking one read drops the true count but not below what the capped
+    // list alone could ever have shown.
+    await api(`/notifications/notif-count-0`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    const countAfter = await api('/notifications/unread-count', owner.session());
+    expect(countAfter.body).toEqual({ count: 104 });
+  });
+
+  it('requires a session for unread-count and never counts another builder\'s notifications', async () => {
+    const { owner } = await seedNotifications('unread-count-auth');
+    const unauthenticated = await api('/notifications/unread-count');
+    expect(unauthenticated.response.status).toBe(401);
+
+    const other = await signupBuilder('notif-count-other');
+    const otherCount = await api('/notifications/unread-count', other.session());
+    expect(otherCount.body).toEqual({ count: 0 });
+
+    const ownerCount = await api('/notifications/unread-count', owner.session());
+    expect(ownerCount.body.count).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -3777,6 +4365,12 @@ describe('Friendships', () => {
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
+    // Found via backlog audit (#319): a new request/its acceptance had no
+    // passive way to reach the other side.
+    const bobNoticesAfterRequest = await api('/notifications', bob.session());
+    expect(bobNoticesAfterRequest.body.notifications.some(
+      (n) => n.message === 'friendship-alice sent you a friend request.')).toBe(true);
+
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
     const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
@@ -3803,6 +4397,10 @@ describe('Friendships', () => {
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
 
+    const aliceNoticesAfterAccept = await api('/notifications', alice.session());
+    expect(aliceNoticesAfterAccept.body.notifications.some(
+      (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
+
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
     expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
@@ -3825,6 +4423,24 @@ describe('Friendships', () => {
       method: 'POST', body: JSON.stringify({ recipientBuilderId: a.builderId }),
     }));
     expect(reverseDirection.response.status).toBe(409);
+  });
+
+  it('accepts only one of two concurrent requests between the same pair, not both', async () => {
+    const a = await signupBuilder('friendship-race-a');
+    const b = await signupBuilder('friendship-race-b');
+
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no existing friendship",
+    // both pass the check, and both land as separate rows for the same
+    // unordered pair, even though only one should ever exist (#259).
+    const [first, second] = await Promise.all([
+      api('/friendships', a.session({ method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }) })),
+      api('/friendships', b.session({ method: 'POST', body: JSON.stringify({ recipientBuilderId: a.builderId }) })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
+
+    const aList = await api('/friendships', a.session());
+    expect(aList.body.friendships).toHaveLength(1);
   });
 
   it('lets a request be declined (deleted while pending) or an accepted friendship removed', async () => {
@@ -3961,6 +4577,13 @@ describe('Prohibited categories and digital goods', () => {
     expect(batch.response.status).toBe(400);
   });
 
+  async function uploadTestModel() {
+    const form = new FormData();
+    form.set('file', glbFile());
+    const response = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    return (await response.json()).modelUrl;
+  }
+
   it('rejects an invalid digitalGoodDisclaimer key and accepts a valid one', async () => {
     const invalid = await api('/catalog', {
       method: 'POST',
@@ -3975,6 +4598,7 @@ describe('Prohibited categories and digital goods', () => {
     expect(invalid.response.status).toBe(400);
     expect(invalid.body.error).toMatch(/digitalGoodDisclaimer must be one of/);
 
+    const modelUrl = await uploadTestModel();
     const valid = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -3982,6 +4606,7 @@ describe('Prohibited categories and digital goods', () => {
         name: 'Downloadable Gift Card',
         color: '#111111',
         dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        modelUrl,
         metadata: { digitalGoodDisclaimer: 'gift-card' },
       }),
     });
@@ -3992,7 +4617,46 @@ describe('Prohibited categories and digital goods', () => {
     expect(fetched.body.template.metadata.digitalGoodDisclaimer).toBe('gift-card');
   });
 
+  // Found via backlog audit: docs/SPEC.md §4's digital-goods exception is
+  // conditional on *both* (a) a representative 3D model and (b) a clear
+  // disclaimer — modelUrl is optional for an ordinary template (a plain
+  // colored box is a normal fallback look), so without this guard a
+  // disclaimer alone was silently sufficient, satisfying only condition (b).
+  it('rejects a digital-good listing with no representative 3D model', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-no-model',
+        name: 'Modelless Download',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        metadata: { digitalGoodDisclaimer: 'art-file' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/must include modelUrl/);
+
+    // Also enforced on update — flagging an existing modelUrl-less listing
+    // as a digital good after the fact shouldn't be possible either.
+    const plainListing = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-retrofit',
+        name: 'Plain Product',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+      }),
+    });
+    expect(plainListing.response.status).toBe(201);
+    const retrofitted = await api('/catalog/digital-good-retrofit', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: { digitalGoodDisclaimer: 'art-file' } }),
+    });
+    expect(retrofitted.response.status).toBe(400);
+  });
+
   it('lets a digital-good flag be cleared by omitting it from a metadata replace', async () => {
+    const modelUrl = await uploadTestModel();
     await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -4000,6 +4664,7 @@ describe('Prohibited categories and digital goods', () => {
         name: 'Temporary Digital Good',
         color: '#111111',
         dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        modelUrl,
         metadata: { digitalGoodDisclaimer: 'art-file' },
       }),
     });
@@ -4077,6 +4742,177 @@ describe('Shipping', () => {
     });
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.domesticOnly).toBeUndefined();
+  });
+});
+
+describe('Extensibility (crop floor)', () => {
+  it('rejects a non-object metadata.extensible', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-not-an-object',
+        name: 'Bad extensible shape',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: 'x' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible must be an object/);
+  });
+
+  it('rejects an unrecognized axis key', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-bad-axis',
+        name: 'Bad extensible axis',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { w: { minM: 1 } } },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible key "w" must be one of/);
+  });
+
+  // The actual bug (#271): a bypassed-frontend request that sets a
+  // non-numeric/missing/negative minM used to sail straight through with
+  // no validation at all, defeating assertCropWithinTemplateBounds's crop
+  // floor at read time (JS's numeric comparison makes `anything < NaN` and
+  // `anything < undefined` both false).
+  it('rejects a missing, non-numeric, NaN, zero, or negative metadata.extensible.x.minM', async () => {
+    let n = 0;
+    for (const minM of [undefined, 'not-a-number', NaN, 0, -1]) {
+      n += 1;
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `extensible-bad-minm-${n}`,
+          name: 'Bad extensible minM',
+          color: '#111111',
+          dimensions: { width: 2, depth: 2, height: 2 },
+          metadata: { extensible: { x: minM === undefined ? {} : { minM } } },
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/metadata\.extensible\.x\.minM must be a positive number/);
+    }
+  });
+
+  it('rejects a minM at or above the template\'s own dimension for that axis', async () => {
+    const atMax = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-minm-at-max',
+        name: 'minM equals width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 2 } } },
+      }),
+    });
+    expect(atMax.response.status).toBe(400);
+    expect(atMax.body.error).toMatch(/metadata\.extensible\.x\.minM must be less than this template's own width/);
+
+    const overMax = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-minm-over-max',
+        name: 'minM exceeds width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 3 } } },
+      }),
+    });
+    expect(overMax.response.status).toBe(400);
+  });
+
+  it('accepts a valid multi-axis metadata.extensible and round-trips it through GET and PATCH', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-valid-template',
+        name: 'Extensible along x and y',
+        color: '#111111',
+        dimensions: { width: 4, depth: 3, height: 1 },
+        metadata: { extensible: { x: { minM: 1 }, y: { minM: 0.5 } } },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
+
+    const fetched = await api('/catalog/extensible-valid-template');
+    expect(fetched.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
+
+    // Clearing it (an all-axes-unchecked save, per src/main.js's own "full
+    // replace, not merge" contract) removes the key entirely, same as the
+    // sibling flags above.
+    const cleared = await api('/catalog/extensible-valid-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.extensible).toBeUndefined();
+  });
+
+  // Found via backlog audit (#338): shrinking a template's width (or
+  // raising its extensible.x.minM) after an instance already has a valid
+  // crop set used to brick that instance -- any later PATCH re-validated
+  // the *carried-over* crop against the template's *current* bounds, even
+  // when the request itself never touched crop or templateId.
+  it('does not re-validate an unchanged crop against a template shrunk after the crop was set', async () => {
+    const builder = await signupBuilder('crop-revalidation-builder');
+    await createGreenbeltLandlet('crop-revalidation-landlet');
+    await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'crop-revalidation-instance',
+        landletId: 'crop-revalidation-landlet',
+        templateId: 'crop-revalidation-template',
+        x: 1, y: 1,
+        crop: { x: 2 },
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    // Seller shrinks the template — the now-stale crop.x=2 no longer fits
+    // (width 4 -> 1.5), but nothing re-validates existing instances yet.
+    const shrunk = await api('/catalog/crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // An unrelated PATCH (just moving it) must still succeed -- it never
+    // touched crop or templateId, so the stale crop isn't re-checked.
+    const moved = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ x: 5, y: 5 }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instance.crop).toEqual({ x: 2 });
+    expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
+
+    // But explicitly re-asserting that same crop value now correctly 400s
+    // -- the caller IS asking for this crop/template pairing to hold today.
+    const reassertedCrop = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ crop: { x: 2 } }),
+    }));
+    expect(reassertedCrop.response.status).toBe(400);
   });
 });
 
@@ -4339,6 +5175,28 @@ describe('Landlet levels', () => {
     expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
   });
 
+  it('exposes ownedAreaM2 on the builder object, including level area (#312)', async () => {
+    const owner = await signupBuilder('levels-owned-area-owner');
+    await createGreenbeltLandletWithArea('levels-owned-area-landlet', 1000);
+    await claim('levels-owned-area-landlet', owner);
+    await api('/landlets/levels-owned-area-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    const expectedOwnedAreaM2 = 1000 + levelCapM2;
+
+    const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
+    expect(listed.ownedAreaM2).toBe(expectedOwnedAreaM2);
+
+    const me = await api('/builders/me', owner.session());
+    expect(me.body.builder.ownedAreaM2).toBe(expectedOwnedAreaM2);
+  });
+
+  it('leaves ownedAreaM2 null on a builder response that never recomputed it (plain create)', async () => {
+    const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owned Area Null Builder' }) });
+    expect(created.body.builder.ownedAreaM2).toBeNull();
+  });
+
   it('cascades landlet_levels cleanup on builder deletion, same as placed_instances/landlet_versions', async () => {
     const owner = await signupBuilder('levels-delete-owner');
     await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);
@@ -4505,6 +5363,13 @@ describe('Simulated purchases', () => {
       body: JSON.stringify({ quantity: 0 }),
     });
     expect(badQuantity.response.status).toBe(400);
+
+    // Found via backlog audit (#337): buyerLabel had no length cap at all.
+    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
+    });
+    expect(badBuyerLabel.response.status).toBe(400);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
@@ -4554,7 +5419,12 @@ describe('Simulated purchases', () => {
     }
     const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
     expect(limited.response.status).toBe(429);
-  }, 20000);
+  }, 45000); // matches the sibling burst-race test below — 30 sequential
+  // round trips reliably finishes in under a second in isolation, but a
+  // long-running CI worker (this whole file, 300+ tests, one process) can
+  // occasionally push it past 20s on nothing but scheduling contention,
+  // not a real regression — this pre-existing flake has now blocked two
+  // separate unrelated PRs' CI runs this session for exactly that reason.
 
   it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
     // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;
@@ -4649,6 +5519,34 @@ describe('Simulated purchases', () => {
     const byTemplate = await api('/purchases?templateId=purchase-list-template');
     expect(byTemplate.response.status).toBe(200);
     expect(byTemplate.body.purchases).toHaveLength(2);
+  });
+
+  // The list above is capped at 100 rows with no pagination — reading a
+  // seller's own "N sales" summary straight off that capped list's own
+  // .length (the Seller modal's Sales panel, before this fix) silently
+  // undercounts once a product has passed 100 sales. totalCount is a
+  // dedicated, uncapped COUNT instead (same fix already applied to
+  // notifications' unread badge — see 'reports the true unread count past
+  // the notifications list's own 100-row cap' above).
+  it('reports the true purchase count past the purchases list\'s own 100-row cap, by both builderId and templateId', async () => {
+    const seller = await signupBuilder('purchase-count-seller');
+    await createTemplate('purchase-count-template', { priceCents: 500 });
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO purchases
+          (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity,
+           total_cents, commission_cents, builder_share_cents, platform_share_cents)
+        VALUES (?, 'purchase-count-instance', 'purchase-count-template', ?, 500, 1, 500, 10, 5, 5)
+      `).bind(`purchase-count-${i}`, seller.builderId));
+    await env.DB.batch(statements);
+
+    const byBuilder = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(byBuilder.body.purchases).toHaveLength(100);
+    expect(byBuilder.body.totalCount).toBe(105);
+
+    const byTemplate = await api('/purchases?templateId=purchase-count-template');
+    expect(byTemplate.body.purchases).toHaveLength(100);
+    expect(byTemplate.body.totalCount).toBe(105);
   });
 
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
@@ -4757,6 +5655,112 @@ describe('Simulated purchases', () => {
     const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(asAdmin.response.status).toBe(200);
     expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  it('lets the product\'s own seller refund a purchase, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-refund-owner-seller');
+    const otherSeller = await signupSeller('purchase-refund-other-seller');
+    const builder = await signupBuilder('purchase-refund-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-refund-owner-landlet', 1000);
+    await claim('purchase-refund-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-refund-owner-template',
+        name: 'Seller-owned refund product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 3000,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-refund-owner-instance', 'purchase-refund-owner-landlet', 'purchase-refund-owner-template', builder);
+
+    const purchased = await api('/instances/purchase-refund-owner-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const wrongSeller = await api(`/purchases/${purchaseId}/refund`, otherSeller.session({ method: 'POST' }));
+    expect(wrongSeller.response.status).toBe(403);
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, owningSeller.session({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect(refunded.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  // DELETE /api/sellers/:sellerId deliberately leaves catalog_templates
+  // (and therefore purchases) pointing at the now-deleted seller_id rather
+  // than cleaning it up — docs/API.md says that's "the same as" a template
+  // that already has a null seller_id. Before this test's fix, the refund
+  // gate's plain `if (purchase.seller_id)` truthiness check treated that
+  // dangling id as still-owned, so no session (not even admin) could ever
+  // match it — the purchase became permanently un-refundable.
+  it('falls back to admin refunding a purchase once the product\'s seller has since deleted their account', async () => {
+    const seller = await signupSeller('purchase-refund-deleted-seller');
+    const builder = await signupBuilder('purchase-refund-deleted-seller-builder');
+    await createGreenbeltLandletWithArea('purchase-refund-deleted-seller-landlet', 1000);
+    await claim('purchase-refund-deleted-seller-landlet', builder);
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-refund-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 2500,
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-refund-deleted-seller-instance', 'purchase-refund-deleted-seller-landlet', 'purchase-refund-deleted-seller-template', builder);
+
+    const purchased = await api('/instances/purchase-refund-deleted-seller-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+    expect(sellerDeleted.response.status).toBe(200);
+
+    const nonAdmin = await signupBuilder('purchase-refund-deleted-seller-nonadmin');
+    const wrongSession = await api(`/purchases/${purchaseId}/refund`, nonAdmin.session({ method: 'POST' }));
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  it('lets the product\'s own seller list its sales via GET /purchases?templateId=, and rejects a different seller', async () => {
+    const owningSeller = await signupSeller('purchase-list-owner-seller');
+    const otherSeller = await signupSeller('purchase-list-other-seller');
+    const builder = await signupBuilder('purchase-list-owner-builder');
+    await createGreenbeltLandletWithArea('purchase-list-owner-landlet', 1000);
+    await claim('purchase-list-owner-landlet', builder);
+    const created = await api('/catalog', owningSeller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-list-owner-template',
+        name: 'Seller-owned listing product',
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 1500,
+        sellerId: owningSeller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-list-owner-instance', 'purchase-list-owner-landlet', 'purchase-list-owner-template', builder);
+    const purchased = await api('/instances/purchase-list-owner-instance/purchase', { method: 'POST' });
+
+    const noSession = await api('/purchases?templateId=purchase-list-owner-template');
+    expect(noSession.response.status).toBe(401);
+
+    const wrongSeller = await api('/purchases?templateId=purchase-list-owner-template', otherSeller.session());
+    expect(wrongSeller.response.status).toBe(403);
+
+    const listed = await api('/purchases?templateId=purchase-list-owner-template', owningSeller.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.purchases).toContainEqual(
+      expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId }),
+    );
   });
 
   it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
@@ -4896,6 +5900,64 @@ describe('Authentication', () => {
     await signup(email, 'first password here');
     const dupe = await signup(email.toUpperCase(), 'second password here');
     expect(dupe.response.status).toBe(409);
+  });
+
+  // Issue #200 (owner decision): "+tag" sub-addressing is a de facto
+  // standard most major providers honor, not a Gmail-only quirk, so it's
+  // stripped for every domain — one real inbox can't back unlimited
+  // accounts by cycling through fresh tags.
+  it('rejects a "+tag" variant of an already-registered email, regardless of domain', async () => {
+    const base = crypto.randomUUID();
+    const email = `auth-plus-${base}@example.com`;
+    await signup(email, 'first password here');
+    const dupe = await signup(`auth-plus-${base}+anything@example.com`, 'second password here');
+    expect(dupe.response.status).toBe(409);
+  });
+
+  // Gmail's dot-insensitivity ("first.last" and "firstlast" are the same
+  // inbox) is genuinely Gmail-specific — no other mainstream provider
+  // folds dots this way — so this only applies to gmail.com/googlemail.com.
+  it('rejects a dotted variant of an already-registered gmail.com email', async () => {
+    const base = crypto.randomUUID().replace(/-/g, '');
+    await signup(`auth.dots.${base}@gmail.com`, 'first password here');
+    const dupe = await signup(`authdots${base}@gmail.com`, 'second password here');
+    expect(dupe.response.status).toBe(409);
+  });
+
+  // The flip side of the above: dot-folding must NOT apply to a non-Gmail
+  // domain, where two dotted variants are genuinely different addresses
+  // (and, in practice, almost always different real inboxes) — a blanket
+  // dot-fold would incorrectly block legitimate distinct signups.
+  it('does NOT fold dots on a non-Gmail domain — dotted variants are distinct accounts', async () => {
+    const base = crypto.randomUUID().replace(/-/g, '');
+    const first = await signup(`auth.dots.${base}@example.com`, 'first password here');
+    expect(first.response.status).toBe(201);
+    const second = await signup(`authdots${base}@example.com`, 'second password here');
+    expect(second.response.status).toBe(201);
+  });
+
+  it('an already-registered "+tag" account (created before #200) still logs in by its exact literal address', async () => {
+    const base = crypto.randomUUID();
+    const email = `auth-legacy-plus-${base}+test1@example.com`;
+    await signup(email, 'a fine long password here');
+    const loggedIn = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password: 'a fine long password here' }),
+    });
+    expect(loggedIn.response.status).toBe(200);
+  });
+
+  it('accepts only one of two concurrent signups for "+tag" variants of the same email, not both', async () => {
+    const base = crypto.randomUUID();
+    // Fired together, not awaited one at a time — a read-then-insert
+    // implementation could let both requests read "no existing account"
+    // and both land as separate rows for what should collide as one
+    // canonical email (#200, same race shape as #259's friendships fix).
+    const [first, second] = await Promise.all([
+      signup(`auth-plus-race-${base}+a@example.com`, 'first password here'),
+      signup(`auth-plus-race-${base}+b@example.com`, 'second password here'),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
   });
 
   it('rate-limits repeated signup attempts against the same email', async () => {

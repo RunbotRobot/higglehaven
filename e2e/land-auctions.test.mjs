@@ -1,5 +1,5 @@
 // Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
-// acquisition auctions") — Settings' own Auctions tab. Two independent
+// acquisition auctions") — Settings' Build tab, alongside Land Cap. Two independent
 // browser pages stand in for two different builders, the same pattern
 // e2e/bundle-sharing.test.mjs already uses, since bidding is inherently a
 // two-party interaction. Covers starting a voluntary auction, placing a
@@ -11,7 +11,7 @@
 // 24-hour default), so waiting for a real one isn't practical in an e2e
 // run. That's covered instead by worker/index.test.js, which can set
 // ends_at into the past directly via the D1 test binding.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin } from './helpers.mjs';
 
 const SELLER = 'Auction Seller';
 const BIDDER = 'Auction Bidder';
@@ -28,7 +28,7 @@ await claimLandlet(sellerPage);
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
+await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForTimeout(500);
 
 const startForm = sellerPage.locator('.auction-start-form');
@@ -60,7 +60,7 @@ await claimLandlet(bidderPage);
 await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
 await bidderPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await bidderPage.click('.settings-tab-btn[data-section="auctions"]');
+await bidderPage.click('.settings-tab-btn[data-section="build"]');
 // Sell Your Land is itself gated behind an async fetch (a "Loading…"
 // placeholder until it resolves — see renderStartSection in src/main.js) —
 // wait for the actual form rather than guessing a fixed delay, the same
@@ -102,7 +102,7 @@ console.log('auction after a too-low bid attempt (should still say $15.00, not $
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await sellerPage.click('.settings-tab-btn[data-section="auctions"]');
+await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('$15.00'),
   { timeout: 10000 },
@@ -128,6 +128,39 @@ console.log('seller\'s notification for the new bid (should mention "New bid of 
 
 await bidderSession.browser.close();
 
+// --- Seller claims a SECOND landlet — #199 already freed their "one
+// claimed landlet" slot the moment the bidder's $15 bid landed above
+// (any starting bid becomes a commitment to sell once a bid exists, not
+// just a $0 one) — and confirms Sell Your Land's picker (#249) lists
+// both, defaults to the one they're actually in Build mode on (their
+// first, which still has the live auction), and switches to the other
+// landlet's own start form when reselected. ---
+await sellerPage.click('#notifications-close-btn');
+await sellerPage.waitForTimeout(300);
+const SECOND_LANDLET_ID = 'auction-picker-second-landlet';
+await createGreenbeltLandletAsAdmin(SECOND_LANDLET_ID);
+const secondClaimStatus = await sellerPage.evaluate(
+  (landletId) => fetch(`/api/landlets/${landletId}/claim`, { method: 'POST' }).then((r) => r.status),
+  SECOND_LANDLET_ID,
+);
+console.log('claiming a second landlet after the first bid landed (should be 200):', secondClaimStatus);
+
+await openAccountMenu(sellerPage);
+await sellerPage.click('#settings-btn');
+await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+await sellerPage.click('.settings-tab-btn[data-section="build"]');
+await sellerPage.waitForSelector('.landlet-picker select', { timeout: 10000 });
+const pickerOptionCount = await sellerPage.locator('.landlet-picker select option').count();
+console.log('landlet picker option count now that the seller owns 2 claimed landlets (should be 2):', pickerOptionCount);
+
+const defaultPickerText = await sellerPage.locator('.auction-row').first().textContent().catch(() => '');
+console.log('default picker selection still shows the live auction on the Build-mode landlet (should mention "Your auction is live"):', defaultPickerText);
+
+await sellerPage.selectOption('.landlet-picker select', SECOND_LANDLET_ID);
+await sellerPage.waitForSelector('.auction-start-form', { timeout: 10000 });
+const secondLandletFormVisible = await sellerPage.locator('.auction-start-form').count();
+console.log('second (unauctioned) landlet shows its own start form once selected (should be 1):', secondLandletFormVisible);
+
 const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnAuctionText.includes('$10.00') &&
   startFormGoneAfterStarting === 0 &&
   bidderOwnStartFormVisible === 1 &&
@@ -136,5 +169,9 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
   sellerSeesBidText.includes('$15.00') &&
   sellerNoticeText.includes('New bid of $15.00') &&
+  secondClaimStatus === 200 &&
+  pickerOptionCount === 2 &&
+  defaultPickerText.includes('Your auction is live') &&
+  secondLandletFormVisible === 1 &&
   errors.length === 0;
-await finish(sellerSession.browser, { pass, label: 'Land acquisition auctions: start + bid through the real UI', errors });
+await finish(sellerSession.browser, { pass, label: 'Land acquisition auctions: start + bid through the real UI, and a multi-landlet Sell Your Land picker (#249)', errors });

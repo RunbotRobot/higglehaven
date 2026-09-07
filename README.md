@@ -40,6 +40,21 @@ a feature against something richer than an empty world. Prints each
 seeded account's email/password at the end so you can log in and look
 around. Dev-only; never run against a production/remote database.
 
+`npm run ingest:geo-data` (`scripts/ingest-geo-data.mjs`) builds the
+"pre-human natural geology" dataset docs/SPEC.md §1 describes — which points
+around the world's real-world anchor (#138) should count as water once the
+1916 Lake Washington Ship Canal lowering is corrected away — by combining
+live USGS elevation data with the real Lake Washington/Lake Union polygons
+from USGS's National Hydrography Dataset (both public, unauthenticated
+services). Writes a sparse `{x, y, landType}` cell list to
+`data/geo/pre-human-water-cells.json` (`--out=` to change); `--radius=`,
+`--spacing=`, and `--reclamation-radius=` (all meters) tune how far out and
+how densely it samples — see `worker/geoData.js` for the actual conversion
+and classification logic this consumes, and issue #219 for the full
+writeup. Not wired into landlet generation itself yet — that's a follow-up
+consumer of this dataset, not this script's own job. Re-run offline as the
+world's radius grows, rather than fetching live per-request.
+
 ## Testing
 
 ```sh

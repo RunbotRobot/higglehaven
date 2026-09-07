@@ -29,12 +29,16 @@ import {
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
+  fetchLandletLevels,
+  addLandletLevel,
+  deleteLandletLevel,
   fetchWorld,
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
   fetchAllLandlets,
   fetchNotifications,
+  fetchUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
   fetchFriendships,
@@ -75,7 +79,6 @@ import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, for
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
-import { bordersWater } from './landletAdjacency.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -151,13 +154,53 @@ let shopActive = false;
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Placeholder buildable volume: a basic single-level landlet, one level
-// (10m, per spec §3) straight up, modeled as a plain cuboid rather than the
-// spec's actual cone-shaped volume (cross-section changes with distance
-// from Earth's center once curvature is modeled). Same simplification as
-// using a flat plane instead of a curved one for the ground right now — get
-// the mechanic working, model the real geometry later.
+// Buildable volume: one level (10m, per spec §3) straight up from whichever
+// level's own floor is currently in view. No longer the flat-plane/plain-
+// cuboid placeholder this comment used to describe — the ground itself is
+// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
+// already widens/narrows the X/Y footprint per height via
+// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
+// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
+// see clampToLandlet's own comment for how the cross-section at that height
+// gets corrected.
 const LANDLET_HEIGHT_M = 10;
+
+// Vertical construction (issue #167/#168/#169): the current lándlet's own
+// ground-level area (needed to preview a level's cap cost client-side
+// before committing, matching worker/index.js's levelCapConsumedM2 exactly)
+// and its already-built levels beyond ground (worker/index.js's
+// landlet_levels, fetched alongside landletRecord in bootstrap() — see
+// fetchLandletLevels). currentLevelIndex is which one Build mode is
+// currently viewing/editing — 0 is the ground level every lándlet already
+// has (never a real landlet_levels row); see renderLevelControls. Levels
+// stack directly with no gaps (matching the backend's own assumption),
+// each occupying [levelIndex * LANDLET_HEIGHT_M, (levelIndex + 1) *
+// LANDLET_HEIGHT_M) — level 0 is exactly today's existing [0, 10) range.
+let currentLandletAreaM2 = LANDLET_AREA_M2;
+let currentLandletLevels = [];
+let currentLevelIndex = 0;
+
+function levelFloorZ(levelIndex) {
+  return levelIndex * LANDLET_HEIGHT_M;
+}
+
+// Mirrors worker/index.js's own levelCapConsumedM2 exactly (same formula,
+// same sampling point) so the cost this previews before a builder commits
+// to a new level is never off from what the server will actually charge.
+function levelCapConsumedM2(landletAreaM2, levelIndex) {
+  const scale = footprintScaleAtHeight(levelIndex * LANDLET_HEIGHT_M);
+  return landletAreaM2 * scale * scale;
+}
+
+function levelExtent() {
+  const indices = currentLandletLevels.map((level) => level.levelIndex);
+  return { top: Math.max(0, ...indices), bottom: Math.min(0, ...indices) };
+}
+
+function levelLabel(levelIndex) {
+  if (levelIndex === 0) return 'Ground';
+  return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
+}
 
 const canvas = document.getElementById('app');
 
@@ -406,10 +449,10 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // factor a real fixed-angular-footprint lándlet would have at that height —
 // genuinely tiny at this scale (LANDLET_HEIGHT_M=10 against Earth's ~6.371
 // million meter radius is a ~0.00016% change), but the correct shape rather
-// than a flat placeholder. Only the above-ground case exists to correct
-// here — below-ground levels (where the spec says the cone narrows
-// instead) depend on a vertical-construction/digging feature this app
-// doesn't have yet (see #136's own scoping note).
+// than a flat placeholder. footprintScaleAtHeight's own formula already
+// covers both directions (> 1 above ground, < 1 below), so below-ground
+// levels (vertical digging, currentLevelIndex < 0 — see #169's own comment
+// just below) narrow correctly here too, not just the above-ground case.
 //
 // Widening around THIS lándlet's own local center, rather than around the
 // single shared point (Earth's center, projected as the world origin) a
@@ -421,9 +464,22 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // renders two lándlets' buildable volumes together to make this visible
 // anyway; the real fix is the same reprojection-from-Earth's-center #166
 // already defers, not something to half-solve here.
+//
+// issue #169: the floor/ceiling used to be hardcoded to ground level's own
+// [0, LANDLET_HEIGHT_M) — now taken from whichever level Build mode is
+// currently viewing/editing (currentLevelIndex/levelFloorZ), so an item
+// placed while looking at Level +1 or Level -1 clamps into *that* level's
+// own 10m slab instead of always snapping back into ground's. z itself
+// stays an absolute height above ground throughout (matching how a level
+// is identified purely by z falling in its own range — see
+// currentLandletLevels' own comment), so footprintScaleAtHeight below still
+// gets the real, correct height for the cone's cross-section at that
+// point, continuously, exactly as it always has for ground level.
 function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = meshDimensions(mesh);
-  const clampedZ = THREE.MathUtils.clamp(z, height / 2, LANDLET_HEIGHT_M - height / 2);
+  const floorZ = levelFloorZ(currentLevelIndex);
+  const ceilingZ = floorZ + LANDLET_HEIGHT_M;
+  const clampedZ = THREE.MathUtils.clamp(z, floorZ + height / 2, ceilingZ - height / 2);
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -691,8 +747,10 @@ translateControls.addEventListener('objectChange', () => {
       maxOffsetX = Math.min(maxOffsetX, halfSpanX - start.x);
       minOffsetY = Math.max(minOffsetY, -halfSpanY - start.y);
       maxOffsetY = Math.min(maxOffsetY, halfSpanY - start.y);
-      minOffsetZ = Math.max(minOffsetZ, height / 2 - start.z);
-      maxOffsetZ = Math.min(maxOffsetZ, LANDLET_HEIGHT_M - height / 2 - start.z);
+      // issue #169: bounded by whichever level is currently being viewed/
+      // edited, same as clampToLandlet's own single-item case.
+      minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
+      maxOffsetZ = Math.min(maxOffsetZ, levelFloorZ(currentLevelIndex) + LANDLET_HEIGHT_M - height / 2 - start.z);
     }
     const offset = new THREE.Vector3(
       THREE.MathUtils.clamp(totalOffset.x, minOffsetX, maxOffsetX),
@@ -800,6 +858,29 @@ for (const group of [trimControls._gizmo.picker.scale, trimControls._gizmo.gizmo
 let trimAxis = null;
 let trimStartLength = 0;
 let trimStartScale = 1;
+
+// A trim commit (drag-release below, or a typed length in the axis-length
+// fields further down) calls replaceMeshWithCrop, which awaits a full
+// model rebuild before swapping the result into productMeshes/scene/
+// selectedMeshes. Two commits close enough together — e.g. tabbing from
+// one axis field to another, or a fast second drag, before the first
+// rebuild resolves — would otherwise both read the *same* pre-edit mesh
+// and crop, race to swap it in, and leave one commit's result an orphaned
+// mesh: visible in the scene but never written into productMeshes, so
+// unreachable by undo/redo, persistLayout, or syncUpdate, while silently
+// losing that commit's crop change. Funneling every trim commit through
+// this single promise chain serializes them — each waits for the
+// previous one's full swap to finish before it starts — and
+// queueTrimEdit's callers re-resolve the *current* mesh by instanceId
+// from productMeshes right before building on it, rather than closing
+// over a mesh reference that may already be stale by the time its turn
+// comes up.
+let trimEditQueue = Promise.resolve();
+function queueTrimEdit(task) {
+  const run = trimEditQueue.then(task, task);
+  trimEditQueue = run.catch((err) => console.error('Trim edit failed:', err));
+  return run;
+}
 
 // Converts the gizmo's live (still-unclamped, still just a raw multiplier
 // of trimStartLength) scale factor into the actual crop length it
@@ -913,7 +994,7 @@ trimControls.addEventListener('objectChange', () => {
   }, RESIZE_PREVIEW_THROTTLE_MS);
 });
 
-trimControls.addEventListener('dragging-changed', async (event) => {
+trimControls.addEventListener('dragging-changed', (event) => {
   controls.enabled = !event.value;
   const object = trimControls.object;
   if (!object) return;
@@ -963,16 +1044,29 @@ trimControls.addEventListener('dragging-changed', async (event) => {
   }
   if (!trimAxis) return; // an invalid grab (see above) never hid the object or started a preview to undo
   const clampedLength = currentDragCropLength(object);
+  const axis = trimAxis;
+  const instanceId = object.userData.instanceId;
   clearTrimPreview(object);
   object.scale.set(1, 1, 1);
-  const updated = await replaceMeshWithCrop(object, { ...object.userData.crop, [trimAxis]: clampedLength });
-  const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-  updated.position.set(clamped.x, clamped.y, clamped.z);
-  updated.userData.safePosition = updated.position.clone();
-  trimControls.attach(updated);
-  persistLayout();
-  syncUpdate(updated);
-  updateTrimLengthInput();
+  queueTrimEdit(async () => {
+    const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
+    if (!current) return; // deleted, or otherwise gone, since this drag ended
+    const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+    updated.position.set(clamped.x, clamped.y, clamped.z);
+    updated.userData.safePosition = updated.position.clone();
+    // The await above is a real gap a builder can select a different item
+    // across — only re-attach the trim gizmo here if `updated` is still
+    // that selection (replaceMeshWithCrop itself already made that same
+    // call for selectedMeshes/its outline; this mirrors it for the
+    // gizmo). Otherwise whatever's actually selected now already has its
+    // own correct gizmo attached, and forcing this one back on would
+    // silently swap it out from under the builder mid-edit.
+    if (selectedMeshes.has(updated)) trimControls.attach(updated);
+    persistLayout();
+    syncUpdate(updated);
+    updateTrimLengthInput();
+  });
 });
 
 // Fixed bright daylight, always — no day-night cycle (docs/SPEC.md §1's
@@ -1289,19 +1383,21 @@ async function loadCroppedModelInstance(template, instance) {
   // Cropping only the +axis end leaves the remaining geometry's true
   // center drifting toward -axis as cropLength shrinks — but every
   // consumer of a placed mesh's own position (collision, landlet-bounds
-  // clamping, ...) assumes position IS the center. Recentering the
-  // geometry and pushing the same offset onto this inner group (rather
-  // than the outer group createMeshForInstance still needs to freely
-  // position) keeps that invariant intact without moving anything the
-  // builder actually sees: the untouched -axis end still lands in
-  // exactly the same spot it would have without this compensation. Each
-  // cropped axis's own offset is independent of the others (they're
-  // different vector components), so accumulating them into one shift
-  // and applying it once, after every axis has been cropped, is
-  // equivalent to applying each axis's own shift right after its own
+  // clamping, ...) assumes position IS the center, the same convention
+  // the box-fallback and uniformly-Resize-scaled cases already follow by
+  // construction. Translating the geometry back by that same drift
+  // restores that invariant: `position` continues to mark the true
+  // center of whatever's actually rendered, exactly like every other
+  // item type. (#272: this used to also push an equal-and-opposite
+  // offset onto this inner group, which canceled the translate below
+  // back out to a no-op — leaving a cropped real model's rendered
+  // footprint silently off-center from what collision/landlet-bounds
+  // clamping assumed.) Each cropped axis's own offset is independent of
+  // the others (different vector components), so accumulating them into
+  // one shift and applying it once, after every axis has been cropped,
+  // is equivalent to applying each axis's own shift right after its own
   // crop — simpler to just do once at the end.
   const shift = [0, 0, 0];
-  const groupOffset = [0, 0, 0];
   for (const axis of croppedAxes) {
     const axisIndex = { x: 0, y: 1, z: 2 }[axis];
     const dimensionKey = AXIS_DIMENSION_KEY[axis];
@@ -1309,7 +1405,6 @@ async function loadCroppedModelInstance(template, instance) {
     const cropLength = effectiveLength(template, instance, axis, dimensionKey);
     const recenterOffset = (cropLength - fullLength) / 2;
     shift[axisIndex] = -recenterOffset;
-    groupOffset[axisIndex] = recenterOffset;
   }
 
   // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
@@ -1366,7 +1461,6 @@ async function loadCroppedModelInstance(template, instance) {
     const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
     inner.add(new THREE.Mesh(geometry, [originalMaterial, backingMaterial]));
   }
-  inner.position.set(groupOffset[0], groupOffset[1], groupOffset[2]);
   const result = new THREE.Group();
   result.add(inner);
   return result;
@@ -3531,16 +3625,17 @@ function renderSellerList() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
       let purchases;
+      let totalCount;
       try {
-        purchases = await fetchPurchases({ templateId: template.templateId });
+        ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
-      salesEmptyEl.hidden = purchases.length > 0;
-      if (purchases.length > 0) {
-        salesSummaryEl.textContent = `${purchases.length} sale${purchases.length === 1 ? '' : 's'}`;
+      salesEmptyEl.hidden = totalCount > 0;
+      if (totalCount > 0) {
+        salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
       }
       for (const purchase of purchases) {
         const saleRow = document.createElement('div');
@@ -3690,10 +3785,6 @@ function renderSettingsSection() {
     renderBuildSettingsSection();
     return;
   }
-  if (activeSettingsTab === 'auctions') {
-    renderAuctionsSettingsSection();
-    return;
-  }
 
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
@@ -3761,17 +3852,16 @@ async function renderLandCapField() {
   field.appendChild(status);
   settingsSectionEl.appendChild(field);
   try {
-    // fetchAllLandlets pages through every one of this builder's owned
-    // landlets, not just fetchLandlets's own first 100 — auctions place no
-    // hard ceiling on how many a builder can accumulate, and the backend's
-    // own land-cap formula sums all of them, so a single-page read here
-    // would silently undercount past that point (#186).
-    const [builders, ownedLandlets] = await Promise.all([
-      fetchBuilders(),
-      fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId }),
-    ]);
+    // ownedAreaM2 comes straight from the builder object now (#312) —
+    // the backend's own recomputeLandCapsBatch already sums every owned
+    // landlet's ground area *and* every level's own cap_consumed_m2
+    // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
+    // so reading it back here is both more accurate (a frontend-side sum
+    // over fetchAllLandlets alone silently ignored level area) and
+    // cheaper (no second paginated fetch needed at all).
+    const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
-    const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
+    const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
       'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
   } catch (err) {
@@ -3786,6 +3876,7 @@ async function renderLandCapField() {
 // there's no landlet to publish from there).
 function renderBuildSettingsSection() {
   renderLandCapField();
+  renderAuctionSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -3986,13 +4077,14 @@ function formatAuctionSummary(auction) {
 }
 
 // Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
-// acquisition auctions") — its own Settings tab, reachable regardless of
-// mode, since bidding on someone else's landlet isn't a "your own Build
-// session" action the way Publish/Version History is. Covers both
-// starting a voluntary auction on whatever landlet this identity
-// currently owns and browsing/bidding on every other active auction in
-// the world.
-async function renderAuctionsSettingsSection() {
+// acquisition auctions") — lives in the Build settings tab, alongside Land
+// Cap (#197: auctioning a landlet is a Build-mode concern, not a Sell one,
+// per the project owner directly). Covers both starting a voluntary
+// auction on whatever landlet this identity currently owns and
+// browsing/bidding on every other active auction in the world — the
+// latter isn't tied to currentLandletId, so it still renders here even
+// outside an active Build session, same as Land Cap above it.
+async function renderAuctionSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -4021,26 +4113,13 @@ async function renderAuctionsSettingsSection() {
   listField.appendChild(auctionList);
   settingsSectionEl.appendChild(listField);
 
-  async function renderStartSection() {
+  async function renderForLandlet(landletId) {
     startStatus.textContent = '';
     startStatus.classList.remove('error');
     for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
-    let owned;
-    try {
-      owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
-    } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your landlet.';
-      startStatus.classList.add('error');
-      return;
-    }
-    if (owned.length === 0) {
-      startStatus.textContent = 'Claim a landlet first to auction it off.';
-      return;
-    }
-    const myLandletId = owned[0].landletId;
     let activeForMine;
     try {
-      activeForMine = await fetchAuctions({ status: 'active', landletId: myLandletId });
+      activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
       startStatus.textContent = err.message || 'Could not check for an existing auction.';
       startStatus.classList.add('error');
@@ -4097,11 +4176,11 @@ async function renderAuctionsSettingsSection() {
       }
       startBtn.disabled = true;
       try {
-        await startAuction(myLandletId, {
+        await startAuction(landletId, {
           startingBidCents: Math.round(dollars * 100),
           durationHours: Math.round(hours),
         });
-        await renderStartSection();
+        await renderForLandlet(landletId);
         await renderAuctionList();
       } catch (err) {
         startStatus.textContent = err.message || 'Could not start the auction.';
@@ -4111,6 +4190,64 @@ async function renderAuctionsSettingsSection() {
     });
     form.appendChild(startBtn);
     startField.appendChild(form);
+  }
+
+  async function renderStartSection() {
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row, .landlet-picker')) el.remove();
+    let owned;
+    try {
+      // fetchAllLandlets pages through every one of this builder's owned
+      // landlets, not just fetchLandlets's own first 100-per-page limit
+      // (#186's own shape). Needed here too now that #199 lets a seller
+      // hold two simultaneously-claimed landlets (starting a $0 auction,
+      // or getting a first bid on any starting amount, frees the claim
+      // lock immediately rather than waiting for resolution) — "exactly
+      // one owned landlet" is no longer a safe assumption (#249).
+      owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check your landlets.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (owned.length === 0) {
+      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      return;
+    }
+
+    // Per the owner's own #249 product call: a picker across every
+    // claimed landlet the builder owns, defaulting to whichever one
+    // they're currently in Build mode on (falling back to the first
+    // owned landlet when that one isn't in this list at all — e.g.
+    // Settings opened from Shop mode with no Build-mode landlet active).
+    let selectedLandletId = owned.some((l) => l.landletId === currentLandletId)
+      ? currentLandletId
+      : owned[0].landletId;
+
+    if (owned.length > 1) {
+      const pickerRow = document.createElement('div');
+      pickerRow.className = 'landlet-picker';
+      const pickerLabel = document.createElement('label');
+      pickerLabel.textContent = 'Landlet';
+      const picker = document.createElement('select');
+      for (const landlet of owned) {
+        const option = document.createElement('option');
+        option.value = landlet.landletId;
+        option.textContent = landlet.name || landlet.landletId;
+        if (landlet.landletId === selectedLandletId) option.selected = true;
+        picker.appendChild(option);
+      }
+      picker.addEventListener('change', () => {
+        selectedLandletId = picker.value;
+        renderForLandlet(selectedLandletId);
+      });
+      pickerLabel.appendChild(picker);
+      pickerRow.appendChild(pickerLabel);
+      startField.appendChild(pickerRow);
+    }
+
+    await renderForLandlet(selectedLandletId);
   }
 
   async function renderAuctionList() {
@@ -4259,6 +4396,113 @@ const measureBtn = document.getElementById('toggle-measure');
 const pasteBtn = document.getElementById('paste-btn');
 const undoBtn = document.getElementById('undo-btn');
 const redoBtn = document.getElementById('redo-btn');
+
+// Vertical construction (issue #169) — Build-mode controls for digging
+// down/building up a level and navigating between whichever ones already
+// exist on this lándlet. See LANDLET_HEIGHT_M's own block comment above for
+// currentLevelIndex/currentLandletLevels/levelFloorZ/levelCapConsumedM2.
+const levelLabelEl = document.getElementById('level-label');
+const levelDownBtn = document.getElementById('level-down-btn');
+const levelUpBtn = document.getElementById('level-up-btn');
+const levelBuildBtn = document.getElementById('level-build-btn');
+const levelDigBtn = document.getElementById('level-dig-btn');
+const levelRemoveBtn = document.getElementById('level-remove-btn');
+const levelStatusEl = document.getElementById('level-status');
+
+function setLevelStatus(message, { isError = false } = {}) {
+  levelStatusEl.textContent = message ?? '';
+  levelStatusEl.classList.toggle('error', isError);
+}
+
+// How far the camera/orbit target have already been shifted for whichever
+// level was last rendered — renderLevelControls applies only the
+// *additional* delta each time, on top of the camera position/orbit
+// target's own value (itself free to have moved via ordinary
+// pinch/drag/scroll since), rather than resetting either outright and
+// discarding wherever the builder was actually looking.
+let lastAppliedLevelFloorZ = 0;
+
+// Re-renders the nav/build/dig/remove controls from currentLevelIndex +
+// currentLandletLevels, and moves the ground mesh to visually sit at
+// whichever level's own floor is now being viewed — a plain vertical
+// translation of the already-curved geometry (see curveGroundGeometry's own
+// comment on why a rigid shift like this doesn't need to redo that curving
+// work: at most a few dozen meters even after digging/building several
+// levels, against Earth's ~6.371 million meter radius, the same
+// "genuinely tiny at this scale" trade-off #135/#136 already accepted).
+// levelBuildBtn/levelDigBtn always preview the cost of extending the
+// lándlet's *true* top/bottom by one — not whichever level currentLevelIndex
+// happens to be viewing — since that's what POSTing 'up'/'down' actually
+// does server-side regardless of where the builder is currently looking.
+function renderLevelControls() {
+  const { top, bottom } = levelExtent();
+  currentLevelIndex = THREE.MathUtils.clamp(currentLevelIndex, bottom, top);
+  levelLabelEl.textContent = levelLabel(currentLevelIndex);
+  levelDownBtn.disabled = currentLevelIndex <= bottom;
+  levelUpBtn.disabled = currentLevelIndex >= top;
+  const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
+  const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
+  levelBuildBtn.textContent = `Build Level Above (${upCostM2.toFixed(2)} m²)`;
+  levelDigBtn.textContent = `Dig Level Below (${downCostM2.toFixed(2)} m²)`;
+  // Only the outermost existing level (in whichever direction it's on) can
+  // actually be removed (worker/index.js's own 409 otherwise) — ground
+  // (index 0) is never a real row and can never be removed at all.
+  levelRemoveBtn.hidden = currentLevelIndex === 0;
+  const floorZ = levelFloorZ(currentLevelIndex);
+  landlet.position.z = floorZ;
+  const cameraDeltaZ = floorZ - lastAppliedLevelFloorZ;
+  if (cameraDeltaZ !== 0) {
+    camera.position.z += cameraDeltaZ;
+    controls.target.z += cameraDeltaZ;
+    controls.update();
+  }
+  lastAppliedLevelFloorZ = floorZ;
+}
+
+function navigateToLevel(levelIndex) {
+  const { top, bottom } = levelExtent();
+  currentLevelIndex = THREE.MathUtils.clamp(levelIndex, bottom, top);
+  setLevelStatus('');
+  renderLevelControls();
+}
+levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex - 1));
+levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
+
+async function addLevel(direction, button, failureMessage) {
+  button.disabled = true;
+  try {
+    const level = await addLandletLevel(currentLandletId, direction);
+    currentLandletLevels.push(level);
+    currentLevelIndex = level.levelIndex;
+    setLevelStatus('');
+    renderLevelControls();
+  } catch (err) {
+    // A 409 here (the two hard limits — depth/10m² footprint — worker/
+    // index.js's handleLandletLevels enforces) is expected, normal input
+    // rejection, not a bug: surfaced inline exactly as the server phrased
+    // it, same as every other builder-facing action's error handling here.
+    setLevelStatus(err.message || failureMessage, { isError: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+levelBuildBtn.addEventListener('click', () => addLevel('up', levelBuildBtn, 'Could not build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', levelDigBtn, 'Could not dig a new level.'));
+
+levelRemoveBtn.addEventListener('click', async () => {
+  levelRemoveBtn.disabled = true;
+  try {
+    await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
+    currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
+    setLevelStatus('');
+    renderLevelControls();
+  } catch (err) {
+    setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
+  } finally {
+    levelRemoveBtn.disabled = false;
+  }
+});
 
 // Snapshot-based rather than per-action command objects: a "snapshot" is
 // just the same plain instance-shape persistLayout()/instanceFromMesh()
@@ -4738,7 +4982,7 @@ modeTrimBtn.addEventListener('click', () => {
 for (const field of trimAxisFieldEls) {
   const axis = field.dataset.trimAxis;
   const input = field.querySelector('.trim-length-input');
-  input.addEventListener('change', async () => {
+  input.addEventListener('change', () => {
     if (selectedMeshes.size !== 1) return;
     const [mesh] = selectedMeshes;
     const template = mesh.userData.template;
@@ -4761,15 +5005,23 @@ for (const field of trimAxisFieldEls) {
     const requestedLength = fromDisplayLength(requestedDisplayLength);
     const clampedRealLength = THREE.MathUtils.clamp(requestedLength, extensible.minM * scale, maxLength * scale);
     const clampedLength = clampedRealLength / scale;
+    const instanceId = mesh.userData.instanceId;
     pushUndoSnapshot();
-    const updated = await replaceMeshWithCrop(mesh, { ...mesh.userData.crop, [axis]: clampedLength });
-    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-    updated.position.set(clamped.x, clamped.y, clamped.z);
-    updated.userData.safePosition = updated.position.clone();
-    trimControls.attach(updated);
-    persistLayout();
-    syncUpdate(updated);
-    updateTrimLengthInput();
+    queueTrimEdit(async () => {
+      const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
+      if (!current) return; // deleted, or otherwise gone, since this edit was queued
+      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+      updated.position.set(clamped.x, clamped.y, clamped.z);
+      updated.userData.safePosition = updated.position.clone();
+      // Same stale-selection guard as the drag-release handler above — see
+      // its own comment. The typed-value path awaits the same
+      // replaceMeshWithCrop model rebuild, so the same race applies here.
+      if (selectedMeshes.has(updated)) trimControls.attach(updated);
+      persistLayout();
+      syncUpdate(updated);
+      updateTrimLengthInput();
+    });
   });
 }
 
@@ -5145,6 +5397,14 @@ const signPostsListEl = document.getElementById('sign-posts-list');
 const signPostsEmptyEl = document.getElementById('sign-posts-empty');
 const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
 let signPostsTargetMesh = null;
+// Guards against reopening this modal on a different mesh before an
+// earlier renderSignPosts()'s own await resolves — without it, the
+// earlier call's stale fetch can land after the target has switched and
+// append its rows (with the old instanceId baked into each delete
+// button) onto a list the user now believes belongs to the new mesh.
+// Same pattern as axisPreviewLoadToken/claimMapLoadToken elsewhere in
+// this file.
+let signPostsLoadToken = 0;
 
 function formatSignPostTime(isoString) {
   const date = new Date(isoString);
@@ -5154,15 +5414,18 @@ function formatSignPostTime(isoString) {
 async function renderSignPosts() {
   signPostsListEl.innerHTML = '';
   if (!signPostsTargetMesh) return;
+  const myLoadToken = ++signPostsLoadToken;
   const instanceId = signPostsTargetMesh.userData.instanceId;
   let posts;
   try {
     posts = await fetchSignPosts(instanceId);
   } catch (err) {
+    if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
     signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
     signPostsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== signPostsLoadToken) return; // superseded — a newer call owns the list now
   signPostsEmptyEl.hidden = posts.length > 0;
   for (const post of posts) {
     const row = document.createElement('div');
@@ -5247,6 +5510,9 @@ const calendarEventsListEl = document.getElementById('calendar-events-list');
 const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
 const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
 let calendarEventsTargetMesh = null;
+// See signPostsLoadToken above — same reopen-on-a-different-mesh race,
+// same fix.
+let calendarEventsLoadToken = 0;
 
 function formatCalendarEventTime(isoString) {
   const date = new Date(isoString);
@@ -5256,15 +5522,18 @@ function formatCalendarEventTime(isoString) {
 async function renderCalendarEvents() {
   calendarEventsListEl.innerHTML = '';
   if (!calendarEventsTargetMesh) return;
+  const myLoadToken = ++calendarEventsLoadToken;
   const instanceId = calendarEventsTargetMesh.userData.instanceId;
   let events;
   try {
     events = await fetchCalendarEvents(instanceId);
   } catch (err) {
+    if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
     calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
     calendarEventsEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== calendarEventsLoadToken) return; // superseded — a newer call owns the list now
   calendarEventsEmptyEl.hidden = events.length > 0;
   for (const event of events) {
     const row = document.createElement('div');
@@ -5472,7 +5741,12 @@ async function handlePlacementClick() {
     return; // tapped empty sky — nothing to place onto, leave placement pending
   }
 
-  const supportZ = supportingMesh ? supportingMesh.position.z + meshDimensions(supportingMesh).height / 2 : 0;
+  // issue #169: tapping bare ground (no supporting product beneath the
+  // click) places onto whichever level's own floor is currently being
+  // viewed/edited, not always ground's z=0.
+  const supportZ = supportingMesh
+    ? supportingMesh.position.z + meshDimensions(supportingMesh).height / 2
+    : levelFloorZ(currentLevelIndex);
 
   const pending = pendingPlacement;
   pendingPlacement = null;
@@ -6117,13 +6391,19 @@ const notificationsCloseBtn = document.getElementById('notifications-close-btn')
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
 async function refreshNotificationsBadge() {
   if (!builderId) return;
   try {
-    const unread = await fetchNotifications({ unreadOnly: true });
-    notificationsBadgeEl.textContent = String(unread.length);
-    notificationsBadgeEl.hidden = unread.length === 0;
+    // A real count query, not fetchNotifications({ unreadOnly: true })'s
+    // own first page — that list is cursor-paginated (issue #320) one
+    // page at a time, which would still undercount the badge if this read
+    // only the first page's own .length (e.g. a popular auction's worth
+    // of bid notifications).
+    const count = await fetchUnreadNotificationCount();
+    notificationsBadgeEl.textContent = String(count);
+    notificationsBadgeEl.hidden = count === 0;
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
   }
@@ -6134,46 +6414,92 @@ function formatNotificationTime(isoString) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }
 
+// #245: renderNotifications awaits fetchNotifications() before populating
+// the panel; if it's invoked again (e.g. the bell clicked twice in quick
+// succession) before that await resolves, the second call's own
+// `innerHTML = ''` clears whatever the first call is about to append,
+// but nothing then stops the first call's now-stale fetch from appending
+// its rows on top of the second call's fresh ones once it resolves —
+// duplicate rows, the same missing-re-entrancy-guard shape #244 already
+// fixed for renderSignPosts/renderCalendarEvents (lower severity here:
+// this always renders the same session-wide list, never a per-click
+// target that could show the wrong object's data). Each call captures the
+// token's value before it starts awaiting, then checks it's still the
+// latest afterward; a superseded call bails out quietly instead of
+// rendering anything.
+let notificationsLoadToken = 0;
+// The cursor for whatever page comes after the ones currently rendered —
+// null once there's nothing more to load (see fetchNotifications'/
+// handleNotifications' nextCursor, issue #320). Reset to null every time
+// renderNotifications starts a fresh first page; advanced by
+// loadMoreNotifications as later pages come in.
+let notificationsNextCursor = null;
+
+function appendNotificationRow(notification) {
+  const row = document.createElement('div');
+  row.className = 'notification-row';
+  row.classList.toggle('unread', !notification.readAt);
+  const message = document.createElement('div');
+  message.textContent = notification.message;
+  row.appendChild(message);
+  const time = document.createElement('div');
+  time.className = 'notification-row-time';
+  time.textContent = formatNotificationTime(notification.createdAt);
+  row.appendChild(time);
+  // Tapping any notice marks just that one read — simpler than a
+  // separate per-row dismiss button, and "Mark all read" still exists
+  // for clearing the whole list at once.
+  if (!notification.readAt) {
+    row.addEventListener('click', async () => {
+      try {
+        await markNotificationRead(notification.notificationId);
+        row.classList.remove('unread');
+        refreshNotificationsBadge();
+      } catch (err) {
+        console.warn('Could not mark notification read:', err);
+      }
+    });
+  }
+  notificationsListEl.appendChild(row);
+}
+
 async function renderNotifications() {
+  const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
+  notificationsLoadMoreBtn.hidden = true;
+  notificationsNextCursor = null;
   if (!builderId) return;
-  let notifications;
+  let page;
   try {
-    notifications = await fetchNotifications();
+    page = await fetchNotifications();
   } catch (err) {
+    if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
     notificationsEmptyEl.hidden = false;
     return;
   }
-  notificationsEmptyEl.hidden = notifications.length > 0;
-  for (const notification of notifications) {
-    const row = document.createElement('div');
-    row.className = 'notification-row';
-    row.classList.toggle('unread', !notification.readAt);
-    const message = document.createElement('div');
-    message.textContent = notification.message;
-    row.appendChild(message);
-    const time = document.createElement('div');
-    time.className = 'notification-row-time';
-    time.textContent = formatNotificationTime(notification.createdAt);
-    row.appendChild(time);
-    // Tapping any notice marks just that one read — simpler than a
-    // separate per-row dismiss button, and "Mark all read" still exists
-    // for clearing the whole list at once.
-    if (!notification.readAt) {
-      row.addEventListener('click', async () => {
-        try {
-          await markNotificationRead(notification.notificationId);
-          row.classList.remove('unread');
-          refreshNotificationsBadge();
-        } catch (err) {
-          console.warn('Could not mark notification read:', err);
-        }
-      });
-    }
-    notificationsListEl.appendChild(row);
-  }
+  if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+  notificationsEmptyEl.hidden = page.notifications.length > 0;
+  for (const notification of page.notifications) appendNotificationRow(notification);
+  notificationsNextCursor = page.nextCursor;
+  notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
 }
+
+notificationsLoadMoreBtn.addEventListener('click', async () => {
+  const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+  notificationsLoadMoreBtn.disabled = true;
+  try {
+    const page = await fetchNotifications({ cursor: notificationsNextCursor });
+    if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
+    for (const notification of page.notifications) appendNotificationRow(notification);
+    notificationsNextCursor = page.nextCursor;
+    notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
+  } catch (err) {
+    console.warn('Could not load more notifications:', err);
+  } finally {
+    notificationsLoadMoreBtn.disabled = false;
+  }
+});
 
 notificationsBtn.addEventListener('click', () => {
   notificationsModalEl.classList.add('visible');
@@ -6239,7 +6565,18 @@ function friendLocationText(friendship) {
   return `${name} (${center.x.toFixed(0)}, ${center.y.toFixed(0)})`;
 }
 
+// #257: same missing-re-entrancy-guard shape as #244/#245 —
+// renderFriends() is called from many places in quick succession (opening
+// the panel, accepting/declining/cancelling a request, closing/reopening
+// via friendsCloseBtn's own refreshFriendsBadge()), and each of those
+// awaits fetchFriendships() before touching the DOM. An earlier call's
+// now-stale response would otherwise append duplicate rows on top of a
+// later call's fresh ones once it resolves. Same monotonic-token fix as
+// axisPreviewLoadToken/notificationsLoadToken.
+let friendsLoadToken = 0;
+
 async function renderFriends() {
+  const myLoadToken = ++friendsLoadToken;
   friendsIncomingListEl.innerHTML = '';
   friendsOutgoingListEl.innerHTML = '';
   friendsAcceptedListEl.innerHTML = '';
@@ -6248,10 +6585,12 @@ async function renderFriends() {
   try {
     friendships = await fetchFriendships();
   } catch (err) {
+    if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
     friendsStatusEl.textContent = err.message || 'Could not load friends.';
     friendsStatusEl.classList.add('error');
     return;
   }
+  if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
   const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
   const outgoing = friendships.filter((f) => f.direction === 'outgoing' && f.status === 'pending');
   const accepted = friendships.filter((f) => f.status === 'accepted');
@@ -6789,12 +7128,25 @@ friendsAddBtn.addEventListener('click', async () => {
   friendsAddBtn.disabled = true;
   try {
     const builders = await fetchBuilders();
-    const match = builders.find((b) => b.label.toLowerCase() === label.trim().toLowerCase());
-    if (!match) {
-      friendsStatusEl.textContent = `No builder named "${label.trim()}" found.`;
+    const trimmed = label.trim();
+    const matches = builders.filter((b) => b.label.toLowerCase() === trimmed.toLowerCase());
+    if (matches.length === 0) {
+      friendsStatusEl.textContent = `No builder named "${trimmed}" found.`;
       friendsStatusEl.classList.add('error');
       return;
     }
+    // Builder labels have no uniqueness constraint (migrations/0054's own
+    // comment: "a unique label was never even guaranteed") — docs/API.md's
+    // "unmatched or ambiguous label surfaces as a status message rather
+    // than a dead end" promise covers this case explicitly, so more than
+    // one match must never silently resolve to whichever one happened to
+    // sort first.
+    if (matches.length > 1) {
+      friendsStatusEl.textContent = `Multiple builders are named "${trimmed}" — ask them to rename to something unique before sending a request.`;
+      friendsStatusEl.classList.add('error');
+      return;
+    }
+    const match = matches[0];
     await sendFriendRequest(match.builderId);
     friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
     await renderFriends();
@@ -6847,7 +7199,20 @@ const shopLandletInfoEl = document.getElementById('shop-landlet-info');
 // bit of chrome uses. A warm tan instead reads as cleared/settled ground
 // (tilled earth, a building's footprint) while staying clearly distinct
 // from greenbelt's green and generating's amber.
-const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f };
+const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0xd99a3f, water: 0x4a9bd1 };
+
+// #220 (sub-issue of #206, docs/SPEC.md §1's "Water cannot be owned"): a
+// landlet's landType (worker/earthCurvature.js's sibling module,
+// worker/index.js's #218) is orthogonal to its lifecycle status — a water
+// landlet still carries status: 'greenbelt' (see migrations/0064's own
+// comment for why) so it never falls through either palette's lookup as
+// "unknown," but it must never render or behave like ordinary available
+// greenbelt. Every per-plot color/affordance lookup goes through this
+// instead of reading `.status` directly, so a water landlet always resolves
+// to each palette's own 'water' entry regardless of its underlying status.
+function plotColorKeyForLandlet(landlet) {
+  return landlet.landType === 'water' ? 'water' : landlet.status;
+}
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.7 m/s
 // (~6 mph, v16 — raised from the original 2.2 m/s for a run that actually
 // reads as one) running. There's no separate run input (a run key/button)
@@ -6975,6 +7340,14 @@ const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 // with an occupancy slot) that doesn't exist yet.
 const SHOP_IDLE_DELAY_S = 3; // no movement input for this long before idle sway starts easing in
 const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in on stillness, out the instant movement resumes)
+// docs/SPEC.md §2's "stationary-too-long triggers an AFK indicator" — a
+// floating label above the avatar's own head (see makeSignPostSprite),
+// visible on the player's own third-person avatar in Shop mode so it's
+// directly self-testable. Deliberately much longer than SHOP_IDLE_DELAY_S:
+// idle sway should read as "still paying attention," AFK should only show
+// once that stops being a believable read — a minute-plus of true stillness.
+const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the AFK label starts fading in
+const SHOP_AFK_BLEND_PER_S = 0.6; // matches SHOP_IDLE_BLEND_PER_S's own feel — in on stillness, out instantly on movement
 const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
 const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
 const SHOP_IDLE_SWAY_PERIOD_MAX_S = 6;
@@ -7674,10 +8047,20 @@ function createShopAvatar() {
   headPivot.add(head);
   group.add(headPivot);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot };
+  // On `group` rather than `headPivot` so idle's own head-turn sway
+  // (updateShopAvatarIdle) doesn't drag the label along with it — a sprite
+  // always faces the camera regardless of parent rotation anyway, but its
+  // *position* still would inherit headPivot's yaw if parented there.
+  // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
+  const afkSprite = makeSignPostSprite('AFK');
+  afkSprite.position.z = headPivot.position.z + SHOP_AVATAR_HEAD_RADIUS_M + 0.3;
+  afkSprite.material.opacity = 0;
+  group.add(afkSprite);
+
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot } — see createShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite } — see createShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
@@ -7685,6 +8068,7 @@ let shopAvatarWalkPhase = 0;
 // Idle sway state (docs/SPEC.md §2) — see updateShopAvatarIdle.
 let shopIdleElapsedS = 0; // seconds since the last real movement input
 let shopIdleBlend = 0; // 0..1 eased "how much idle sway is showing"
+let shopAfkBlend = 0; // 0..1 eased "how visible the AFK label is" — see SHOP_AFK_DELAY_S
 let shopIdleSwayPhase = 0;
 let shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
 let shopIdleSwayYawOffset = 0; // read by updateShopMovement to offset the avatar's own facing
@@ -7744,11 +8128,15 @@ function updateShopAvatarIdle(moveMagnitude, dt) {
   if (moveMagnitude > 0) {
     shopIdleElapsedS = 0;
     shopIdleBlend = 0;
+    shopAfkBlend = 0;
   } else {
     shopIdleElapsedS += dt;
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+    const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
+    shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
   }
+  shopAvatar.afkSprite.material.opacity = shopAfkBlend;
 
   shopIdleSwayPhase += (dt / shopIdleSwayPeriodS) * Math.PI * 2;
   if (shopIdleSwayPhase >= Math.PI * 2) {
@@ -8641,8 +9029,12 @@ shopSignHintEl.addEventListener('click', async () => {
 shopCalendarHintEl.addEventListener('click', async () => {
   const calendar = nearestActiveCalendar;
   if (!calendar) return;
-  const authorLabel = shopperLabel();
-  if (!authorLabel) return;
+  // Unlike signs (anonymous shopperLabel()), docs/SPEC.md §6 calls calendar
+  // events "builder-authored" — the server now derives authorLabel from a
+  // real logged-in builder and rejects anyone but the hosting landlet's own
+  // owner, so this needs a real identity, not a free-text name prompt.
+  const builder = await ensureBuilderIdentity();
+  if (!builder) return;
   const text = prompt('Event details (up to 280 characters):', '');
   if (!text || !text.trim()) return;
   // Optional third step — most events are just a plain announcement (the
@@ -8664,7 +9056,7 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
   shopCalendarHintEl.disabled = true;
   try {
-    const event = await createCalendarEvent(calendar.instanceId, { authorLabel, text: text.trim(), scheduledAt });
+    const event = await createCalendarEvent(calendar.instanceId, { text: text.trim(), scheduledAt });
     calendar.events.push(event);
     rebuildCalendarSprites(calendar);
   } catch (err) {
@@ -8792,6 +9184,7 @@ function unloadShopLandletInstances(entry) {
 // trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'level-controls',
 ];
 
 async function enterShopMode() {
@@ -8933,7 +9326,7 @@ async function enterShopMode() {
     group.position.set(record.center.x, record.center.y, 0);
     const groundMesh = new THREE.Mesh(
       new THREE.ShapeGeometry(shapeForLandlet(record)),
-      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[record.status] ?? 0x4caf50 }),
+      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKeyForLandlet(record)] ?? 0x4caf50 }),
     );
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
@@ -8953,6 +9346,7 @@ async function enterShopMode() {
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
   shopIdleBlend = 0;
+  shopAfkBlend = 0;
   shopIdleSwayYawOffset = 0;
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
@@ -9221,7 +9615,7 @@ function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
 
 // Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
 // claim-map flyover and the real 3D world it's picking a plot in agree.
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878 };
+const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, water: 0x4a9bd1 };
 
 // docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
 // earthCurvature.js) applied to this flyover — the one place in this app
@@ -9384,10 +9778,10 @@ async function loadLandletMap(resolve) {
   const plotOutlines = [];
   let anyAvailable = false;
   for (const landlet of landlets) {
-    if (landlet.status === 'greenbelt') anyAvailable = true;
+    if (landlet.status === 'greenbelt' && landlet.landType !== 'water') anyAvailable = true;
     const shape = shapeForLandlet(landlet);
     const geometry = new THREE.ShapeGeometry(shape);
-    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff });
+    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff });
     const mesh = new THREE.Mesh(geometry, material);
     // The plot's own polygon (shape, above) stays flat — only its
     // placement moves to the real curved position. Tilting the polygon
@@ -9458,13 +9852,14 @@ async function loadLandletMap(resolve) {
     const landlet = mesh.userData.landlet;
 
     if (selectedMesh) {
-      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[selectedMesh.userData.landlet.status] ?? 0xffffff);
+      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(selectedMesh.userData.landlet)] ?? 0xffffff);
     }
     selectedMesh = mesh;
     // Lighten toward white rather than using a fixed highlight color, so
     // the highlighted plot still visibly carries its own status color
-    // (available vs. claimed) instead of every selection looking the same.
-    mesh.material.color.setHex(CLAIM_PLOT_COLORS[landlet.status] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
+    // (available vs. claimed vs. water) instead of every selection looking
+    // the same.
+    mesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
 
     if (selectionOutline) {
       scene.remove(selectionOutline);
@@ -9478,16 +9873,9 @@ async function loadLandletMap(resolve) {
     scene.add(selectionOutline);
     claimFlyover.selectionOutline = selectionOutline;
 
-    const statusLabel = landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    // #221: shoreline scarcity is meant to be organically discovered, not
-    // mechanically boosted (docs/SPEC.md §1) — this only surfaces the fact
-    // a builder could otherwise only notice by eyeballing the map, computed
-    // fresh from the same landlets this flyover already fetched rather than
-    // a stored flag. See src/landletAdjacency.js for why a bounding-circle
-    // approximation is good enough here.
-    const waterNote = bordersWater(landlet, landlets) ? ' · Borders water' : '';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}${waterNote}`;
-    claimConfirmBtn.disabled = landlet.status !== 'greenbelt';
+    const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
+    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
 
@@ -9580,26 +9968,34 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles, shared] = await Promise.all([
+    const [catalog, remoteInstances, landletRecord, bundles, shared, levels] = await Promise.all([
       fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
+      fetchLandletLevels(currentLandletId),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
     myBundles = bundles;
     communityBundles = shared;
     applyLandletShape(landletRecord);
+    currentLandletAreaM2 = landletRecord.areaM2;
+    currentLandletLevels = levels;
+    currentLevelIndex = 0;
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
     myBundles = [];
     communityBundles = [];
     currentLandletId = 'starter-landlet';
+    currentLandletAreaM2 = LANDLET_AREA_M2;
+    currentLandletLevels = [];
+    currentLevelIndex = 0;
     // A previously-saved instance list (builder additions/removals/moves)
     // entirely replaces the starter set — not merged with it — since the
     // starter set is just a first-visit default, not content to preserve
     // alongside whatever the builder has actually done.
     instances = loadInstances() ?? DEFAULT_INSTANCES;
   }
+  renderLevelControls();
 
   buildCatalogPickerButtons();
   renderBundlePicker();
