@@ -91,17 +91,38 @@ function strictlyInsidePolygon(point, polygon) {
   return true;
 }
 
-function segmentsIntersect(p1, p2, p3, p4) {
-  const d1 = cross(p3, p4, p1);
-  const d2 = cross(p3, p4, p2);
-  const d3 = cross(p1, p2, p3);
-  const d4 = cross(p1, p2, p4);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
-  return false;
+// #412: a point exactly on the line through (lineStart, lineEnd) has a
+// signed cross product of exactly 0 — but two vertices meant to coincide
+// (adjacent polygons from the same generator, designed to share an edge)
+// essentially never land on bit-identical floats, so in practice this is
+// off by noise around the 14th-15th significant digit, not 0. The raw
+// cross product's magnitude also scales with the segment's own length, so
+// a fixed epsilon on it isn't physically meaningful — dividing by the
+// segment length turns it into an actual perpendicular distance in meters,
+// comparable against the same TOUCH_EPSILON_M strictlyInsidePolygon above
+// already uses for this identical problem.
+function signedDistanceFromLine(lineStart, lineEnd, point) {
+  const dx = lineEnd.x - lineStart.x;
+  const dy = lineEnd.y - lineStart.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return Math.hypot(point.x - lineStart.x, point.y - lineStart.y);
+  return ((point.x - lineStart.x) * dy - (point.y - lineStart.y) * dx) / length;
 }
 
-function cross(origin, a, b) {
-  return (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+// True proper crossing only — a point within TOUCH_EPSILON_M of the other
+// segment's line doesn't count toward straddling either side, so a shared
+// (or near-shared, per the float-noise reasoning above) vertex or a
+// collinear touch reads as a touch, not an intersection.
+function straddles(a, b) {
+  return (a > TOUCH_EPSILON_M && b < -TOUCH_EPSILON_M) || (a < -TOUCH_EPSILON_M && b > TOUCH_EPSILON_M);
+}
+
+function segmentsIntersect(p1, p2, p3, p4) {
+  const d1 = signedDistanceFromLine(p3, p4, p1);
+  const d2 = signedDistanceFromLine(p3, p4, p2);
+  const d3 = signedDistanceFromLine(p1, p2, p3);
+  const d4 = signedDistanceFromLine(p1, p2, p4);
+  return straddles(d1, d2) && straddles(d3, d4);
 }
 
 function parsePolygon(value) {
