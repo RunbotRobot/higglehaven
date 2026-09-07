@@ -249,7 +249,24 @@ before starting to code:
    tracking issue, or `sub_issue_write` (`method: "add"`) to attach an
    issue you already created. Each sub-issue should be independently
    implementable and mergeable on its own, through the same
-   own-session-branch cycle described above.
+   own-session-branch cycle described above. **Do this in the same pass
+   as filing the tracking issue, not after a separate, invisible
+   investigation phase** — issue #207 sat with zero linked sub-issues for
+   about 7 hours (looking stalled to the project owner checking on it)
+   before one session silently scoped *and* completed all three of its
+   sub-issues in one uninterrupted run, so nobody — owner or another
+   session — could see the breakdown or help with a piece of it until it
+   was already done. A tracking issue with no visible sub-issues yet
+   reads as stalled even if a session is actively working out the
+   breakdown behind the scenes. If you genuinely need investigation time
+   before you can scope sub-issues with confidence, say so with an issue
+   comment or a control room `tasks` doc note rather than leaving the
+   tracking issue silent in the meantime. The Control Room board itself
+   surfaces this too: set `subIssues` (an array of the sub-issue numbers)
+   on the tracking task's own `tasks` doc alongside `sub_issue_write`'s
+   real GitHub linking — the board renders it as a linked "Sub-issues:
+   #218 #219 ..." line on the card, so the breakdown is visible without
+   opening GitHub at all.
 3. **Recurse.** If a sub-issue is still big enough that landing it risks a
    painful merge or a multi-day session, break *it* into its own
    sub-issues the same way. Keep nesting until every leaf task is roughly
