@@ -1230,4 +1230,167 @@ describe('Landlet levels', () => {
     expect(down.response.status).toBe(409);
     expect(down.body.error).toMatch(/center/i);
   });
+
+  // #394: nothing previously stopped placing an instance's z arbitrarily
+  // high/deep without ever buying the level through this file's own
+  // endpoint above — bypassing the land-cap cost that endpoint charges.
+  describe('instance z bounds (#394)', () => {
+    it('allows an instance within one level height of ground on a lándlet with no levels purchased', async () => {
+      const owner = await signupBuilder('instance-z-no-levels-owner');
+      await createGreenbeltLandletWithArea('instance-z-no-levels-landlet', 1000);
+      await claim('instance-z-no-levels-landlet', owner);
+
+      const withinRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-within-no-levels',
+          landletId: 'instance-z-no-levels-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M / 2,
+        }),
+      }));
+      expect(withinRange.response.status).toBe(201);
+    });
+
+    it('rejects an instance z beyond one level height of ground with no levels purchased', async () => {
+      const owner = await signupBuilder('instance-z-reject-owner');
+      await createGreenbeltLandletWithArea('instance-z-reject-landlet', 1000);
+      await claim('instance-z-reject-landlet', owner);
+
+      const tooHigh = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-too-high',
+          landletId: 'instance-z-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 2,
+        }),
+      }));
+      expect(tooHigh.response.status).toBe(400);
+      expect(tooHigh.body.error).toMatch(/purchased levels/);
+
+      const tooDeep = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-too-deep',
+          landletId: 'instance-z-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: -LEVEL_HEIGHT_M * 2,
+        }),
+      }));
+      expect(tooDeep.response.status).toBe(400);
+    });
+
+    it('extends the allowed instance z range as levels are purchased, in both directions', async () => {
+      const owner = await signupBuilder('instance-z-extend-owner');
+      await createGreenbeltLandletWithArea('instance-z-extend-landlet', 1000);
+      await claim('instance-z-extend-landlet', owner);
+      await api('/landlets/instance-z-extend-landlet/levels', owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+
+      const nowInRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-now-in-range',
+          landletId: 'instance-z-extend-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      expect(nowInRange.response.status).toBe(201);
+
+      const stillOutOfRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-still-out',
+          landletId: 'instance-z-extend-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 2.5,
+        }),
+      }));
+      expect(stillOutOfRange.response.status).toBe(400);
+
+      // Downward is unaffected by an upward-only purchase.
+      const downStillOutOfRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-down-still-out',
+          landletId: 'instance-z-extend-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: -LEVEL_HEIGHT_M * 2,
+        }),
+      }));
+      expect(downStillOutOfRange.response.status).toBe(400);
+    });
+
+    it('rejects moving an existing instance\'s z out of range via PATCH, but leaves an untouched out-of-range z alone', async () => {
+      const owner = await signupBuilder('instance-z-patch-owner');
+      await createGreenbeltLandletWithArea('instance-z-patch-landlet', 1000);
+      await claim('instance-z-patch-landlet', owner);
+      const created = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-z-patch-target',
+          landletId: 'instance-z-patch-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: 0,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+
+      const movedOutOfRange = await api('/instances/instance-z-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ z: LEVEL_HEIGHT_M * 5 }),
+      }));
+      expect(movedOutOfRange.response.status).toBe(400);
+
+      // A grandfathered-in out-of-range z (e.g. from before this check
+      // existed, or a level removed out from under it) directly seeded —
+      // an unrelated field-only PATCH that never touches z must not
+      // suddenly start re-validating and bricking it, the same
+      // "only re-check what actually changed" reasoning already applied
+      // to crop/template above.
+      await env.DB.prepare(
+        "UPDATE placed_instances SET z_m = ? WHERE instance_id = 'instance-z-patch-target'",
+      ).bind(LEVEL_HEIGHT_M * 5).run();
+      const unrelatedPatch = await api('/instances/instance-z-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ label: 'Renamed' }),
+      }));
+      expect(unrelatedPatch.response.status).toBe(200);
+      expect(unrelatedPatch.body.instance.label).toBe('Renamed');
+      expect(unrelatedPatch.body.instance.z).toBe(LEVEL_HEIGHT_M * 5);
+    });
+
+    it('applies the same z bounds to the lándlet draft save endpoint', async () => {
+      const owner = await signupBuilder('instance-z-draft-owner');
+      await createGreenbeltLandletWithArea('instance-z-draft-landlet', 1000);
+      await claim('instance-z-draft-landlet', owner);
+
+      const rejected = await api('/landlets/instance-z-draft-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-z-draft-out-of-range',
+            templateId: 'placeholder-tree',
+            x: 1, y: 1, z: LEVEL_HEIGHT_M * 3,
+          }],
+        }),
+      }));
+      expect(rejected.response.status).toBe(400);
+
+      const accepted = await api('/landlets/instance-z-draft-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-z-draft-in-range',
+            templateId: 'placeholder-tree',
+            x: 1, y: 1, z: 0,
+          }],
+        }),
+      }));
+      expect(accepted.response.status).toBe(200);
+    });
+  });
 });

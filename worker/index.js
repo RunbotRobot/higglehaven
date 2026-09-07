@@ -3655,6 +3655,7 @@ async function handleLandletDraft(request, db, landletId) {
       ids.add(instance.instanceId);
     }
     await assertCropWithinTemplateBounds(db, instances);
+    await assertInstanceZWithinLevels(db, instances);
 
     const versionId = crypto.randomUUID();
     const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
@@ -4568,6 +4569,7 @@ async function handleInstances(request, db, route, url) {
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     await assertCropWithinTemplateBounds(db, instances);
+    await assertInstanceZWithinLevels(db, instances);
     const existingInstances = await getInstancesById(db, instanceIds);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
@@ -4637,6 +4639,7 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
+    await assertInstanceZWithinLevels(db, [instance]);
     await db.prepare(`
       INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -4678,6 +4681,14 @@ async function handleInstances(request, db, route, url) {
       || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
     if (cropOrTemplateChanged) {
       await assertCropWithinTemplateBounds(db, [instance]);
+    }
+    // Same "only re-check what actually changed" reasoning as crop above:
+    // an unrelated PATCH (renaming a label, say) always resends the
+    // instance's full current state, so re-validating an untouched z
+    // against the landlet's *current* levels would risk bricking existing
+    // instances if a level was ever removed out from under them.
+    if (instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
+      await assertInstanceZWithinLevels(db, [instance]);
     }
     await db.prepare(`
       UPDATE placed_instances
@@ -5272,6 +5283,44 @@ async function assertCropWithinTemplateBounds(db, instances) {
           400,
         );
       }
+    }
+  }
+}
+
+// Half a level's height, allowed as slack on each end of a landlet's
+// purchased-levels range below — an instance's own thickness can carry it
+// slightly past a level's exact z boundary (see levelCapConsumedM2's own
+// comment on where that boundary sits) without actually needing the next
+// level purchased just to fit.
+const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
+
+// Confirms every instance's z falls within the landlet's actual purchased
+// vertical extent (landlet_levels — see handleLandletLevels, the only
+// place cap cost for going up/down is ever charged), so placing an
+// instance directly can't be used to build arbitrarily high/deep for free
+// without ever calling that endpoint. A landlet with no landlet_levels
+// rows at all (the common case — most landlets never go vertical) still
+// has an implicit ground level at index 0, matching the Math.min/max(0, ...)
+// pattern handleLandletLevels itself uses to find the current extent.
+async function assertInstanceZWithinLevels(db, instances) {
+  const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
+  if (landletIds.length === 0) return;
+  const placeholders = landletIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT landlet_id, level_index FROM landlet_levels WHERE landlet_id IN (${placeholders})`,
+  ).bind(...landletIds).all();
+  const levelIndicesByLandlet = new Map(landletIds.map((landletId) => [landletId, []]));
+  for (const row of results) levelIndicesByLandlet.get(row.landlet_id).push(row.level_index);
+  for (const instance of instances) {
+    const levelIndices = levelIndicesByLandlet.get(instance.landletId) || [];
+    const minZ = Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const maxZ = Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    if (instance.z < minZ || instance.z > maxZ) {
+      throw new HttpError(
+        `z (${instance.z}) is outside landlet "${instance.landletId}"'s purchased levels `
+        + `(allowed range: ${minZ} to ${maxZ}) — add more levels via POST /landlets/:id/levels first`,
+        400,
+      );
     }
   }
 }

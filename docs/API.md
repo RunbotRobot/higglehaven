@@ -3613,6 +3613,21 @@ auction) — matching the existing "a new owner gets the land, not the
 previous owner's stuff on it" reasoning already applied to
 `placed_instances`/`landlet_versions` there.
 
+### Instance placement is bounded by purchased levels (#394)
+
+Every instance create/update path (`POST/PUT/PATCH /api/instances*`,
+including the batch and draft-save endpoints) rejects a `z` outside the
+lándlet's currently *purchased* vertical extent — `400` if `z` falls
+outside `[min(0, ...levelIndices) * LEVEL_HEIGHT_M - LEVEL_HEIGHT_M / 2,
+max(0, ...levelIndices) * LEVEL_HEIGHT_M + LEVEL_HEIGHT_M / 2]` (the half-
+level slack accounts for an instance's own thickness carrying it slightly
+past a level's exact boundary). A lándlet with no `landlet_levels` rows
+still has the implicit ground level at index `0`, so its instances must
+sit within one level's height of the ground. This closes a gap where
+placing an instance directly could build arbitrarily high or deep without
+ever calling `POST /api/landlets/:landletId/levels` — the only place land
+cap is actually charged for going vertical.
+
 ## Simulated purchases
 
 Land cap's own commentary above flags the actual gap directly: this
