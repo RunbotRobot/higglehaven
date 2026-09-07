@@ -73,6 +73,7 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  createPurchaseIntent,
   fetchPurchases,
   refundPurchase,
 } from './api.js';
@@ -9538,21 +9539,139 @@ shopReviewHintEl.addEventListener('click', async () => {
   }
 });
 
+// ---- Real checkout (#453, docs/API.md's "Real checkout (Stripe)") — a
+// Stripe Elements card form mounted into the static #checkout-modal
+// markup. Stripe.js is loaded lazily (only the first time it's actually
+// needed, not on every page load) since most products never reach this
+// path at all — see docs/API.md: a product stays on the plain simulated
+// purchaseInstance() call below until its own seller has both a
+// server-wide Stripe key AND finished Connect onboarding.
+const checkoutModalEl = document.getElementById('checkout-modal');
+const checkoutCloseBtn = document.getElementById('checkout-close-btn');
+const checkoutSummaryEl = document.getElementById('checkout-summary');
+const checkoutFormEl = document.getElementById('checkout-form');
+const checkoutCardElementEl = document.getElementById('checkout-card-element');
+const checkoutStatusEl = document.getElementById('checkout-status');
+const checkoutSubmitBtn = document.getElementById('checkout-submit-btn');
+
+let stripeJsPromise = null;
+function loadStripeJs() {
+  if (!stripeJsPromise) {
+    stripeJsPromise = new Promise((resolve, reject) => {
+      if (window.Stripe) { resolve(window.Stripe); return; }
+      const script = document.createElement('script');
+      script.src = 'https://js.stripe.com/v3/';
+      script.onload = () => resolve(window.Stripe);
+      script.onerror = () => reject(new Error('Could not load the payment form — check your connection.'));
+      document.head.appendChild(script);
+    });
+  }
+  return stripeJsPromise;
+}
+
+let checkoutCardElement = null;
+
+function closeCheckoutModal() {
+  checkoutModalEl.classList.remove('visible');
+  if (checkoutCardElement) {
+    checkoutCardElement.unmount();
+    checkoutCardElement.destroy();
+    checkoutCardElement = null;
+  }
+  checkoutFormEl.onsubmit = null;
+}
+checkoutCloseBtn.onclick = closeCheckoutModal;
+
+// intent is a purchase-intent response with sellerReady: true (see
+// createPurchaseIntent in src/api.js) — clientSecret/publishableKey come
+// straight from it, never re-derived here.
+async function openCheckoutModal(instanceId, name, intent) {
+  checkoutSummaryEl.textContent = `"${name}" — ${formatPriceCents(intent.totalCents)}`;
+  checkoutStatusEl.textContent = '';
+  checkoutStatusEl.classList.remove('error');
+  checkoutSubmitBtn.disabled = false;
+  checkoutSubmitBtn.textContent = `Pay ${formatPriceCents(intent.totalCents)}`;
+  checkoutCardElementEl.innerHTML = '';
+  checkoutModalEl.classList.add('visible');
+
+  let stripe;
+  try {
+    const Stripe = await loadStripeJs();
+    stripe = Stripe(intent.publishableKey);
+  } catch (err) {
+    checkoutStatusEl.textContent = err.message || 'Could not load the payment form.';
+    checkoutStatusEl.classList.add('error');
+    return;
+  }
+  // The modal (or checkout entirely) can close while loadStripeJs() above
+  // was still resolving — mounting into a card element that's no longer
+  // part of the visible modal would just be wasted/confusing work.
+  if (!checkoutModalEl.classList.contains('visible')) return;
+
+  checkoutCardElement = stripe.elements().create('card');
+  checkoutCardElement.mount('#checkout-card-element');
+
+  checkoutFormEl.onsubmit = async (e) => {
+    e.preventDefault();
+    checkoutSubmitBtn.disabled = true;
+    checkoutStatusEl.textContent = 'Processing…';
+    checkoutStatusEl.classList.remove('error');
+    try {
+      const confirmation = await stripe.confirmCardPayment(intent.clientSecret, {
+        payment_method: { card: checkoutCardElement },
+      });
+      if (confirmation.error) {
+        checkoutStatusEl.textContent = confirmation.error.message || 'Payment failed.';
+        checkoutStatusEl.classList.add('error');
+        checkoutSubmitBtn.disabled = false;
+        return;
+      }
+      if (confirmation.paymentIntent.status !== 'succeeded') {
+        checkoutStatusEl.textContent = `Payment status: ${confirmation.paymentIntent.status}. Try again or use a different card.`;
+        checkoutStatusEl.classList.add('error');
+        checkoutSubmitBtn.disabled = false;
+        return;
+      }
+      // Server-side confirmation — see docs/API.md: this is what actually
+      // credits the builder and writes the purchases row, using the
+      // PaymentIntent's own confirmed amount/metadata, not anything this
+      // client claims.
+      await purchaseInstance(instanceId, { paymentIntentId: confirmation.paymentIntent.id });
+      closeCheckoutModal();
+      alert('Purchase complete — thank you! The seller has been paid.');
+    } catch (err) {
+      checkoutStatusEl.textContent = err.message || 'Could not complete checkout.';
+      checkoutStatusEl.classList.add('error');
+      checkoutSubmitBtn.disabled = false;
+    }
+  };
+}
+
 shopBuyHintEl.addEventListener('click', async () => {
   const review = nearestActiveReview;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
-  const confirmed = confirm(
-    `Simulate buying "${name}" for ${formatPriceCents(priceCents)}? This is a dev-mode simulation — no real money is ever charged, but the seller's dállers balance is credited for real.`,
-  );
-  if (!confirmed) return;
+  const instanceId = review.mesh.userData.instanceId;
   shopBuyHintEl.disabled = true;
   try {
-    await purchaseInstance(review.mesh.userData.instanceId);
-    alert('Purchase simulated — the seller has been credited.');
+    const intent = await createPurchaseIntent(instanceId);
+    if (!intent.configured) {
+      const confirmed = confirm(
+        `Simulate buying "${name}" for ${formatPriceCents(priceCents)}? This is a dev-mode simulation — no real money is ever charged, but the seller's dállers balance is credited for real.`,
+      );
+      if (!confirmed) return;
+      await purchaseInstance(instanceId);
+      alert('Purchase simulated — the seller has been credited.');
+      return;
+    }
+    if (!intent.sellerReady) {
+      alert(`"${name}" can't be bought yet — its seller hasn't finished setting up payouts.`);
+      return;
+    }
+    await openCheckoutModal(instanceId, name, intent);
   } catch (err) {
-    alert(err.message || 'Could not simulate this purchase.');
+    alert(err.message || 'Could not start checkout.');
   } finally {
     shopBuyHintEl.disabled = false;
   }

@@ -3709,20 +3709,25 @@ cap is actually charged for going vertical.
 ## Simulated purchases
 
 Land cap's own commentary above flags the actual gap directly: this
-dev-mode backend has no real commerce/checkout system at all, only auction
-sale proceeds as a dáller source, even though docs/SPEC.md §5's *intended
-primary* earning path is "Dállers credit instantly to builders on sale
-completion" of a *product*. This closes that gap — `POST
+backend originally had no real commerce/checkout system at all, only
+auction sale proceeds as a dáller source, even though docs/SPEC.md §5's
+*intended primary* earning path is "Dállers credit instantly to builders
+on sale completion" of a *product*. This closes that gap — `POST
 /api/instances/:instanceId/purchase` (`migrations/0051_purchases.sql`) lets
 a shopper "buy" a priced, placed product.
 
-**This is a dev-mode simulation, not real commerce.** No real payment is
-ever processed and a shopper is charged nothing — this project's standing
-"no real payments/Stripe" constraint is untouched, the same way it's
-untouched by the existing simulated dállers/auction economy. What *is*
-real is the commission math: a successful purchase credits an actual
-builder's `dallers_balance_cents` and `daller_earnings_events` ledger
-(migrations/0050), so it feeds land cap's own formula for real.
+**Two paths, chosen automatically per product.** Originally this was a
+pure dev-mode simulation — no real payment, a shopper charged nothing.
+#453 adds a real path alongside it: once the server has Stripe configured
+*and* the product's own seller has finished Connect Custom onboarding
+(`POST /api/sellers/me/stripe-account` above), a purchase of that seller's
+product goes through a real Stripe charge instead — see "Real checkout
+(Stripe)" below. A product from a seller who hasn't connected Stripe yet
+(or when the server has no Stripe key configured at all) still uses the
+simulation described in this section. Either way, the commission math is
+identical (see "Commission math" below) and a successful purchase credits
+an actual builder's `dallers_balance_cents` and `daller_earnings_events`
+ledger (migrations/0050), so it feeds land cap's own formula for real.
 
 ### Request/response
 
@@ -3753,6 +3758,7 @@ as sign-post/review `authorLabel`. Returns `201` with the created
     "commissionCents": 100,
     "builderShareCents": 50,
     "platformShareCents": 50,
+    "stripePaymentIntentId": null,
     "createdAt": "..."
   }
 }
@@ -3766,7 +3772,11 @@ reasoning as auctions' `durationHours` cap above) against this deliberately
 unauthenticated endpoint turning one request into an unbounded
 `dallers_balance_cents`/land-cap credit. `429` past 30 calls per 15 minutes
 from one client IP (see "Rate limiting" above) closes the other half of
-that gap — repeated smaller requests instead of one large one.
+that gap — repeated smaller requests instead of one large one. `400` if
+this product's own seller has finished Stripe onboarding — real payment is
+required for it now, via "Real checkout (Stripe)" below, not this
+simulated shape (`paymentIntentId` present in the body routes here
+instead, see that section).
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
@@ -3804,15 +3814,81 @@ own take — if it pushes the builder's share above the commission itself
 formula's fixed 2%/50%, but the code doesn't assume that won't change),
 the platform's own share is `0`, never negative.
 
+### Real checkout (Stripe)
+
+`POST /api/instances/:instanceId/purchase-intent` (same optional
+`{quantity, buyerLabel}` body as the simulated endpoint) is the first
+step of a real purchase — it never writes anything to the database itself,
+only creates a Stripe PaymentIntent. Response shape depends on how
+Stripe-ready this product's seller is:
+
+```jsonc
+// Stripe isn't configured on this server at all — use the simulated
+// POST .../purchase endpoint above instead.
+{ "configured": false }
+
+// Stripe is configured, but this seller hasn't finished Connect Custom
+// onboarding yet (`POST /api/sellers/me/stripe-account` above) — this
+// product can't be purchased for real money right now.
+{ "configured": true, "sellerReady": false }
+
+// Ready for real checkout.
+{
+  "configured": true,
+  "sellerReady": true,
+  "clientSecret": "pi_..._secret_...",
+  "publishableKey": "pk_...",
+  "totalCents": 5000
+}
+```
+
+`clientSecret`/`publishableKey` are handed to Stripe.js client-side
+(`stripe.confirmCardPayment(clientSecret, ...)`) — a buyer's card details
+are only ever sent directly from the browser to Stripe, never through this
+backend. This is a *destination charge*: the PaymentIntent's own `amount`
+is `totalCents` (what the buyer is charged), `application_fee_amount` is
+the full `commissionCents` (kept in higglehaven's own Stripe balance —
+same formula as "Commission math" above, computed from this same
+`totalCents`), and `transfer_data.destination` is the seller's connected
+account, to which Stripe automatically transfers the remainder
+(`totalCents - commissionCents`, the seller's real-money ~98% share). The
+PaymentIntent's `metadata` records `instanceId`/`quantity`/`buyerLabel` —
+authoritative at confirm time below, not re-derived from anything the
+confirm request itself claims.
+
+Once `stripe.confirmCardPayment` resolves successfully client-side, call
+`POST /api/instances/:instanceId/purchase` again — same endpoint as the
+simulated flow, but with `{ "paymentIntentId": "pi_..." }` in the body
+instead of `quantity`/`buyerLabel` (those come from the PaymentIntent's own
+metadata, not this request). This is the server-side confirmation step: it
+retrieves the PaymentIntent from Stripe, requires `status === "succeeded"`
+and that its `metadata.instanceId` matches the URL's `instanceId`, then
+credits the builder and writes the `purchases` row exactly like a
+simulated purchase — `totalCents` for the commission math comes from the
+PaymentIntent's own `amount` (what Stripe actually confirms was charged),
+never recomputed from the current catalog price. `409` if this
+PaymentIntent has already been applied to a purchase (a retried confirm
+call, or two concurrent ones, can't double-credit — enforced atomically by
+a `UNIQUE` index on `purchases.stripe_payment_intent_id`, `migrations
+/0069_purchase_stripe_payment_intent.sql`, not just this endpoint's own
+pre-check). `400` if the PaymentIntent hasn't succeeded yet, or belongs to
+a different instance. `503` if Stripe isn't configured.
+
 ### Frontend wiring
 
 Shop mode's proximity-tracked nearest-instance hint column
 (`updateReviewFade` in `src/main.js`, shared with "Product reviews" and
-"Product pricing" above) gains a "Simulate Purchase" button
-(`#shop-buy-hint`), shown only when the nearest instance's template has a
-price set. Clicking it confirms the simulated charge (making the no-real-
-money nature explicit in the copy itself) before calling `purchaseInstance`
-(`src/api.js`).
+"Product pricing" above) gains a "Buy" button (`#shop-buy-hint`), shown
+only when the nearest instance's template has a price set. Clicking it
+calls `createPurchaseIntent` (`src/api.js`) first: `configured: false`
+falls back to the original confirm()-dialog simulated flow unchanged
+(making the no-real-money nature explicit in the copy, before calling
+`purchaseInstance`); `sellerReady: false` shows a plain alert instead of
+opening checkout; otherwise it opens `#checkout-modal`, a small Stripe
+Elements card form (Stripe.js loaded lazily, only the first time it's
+actually needed), and on a successful `confirmCardPayment` calls
+`purchaseInstance` again with the resulting `paymentIntentId` to finish
+the purchase server-side.
 
 ### Testing note
 
@@ -3822,7 +3898,21 @@ request body (including the anonymous-default-quantity-1 case for a missing
 body), the commission math (including the 0.5% floor edge case and
 confirming `platformShareCents` never goes negative), the real ledger/
 balance credit, the `GET /api/purchases` listing, and a malformed-JSON body
-failing cleanly rather than with a raw parse error.
+failing cleanly rather than with a raw parse error. `worker/stripe-checkout
+.test.js` covers everything reachable without an actual Stripe network call
+— the same limit `worker/stripe-connect.test.js` already established (the
+test environment never configures a real `STRIPE_SECRET_KEY`, and this
+suite runs inside workerd via `@cloudflare/vitest-pool-workers`, not a
+mockable Node/jsdom `fetch`): `purchase-intent`'s `configured: false` shape
+with no key set at all, its `sellerReady: false` shape once a fake key is
+set but the seller hasn't finished onboarding, the confirm endpoint's
+`409` on an already-applied `stripe_payment_intent_id` (the DB check runs
+before any Stripe call), and that a Stripe-ready seller's product rejects
+the old simulated purchase shape with `400`. Actually creating/retrieving
+a PaymentIntent (a real Stripe call) is outside what this environment can
+exercise automatically — verified by direct code reading against Stripe's
+own documented PaymentIntent/destination-charge API shape instead, same as
+`buildStripeIndividualParams`/`stripeRequest` themselves were for #452.
 `e2e/simulated-purchases.test.mjs` exercises the same flow through the real
 Seller-modal upload UI for the priced product, then the purchase API the
 in-world hint calls — the hint's own in-world click isn't reachable without

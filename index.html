@@ -2615,6 +2615,74 @@
         background: rgb(var(--ink-rgb) / 0.15);
         color: var(--pill-text);
       }
+      /* Real checkout (#453) — a buyer's card details are only ever typed
+         into Stripe's own iframe (mounted into #checkout-card-element by
+         Stripe Elements, see registerStripeCheckout in src/main.js), never
+         into a field this page itself controls. Same modal shape as
+         #auth-modal above. */
+      #checkout-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #checkout-modal.visible {
+        display: flex;
+      }
+      #checkout-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #checkout-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #checkout-summary {
+        font-size: 13px;
+        color: var(--pill-text-soft);
+      }
+      #checkout-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #checkout-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #checkout-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #checkout-status.error {
+        color: #b3402c;
+      }
+      #checkout-form > button[type='submit'] {
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 14px/1.4 sans-serif;
+      }
+      #checkout-form > button[type='submit']:disabled {
+        opacity: 0.6;
+      }
     </style>
   </head>
   <body>
@@ -2626,7 +2694,7 @@
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
     <div id="shop-product-info" class="shop-ui"></div>
-    <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
+    <button id="shop-buy-hint" class="shop-ui" type="button">Buy</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <button id="shop-fly-btn" class="shop-ui" type="button">&#9992;&#65039;</button>
@@ -2927,6 +2995,18 @@
         <div id="claim-modal-actions">
           <button id="claim-refresh-btn" type="button">Refresh</button>
         </div>
+      </div>
+    </div>
+    <div id="checkout-modal">
+      <div id="checkout-modal-content">
+        <button id="checkout-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Checkout</h2>
+        <div id="checkout-summary"></div>
+        <form id="checkout-form">
+          <div id="checkout-card-element"></div>
+          <div id="checkout-status"></div>
+          <button id="checkout-submit-btn" type="submit">Pay</button>
+        </form>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

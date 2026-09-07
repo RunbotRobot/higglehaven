@@ -370,7 +370,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'instances') {
-    return handleInstances(request, env.DB, route, url);
+    return handleInstances(request, env.DB, route, url, env);
   }
 
   if (route[0] === 'models' && route.length === 1) {
@@ -4869,7 +4869,7 @@ async function explainClaimConflict(db, landletId, builderId) {
   throw new HttpError('Landlet could not be claimed', 409);
 }
 
-async function handleInstances(request, db, route, url) {
+async function handleInstances(request, db, route, url, env) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
@@ -5087,8 +5087,12 @@ async function handleInstances(request, db, route, url) {
     return handleCalendarEvents(request, db, route);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase-intent') {
+    return handleInstancePurchaseIntent(request, db, env, route[1]);
+  }
+
   if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase') {
-    return handleInstancePurchase(request, db, route[1]);
+    return handleInstancePurchase(request, db, env, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5307,15 +5311,28 @@ function isoDateString(value, field) {
   return new Date(text).toISOString();
 }
 
-// Simulated purchases (docs/SPEC.md §5's "Universal commission formula,"
-// migrations/0051) — see that migration's own comment for why this exists
-// and why it is explicitly NOT real commerce (no real payment is ever
-// processed; a shopper is charged nothing). This is the actual mechanism
-// that credits a builder's dállers balance and land-cap-feeding earnings
-// ledger when a shopper "buys" a product placed on their lándlet — the one
-// concrete dáller-earning path docs/SPEC.md §5 treats as PRIMARY (auction
-// sale proceeds, migrations/0045, are the only other one this backend
-// implements).
+// Purchases (docs/SPEC.md §5's "Universal commission formula," migrations
+// /0051) — this is the actual mechanism that credits a builder's dállers
+// balance and land-cap-feeding earnings ledger when a shopper "buys" a
+// product placed on their lándlet, the one concrete dáller-earning path
+// docs/SPEC.md §5 treats as PRIMARY (auction sale proceeds, migrations
+// /0045, are the only other one this backend implements). Originally a
+// pure dev-mode simulation (no real payment, a shopper charged nothing —
+// see migrations/0051's own comment for that history); #453 adds a real
+// path alongside it once Stripe is configured server-wide AND the
+// template's seller has finished Connect Custom onboarding (#452): a
+// buyer is actually charged via a Stripe PaymentIntent
+// (application_fee_amount + transfer_data to the seller's own connected
+// account, so the seller keeps ~98% as real money and the platform's
+// ~2% commission lands in higglehaven's own Stripe balance), and only a
+// successful PaymentIntent's own confirmed amount ever credits anything
+// here. Both paths share the exact same commission math
+// (computePurchaseShares below) so a real charge and a simulated one
+// always agree on how a given totalCents splits — and once a seller IS
+// Stripe-ready, the simulated path is no longer offered for their
+// products at all (see handleInstancePurchase's own guard), so a client
+// can't just skip straight to free simulated credit once real money is
+// on the table.
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
 const PURCHASE_BUILDER_SPLIT = 0.5; // "Universal 50/50 split"
 const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
@@ -5345,55 +5362,12 @@ const MAX_MONEY_CENTS = 100_000_000;
 // sibling mutation this dev-mode backend has already locked down today.
 const PURCHASE_RATE_LIMIT_MAX = 30;
 
-async function handleInstancePurchase(request, db, instanceId) {
-  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
-  const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-  if (!instance) return json({ error: 'Instance not found' }, 404);
-  const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
-  if (!template) return json({ error: 'Catalog template not found' }, 404);
-  if (template.price_cents == null) {
-    throw new HttpError('This product has no price set and cannot be purchased', 400);
-  }
-  const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
-  if (!landlet?.owner_builder_id) {
-    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400);
-  }
-
-  // quantity/buyerLabel are both genuinely optional, and this endpoint has
-  // no other required fields, so a missing or empty body is just "buy one,
-  // anonymously" rather than an error — read it directly instead of through
-  // the shared readJson (which rejects a missing content-type/body).
-  let input = {};
-  const contentType = request.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const text = await request.text();
-    if (text) {
-      try {
-        input = JSON.parse(text);
-      } catch {
-        throw new HttpError('Request body is not valid JSON', 400);
-      }
-    }
-  }
-  return finishPurchase(db, instance, template, landlet, input);
-}
-
-async function finishPurchase(db, instance, template, landlet, input) {
-  const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
-  // Capped as a sanity bound against a malformed/abusive request producing
-  // an absurd totalCents (and the dállers-balance/land-cap credit that
-  // flows from it) — not itself a spec requirement, same reasoning as
-  // durationHours' cap above. This endpoint has no session (see
-  // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
-  // there's no real payment backing it), so quantity was the only thing
-  // standing between one request and an unbounded credit before this cap;
-  // the checkRateLimit call above closes the other half of that gap
-  // (repeated smaller requests instead of one large one).
-  if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
-  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
-
-  const unitPriceCents = template.price_cents;
-  const totalCents = unitPriceCents * quantity;
+// Shared by both the real (Stripe) and simulated purchase paths — however
+// totalCents was actually arrived at (a confirmed PaymentIntent's own
+// .amount, or unitPriceCents * quantity for a simulated buy), the
+// commission/builder/platform split is computed identically so the two
+// paths can never disagree about how a given total divides up.
+function computePurchaseShares(totalCents) {
   const commissionCents = Math.round(totalCents * PURCHASE_COMMISSION_RATE);
   const builderShareCents = Math.max(
     Math.round(commissionCents * PURCHASE_BUILDER_SPLIT),
@@ -5404,6 +5378,176 @@ async function finishPurchase(db, instance, template, landlet, input) {
   // itself (only possible on an unusually low commission rate), the
   // platform's own share is 0, never negative.
   const platformShareCents = Math.max(commissionCents - builderShareCents, 0);
+  return { commissionCents, builderShareCents, platformShareCents };
+}
+
+// Shared instance/template/landlet lookup + validation for the
+// purchase-intent and purchase endpoints — identical checks either way.
+async function loadPurchasableInstance(db, instanceId) {
+  const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+  if (!instance) throw new HttpError('Instance not found', 404);
+  const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
+  if (!template) throw new HttpError('Catalog template not found', 404);
+  if (template.price_cents == null) {
+    throw new HttpError('This product has no price set and cannot be purchased', 400);
+  }
+  const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
+  if (!landlet?.owner_builder_id) {
+    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400);
+  }
+  return { instance, template, landlet };
+}
+
+// quantity/buyerLabel are both genuinely optional, and neither endpoint
+// below has any other required field, so a missing or empty body just
+// means "one, anonymously" rather than an error — read directly instead
+// of through the shared readJson (which rejects a missing content-type/
+// body).
+async function readOptionalJsonBody(request) {
+  const contentType = request.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) return {};
+  const text = await request.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new HttpError('Request body is not valid JSON', 400);
+  }
+}
+
+// Capped as a sanity bound against a malformed/abusive request producing
+// an absurd totalCents (and the dállers-balance/land-cap credit that
+// flows from it) — not itself a spec requirement, same reasoning as
+// durationHours' cap elsewhere. Neither endpoint below requires a shopper
+// session (see docs/API.md — deliberately unauthenticated, matching the
+// pre-#453 simulated design; a real Stripe charge is still gated behind
+// checkRateLimit + Stripe's own Radar fraud detection on PaymentIntent
+// creation), so quantity was the only thing standing between one request
+// and an unbounded credit before this cap; checkRateLimit closes the
+// other half (repeated smaller requests instead of one large one).
+function validatedPurchaseQuantity(input) {
+  const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
+  if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
+  return quantity;
+}
+
+// Whether stripeConfigured(env) AND this template's own seller has
+// finished Connect Custom onboarding — the point past which real payment
+// is required and the old simulated path is no longer offered (see
+// handleInstancePurchase's own guard below). A template with no sellerId
+// at all (an admin/system-owned placeholder item, per purchases' own
+// schema comment) can never have a connected Stripe account, so it always
+// stays on the simulated path regardless of server-wide Stripe config.
+async function sellerStripeReady(db, env, sellerId) {
+  if (!stripeConfigured(env) || !sellerId) return null;
+  const seller = await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+    .bind(sellerId).first();
+  if (!seller?.stripe_account_id || seller.stripe_onboarding_status !== 'complete') return { ready: false };
+  return { ready: true, stripeAccountId: seller.stripe_account_id };
+}
+
+// Creates a real Stripe PaymentIntent for a purchase, ahead of any DB
+// write — the write itself only ever happens once handleInstancePurchase
+// below confirms this PaymentIntent actually succeeded. A destination
+// charge: application_fee_amount is the commission (kept in higglehaven's
+// own Stripe balance; the builder's dáller share of it is credited
+// separately below, not moved as real money), and Stripe automatically
+// transfers the remainder (totalCents - commissionCents, the seller's
+// ~98%) to transfer_data.destination.
+async function handleInstancePurchaseIntent(request, db, env, instanceId) {
+  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
+  const { instance, template } = await loadPurchasableInstance(db, instanceId);
+  const input = await readOptionalJsonBody(request);
+  const quantity = validatedPurchaseQuantity(input);
+  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
+
+  const stripeReady = await sellerStripeReady(db, env, template.seller_id);
+  if (!stripeReady) return json({ configured: false });
+  if (!stripeReady.ready) return json({ configured: true, sellerReady: false });
+
+  const totalCents = template.price_cents * quantity;
+  const { commissionCents } = computePurchaseShares(totalCents);
+  const paymentIntent = await stripeRequest(env, 'POST', 'payment_intents', {
+    amount: totalCents,
+    currency: 'usd',
+    application_fee_amount: commissionCents,
+    transfer_data: { destination: stripeReady.stripeAccountId },
+    automatic_payment_methods: { enabled: 'true' },
+    // Authoritative at confirm time (handleInstancePurchase re-derives
+    // quantity/instanceId from these rather than trusting the confirm
+    // request's own body) — a buyer's card details never pass through
+    // this backend at all; only Stripe.js talks to Stripe directly with
+    // them, using this PaymentIntent's client_secret.
+    metadata: { instanceId: instance.instance_id, quantity: String(quantity), buyerLabel: buyerLabel || '' },
+  });
+
+  return json({
+    configured: true,
+    sellerReady: true,
+    clientSecret: paymentIntent.client_secret,
+    publishableKey: env.STRIPE_PUBLISHABLE_KEY || null,
+    totalCents,
+  });
+}
+
+async function handleInstancePurchase(request, db, env, instanceId) {
+  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
+  const { instance, template, landlet } = await loadPurchasableInstance(db, instanceId);
+  const input = await readOptionalJsonBody(request);
+
+  if (input.paymentIntentId) {
+    return finishRealPurchase(db, env, instance, template, landlet, stringValue(input.paymentIntentId, 'paymentIntentId'));
+  }
+
+  // Once this seller is Stripe-ready, real payment is required — a client
+  // can no longer just omit paymentIntentId to get free simulated credit
+  // once actual money is on the table for this product.
+  const stripeReady = await sellerStripeReady(db, env, template.seller_id);
+  if (stripeReady?.ready) {
+    throw new HttpError('This product requires real payment — create a purchase-intent first', 400);
+  }
+
+  const quantity = validatedPurchaseQuantity(input);
+  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
+  const unitPriceCents = template.price_cents;
+  const totalCents = unitPriceCents * quantity;
+  return finishPurchase(db, instance, template, landlet, {
+    quantity, unitPriceCents, totalCents, buyerLabel, stripePaymentIntentId: null,
+  });
+}
+
+// Verifies a PaymentIntent this same server created (handleInstancePurchaseIntent
+// above) actually succeeded before ever crediting anything — a buyer's
+// client-side stripe.confirmCardPayment() call only proves the CARD
+// succeeded from the browser's point of view; this is the server-side
+// confirmation that Stripe itself agrees, using the authoritative
+// quantity/instanceId this PaymentIntent's own metadata was created with
+// rather than trusting anything in the confirm request's own body.
+async function finishRealPurchase(db, env, instance, template, landlet, paymentIntentId) {
+  if (!stripeConfigured(env)) throw new HttpError('Stripe is not configured on this server', 503);
+  const existing = await db.prepare('SELECT purchase_id FROM purchases WHERE stripe_payment_intent_id = ?')
+    .bind(paymentIntentId).first();
+  if (existing) throw new HttpError('This payment has already been applied to a purchase', 409);
+
+  const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`);
+  if (paymentIntent.status !== 'succeeded') {
+    throw new HttpError(`Payment has not succeeded yet (status: ${paymentIntent.status})`, 400);
+  }
+  if (paymentIntent.metadata?.instanceId !== instance.instance_id) {
+    throw new HttpError('This payment does not match this instance', 400);
+  }
+
+  const quantity = positiveInteger(paymentIntent.metadata.quantity, 'quantity');
+  const totalCents = paymentIntent.amount;
+  const unitPriceCents = Math.round(totalCents / quantity);
+  const buyerLabel = paymentIntent.metadata.buyerLabel || null;
+  return finishPurchase(db, instance, template, landlet, {
+    quantity, unitPriceCents, totalCents, buyerLabel, stripePaymentIntentId: paymentIntentId,
+  });
+}
+
+async function finishPurchase(db, instance, template, landlet, { quantity, unitPriceCents, totalCents, buyerLabel, stripePaymentIntentId }) {
+  const { commissionCents, builderShareCents, platformShareCents } = computePurchaseShares(totalCents);
 
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
@@ -5411,10 +5555,11 @@ async function finishPurchase(db, instance, template, landlet, input) {
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
+         stripe_payment_intent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
-      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents),
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, stripePaymentIntentId),
     db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
@@ -5561,6 +5706,7 @@ function purchaseFromRow(row) {
     commissionCents: row.commission_cents,
     builderShareCents: row.builder_share_cents,
     platformShareCents: row.platform_share_cents,
+    stripePaymentIntentId: row.stripe_payment_intent_id,
     createdAt: row.created_at,
     refundedAt: row.refunded_at,
   };

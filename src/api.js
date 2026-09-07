@@ -703,14 +703,38 @@ export async function resolveAuctionNow(auctionId) {
 // Simulated purchases (see migrations/0051_purchases.sql) — a dev-mode-only
 // "buy" that never charges anything real, but does run the actual
 // commission math and credit a real builder, completing the earning loop
-// land cap (migrations/0050) is normalized against.
-export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
+// land cap (migrations/0050) is normalized against. Once a product's own
+// seller has finished Stripe Connect onboarding (#453, "Real checkout
+// (Stripe)" in docs/API.md), this same endpoint instead finishes a real
+// checkout — pass `paymentIntentId` (from a successful
+// stripe.confirmCardPayment(), via createPurchaseIntent below) instead of
+// quantity/buyerLabel, which come from that PaymentIntent's own metadata
+// server-side, not this call.
+export async function purchaseInstance(instanceId, { quantity, buyerLabel, paymentIntentId } = {}) {
   const { purchase } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(paymentIntentId ? { paymentIntentId } : { quantity, buyerLabel }),
+  });
+  return purchase;
+}
+
+// First step of a real checkout (#453) — creates a Stripe PaymentIntent
+// server-side without writing anything to the database yet. Response
+// shape varies with how Stripe-ready this product's seller is:
+// `{configured:false}` (fall back to the plain simulated purchaseInstance
+// call above), `{configured:true, sellerReady:false}` (this seller hasn't
+// finished Connect onboarding — can't check out for real yet), or
+// `{configured:true, sellerReady:true, clientSecret, publishableKey,
+// totalCents}` — hand clientSecret/publishableKey to Stripe.js, then call
+// purchaseInstance with the resulting paymentIntentId once
+// stripe.confirmCardPayment() succeeds.
+export async function createPurchaseIntent(instanceId, { quantity, buyerLabel } = {}) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase-intent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ quantity, buyerLabel }),
   });
-  return purchase;
 }
 
 // The list is capped at 100 rows server-side (no pagination) — totalCount
