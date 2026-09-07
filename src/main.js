@@ -36,6 +36,8 @@ import {
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
+  fetchSellerStripeAccount,
+  submitSellerStripeAccount,
   fetchAllLandlets,
   fetchNotifications,
   fetchUnreadNotificationCount,
@@ -3902,6 +3904,10 @@ function renderSettingsSection() {
     renderBuildSettingsSection();
     return;
   }
+  if (activeSettingsTab === 'sell') {
+    renderSellSettingsSection();
+    return;
+  }
 
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
@@ -4161,6 +4167,131 @@ function renderBuildSettingsSection() {
   });
 
   renderVersionHistory();
+}
+
+// Seller-facing Stripe Connect Custom account onboarding (#452, first leaf
+// under #347/#324's real-money payment processing — owner-confirmed
+// account type: Custom, meaning Stripe stays entirely invisible to the
+// seller and higglehaven builds this form itself, rather than redirecting
+// to a Stripe-hosted page). Lives under the Sell settings tab since it's a
+// seller-identity concern, not tied to any one landlet the way Build's
+// Publish/Auction sections are.
+async function renderSellSettingsSection() {
+  const statusField = document.createElement('div');
+  statusField.className = 'settings-field';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Payout Account';
+  statusField.appendChild(statusLabel);
+  const statusNote = document.createElement('div');
+  statusNote.className = 'settings-empty-note';
+  statusNote.textContent = 'Loading…';
+  statusField.appendChild(statusNote);
+  settingsSectionEl.appendChild(statusField);
+
+  const formField = document.createElement('div');
+  formField.className = 'settings-field';
+  settingsSectionEl.appendChild(formField);
+
+  let account;
+  try {
+    account = await fetchSellerStripeAccount();
+  } catch (err) {
+    statusNote.textContent = err.message || 'Could not load your payout account status.';
+    statusNote.classList.add('error');
+    return;
+  }
+
+  function describeStatus() {
+    if (!account.configured) {
+      return "Stripe payouts aren't set up on this server yet — check back later.";
+    }
+    if (account.status === 'complete') return 'Your payout account is fully set up.';
+    if (account.status === 'requirements_due') {
+      return `Stripe needs more information: ${account.requirementsCurrentlyDue.join(', ')}`;
+    }
+    if (account.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
+    if (account.connected) return 'Your account was created — verification is pending.';
+    return 'Not set up yet. Real-money sales are held until this is complete.';
+  }
+
+  statusNote.textContent = describeStatus();
+  statusNote.classList.remove('error');
+
+  const fields = [
+    ['firstName', 'First name', 'text'],
+    ['lastName', 'Last name', 'text'],
+    ['dobDay', 'Birth day', 'number'],
+    ['dobMonth', 'Birth month', 'number'],
+    ['dobYear', 'Birth year', 'number'],
+    ['ssnLast4', 'SSN (last 4 digits)', 'text'],
+    ['addressLine1', 'Street address', 'text'],
+    ['addressCity', 'City', 'text'],
+    ['addressState', 'State', 'text'],
+    ['addressPostalCode', 'ZIP code', 'text'],
+    ['addressCountry', 'Country (2-letter code)', 'text'],
+    ['routingNumber', 'Bank routing number', 'text'],
+    ['accountNumber', 'Bank account number', 'text'],
+  ];
+  const inputs = {};
+  const form = document.createElement('div');
+  form.className = 'stripe-onboarding-form';
+  for (const [key, fieldLabel, type] of fields) {
+    const label = document.createElement('label');
+    label.textContent = fieldLabel;
+    const input = document.createElement('input');
+    input.type = type;
+    if (key === 'addressCountry') input.value = 'US';
+    if (key === 'dobMonth') { input.min = '1'; input.max = '12'; }
+    if (key === 'dobDay') { input.min = '1'; input.max = '31'; }
+    label.appendChild(input);
+    form.appendChild(label);
+    inputs[key] = input;
+  }
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'version-action-btn';
+  submitBtn.textContent = account.connected ? 'Update payout account' : 'Set up payout account';
+  form.appendChild(submitBtn);
+  const formStatus = document.createElement('div');
+  formStatus.className = 'settings-empty-note';
+  form.appendChild(formStatus);
+
+  submitBtn.addEventListener('click', async () => {
+    formStatus.textContent = '';
+    formStatus.classList.remove('error');
+    submitBtn.disabled = true;
+    try {
+      account = await submitSellerStripeAccount({
+        individual: {
+          firstName: inputs.firstName.value,
+          lastName: inputs.lastName.value,
+          dobDay: Number(inputs.dobDay.value),
+          dobMonth: Number(inputs.dobMonth.value),
+          dobYear: Number(inputs.dobYear.value),
+          ssnLast4: inputs.ssnLast4.value,
+          addressLine1: inputs.addressLine1.value,
+          addressCity: inputs.addressCity.value,
+          addressState: inputs.addressState.value,
+          addressPostalCode: inputs.addressPostalCode.value,
+          addressCountry: inputs.addressCountry.value,
+        },
+        externalAccount: {
+          routingNumber: inputs.routingNumber.value,
+          accountNumber: inputs.accountNumber.value,
+          currency: 'usd',
+        },
+      });
+      statusNote.textContent = describeStatus();
+      formStatus.textContent = 'Submitted.';
+    } catch (err) {
+      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.classList.add('error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  formField.appendChild(form);
 }
 
 function formatDallers(cents) {
