@@ -45,12 +45,16 @@ async function fetchJson(pathAndQuery) {
 
 // Delay only the first PATCH to this template — the "Save Digital Good"
 // click below — so there's a deterministic window in which to close and
-// reopen the modal before it resolves.
+// reopen the modal before it resolves. 3000ms (not the original 1500ms)
+// gives the "still disabled" check below — which fires after a fixed
+// ~1000ms of its own waits, not a poll — comfortable margin against a
+// slower CI runner; the "re-enabled" check further down polls instead of
+// sleeping a matching fixed duration, so it isn't sensitive to this value.
 let patchCount = 0;
 await page.route('**/api/catalog/*', async (route) => {
   if (route.request().method() === 'PATCH') {
     patchCount++;
-    if (patchCount === 1) await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (patchCount === 1) await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   await route.continue();
 });
@@ -85,9 +89,21 @@ const shippingDisabledWhileDigitalGoodPending = await saveShippingBtn().isDisabl
 console.log('Save Shipping disabled on the freshly reopened row while the pre-reopen Save Digital Good PATCH is still in flight (should be true):', shippingDisabledWhileDigitalGoodPending);
 
 // Wait for PATCH #1 to resolve, which should re-enable the buttons on
-// THIS (the currently visible, post-reopen) row.
-await page.waitForTimeout(1500);
-const shippingEnabledAfterDigitalGoodResolves = await saveShippingBtn().isEnabled();
+// THIS (the currently visible, post-reopen) row. Polled (same idiom as
+// digital-goods.test.mjs's own "Saved." wait) rather than a fixed sleep
+// matched to the 1500ms delay injected above — a bare `waitForTimeout`
+// here left zero margin for real CI-runner jitter (this shard's own
+// dev-server startup cost, host load, etc.), so a resolution landing even
+// slightly past 1500ms read as a false failure instead of what it was:
+// the fix working, just a bit slower than the fixed sleep assumed.
+await page.waitForFunction(
+  () => {
+    const btn = Array.from(document.querySelectorAll('.seller-row button')).find((el) => el.textContent === 'Save Shipping');
+    return !!btn && !btn.disabled;
+  },
+  { timeout: 10000 },
+);
+const shippingEnabledAfterDigitalGoodResolves = true;
 console.log('Save Shipping re-enabled on the reopened row once the earlier save resolves (should be true):', shippingEnabledAfterDigitalGoodResolves);
 
 await saveShippingBtn().click();
