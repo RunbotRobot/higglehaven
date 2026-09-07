@@ -48,6 +48,56 @@ describe('Landlet updates', () => {
     expect(stillClaimable.response.status).toBe(200);
   });
 
+  it('does not let a concurrent claim be reverted by a racing PATCH', async () => {
+    // Fired together, not awaited one at a time — PATCH's own read of the
+    // still-unowned row and its later write straddle the claim's write in
+    // an unfixed version, letting the claim's status/owner_builder_id get
+    // silently pinned back to the stale unowned values PATCH read earlier
+    // (the request even reports 200, no trace anything was reverted).
+    await createGreenbeltLandlet('patch-claim-race-landlet');
+    const claimer = await signupBuilder('patch-claim-race-claimer');
+    const [patched, claimed] = await Promise.all([
+      api('/landlets/patch-claim-race-landlet', {
+        method: 'PATCH', body: JSON.stringify({ name: 'Renamed mid-race' }),
+      }),
+      api('/landlets/patch-claim-race-landlet/claim', claimer.session({ method: 'POST' })),
+    ]);
+    expect(claimed.response.status).toBe(200);
+    // A PATCH that loses the race gets a 409 instead of silently no-op'ing
+    // over the claim; one that fully completes before the claim starts is
+    // untouched by any of this and still succeeds normally.
+    expect([200, 409]).toContain(patched.response.status);
+
+    const stored = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('patch-claim-race-landlet').first();
+    expect(stored.status).toBe('claimed');
+    expect(stored.owner_builder_id).toBe(claimer.builderId);
+  });
+
+  it('does not let a concurrent claim be reverted (or the newly-claimed land deleted) by a racing DELETE', async () => {
+    await createGreenbeltLandlet('delete-claim-race-landlet');
+    const claimer = await signupBuilder('delete-claim-race-claimer');
+    const [deleted, claimed] = await Promise.all([
+      api('/landlets/delete-claim-race-landlet', { method: 'DELETE' }),
+      api('/landlets/delete-claim-race-landlet/claim', claimer.session({ method: 'POST' })),
+    ]);
+    const stored = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('delete-claim-race-landlet').first();
+    if (claimed.response.status === 200) {
+      // The claim won — the landlet must still exist, claimed, not
+      // silently deleted out from under its brand-new owner.
+      expect(stored).not.toBeNull();
+      expect(stored.status).toBe('claimed');
+      expect(stored.owner_builder_id).toBe(claimer.builderId);
+    } else {
+      // The delete won first — the claim correctly found nothing left to claim.
+      expect(deleted.response.status).toBe(200);
+      expect(stored).toBeNull();
+    }
+  });
+
   it('still allows other field updates on an unowned landlet via PUT/PATCH', async () => {
     await createGreenbeltLandlet('unowned-rename-landlet');
     const renamed = await api('/landlets/unowned-rename-landlet', {
