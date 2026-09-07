@@ -2425,10 +2425,10 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const rejected = await api('/instances/not-a-calendar-instance/events', {
+    const rejected = await api('/instances/not-a-calendar-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/not marked as a community calendar/);
   });
@@ -2450,26 +2450,45 @@ describe('Community calendar', () => {
     expect(emptyList.response.status).toBe(200);
     expect(emptyList.body.events).toEqual([]);
 
-    const missingText = await api('/instances/calendar-with-events/events', {
+    // docs/SPEC.md §6: calendar events are builder-authored, unlike sign
+    // posts — POST requires a session logged in as the hosting landlet's
+    // own owner, unlike GET/the sign-posts POST above.
+    const unauthenticated = await api('/instances/calendar-with-events/events', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder' }),
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
     });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const otherBuilder = await signupBuilder('community-calendar-other-builder');
+    const wrongBuilder = await api('/instances/calendar-with-events/events', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
+    expect(wrongBuilder.response.status).toBe(403);
+
+    const missingText = await api('/instances/calendar-with-events/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
     expect(missingText.response.status).toBe(400);
 
-    const tooLong = await api('/instances/calendar-with-events/events', {
+    const tooLong = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'x'.repeat(281) }),
-    });
+      body: JSON.stringify({ text: 'x'.repeat(281) }),
+    }));
     expect(tooLong.response.status).toBe(400);
 
-    const posted = await api('/instances/calendar-with-events/events', {
+    // authorLabel is not client-supplied — it's derived from the session
+    // builder's own label, even if a client tries to send a different one
+    // (impersonation is exactly the bug this gate closes).
+    const posted = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ authorLabel: 'Someone Else Entirely', text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(posted.response.status).toBe(201);
     expect(posted.body.event).toMatchObject({
       instanceId: 'calendar-with-events',
-      authorLabel: 'A Builder',
+      authorLabel: calendarBuilder.builder.label,
       text: 'Bonfire night, Friday 8pm!',
     });
     expect(posted.body.event.eventId).toMatch(/^event-/);
@@ -2505,10 +2524,10 @@ describe('Community calendar', () => {
         isCommunityCalendar: true,
       }),
     }));
-    await api('/instances/calendar-to-delete/events', {
+    await api('/instances/calendar-to-delete/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Market day' }),
-    });
+      body: JSON.stringify({ text: 'Market day' }),
+    }));
     await api('/instances/calendar-to-delete', calendarBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/calendar-to-delete/events');
@@ -2528,23 +2547,23 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const plain = await api('/instances/calendar-scheduled-instance/events', {
+    const plain = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     expect(plain.body.event.scheduledAt).toBeNull();
     expect(plain.body.event.triggeredAt).toBeNull();
 
-    const invalid = await api('/instances/calendar-scheduled-instance/events', {
+    const invalid = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bad date', scheduledAt: 'not a date' }),
-    });
+      body: JSON.stringify({ text: 'Bad date', scheduledAt: 'not a date' }),
+    }));
     expect(invalid.response.status).toBe(400);
 
-    const scheduled = await api('/instances/calendar-scheduled-instance/events', {
+    const scheduled = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
+    }));
     expect(scheduled.response.status).toBe(201);
     expect(scheduled.body.event.scheduledAt).toBe('2026-08-26T20:00:00.000Z');
     expect(scheduled.body.event.triggeredAt).toBeNull();
@@ -2563,20 +2582,20 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const future = await api('/instances/calendar-trigger-instance/events', {
+    const future = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
     const futureEventId = future.body.event.eventId;
     const notDueYet = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
     expect(notDueYet.response.status).toBe(200);
     expect(notDueYet.body.triggered).toBe(false);
     expect(notDueYet.body.event.triggeredAt).toBeNull();
 
-    const noSchedule = await api('/instances/calendar-trigger-instance/events', {
+    const noSchedule = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     const noScheduleTrigger = await api(`/instances/calendar-trigger-instance/events/${noSchedule.body.event.eventId}/trigger`, { method: 'POST' });
     expect(noScheduleTrigger.body.triggered).toBe(false);
 
@@ -2620,10 +2639,10 @@ describe('Community calendar', () => {
         isCommunityCalendar: true,
       }),
     }));
-    const created = await api('/instances/calendar-race-instance/events', {
+    const created = await api('/instances/calendar-race-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
     const eventId = created.body.event.eventId;
     await env.DB.prepare(`UPDATE calendar_events SET scheduled_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?`).bind(eventId).run();
 

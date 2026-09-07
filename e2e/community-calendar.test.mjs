@@ -1,16 +1,17 @@
 // Community calendar (docs/SPEC.md §6: "Community calendar reuses the
 // identical pattern [as community signs], builder-authored") — structurally
-// a twin of community signs (e2e/community-signs.test.mjs): a builder flags
-// a placed instance via the "Community Calendar" toggle, and shoppers can
-// then leave short event postings on it (rendered in-world as fading
-// floating text in Shop mode, via the same updateCalendarFade/
-// makeSignPostSprite machinery signs use — not covered here for the same
-// reason: real camera movement and native browser dialogs are exercised
-// manually instead, documented in docs/API.md). This test covers the
-// pieces that ARE reliably automatable: the build-mode toggle-then-manage
-// button, the Manage Events moderation panel (#calendar-events-modal,
-// including its own "Remove Community Calendar" button), and the backend
-// calendar-events API all three unlock.
+// a near-twin of community signs (e2e/community-signs.test.mjs), but unlike
+// signs' anonymous shopper-authored posts, only the hosting landlet's own
+// builder may post an event (rendered in-world as fading floating text in
+// Shop mode, via the same updateCalendarFade/makeSignPostSprite machinery
+// signs use — not covered here for the same reason: real camera movement
+// and native browser dialogs are exercised manually instead, documented in
+// docs/API.md). This test covers the pieces that ARE reliably automatable:
+// the build-mode toggle-then-manage button, the Manage Events moderation
+// panel (#calendar-events-modal, including its own "Remove Community
+// Calendar" button), and the backend calendar-events API all three unlock
+// — posting here as the landlet's own owner (this browser's logged-in
+// identity, per claimLandlet below), the only identity actually allowed to.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Community Calendar Suite Tester';
@@ -53,18 +54,23 @@ console.log('isCommunityCalendar persisted after toggling on (should be true):',
 
 // Leave a couple of events via the same API the in-world "Add an Event"
 // button calls (createCalendarEvent in src/api.js), then list them back.
+// No authorLabel in the request bodies — docs/SPEC.md §6 calls calendar
+// events "builder-authored," so the server now derives it from this
+// browser's own logged-in builder session (the landlet's owner, per
+// claimLandlet above) rather than accepting client-supplied free text;
+// both events below end up with the identical real authorLabel (LABEL).
 await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
+  body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
 });
 await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'Another Builder', text: 'Market day, Saturday morning.' }),
+  body: JSON.stringify({ text: 'Market day, Saturday morning.' }),
 });
 const { events } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
-console.log('events on the calendar (should be 2, oldest first):', events.map((e) => `${e.authorLabel}: ${e.text}`));
+console.log('events on the calendar (should be 2, oldest first, both authored by the real logged-in builder):', events.map((e) => `${e.authorLabel}: ${e.text}`));
 
 // A second click on the same (still-selected) button now opens Manage
 // Events instead of un-flagging.
@@ -74,17 +80,19 @@ await page.waitForTimeout(300);
 const rowCountInPanel = await page.locator('.calendar-event-row').count();
 const firstRowText = await page.locator('.calendar-event-row').first().textContent();
 console.log('rows shown in the panel (should be 2):', rowCountInPanel);
-console.log('first row mentions author+text (should mention "A Builder" and "Bonfire night"):', firstRowText);
+console.log(`first row mentions author+text (should mention "${LABEL}" and "Bonfire night"):`, firstRowText);
 
 // Delete the second event via its row's own × button (not the API
 // directly) — this is the actual moderation path a builder would use.
-await page.locator('.calendar-event-row').filter({ hasText: 'Another Builder' }).locator('.calendar-event-row-delete').click();
+// Both rows share the same author now, so this test distinguishes them by
+// event text instead (the thing that's actually still unique per event).
+await page.locator('.calendar-event-row').filter({ hasText: 'Market day' }).locator('.calendar-event-row-delete').click();
 await page.waitForFunction(() => document.querySelectorAll('.calendar-event-row').length === 1, { timeout: 5000 });
 const rowCountAfterDelete = await page.locator('.calendar-event-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 
 const { events: eventsAfterDelete } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
-console.log('events persisted server-side after the panel delete (should be 1, the surviving one authored by "A Builder"):', eventsAfterDelete.map((e) => e.authorLabel));
+console.log('events persisted server-side after the panel delete (should be 1, the surviving "Bonfire night" one):', eventsAfterDelete.map((e) => `${e.authorLabel}: ${e.text}`));
 
 // Scheduled events + the one-shot creative-tool trigger (docs/SPEC.md
 // §6's own "scheduled confetti-cannon" example) — posted directly via the
@@ -102,7 +110,7 @@ await page.waitForTimeout(300);
 const scheduledPost = await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'A Builder', text: 'Fireworks!', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+  body: JSON.stringify({ text: 'Fireworks!', scheduledAt: '2099-01-01T00:00:00.000Z' }),
 });
 const scheduledEventId = scheduledPost.body.event.eventId;
 
@@ -138,9 +146,10 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   events.length === 2 &&
   events[0].text === 'Bonfire night, Friday 8pm!' &&
   rowCountInPanel === 2 &&
-  firstRowText.includes('A Builder') && firstRowText.includes('Bonfire night') &&
+  firstRowText.includes(LABEL) && firstRowText.includes('Bonfire night') &&
   rowCountAfterDelete === 1 &&
-  eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === 'A Builder' &&
+  eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === LABEL &&
+  eventsAfterDelete[0].text === 'Bonfire night, Friday 8pm!' &&
   scheduledRowText.includes('Scheduled for') &&
   notDueTrigger.body.triggered === false &&
   modalHiddenAfterUnflag &&
