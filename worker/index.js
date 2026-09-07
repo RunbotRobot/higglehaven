@@ -633,6 +633,12 @@ function formatBytes(bytes) {
   return `${bytes}B`;
 }
 
+// Same reasoning as BUILDER_CREATE_RATE_LIMIT_MAX above (#362) — single
+// and batch each get their own bucket since batch can create up to 100
+// templates in one call.
+const CATALOG_CREATE_RATE_LIMIT_MAX = 20;
+const CATALOG_BATCH_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
@@ -660,6 +666,7 @@ async function handleCatalog(request, db, route, url, models) {
   }
 
   if ((request.method === 'POST' || request.method === 'PUT') && route.length === 2 && route[1] === 'batch') {
+    await checkRateLimit(db, `catalog-batch-create:${clientIp(request)}`, CATALOG_BATCH_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (!Array.isArray(input.templates)) throw new HttpError('templates must be an array', 400);
     if (input.templates.length === 0) throw new HttpError('templates must contain at least one item', 400);
@@ -835,6 +842,7 @@ async function handleCatalog(request, db, route, url, models) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    await checkRateLimit(db, `catalog-create:${clientIp(request)}`, CATALOG_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const template = validateTemplate(input, crypto.randomUUID());
     if (template.sellerId) {
@@ -1192,6 +1200,13 @@ async function getVersion(db, landletId, versionId) {
   return row ? versionFromRow(row) : null;
 }
 
+// Found via #362 — POST /api/builders, /api/sellers, and /api/catalog
+// (single + batch, both through validateTemplate) had no rate limit at
+// all, unlike every other unauthenticated/repeatable mutation in this
+// file (signup, password-reset, sign posts, purchases) — same fix
+// already applied to sign posts in #337, one bucket per route.
+const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleBuilders(request, db, route) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
@@ -1219,8 +1234,9 @@ async function handleBuilders(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    await checkRateLimit(db, `builder-create:${clientIp(request)}`, BUILDER_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    const label = labelValue(input.label, 'label');
     // Unauthenticated on purpose, unlike everything else in this handler
     // below — this only ever creates a brand-new, unlinked (user_id NULL)
     // row, never touches anyone else's identity or data, so there's
@@ -1471,6 +1487,9 @@ async function sellerExists(db, sellerId) {
 // any of their existing templates' seller_id pointing at an ID no longer
 // in the roster, the same way a template can already have a null
 // seller_id for an unclaimed custom upload.
+// Same reasoning as BUILDER_CREATE_RATE_LIMIT_MAX above (#362).
+const SELLER_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleSellers(request, db, route) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     return handleMySeller(request, db);
@@ -1482,10 +1501,11 @@ async function handleSellers(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
+    await checkRateLimit(db, `seller-create:${clientIp(request)}`, SELLER_CREATE_RATE_LIMIT_MAX);
     // Unauthenticated on purpose — same reasoning as POST /api/builders
     // above: a brand-new, unlinked row, nothing to spoof.
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    const label = labelValue(input.label, 'label');
     const sellerId = input.sellerId !== undefined
       ? stringValue(input.sellerId, 'sellerId')
       : `seller-${crypto.randomUUID()}`;
@@ -5333,12 +5353,20 @@ function assertValidExtensible(metadata, dimensions) {
 
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
+  // name/color/category/subcategory found via #362: name/color went
+  // through plain stringValue (no upper bound, unlike every other
+  // user-facing free-text field per #337's own audit), and category/
+  // subcategory skipped type validation entirely (a raw `||` fallback
+  // accepted any truthy value, string or not). labelValue's cap and its
+  // typeof check now cover all four the same way MAX_LABEL_LENGTH
+  // already covers builder/seller labels — the `||`-style fallback to a
+  // default is preserved by only validating when the input is truthy.
   const template = {
     templateId: stringValue(input.templateId || fallbackId, 'templateId'),
-    name: stringValue(input.name, 'name'),
-    category: input.category || 'placeholder',
-    subcategory: input.subcategory || null,
-    color: stringValue(input.color, 'color'),
+    name: labelValue(input.name, 'name'),
+    category: input.category ? labelValue(input.category, 'category') : 'placeholder',
+    subcategory: input.subcategory ? labelValue(input.subcategory, 'subcategory') : null,
+    color: labelValue(input.color, 'color'),
     dimensions: {
       width: positiveNumber(dimensions.width, 'dimensions.width'),
       depth: positiveNumber(dimensions.depth, 'dimensions.depth'),

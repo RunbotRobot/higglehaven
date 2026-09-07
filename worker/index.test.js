@@ -20,7 +20,29 @@ beforeAll(async () => {
 async function api(path, options = {}) {
   const response = await SELF.fetch(`https://higglehaven.test/api${path}`, {
     ...options,
-    headers: options.body ? { 'content-type': 'application/json', ...options.headers } : options.headers,
+    // Found via #362: several IP-keyed rate limits (checkRateLimit calls
+    // bucketed by clientIp(request) alone — sign posts, purchases, and
+    // now builders/sellers/catalog) all fall back to a shared 'unknown'
+    // clientIp when no cf-connecting-ip header is set. Every call in this
+    // suite that doesn't explicitly set one used to collide on that same
+    // bucket by accident — harmless while only a handful of tests hit a
+    // rate-limited endpoint, but it broke outright once catalog-template
+    // creation (used as ordinary fixture setup in dozens of unrelated
+    // tests, e.g. "Simulated purchases"' own createTemplate) started
+    // being rate-limited too: enough of those calls shared one bucket to
+    // trip the limit well before any single test's own real behavior
+    // exhausted it. Defaulting every call to its own random synthetic IP
+    // isolates unrelated tests from each other by default, the same way
+    // two different real-world clients would never share a bucket;
+    // a test that deliberately wants several calls to share one bucket
+    // (every existing rate-limit test above already does this) still
+    // can, by passing its own explicit cf-connecting-ip header, which
+    // takes precedence here.
+    headers: {
+      'cf-connecting-ip': `test-${crypto.randomUUID()}`,
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...options.headers,
+    },
   });
 
   return { response, body: await response.json() };
@@ -648,6 +670,96 @@ describe('Worker API', () => {
         { templateId: 'duplicate', name: 'Two', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
       ] }),
     })).response.status).toBe(400);
+  });
+
+  // Found via backlog audit (#362): name/color/category/subcategory all
+  // had no length cap (name/color went through plain stringValue;
+  // category/subcategory skipped type validation entirely via a raw `||`
+  // fallback) — unlike authorLabel/buyerLabel, which got the same cap for
+  // the same bug class back in #337.
+  it('rejects catalog template name/color/category/subcategory over the length cap', async () => {
+    const base = {
+      templateId: 'catalog-length-cap-test', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+    };
+    const nameTooLong = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'x'.repeat(101) }),
+    });
+    expect(nameTooLong.response.status).toBe(400);
+
+    const colorTooLong = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine name', color: 'x'.repeat(101) }),
+    });
+    expect(colorTooLong.response.status).toBe(400);
+
+    const categoryTooLong = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine name', category: 'x'.repeat(101) }),
+    });
+    expect(categoryTooLong.response.status).toBe(400);
+
+    const subcategoryTooLong = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine name', subcategory: 'x'.repeat(101) }),
+    });
+    expect(subcategoryTooLong.response.status).toBe(400);
+
+    // A non-string category previously skipped validation silently (raw
+    // `input.category || 'placeholder'`) instead of being rejected.
+    const categoryWrongType = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine name', category: { nested: true } }),
+    });
+    expect(categoryWrongType.response.status).toBe(400);
+
+    // An omitted category/subcategory still falls back the same as before.
+    const fine = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine name' }),
+    });
+    expect(fine.response.status).toBe(201);
+    expect(fine.body.template.category).toBe('placeholder');
+    expect(fine.body.template.subcategory).toBeNull();
+  });
+
+  // Found via backlog audit (#362): unlike every other public, repeatable
+  // mutation in this file, POST /api/catalog (and /api/catalog/batch) had
+  // no rate limit at all. Synthetic cf-connecting-ip per the sign-post
+  // rate-limit test's own approach, so this test's bucket doesn't collide
+  // with any other catalog test above.
+  it('rate-limits repeated catalog template creations from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog', {
+        method: 'POST', headers, body: JSON.stringify({
+          templateId: `catalog-rate-limit-${i}`, name: `Rate limit ${i}`,
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog', {
+      method: 'POST', headers, body: JSON.stringify({
+        templateId: 'catalog-rate-limit-one-too-many', name: 'One too many',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
+  it('rate-limits repeated catalog template batch creations from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog/batch', {
+        method: 'POST', headers, body: JSON.stringify({ templates: [{
+          templateId: `catalog-batch-rate-limit-${i}`, name: `Batch rate limit ${i}`,
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog/batch', {
+      method: 'POST', headers, body: JSON.stringify({ templates: [{
+        templateId: 'catalog-batch-rate-limit-one-too-many', name: 'One too many',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }] }),
+    });
+    expect(limited.response.status).toBe(429);
   });
 
   it('cursor-paginates placed instances within one landlet', async () => {
@@ -3148,6 +3260,31 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // Found via backlog audit (#362): builder label had no length cap at
+  // all — unlike authorLabel/buyerLabel, which got the same cap for the
+  // same bug class back in #337.
+  it('rejects a builder label over the length cap', async () => {
+    const tooLong = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    });
+    expect(tooLong.response.status).toBe(400);
+  });
+
+  // Found via backlog audit (#362): unlike every other public, repeatable
+  // mutation in this file, POST /api/builders had no rate limit at all.
+  // Synthetic cf-connecting-ip per the sign-post rate-limit test's own
+  // approach, so this test's bucket doesn't collide with any other
+  // builder test above.
+  it('rate-limits repeated builder creations from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders', { method: 'POST', headers, body: JSON.stringify({ label: `Builder ${i}` }) });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders', { method: 'POST', headers, body: JSON.stringify({ label: 'One too many' }) });
+    expect(limited.response.status).toBe(429);
+  });
+
   // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
   // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
   // session resolves *your* builder profile, mutation or not (per the
@@ -3474,6 +3611,40 @@ describe('Builders', () => {
     const lateAfter = list.body.builders.find((b) => b.builderId === late.builderId);
     expect(lateAfter.isPioneer).toBe(false);
     expect(lateAfter.pioneerRank).toBeNull();
+  });
+});
+
+describe('Sellers', () => {
+  it('creates an unlinked seller via direct POST', async () => {
+    const created = await api('/sellers', { method: 'POST', body: JSON.stringify({ label: 'Direct Seller' }) });
+    expect(created.response.status).toBe(201);
+    expect(created.body.seller.label).toBe('Direct Seller');
+    expect(created.body.seller.sellerId).toMatch(/^seller-/);
+  });
+
+  // Found via backlog audit (#362): seller label had no length cap at
+  // all — unlike authorLabel/buyerLabel, which got the same cap for the
+  // same bug class back in #337.
+  it('rejects a seller label over the length cap', async () => {
+    const tooLong = await api('/sellers', {
+      method: 'POST', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    });
+    expect(tooLong.response.status).toBe(400);
+  });
+
+  // Found via backlog audit (#362): unlike every other public, repeatable
+  // mutation in this file, POST /api/sellers had no rate limit at all.
+  // Synthetic cf-connecting-ip per the sign-post rate-limit test's own
+  // approach, so this test's bucket doesn't collide with any other
+  // seller test above.
+  it('rate-limits repeated seller creations from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/sellers', { method: 'POST', headers, body: JSON.stringify({ label: `Seller ${i}` }) });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/sellers', { method: 'POST', headers, body: JSON.stringify({ label: 'One too many' }) });
+    expect(limited.response.status).toBe(429);
   });
 });
 
@@ -6118,20 +6289,33 @@ describe('Authentication', () => {
 
   it('rate-limits repeated signup attempts against the same email', async () => {
     const email = `auth-ratelimit-signup-${crypto.randomUUID()}@example.com`;
+    // Explicit shared cf-connecting-ip — same idea as every other
+    // rate-limit test in this file: api()'s own default now assigns a
+    // fresh random IP per call precisely so unrelated tests never
+    // accidentally share a bucket (see api()'s own comment), so a test
+    // that specifically wants several calls to land in the SAME bucket
+    // has to say so explicitly.
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    function attemptSignup(signupEmail) {
+      return api('/auth/signup', {
+        method: 'POST', headers,
+        body: JSON.stringify({ email: signupEmail, password: 'a fine long password', username: `user-${crypto.randomUUID().slice(0, 8)}` }),
+      });
+    }
     // First succeeds; the next 4 hit the ordinary "already registered" 409
     // (still counted against the limit — checkRateLimit runs before that
     // check) — 5 total attempts, right at the limit.
     for (let i = 0; i < 5; i++) {
-      const attempt = await signup(email, 'a fine long password');
+      const attempt = await attemptSignup(email);
       expect(attempt.response.status).not.toBe(429);
     }
-    const sixth = await signup(email, 'a fine long password');
+    const sixth = await attemptSignup(email);
     expect(sixth.response.status).toBe(429);
 
     // A different email from the same (test-env) client isn't affected —
     // bucketed per-target, not just per-source.
     const otherEmail = `auth-ratelimit-signup-other-${crypto.randomUUID()}@example.com`;
-    const otherAttempt = await signup(otherEmail, 'a fine long password');
+    const otherAttempt = await attemptSignup(otherEmail);
     expect(otherAttempt.response.status).toBe(201);
   });
 
@@ -6295,11 +6479,14 @@ describe('Authentication', () => {
   it('rate-limits repeated password-reset requests against the same email', async () => {
     const email = `auth-ratelimit-reset-${crypto.randomUUID()}@example.com`;
     await signup(email, 'a fine long password');
+    // Explicit shared cf-connecting-ip — see the signup rate-limit test's
+    // own comment above for why this is needed now.
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 5; i++) {
-      const attempt = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+      const attempt = await api('/auth/request-password-reset', { method: 'POST', headers, body: JSON.stringify({ email }) });
       expect(attempt.response.status).toBe(200);
     }
-    const sixth = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    const sixth = await api('/auth/request-password-reset', { method: 'POST', headers, body: JSON.stringify({ email }) });
     expect(sixth.response.status).toBe(429);
   });
 
