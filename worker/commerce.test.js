@@ -1008,6 +1008,27 @@ describe('Bundles', () => {
     expect(missing.response.status).toBe(404);
   });
 
+  // Found via backlog audit (#468): a rename PATCH and a share-toggle PATCH
+  // firing concurrently each used to fill in the field they omitted from a
+  // pre-race snapshot of the row, so whichever UPDATE landed second
+  // silently overwrote the first request's change with that stale value.
+  it('does not let a concurrent rename and share-toggle clobber each other', async () => {
+    const owner = await signupBuilder('bundle-patch-concurrent-owner');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const [renamed, shared] = await Promise.all([
+      api(`/bundles/${bundleId}`, owner.session({ method: 'PATCH', body: JSON.stringify({ name: 'Concurrent rename' }) })),
+      api(`/bundles/${bundleId}`, owner.session({ method: 'PATCH', body: JSON.stringify({ shared: true }) })),
+    ]);
+    expect(renamed.response.status).toBe(200);
+    expect(shared.response.status).toBe(200);
+
+    const list = await api(`/bundles?builderId=${owner.builderId}`, owner.session());
+    const final = list.body.bundles.find((b) => b.bundleId === bundleId);
+    expect(final).toMatchObject({ name: 'Concurrent rename', shared: true });
+  });
+
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
     const owner = await signupBuilder('bundle-delete-owner');
     const other = await signupBuilder('bundle-delete-other');
