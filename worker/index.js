@@ -1248,54 +1248,7 @@ async function handleBuilders(request, db, route) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
-    // #263: without this, deleting the builder cascades straight through
-    // auction_bids.bidder_builder_id (ON DELETE CASCADE) and silently
-    // erases whichever bid this builder currently holds — including one
-    // that's the *current highest* on someone else's still-active auction.
-    // A new bid must strictly exceed the current highest (see
-    // handleAuctionBids' own comment), so a leading bid actively deters
-    // every other bidder for as long as it stands; deleting it right
-    // before the auction resolves lets a real bidder walk back a
-    // commitment that shaped how others bid, at zero cost (a fresh,
-    // unrestricted builder profile is auto-provisioned for the same
-    // logged-in user on their very next request). There's no bid-
-    // withdrawal feature in this app, so a placed bid should be exactly as
-    // binding as it already implicitly is for a builder who doesn't
-    // delete their account — block the deletion instead of notifying
-    // after the fact, since nothing can undo the chilling effect the
-    // now-vanished bid already had on other bidders.
-    const leadingBid = await db.prepare(`
-      SELECT a.auction_id FROM auctions a
-      JOIN auction_bids b ON b.auction_id = a.auction_id
-      WHERE a.status = 'active' AND b.bidder_builder_id = ?
-        AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
-      LIMIT 1
-    `).bind(route[1]).first();
-    if (leadingBid) {
-      throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
-    }
-    // #279: the owner's stated policy is "once a land is put up for
-    // auction, that decision can't be revoked — at least if it has bids;
-    // if it doesn't, and the builder still has the land cap to retain
-    // their land, they could cancel the auction then." Mirrors the #263
-    // guard above but from the seller's side: without this, a seller could
-    // delete their own account to silently back out of an auction that
-    // already has real bids on it — their land reverts to greenbelt
-    // (re-claimable, including by them again under a fresh
-    // auto-provisioned builder profile) and every bidder just gets a
-    // "sorry, void" notification, with no way for anyone to undo the
-    // chilling effect those bids already had on other bidders. A
-    // zero-bid auction has no one to protect this way, so it stays
-    // cancelable via self-deletion exactly as before.
-    const sellingAuctionWithBids = await db.prepare(`
-      SELECT a.auction_id FROM auctions a
-      WHERE a.seller_builder_id = ? AND a.status = 'active'
-        AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
-      LIMIT 1
-    `).bind(route[1]).first();
-    if (sellingAuctionWithBids) {
-      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
-    }
+
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not
@@ -1309,31 +1262,75 @@ async function handleBuilders(request, db, route) {
     `).bind(route[1]).all();
     const landletIds = owned.results.map((row) => row.landlet_id);
 
-    const statements = landletIds.flatMap((landletId) => [
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
-      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(landletId),
-      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(landletId),
+    // #263/#279 guard the leading-bidder and with-bids-selling cases below,
+    // but doing so as separate SELECTs checked *before* this batch (as an
+    // earlier version of this handler did) leaves a window where a bid
+    // placed in between could slip through uncaught — found via backlog
+    // audit. Folded into the DELETE's own WHERE clause instead (the same
+    // atomic conditional-write pattern used elsewhere in this file, e.g.
+    // handlePurchaseRefund/the #270 calendar-trigger fix), and every other
+    // statement in this same D1 batch (one atomic transaction) is gated on
+    // this builder row having actually been removed by it — so if either
+    // guard blocks the delete, none of the land-release side effects below
+    // take hold either, exactly as if the whole request had been rejected
+    // up front instead of partially applied.
+    const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
+    const statements = [
       db.prepare(`
-        UPDATE landlets
-        SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
-            claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ?
-      `).bind(landletId),
-    ]);
+        DELETE FROM builders
+        WHERE builder_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            JOIN auction_bids b ON b.auction_id = a.auction_id
+            WHERE a.status = 'active' AND b.bidder_builder_id = ?
+              AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            WHERE a.seller_builder_id = ? AND a.status = 'active'
+              AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+          )
+      `).bind(route[1], route[1], route[1]),
+      ...landletIds.flatMap((landletId) => [
+        db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`DELETE FROM landlet_levels WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`
+          UPDATE landlets
+          SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+              claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE landlet_id = ? AND ${builderGone}
+        `).bind(landletId, route[1]),
+      ]),
+    ];
 
     // Deleting this builder cascades (migrations/0045_auctions.sql,
     // seller_builder_id ON DELETE CASCADE) straight through any auction
     // where they're the seller. The #279 guard above guarantees any such
-    // auction still active at this point has zero bids — there's no one to
-    // notify, and nothing more to do beyond letting the cascade take it
-    // (and its now-nonexistent auction_bids rows) away. The land itself
-    // doesn't need separate handling here either — it's still
-    // status='claimed'/owned by this builder throughout an active auction
-    // (see handleStartAuction), so it's already covered by the greenbelt
-    // release above.
-    statements.push(db.prepare('DELETE FROM builders WHERE builder_id = ?').bind(route[1]));
-    await db.batch(statements);
+    // auction still active at delete time has zero bids — there's no one
+    // to notify, and nothing more to do beyond letting the cascade take it
+    // (and its now-nonexistent auction_bids rows) away.
+    const [deleted] = await db.batch(statements);
+    if (deleted.meta.changes === 0) {
+      // One of the two guards blocked it, or (far narrower window) a
+      // concurrent request already deleted this builder out from under
+      // us — re-check purely to pick the right error message; every
+      // statement above already left everything else untouched either way.
+      const stillExists = await db.prepare('SELECT builder_id FROM builders WHERE builder_id = ?').bind(route[1]).first();
+      if (!stillExists) throw new HttpError('Builder not found', 404);
+      const leadingBid = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        JOIN auction_bids b ON b.auction_id = a.auction_id
+        WHERE a.status = 'active' AND b.bidder_builder_id = ?
+          AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+        LIMIT 1
+      `).bind(route[1]).first();
+      if (leadingBid) {
+        throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
+      }
+      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+    }
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
 
