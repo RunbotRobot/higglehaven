@@ -717,6 +717,21 @@ describe('Authentication', () => {
     expect(reused.response.status).toBe(400);
   });
 
+  it('does not double-consume the same verify-email token under a concurrent race', async () => {
+    const email = `auth-verify-race-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const token = new URL(signedUp.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
+
+    // Fired together, not awaited one at a time — a SELECT-then-UPDATE
+    // implementation could let both requests read "not yet consumed" and
+    // both report success, even though only one should ever win (#377).
+    const [first, second] = await Promise.all([
+      api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+      api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
+  });
+
   it('resets a forgotten password via a real token, and signs out every existing session', async () => {
     const email = `auth-reset-${crypto.randomUUID()}@example.com`;
     const oldPassword = 'the original password';
@@ -754,6 +769,22 @@ describe('Authentication', () => {
     // The token itself is single-use.
     const reusedToken = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'yet another password' }) });
     expect(reusedToken.response.status).toBe(400);
+  });
+
+  it('does not double-consume the same reset-password token under a concurrent race', async () => {
+    const email = `auth-reset-race-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'the original password');
+    const requested = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    const token = new URL(requested.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+
+    // Same race shape as the verify-email test above (#377) — only one of
+    // these two concurrent requests should ever actually reset the
+    // password and sign every session out.
+    const [first, second] = await Promise.all([
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'password from request A' }) }),
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'password from request B' }) }),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
   });
 
   it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {
@@ -802,6 +833,21 @@ describe('Authentication', () => {
 
     const alreadyVerified = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
     expect(alreadyVerified.response.status).toBe(400);
+  });
+
+  // #363: previously had no rate limit at all — a logged-in user could loop
+  // this endpoint to burn the operator's real Resend email quota.
+  it('rate-limits repeated resend-verification requests for the same user', async () => {
+    const email = `auth-ratelimit-resend-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const sessionToken = extractSessionCookie(signedUp.response);
+
+    for (let i = 0; i < 5; i++) {
+      const attempt = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const sixth = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+    expect(sixth.response.status).toBe(429);
   });
 
   it('signup automatically provisions a linked builder profile', async () => {
