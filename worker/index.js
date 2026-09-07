@@ -1649,6 +1649,13 @@ async function handleFriendships(request, db, route, url) {
     if (inserted.meta.changes === 0) {
       throw new HttpError('A friendship or pending request already exists between these builders', 409);
     }
+    // Found via backlog audit (#319): a new request/an acceptance had no
+    // passive way to reach the other side — they'd have to proactively
+    // re-poll GET /api/friendships. Best-effort, same as every other
+    // notification in this file (fired after the write it's about, not
+    // batched atomically with it).
+    await notificationStatement(db, recipientBuilderId,
+      `${sessionBuilder.label} sent you a friend request.`).run();
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
@@ -1673,6 +1680,10 @@ async function handleFriendships(request, db, route, url) {
     // instead of the clean 404 this should be.
     const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
     if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
+    // Same "no passive way to find out" gap as the new-request notification
+    // above (#319), for the requester's side of an acceptance.
+    await notificationStatement(db, existing.requester_builder_id,
+      `${sessionBuilder.label} accepted your friend request.`).run();
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);

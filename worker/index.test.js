@@ -4250,6 +4250,12 @@ describe('Friendships', () => {
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
+    // Found via backlog audit (#319): a new request/its acceptance had no
+    // passive way to reach the other side.
+    const bobNoticesAfterRequest = await api('/notifications', bob.session());
+    expect(bobNoticesAfterRequest.body.notifications.some(
+      (n) => n.message === 'friendship-alice sent you a friend request.')).toBe(true);
+
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
     const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
@@ -4275,6 +4281,10 @@ describe('Friendships', () => {
     }));
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
+
+    const aliceNoticesAfterAccept = await api('/notifications', alice.session());
+    expect(aliceNoticesAfterAccept.body.notifications.some(
+      (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
 
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
