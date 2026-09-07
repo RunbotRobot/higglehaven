@@ -1362,6 +1362,15 @@ function builderFromRow(row) {
     // area this builder may own at once, distinct from dallersBalanceCents
     // above (which land-specific lándlets can be acquired via auction).
     landCapM2: row.land_cap_m2,
+    // The real total currently counted against that cap — ground-level
+    // landlet area plus every level's own cap_consumed_m2 (docs/API.md's
+    // "Vertical construction"), the same sum recomputeLandCap/
+    // recomputeLandCapsBatch already compute internally to grow landCapM2
+    // itself. Only present (non-null) on a row that just went through one
+    // of those — GET /api/builders and GET /api/builders/me both do; a
+    // plain create/rename response doesn't recompute anything, so stays
+    // null rather than a stale or misleadingly-precise-looking number.
+    ownedAreaM2: row.owned_area_m2 ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1395,7 +1404,9 @@ async function getOrCreateBuilderForUser(db, user) {
 async function handleMyBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
   const row = await getOrCreateBuilderForUser(db, user);
-  row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
+  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
+  row.land_cap_m2 = nextCap;
+  row.owned_area_m2 = ownedAreaM2;
   return json({ builder: builderFromRow(row) });
 }
 
@@ -2222,9 +2233,15 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
   return Math.max(currentCapM2, candidateCap);
 }
 
+// Returns both the (possibly ratcheted-up) cap itself and the real total
+// owned area (ground + levels) that fed the formula — callers that only
+// care about the cap can ignore ownedAreaM2, but GET /api/builders/me
+// exposes it so the frontend's own "you own X of Y" display (#312) never
+// has to re-derive it (and risk leaving out level area the way its
+// original ground-only-landlets sum did).
 async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
-  if (!builder) return LAND_CAP_STARTER_M2;
+  if (!builder) return { nextCap: LAND_CAP_STARTER_M2, ownedAreaM2: 0 };
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earningsRow, ownedRow, levelsRow] = await Promise.all([
     db.prepare(`
@@ -2245,17 +2262,20 @@ async function recomputeLandCap(db, builderId) {
   if (nextCap !== builder.land_cap_m2) {
     await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
   }
-  return nextCap;
+  return { nextCap, ownedAreaM2 };
 }
 
 // List-endpoint version of the above: instead of the same 2-3 queries
 // repeated once per builder (an N+1 round-trip pattern that made GET
 // /api/builders get linearly slower as the builder count grew), pulls
-// earnings and owned-area totals for every builder in exactly 2 aggregate
+// earnings and owned-area totals for every builder in exactly 3 aggregate
 // queries, then applies the identical formula in memory. Mutates each
-// row's land_cap_m2 in place (matching recomputeLandCap's per-row
-// contract) and persists only the rows that actually changed, in a single
-// batched call.
+// row's land_cap_m2 *and* owned_area_m2 in place (matching
+// recomputeLandCap's own two-value contract) and persists only the
+// land_cap_m2 changes, in a single batched call — owned_area_m2 is never
+// itself persisted, just attached to the in-memory row so builderFromRow
+// can expose it (#312: this is what GET /api/builders actually runs, so
+// it's the code path the frontend's own Land Cap display depends on).
 async function recomputeLandCapsBatch(db, rows) {
   if (rows.length === 0) return;
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -2282,6 +2302,7 @@ async function recomputeLandCapsBatch(db, rows) {
   const updates = [];
   for (const row of rows) {
     const ownedAreaM2 = (ownedByBuilder.get(row.builder_id) ?? 0) + (levelsByBuilder.get(row.builder_id) ?? 0);
+    row.owned_area_m2 = ownedAreaM2;
     const nextCap = computeNextLandCap(
       row.land_cap_m2,
       earningsByBuilder.get(row.builder_id) ?? 0,
