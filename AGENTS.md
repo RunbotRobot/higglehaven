@@ -161,66 +161,58 @@ what actually keeps a bad turn from doing real damage, not this loop.
 
 Each session having its own branch prevents git-branch collisions, but
 it does nothing to stop two sessions from independently picking up the
-*same* Issue #25 backlog item at nearly the same time — that's a
-separate race, and it has happened more than once (#86 fixed twice on
-the same day this convention was still numbered branches; #126
-fixed twice again after the switch to per-session-name branches,
-forcing one PR to be closed as a duplicate and its branch reset).
-Switching branch models didn't touch this problem at all — it's about
-which issue two sessions decide to work on, not which branch either of
-them commits to. None of the following eliminates the race (self-
-assigning a GitHub Issue and commenting on #25 are both advisory, not
-atomic), but each shrinks the window or lowers the cost when it happens
-anyway:
+*same* backlog item at nearly the same time — that's a separate race,
+and it has happened repeatedly (#86 fixed twice back when this
+convention was still numbered branches; #126 fixed twice again after
+the switch to per-session-name branches; #271/#284 and #291/#292/#298
+all duplicated on 2026-09-06 alone, the last of those a control-room
+feedback message four sessions independently picked up at once).
+Neither switching branch models nor adding the control room touched
+this problem — it's about which task two sessions decide to work on,
+not which branch either of them commits to, or which place they read
+the task from. None of the following eliminates the race (self-
+assigning a GitHub Issue, and claiming a task in the control room, are
+both advisory, not atomic), but each shrinks the window or lowers the
+cost when it happens anyway:
 
 - **Self-assign before you investigate, not after.** The gap between
-  reading an issue and claiming it is where collisions happen — don't
-  spend several minutes reading code or planning a fix before calling
-  `issue_write` to self-assign. Claim first, investigate second.
-- **Claim one issue at a time.** Bundling several small unclaimed issues
+  reading a task and claiming it is where collisions happen — don't
+  spend several minutes reading code or planning a fix before claiming
+  it. Claim first, investigate second. This applies equally to an
+  unresolved control-room `feedback` message you're about to act on,
+  not just a GitHub Issue: the moment you decide to do it, write (or
+  update) its `tasks` doc — id `feedback-<message id>` if you don't
+  also file a real GitHub issue for it — with `status: "in_progress"`
+  and your session name, *then* start reading code. Don't let "just
+  reply to the owner first" or "just check the code first" become the
+  de facto claim instead. A feedback item small enough that filing a
+  real issue feels like overkill is still worth a `tasks` doc for this
+  reason alone — the claim is the point, not the issue tracker.
+- **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —
   and splitting into separate commits/PRs if a collision does turn up
   mid-way — over one bundled claim.
 - **Re-check right before you publish, not just before you start.** A
   claim made minutes ago can be stale by the time you push — someone
-  else's PR for the same issue may already have merged. Re-fetch the
-  issue's state immediately before pushing or opening a PR, not only at
-  claim time; catching a collision here is far cheaper than discovering
-  it from a merge conflict on an already-open PR.
-- **Treat the issue's `assignees` field as the authoritative check, not
-  just #25's comment thread.** Comments are what everyone actually skims
-  in practice, but a fast-moving thread can bury or delay a "Starting X"
-  comment; `assignees` is a single fact you can check directly on the
-  issue itself before adding yourself to it.
+  else's PR for the same task may already have merged. Re-fetch its
+  state immediately before pushing or opening a PR, not only at claim
+  time; catching a collision here is far cheaper than discovering it
+  from a merge conflict on an already-open PR.
+- **Treat the `tasks` collection and the issue's `assignees` field as
+  the authoritative checks, not any comment thread.** A fast-moving
+  conversation is what everyone actually skims in practice, but it can
+  bury or delay a "Starting X" message; a `tasks` doc's `status`/
+  `session` fields and a GitHub issue's `assignees` are each a single
+  fact you can check directly before adding yourself to either. Check
+  the `tasks` collection for an existing doc on the item *before*
+  creating one — that's the fast, single-query check the rest of this
+  fleet is already reading every cycle, so it catches a same-minute
+  collision that a GitHub API round-trip alone might not.
 
 If a collision happens anyway: whoever notices second stands down
-immediately (comment noting the duplicate, drop the redundant work)
-rather than finishing in parallel.
-
-### Claiming feedback-driven work — the same discipline, extended
-
-Everything above narrows the race for GitHub Issues specifically, because
-an issue has an `assignees` field to check. A raw owner `feedback` message
-in the control room's `messages` collection has no such field — nothing
-stops several sessions reading it in the same few minutes and each
-independently deciding to act on it. This is exactly what happened on
-2026-09-07: four sessions simultaneously picked up one piece of owner
-feedback (removing a stale claim-map note) with no GitHub issue involved
-at all, producing four competing PRs.
-
-The fix is to extend "claim first, investigate second" to cover this case
-explicitly, reusing the `tasks` collection rather than inventing a new
-mechanism: the moment you decide to act on a `messages` feedback doc
-(whether or not it's worth a real GitHub issue), immediately write a
-`tasks` doc for it — id `feedback-<message id>` if you don't file a real
-issue, `status: "in_progress"`, your session name — *before* you start
-investigating or coding, exactly as you would self-assign an issue.
-Check `tasks` for an existing doc against that message id first, the same
-way you'd check an issue's `assignees`. A feedback item small enough that
-filing a real GitHub issue feels like overkill is still worth a `tasks`
-doc for this reason alone — the claim is the point, not the issue
-tracker.
+immediately (note the duplicate in the task's `tasks` doc, drop the
+redundant work) rather than finishing in parallel.
 
 ### Backlog exploration — file everything you find, not just one issue
 
