@@ -78,6 +78,28 @@ const listedAuctionText = await auctionsListItems.first().textContent();
 console.log('auction as seen by the bidder (should mention $10.00 starting bid, no bids yet):', listedAuctionText);
 
 const bidInput = auctionsListItems.first().locator('.auction-row-bid-input');
+
+// A negative bid input used to silently no-op the Place Bid click — no
+// status text, no alert, nothing (#443). Note an actually-EMPTY input
+// doesn't hit this path at all: Number('') is 0, which is finite and
+// non-negative, so it sails through to the server (and gets rejected
+// there instead, going through the existing catch-block alert below) —
+// '-5' is a value <input type="number"> actually accepts (unlike
+// non-numeric text, which the browser itself blanks out before it ever
+// reaches this handler) that genuinely fails the client-side
+// Number.isFinite/< 0 check. It now surfaces its own alert, same
+// handling pattern as the sibling Start Auction form. The shared dialog
+// listener from launchPage still auto-accepts it; this one just also
+// records the message it saw.
+let lastAlertMessage = null;
+bidderPage.on('dialog', (dialog) => { lastAlertMessage = dialog.message(); });
+await bidInput.fill('-5');
+await auctionsListItems.first().locator('.auction-bid-btn').click();
+await bidderPage.waitForTimeout(300);
+console.log('alert shown for a negative bid input (should mention "zero or more"):', lastAlertMessage);
+const invalidBidAlertOk = lastAlertMessage === 'Enter a bid amount of zero or more.';
+lastAlertMessage = null;
+
 await bidInput.fill('15');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForFunction(
@@ -165,6 +187,7 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   startFormGoneAfterStarting === 0 &&
   bidderOwnStartFormVisible === 1 &&
   listedAuctionText.includes('$10.00') &&
+  invalidBidAlertOk &&
   afterBidText.includes('$15.00') && afterBidText.includes('1 bid') &&
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
   sellerSeesBidText.includes('$15.00') &&
