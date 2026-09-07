@@ -1114,6 +1114,72 @@
       #upload-submit-btn:disabled {
         opacity: 0.5;
       }
+      /* #453: real-money checkout — same modal shell as #upload-modal,
+         stacked above the world (no other modal opens over Shop mode's
+         world view), holding a Stripe Elements card field. */
+      #checkout-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #checkout-modal.visible {
+        display: flex;
+      }
+      #checkout-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #checkout-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #checkout-summary {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #checkout-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #checkout-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #checkout-status.error {
+        color: #b3402c;
+      }
+      #checkout-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #checkout-pay-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #checkout-pay-btn:disabled {
+        opacity: 0.5;
+      }
       /* Same modal shell as #upload-modal, just wider — each row needs
          room for an axis picker, a minimum-length field, and a Save
          button alongside the product name. */
@@ -2772,6 +2838,18 @@
         <div id="upload-status"></div>
         <div id="upload-modal-actions">
           <button id="upload-submit-btn" type="button">Add Product</button>
+        </div>
+      </div>
+    </div>
+    <div id="checkout-modal">
+      <div id="checkout-modal-content">
+        <button id="checkout-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="checkout-modal-title">Checkout</h2>
+        <div id="checkout-summary"></div>
+        <div id="checkout-card-element"></div>
+        <div id="checkout-status"></div>
+        <div id="checkout-modal-actions">
+          <button id="checkout-pay-btn" type="button">Pay</button>
         </div>
       </div>
     </div>

@@ -73,6 +73,7 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  finalizePurchase,
   fetchPurchases,
   refundPurchase,
 } from './api.js';
@@ -7591,6 +7592,12 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
 const shopLandletInfoEl = document.getElementById('shop-landlet-info');
+const checkoutModalEl = document.getElementById('checkout-modal');
+const checkoutSummaryEl = document.getElementById('checkout-summary');
+const checkoutCardElementEl = document.getElementById('checkout-card-element');
+const checkoutStatusEl = document.getElementById('checkout-status');
+const checkoutPayBtn = document.getElementById('checkout-pay-btn');
+const checkoutCancelBtn = document.getElementById('checkout-cancel-btn');
 
 // A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
 // cold clash against this world's warm cream-and-green palette (see
@@ -9538,21 +9545,105 @@ shopReviewHintEl.addEventListener('click', async () => {
   }
 });
 
+// #453: Stripe.js is loaded lazily, only the first time a real-money
+// checkout is actually needed — the overwhelming majority of purchases in
+// this dev-mode-heavy app never reach this path (see purchaseInstance's
+// own comment in src/api.js), so there's no reason to pull in a
+// third-party script on every page load.
+let stripeJsPromise = null;
+function loadStripeJs() {
+  if (stripeJsPromise) return stripeJsPromise;
+  stripeJsPromise = new Promise((resolve, reject) => {
+    if (window.Stripe) { resolve(window.Stripe); return; }
+    const script = document.createElement('script');
+    script.src = 'https://js.stripe.com/v3/';
+    script.onload = () => resolve(window.Stripe);
+    script.onerror = () => { stripeJsPromise = null; reject(new Error('Could not load Stripe.')); };
+    document.head.appendChild(script);
+  });
+  return stripeJsPromise;
+}
+
+let checkoutCardElement = null;
+
+function closeCheckoutModal() {
+  checkoutModalEl.classList.remove('visible');
+  if (checkoutCardElement) {
+    checkoutCardElement.unmount();
+    checkoutCardElement = null;
+  }
+}
+
+// Collects real payment for a connected seller's product, once
+// purchaseInstance's response comes back as `requiresPayment` instead of
+// an already-completed `purchase` (#453). The returned promise resolves
+// once the purchase has genuinely been finalized (Stripe confirmed the
+// charge AND the server has recorded it) or rejects if the buyer cancels
+// — it deliberately does NOT resolve just because the modal was shown, so
+// a caller's own `finally` (e.g. re-enabling the button that opened this)
+// covers the whole checkout, not just the initial setup.
+function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { name, totalCents }) {
+  return new Promise((resolve, reject) => {
+    checkoutSummaryEl.textContent = `${name} — ${formatPriceCents(totalCents)}`;
+    checkoutStatusEl.textContent = 'Loading payment form…';
+    checkoutStatusEl.classList.remove('error');
+    checkoutPayBtn.disabled = true;
+    checkoutModalEl.classList.add('visible');
+
+    checkoutCancelBtn.onclick = () => {
+      closeCheckoutModal();
+      reject(new Error('Checkout cancelled.'));
+    };
+
+    loadStripeJs().then((Stripe) => {
+      const stripe = Stripe(publishableKey);
+      const elements = stripe.elements();
+      checkoutCardElement = elements.create('card');
+      checkoutCardElement.mount(checkoutCardElementEl);
+      checkoutStatusEl.textContent = '';
+      checkoutPayBtn.disabled = false;
+
+      checkoutPayBtn.onclick = async () => {
+        checkoutPayBtn.disabled = true;
+        checkoutStatusEl.textContent = 'Processing…';
+        checkoutStatusEl.classList.remove('error');
+        try {
+          const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
+          if (result.error) throw new Error(result.error.message || 'Payment failed.');
+          const purchase = await finalizePurchase(paymentIntentId);
+          closeCheckoutModal();
+          resolve(purchase);
+        } catch (err) {
+          checkoutStatusEl.textContent = err.message || 'Payment failed.';
+          checkoutStatusEl.classList.add('error');
+          checkoutPayBtn.disabled = false;
+        }
+      };
+    }).catch((err) => {
+      checkoutStatusEl.textContent = err.message || 'Could not load Stripe.';
+      checkoutStatusEl.classList.add('error');
+    });
+  });
+}
+
 shopBuyHintEl.addEventListener('click', async () => {
   const review = nearestActiveReview;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
-  const confirmed = confirm(
-    `Simulate buying "${name}" for ${formatPriceCents(priceCents)}? This is a dev-mode simulation — no real money is ever charged, but the seller's dállers balance is credited for real.`,
-  );
+  const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}?`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
   try {
-    await purchaseInstance(review.mesh.userData.instanceId);
-    alert('Purchase simulated — the seller has been credited.');
+    const result = await purchaseInstance(review.mesh.userData.instanceId);
+    if (result.requiresPayment) {
+      await runCheckoutFlow(result, { name, totalCents: priceCents });
+      alert('Purchase complete — thank you!');
+    } else {
+      alert('Purchase simulated — the seller has been credited.');
+    }
   } catch (err) {
-    alert(err.message || 'Could not simulate this purchase.');
+    if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {
     shopBuyHintEl.disabled = false;
   }

@@ -1707,4 +1707,85 @@ describe('Simulated purchases', () => {
     });
     expect(rejected.response.status).toBe(400);
   });
+
+  // #453: real-money checkout for a seller who has fully completed Stripe
+  // Connect onboarding (#452). This test suite never configures
+  // STRIPE_SECRET_KEY (same dev-mode-friendly pattern as RESEND_API_KEY
+  // and stripe-connect.test.js's own tests), so the actual PaymentIntent-
+  // creation/confirmation round trip can't be exercised here — only the
+  // fallback behavior and handlePurchaseFinalize's own validation/
+  // idempotency logic, which run entirely without a live Stripe call.
+  describe('Real-money checkout (#453)', () => {
+    it('still uses the simulated purchase path when Stripe is not configured, even for a fully connected seller', async () => {
+      const seller = await signupSeller('checkout-fallback-seller');
+      const builder = await signupBuilder('checkout-fallback-builder');
+      await createGreenbeltLandletWithArea('checkout-fallback-landlet', 1000);
+      await claim('checkout-fallback-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'checkout-fallback-template',
+          name: 'Connected-seller product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 5000,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('checkout-fallback-instance', 'checkout-fallback-landlet', 'checkout-fallback-template', builder);
+
+      // Simulates a seller who has finished onboarding (#452's own POST
+      // endpoint is what would normally set these, but that requires a
+      // real Stripe call this test suite deliberately never makes).
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_test123', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+      `).bind(seller.sellerId).run();
+
+      const purchased = await api('/instances/checkout-fallback-instance/purchase', { method: 'POST' });
+      expect(purchased.response.status).toBe(201);
+      expect(purchased.body.purchase).toMatchObject({ totalCents: 5000, paymentIntentId: null });
+      expect(purchased.body.requiresPayment).toBeUndefined();
+    });
+
+    it('validates paymentIntentId before checking whether Stripe is configured', async () => {
+      const missing = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({}) });
+      expect(missing.response.status).toBe(400);
+
+      const wrongType = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({ paymentIntentId: 42 }) });
+      expect(wrongType.response.status).toBe(400);
+    });
+
+    it('503s once a well-formed but unknown paymentIntentId passes validation, since Stripe is never configured in this test suite', async () => {
+      const notConfigured = await api('/purchases/finalize', {
+        method: 'POST',
+        body: JSON.stringify({ paymentIntentId: 'pi_does_not_exist' }),
+      });
+      expect(notConfigured.response.status).toBe(503);
+    });
+
+    it('is idempotent for an already-finalized paymentIntentId, entirely without needing Stripe configured', async () => {
+      const seller = await signupBuilder('checkout-idempotent-seller');
+      await createGreenbeltLandletWithArea('checkout-idempotent-landlet', 1000);
+      await claim('checkout-idempotent-landlet', seller);
+      await createTemplate('checkout-idempotent-template', { priceCents: 2000 });
+      await placeInstance('checkout-idempotent-instance', 'checkout-idempotent-landlet', 'checkout-idempotent-template', seller);
+      const purchased = await api('/instances/checkout-idempotent-instance/purchase', { method: 'POST' });
+      const { purchaseId } = purchased.body.purchase;
+
+      // Directly attaches a payment_intent_id to an existing (simulated)
+      // purchase to stand in for one handlePurchaseFinalize itself wrote
+      // — the idempotency lookup only cares that a purchases row already
+      // carries this id, not how it got there.
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_already_finalized', purchaseId).run();
+
+      const finalized = await api('/purchases/finalize', {
+        method: 'POST',
+        body: JSON.stringify({ paymentIntentId: 'pi_already_finalized' }),
+      });
+      expect(finalized.response.status).toBe(200);
+      expect(finalized.body.purchase.purchaseId).toBe(purchaseId);
+    });
+  });
 });
