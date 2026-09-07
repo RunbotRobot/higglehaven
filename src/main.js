@@ -609,10 +609,20 @@ const alignmentGuideX = makeAlignmentGuide(); // shown when the dragged item's X
 const alignmentGuideY = makeAlignmentGuide(); // same, for a Y snap — drawn running along X
 
 // null per axis when nothing's currently snapped; otherwise
-// { guideCoordinate, snappedValue } — guideCoordinate is the world
-// coordinate the snap is holding onto (what the hysteresis check below
-// measures the raw drag against), snappedValue is what the dragged mesh's
-// own center gets set to so its matching edge/center actually lands there.
+// { guideCoordinate, snappedValue, capturedRawValue } — guideCoordinate is
+// the target edge/center coordinate the snap matched against (drawn as the
+// guide line), snappedValue is what the dragged mesh's own center gets set
+// to so its matching edge/center actually lands there, and capturedRawValue
+// is the raw drag position at the moment this snap was captured — what the
+// hysteresis check below measures the current raw drag against. That has
+// to be capturedRawValue rather than guideCoordinate: an edge-matched snap
+// (see findAlignmentSnap's own min/center/max candidates) has a
+// guideCoordinate offset from the dragged mesh's own center by its
+// half-extent, a different coordinate space than the raw center-drag
+// position resolveAlignmentAxis is called with — comparing rawValue
+// against guideCoordinate directly made the release band effectively
+// never apply to edge snaps (the common case), since that offset is
+// almost always bigger than ALIGNMENT_RELEASE_M.
 const alignmentSnapState = { x: null, y: null };
 
 // Own local half-extent along `axis` — ignoring rotation, same simplifying
@@ -660,10 +670,11 @@ function findAlignmentSnap(movingMesh, axis, rawValue) {
 
 function resolveAlignmentAxis(axis, movingMesh, rawValue) {
   const held = alignmentSnapState[axis];
-  if (held && Math.abs(rawValue - held.guideCoordinate) < ALIGNMENT_RELEASE_M) {
+  if (held && Math.abs(rawValue - held.capturedRawValue) < ALIGNMENT_RELEASE_M) {
     return held.snappedValue; // still within the release band — keep holding, ignore rawValue entirely
   }
   const found = findAlignmentSnap(movingMesh, axis, rawValue);
+  if (found) found.capturedRawValue = rawValue;
   alignmentSnapState[axis] = found;
   return found ? found.snappedValue : rawValue;
 }
@@ -8916,18 +8927,29 @@ renderer.domElement.addEventListener('click', (event) => {
 // anything's actually due.
 const SCHEDULED_EVENT_CHECK_INTERVAL_MS = 10000;
 let lastScheduledEventCheck = 0;
+// event.triggeredAt is only ever set once a trigger request's own .then()
+// resolves — with nothing tracking a request already in flight, a call
+// slower than one 10s check interval (slow network, a throttled
+// backgrounded tab, or many due events firing in the same tick) let the
+// next tick re-issue a request for that same still-untriggered event.
+// pendingCalendarEventTriggers closes that gap; eventId is unique enough
+// on its own (no instanceId needed) since it's never reused across events.
+const pendingCalendarEventTriggers = new Set();
 function checkScheduledCalendarEvents() {
   const nowIso = new Date().toISOString();
   for (const calendar of shopCalendars) {
     for (const event of calendar.events) {
       if (!event.scheduledAt || event.triggeredAt || event.scheduledAt > nowIso) continue;
+      if (pendingCalendarEventTriggers.has(event.eventId)) continue;
+      pendingCalendarEventTriggers.add(event.eventId);
       triggerCalendarEvent(calendar.instanceId, event.eventId).then(({ event: updated, triggered }) => {
         // Cache the server's own triggeredAt locally regardless of who
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
         if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
-      }).catch(() => {});
+        pendingCalendarEventTriggers.delete(event.eventId);
+      }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
   }
 }
