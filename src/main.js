@@ -514,7 +514,15 @@ function wireDraggingBehavior(transformControls) {
     controls.enabled = !event.value;
     if (event.value) {
       edgePanDragStartCameraPos = camera.position.clone();
-      pushUndoSnapshot();
+      // #402: pushUndoSnapshot captures productMeshes as it stands right
+      // now — skip it while another action (Undo/Redo, a trim commit,
+      // Paste, tap-to-place) is still mid-flight rebuilding that same
+      // array, so a bad-timing drag doesn't push a torn, partially-
+      // rebuilt snapshot onto the undo stack. The drag itself still
+      // proceeds either way — it only repositions the one mesh already
+      // being dragged, not the productMeshes array's own membership, so
+      // it isn't itself part of the race #402 is about.
+      if (!sceneMutationBusy) pushUndoSnapshot();
       return;
     }
     edgePanDragStartCameraPos = null;
@@ -1062,22 +1070,31 @@ trimControls.addEventListener('dragging-changed', (event) => {
   queueTrimEdit(async () => {
     const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
     if (!current) return; // deleted, or otherwise gone, since this drag ended
-    const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
-    if (!updated) return; // deleted while this crop's model was loading
-    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-    updated.position.set(clamped.x, clamped.y, clamped.z);
-    updated.userData.safePosition = updated.position.clone();
-    // The await above is a real gap a builder can select a different item
-    // across — only re-attach the trim gizmo here if `updated` is still
-    // that selection (replaceMeshWithCrop itself already made that same
-    // call for selectedMeshes/its outline; this mirrors it for the
-    // gizmo). Otherwise whatever's actually selected now already has its
-    // own correct gizmo attached, and forcing this one back on would
-    // silently swap it out from under the builder mid-edit.
-    if (selectedMeshes.has(updated)) trimControls.attach(updated);
-    persistLayout();
-    syncUpdate(updated);
-    updateTrimLengthInput();
+    // #402: replaceMeshWithCrop's own await is exactly the gap Undo/Redo
+    // (or another mutating action) could interleave a productMeshes
+    // change across — hold the shared gate for it, same reasoning as the
+    // other call sites below.
+    if (!beginSceneMutation()) return;
+    try {
+      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      if (!updated) return; // deleted while this crop's model was loading
+      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+      updated.position.set(clamped.x, clamped.y, clamped.z);
+      updated.userData.safePosition = updated.position.clone();
+      // The await above is a real gap a builder can select a different item
+      // across — only re-attach the trim gizmo here if `updated` is still
+      // that selection (replaceMeshWithCrop itself already made that same
+      // call for selectedMeshes/its outline; this mirrors it for the
+      // gizmo). Otherwise whatever's actually selected now already has its
+      // own correct gizmo attached, and forcing this one back on would
+      // silently swap it out from under the builder mid-edit.
+      if (selectedMeshes.has(updated)) trimControls.attach(updated);
+      persistLayout();
+      syncUpdate(updated);
+      updateTrimLengthInput();
+    } finally {
+      endSceneMutation();
+    }
   });
 });
 
@@ -4570,18 +4587,42 @@ function captureSnapshot() {
   return productMeshes.map((mesh) => instanceFromMesh(mesh));
 }
 
-// Set for the duration of restoreSnapshot's own await (mesh rebuilding plus
-// the batch create/update/delete network calls) — without it, a second
-// rapid click (a trackpad double-click, or just an eager user) before the
-// first restoreSnapshot resolves would pop another snapshot and start a
-// second, concurrent restoreSnapshot mutating the same shared
-// productMeshes/selectedMeshes/undoStack/redoStack and firing overlapping
-// batch requests, potentially for the same instance IDs.
-let undoRedoBusy = false;
+// Set for the duration of any action with a real await gap that mutates
+// productMeshes in place — restoreSnapshot's own mesh rebuilding plus batch
+// create/update/delete calls, a trim commit's model reload, Paste, and
+// tap-to-place. Originally scoped to just Undo/Redo (hence the name), but
+// #402 found that restoreSnapshot racing any of Delete/Trim/Place/Paste —
+// not just another Undo/Redo click — could orphan a mesh from
+// productMeshes the same way #398's narrower Trim-vs-Delete fix did: any
+// of those can start their own async mutation while restoreSnapshot (or
+// another one of them) is still mid-flight, interleaving writes to the
+// same shared productMeshes/selectedMeshes/undoStack/redoStack and firing
+// overlapping batch requests, potentially for the same instance IDs.
+// beginSceneMutation()/endSceneMutation() below are the shared gate every
+// such entry point now goes through instead of touching this flag
+// directly — see their own comment.
+let sceneMutationBusy = false;
+
+// Claims the mutation gate for an action with an async body that mutates
+// productMeshes (a real await, not just a synchronous splice) — returns
+// false without side effects if another such action is already in
+// flight, so the caller can bail out exactly like Undo/Redo already did.
+// Callers must release the gate via endSceneMutation() in a `finally`.
+function beginSceneMutation() {
+  if (sceneMutationBusy) return false;
+  sceneMutationBusy = true;
+  updateUndoRedoButtons();
+  return true;
+}
+
+function endSceneMutation() {
+  sceneMutationBusy = false;
+  updateUndoRedoButtons();
+}
 
 function updateUndoRedoButtons() {
-  undoBtn.disabled = undoRedoBusy || undoStack.length === 0;
-  redoBtn.disabled = undoRedoBusy || redoStack.length === 0;
+  undoBtn.disabled = sceneMutationBusy || undoStack.length === 0;
+  redoBtn.disabled = sceneMutationBusy || redoStack.length === 0;
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -4660,30 +4701,24 @@ async function restoreSnapshot(snapshot) {
 }
 
 async function undo() {
-  if (undoStack.length === 0 || undoRedoBusy) return;
-  undoRedoBusy = true;
-  updateUndoRedoButtons();
+  if (undoStack.length === 0 || !beginSceneMutation()) return;
   try {
     const previous = undoStack.pop();
     redoStack.push(captureSnapshot());
     await restoreSnapshot(previous);
   } finally {
-    undoRedoBusy = false;
-    updateUndoRedoButtons();
+    endSceneMutation();
   }
 }
 
 async function redo() {
-  if (redoStack.length === 0 || undoRedoBusy) return;
-  undoRedoBusy = true;
-  updateUndoRedoButtons();
+  if (redoStack.length === 0 || !beginSceneMutation()) return;
   try {
     const next = redoStack.pop();
     undoStack.push(captureSnapshot());
     await restoreSnapshot(next);
   } finally {
-    undoRedoBusy = false;
-    updateUndoRedoButtons();
+    endSceneMutation();
   }
 }
 
@@ -5066,18 +5101,24 @@ for (const field of trimAxisFieldEls) {
     queueTrimEdit(async () => {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
-      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
-      if (!updated) return; // deleted while this crop's model was loading
-      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-      updated.position.set(clamped.x, clamped.y, clamped.z);
-      updated.userData.safePosition = updated.position.clone();
-      // Same stale-selection guard as the drag-release handler above — see
-      // its own comment. The typed-value path awaits the same
-      // replaceMeshWithCrop model rebuild, so the same race applies here.
-      if (selectedMeshes.has(updated)) trimControls.attach(updated);
-      persistLayout();
-      syncUpdate(updated);
-      updateTrimLengthInput();
+      // #402: same shared-gate reasoning as the drag-release handler above.
+      if (!beginSceneMutation()) return;
+      try {
+        const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+        if (!updated) return; // deleted while this crop's model was loading
+        const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+        updated.position.set(clamped.x, clamped.y, clamped.z);
+        updated.userData.safePosition = updated.position.clone();
+        // Same stale-selection guard as the drag-release handler above — see
+        // its own comment. The typed-value path awaits the same
+        // replaceMeshWithCrop model rebuild, so the same race applies here.
+        if (selectedMeshes.has(updated)) trimControls.attach(updated);
+        persistLayout();
+        syncUpdate(updated);
+        updateTrimLengthInput();
+      } finally {
+        endSceneMutation();
+      }
     });
   });
 }
@@ -5322,7 +5363,11 @@ measureBtn.addEventListener('click', () => {
 });
 
 deleteBtn.addEventListener('click', () => {
-  if (selectedMeshes.size === 0) return;
+  // #402: bail out (rather than mutate productMeshes) while another
+  // mutating action (Undo/Redo, a trim commit, Paste, tap-to-place) is
+  // still mid-flight — this handler is otherwise fully synchronous, so it
+  // never needs to *hold* the gate itself, only check it.
+  if (selectedMeshes.size === 0 || sceneMutationBusy) return;
   pushUndoSnapshot();
   const meshes = [...selectedMeshes];
   const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
@@ -5707,9 +5752,17 @@ pasteBtn.addEventListener('click', async () => {
   // what you just copied would work in any other editor.
   const anchor = selectionPlacementAnchor();
   if (anchor) {
-    exitMultiSelectMode();
-    pushUndoSnapshot();
-    await placeClipboardItems(clipboard, anchor.x, anchor.y, anchor.supportZ);
+    // #402: placeClipboardItems has a real await per item, so (unlike
+    // deleteBtn's fully-synchronous handler above) this needs to hold the
+    // gate for that whole span, not just check it once up front.
+    if (!beginSceneMutation()) return;
+    try {
+      exitMultiSelectMode();
+      pushUndoSnapshot();
+      await placeClipboardItems(clipboard, anchor.x, anchor.y, anchor.supportZ);
+    } finally {
+      endSceneMutation();
+    }
     return;
   }
   const count = clipboard.length;
@@ -5784,6 +5837,12 @@ async function placeClipboardItems(items, x, y, supportZ) {
 // product if that's what the raycast actually hit, so tapping a tabletop
 // rests the new item there instead of on the ground beneath it.
 async function handlePlacementClick() {
+  // #402: leave pendingPlacement untouched (rather than silently
+  // consuming the tap) while another mutating action is mid-flight, so
+  // the builder's pending placement survives for a retry tap once it
+  // clears — checked before claiming the gate below since spawnInstanceAt/
+  // placeClipboardItems both have a real await per item.
+  if (sceneMutationBusy) return;
   const productHits = raycaster.intersectObjects(productMeshes, true);
   const groundHits = raycaster.intersectObject(landlet);
 
@@ -5806,15 +5865,19 @@ async function handlePlacementClick() {
     : levelFloorZ(currentLevelIndex);
 
   const pending = pendingPlacement;
+  if (!beginSceneMutation()) return;
   pendingPlacement = null;
   addItemBtn.textContent = '+ Add Item';
   pushUndoSnapshot();
-
-  if (pending.type === 'template') {
-    const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
-    selectOnly(mesh);
-  } else {
-    await placeClipboardItems(pending.items, point.x, point.y, supportZ);
+  try {
+    if (pending.type === 'template') {
+      const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
+      selectOnly(mesh);
+    } else {
+      await placeClipboardItems(pending.items, point.x, point.y, supportZ);
+    }
+  } finally {
+    endSceneMutation();
   }
 }
 
