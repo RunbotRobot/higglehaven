@@ -1124,6 +1124,33 @@ describe('Landlet levels', () => {
     expect(list.body.levels.map((level) => level.levelIndex)).toEqual([-1]);
   });
 
+  // Found via backlog audit (#395): the outermost-level DELETE used to run
+  // a plain SELECT-then-DELETE with no guard tying the delete to the
+  // extent it was read against. Racing two DELETEs against the exact same
+  // level is deterministic regardless of request interleaving (unlike
+  // racing two adds, which both legitimately succeed with different
+  // indexes whenever they happen to run sequentially) — same shape as the
+  // calendar-trigger race test above and the bid-race test in
+  // commerce.test.js, both of which race identical requests for the same
+  // reason. Exactly one DELETE can ever actually remove the row.
+  it('lets exactly one of two concurrent deletes for the same level succeed', async () => {
+    const owner = await signupBuilder('levels-remove-race-owner');
+    await createGreenbeltLandletWithArea('levels-remove-race-landlet', 1000);
+    await claim('levels-remove-race-landlet', owner);
+    await api('/landlets/levels-remove-race-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const [first, second] = await Promise.all([
+      api('/landlets/levels-remove-race-landlet/levels/1', owner.session({ method: 'DELETE' })),
+      api('/landlets/levels-remove-race-landlet/levels/1', owner.session({ method: 'DELETE' })),
+    ]);
+    expect([first.response.status, second.response.status].sort()).toEqual([200, 409]);
+
+    const list = await api('/landlets/levels-remove-race-landlet/levels');
+    expect(list.body.levels).toEqual([]);
+  });
+
   it('folds level cap consumption into the owning builder\'s land cap growth formula', async () => {
     const owner = await signupBuilder('levels-cap-owner');
     await createGreenbeltLandletWithArea('levels-cap-landlet', 1000);

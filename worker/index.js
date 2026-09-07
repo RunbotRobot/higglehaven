@@ -2103,9 +2103,38 @@ async function handleLandletLevels(request, db, route) {
       );
     }
     const levelId = `level-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
-    `).bind(levelId, landletId, levelIndex, capConsumedM2).run();
+    // Found via backlog audit (#395): levelIndex above was computed from a
+    // plain SELECT snapshot, then this was a plain INSERT — a concurrent
+    // add in the same direction could compute the same levelIndex from its
+    // own stale read, and the loser's INSERT would throw a raw UNIQUE
+    // constraint violation (an unshaped 500) instead of this file's usual
+    // clean 409. Folding the "still the same extent" check into the
+    // INSERT's own WHERE clause (same idiom as the auction-start guard
+    // above) makes the whole read-derived-index-then-insert one atomic
+    // statement: it only succeeds if the table's current extent in this
+    // direction still matches what levelIndex was computed from, catching
+    // both a same-direction race (another add landed the same index first)
+    // and a cross-direction one (a concurrent remove shifted the extent
+    // out from under this read).
+    // A ground floor of 0 has to be included in the extent comparison even
+    // when no row exists on this side yet (e.g. adding the first "down"
+    // level while "up" levels already exist) — mirrors the Math.max(0, ...)/
+    // Math.min(0, ...) floor levelIndex itself was just computed with above,
+    // via a synthetic zero row unioned into the scan.
+    const extentBefore = input.direction === 'up' ? levelIndex - 1 : levelIndex + 1;
+    const inserted = await db.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2)
+      SELECT ?, ?, ?, ?
+      WHERE (
+        SELECT ${input.direction === 'up' ? 'MAX' : 'MIN'}(level_index) FROM (
+          SELECT level_index FROM landlet_levels WHERE landlet_id = ? UNION ALL SELECT 0
+        )
+      ) = ?
+        AND NOT EXISTS (SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = ?)
+    `).bind(levelId, landletId, levelIndex, capConsumedM2, landletId, extentBefore, landletId, levelIndex).run();
+    if (inserted.meta.changes === 0) {
+      throw new HttpError('This landlet\'s levels changed — please retry', 409);
+    }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
     return json({ level: levelFromRow(row) }, 201);
@@ -2116,14 +2145,29 @@ async function handleLandletLevels(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const levelIndex = integerValue(route[3], 'levelIndex');
-    const levels = await landletLevels(db, landletId);
-    const outermost = levelIndex > 0
-      ? Math.max(0, ...levels.map((level) => level.level_index))
-      : Math.min(0, ...levels.map((level) => level.level_index));
-    if (levelIndex === 0 || outermost !== levelIndex) {
+    if (levelIndex === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
     }
-    await db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ? AND level_index = ?').bind(landletId, levelIndex).run();
+    // Found via backlog audit (#395): the outermost check below used to run
+    // against a plain SELECT snapshot, then the actual DELETE was a
+    // separate, unguarded statement — a concurrent add extending past this
+    // level (between the read and the delete) would let this DELETE still
+    // remove what's no longer the outermost row, leaving a gap the
+    // landlet_levels schema comment's own "no gaps" adjacency rule
+    // promises never happens. Re-checking "is this still the current
+    // outermost in its own direction" as part of the DELETE's own WHERE
+    // clause closes that window.
+    const deleted = await db.prepare(`
+      DELETE FROM landlet_levels
+      WHERE landlet_id = ? AND level_index = ?
+        AND level_index = (
+          SELECT CASE WHEN ? > 0 THEN MAX(level_index) ELSE MIN(level_index) END
+          FROM landlet_levels WHERE landlet_id = ?
+        )
+    `).bind(landletId, levelIndex, levelIndex, landletId).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Only the outermost existing level can be removed', 409);
+    }
     await recomputeLandCap(db, landlet.owner_builder_id);
     return json({ deleted: true });
   }
