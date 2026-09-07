@@ -4014,6 +4014,48 @@ describe('Notifications', () => {
     expect(bidderNotices.body.notifications).toHaveLength(0);
   });
 
+  // Issue #320: the list was hardcoded to LIMIT 100 with no way to page
+  // further — a builder with more notifications than that could never see
+  // or individually mark read anything older than the newest 100.
+  it('paginates the notifications list via cursor, newest first, with no gaps or duplicates', async () => {
+    const owner = await signupBuilder('notif-page-owner');
+    const bidder = await signupBuilder('notif-page-bidder');
+    const landletId = 'notif-page-landlet';
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Three strictly increasing bids — three separate bid notifications
+    // for the owner, enough to exercise a limit=1 page boundary twice.
+    for (const amountCents of [500, 1000, 1500]) {
+      await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents }),
+      }));
+    }
+    const whole = await api('/notifications', owner.session());
+    expect(whole.body.notifications.length).toBeGreaterThanOrEqual(3);
+    expect(whole.body.nextCursor).toBeNull(); // under the default limit — nothing more to page to
+
+    const seenIds = [];
+    let cursor = null;
+    for (let i = 0; i < whole.body.notifications.length; i++) {
+      const page = await api(
+        `/notifications?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        owner.session(),
+      );
+      expect(page.body.notifications).toHaveLength(1);
+      seenIds.push(page.body.notifications[0].notificationId);
+      cursor = page.body.nextCursor;
+    }
+    expect(cursor).toBeNull(); // exhausted after exactly as many pages as there are rows
+    expect(seenIds).toEqual(whole.body.notifications.map((n) => n.notificationId)); // same order, one row at a time
+
+    const invalidCursor = await api('/notifications?cursor=not-base64', owner.session());
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
   it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
     const { owner, bidder } = await seedNotifications('spoof');
     const spoofed = await api(`/notifications?builderId=${owner.builderId}`, bidder.session());

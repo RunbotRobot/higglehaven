@@ -2021,6 +2021,19 @@
       #notifications-mark-all-btn:disabled {
         opacity: 0.5;
       }
+      #notifications-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #notifications-load-more-btn:disabled {
+        opacity: 0.5;
+      }
       /* Same modal shell as #notifications-modal — friend requests
          (docs/SPEC.md §2), opened from #friends-btn. Three subsections
          (Requests/Sent/Friends) share one .friend-row look with different
@@ -2754,6 +2767,7 @@
         <h2>Notices</h2>
         <button id="notifications-mark-all-btn" type="button">Mark all read</button>
         <div id="notifications-list"></div>
+        <button id="notifications-load-more-btn" type="button" hidden>Load more</button>
         <div id="notifications-empty">Nothing here yet.</div>
       </div>
     </div>

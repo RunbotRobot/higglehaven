@@ -1530,13 +1530,30 @@ async function handleNotifications(request, db, route, url) {
     const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
     assertOwner(builderId, sessionBuilder.builder_id, 'Not your notifications');
     const unreadOnlyParam = url.searchParams.get('unreadOnly');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = ['builder_id = ?'];
     const bindings = [builderId];
     if (unreadOnlyParam === 'true') conditions.push('read_at IS NULL');
+    // Newest-first (unlike this file's other cursor-paginated lists, all
+    // ascending) — "older than the last row already seen" is the opposite
+    // comparison, and DESC on both the primary and tiebreak columns keeps
+    // one consistent page order across cursor pages, same as those.
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND notification_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
     const { results } = await db.prepare(`
-      SELECT * FROM notifications WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100
-    `).bind(...bindings).all();
-    return json({ notifications: results.map(notificationFromRow) });
+      SELECT * FROM notifications WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, notification_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      notifications: page.map(notificationFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.notification_id) : null,
+    });
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {

@@ -6391,14 +6391,16 @@ const notificationsCloseBtn = document.getElementById('notifications-close-btn')
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
 async function refreshNotificationsBadge() {
   if (!builderId) return;
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
-    // own .length — that list is capped at 100 rows server-side, which
-    // would silently undercount the badge past that (e.g. a popular
-    // auction's worth of bid notifications).
+    // own first page — that list is cursor-paginated (issue #320) one
+    // page at a time, which would still undercount the badge if this read
+    // only the first page's own .length (e.g. a popular auction's worth
+    // of bid notifications).
     const count = await fetchUnreadNotificationCount();
     notificationsBadgeEl.textContent = String(count);
     notificationsBadgeEl.hidden = count === 0;
@@ -6426,14 +6428,50 @@ function formatNotificationTime(isoString) {
 // latest afterward; a superseded call bails out quietly instead of
 // rendering anything.
 let notificationsLoadToken = 0;
+// The cursor for whatever page comes after the ones currently rendered —
+// null once there's nothing more to load (see fetchNotifications'/
+// handleNotifications' nextCursor, issue #320). Reset to null every time
+// renderNotifications starts a fresh first page; advanced by
+// loadMoreNotifications as later pages come in.
+let notificationsNextCursor = null;
+
+function appendNotificationRow(notification) {
+  const row = document.createElement('div');
+  row.className = 'notification-row';
+  row.classList.toggle('unread', !notification.readAt);
+  const message = document.createElement('div');
+  message.textContent = notification.message;
+  row.appendChild(message);
+  const time = document.createElement('div');
+  time.className = 'notification-row-time';
+  time.textContent = formatNotificationTime(notification.createdAt);
+  row.appendChild(time);
+  // Tapping any notice marks just that one read — simpler than a
+  // separate per-row dismiss button, and "Mark all read" still exists
+  // for clearing the whole list at once.
+  if (!notification.readAt) {
+    row.addEventListener('click', async () => {
+      try {
+        await markNotificationRead(notification.notificationId);
+        row.classList.remove('unread');
+        refreshNotificationsBadge();
+      } catch (err) {
+        console.warn('Could not mark notification read:', err);
+      }
+    });
+  }
+  notificationsListEl.appendChild(row);
+}
 
 async function renderNotifications() {
   const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
+  notificationsLoadMoreBtn.hidden = true;
+  notificationsNextCursor = null;
   if (!builderId) return;
-  let notifications;
+  let page;
   try {
-    notifications = await fetchNotifications();
+    page = await fetchNotifications();
   } catch (err) {
     if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
@@ -6441,35 +6479,27 @@ async function renderNotifications() {
     return;
   }
   if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
-  notificationsEmptyEl.hidden = notifications.length > 0;
-  for (const notification of notifications) {
-    const row = document.createElement('div');
-    row.className = 'notification-row';
-    row.classList.toggle('unread', !notification.readAt);
-    const message = document.createElement('div');
-    message.textContent = notification.message;
-    row.appendChild(message);
-    const time = document.createElement('div');
-    time.className = 'notification-row-time';
-    time.textContent = formatNotificationTime(notification.createdAt);
-    row.appendChild(time);
-    // Tapping any notice marks just that one read — simpler than a
-    // separate per-row dismiss button, and "Mark all read" still exists
-    // for clearing the whole list at once.
-    if (!notification.readAt) {
-      row.addEventListener('click', async () => {
-        try {
-          await markNotificationRead(notification.notificationId);
-          row.classList.remove('unread');
-          refreshNotificationsBadge();
-        } catch (err) {
-          console.warn('Could not mark notification read:', err);
-        }
-      });
-    }
-    notificationsListEl.appendChild(row);
-  }
+  notificationsEmptyEl.hidden = page.notifications.length > 0;
+  for (const notification of page.notifications) appendNotificationRow(notification);
+  notificationsNextCursor = page.nextCursor;
+  notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
 }
+
+notificationsLoadMoreBtn.addEventListener('click', async () => {
+  const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+  notificationsLoadMoreBtn.disabled = true;
+  try {
+    const page = await fetchNotifications({ cursor: notificationsNextCursor });
+    if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
+    for (const notification of page.notifications) appendNotificationRow(notification);
+    notificationsNextCursor = page.nextCursor;
+    notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
+  } catch (err) {
+    console.warn('Could not load more notifications:', err);
+  } finally {
+    notificationsLoadMoreBtn.disabled = false;
+  }
+});
 
 notificationsBtn.addEventListener('click', () => {
   notificationsModalEl.classList.add('visible');
