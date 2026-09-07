@@ -198,6 +198,30 @@ If a collision happens anyway: whoever notices second stands down
 immediately (comment noting the duplicate, drop the redundant work)
 rather than finishing in parallel.
 
+### Claiming feedback-driven work — the same discipline, extended
+
+Everything above narrows the race for GitHub Issues specifically, because
+an issue has an `assignees` field to check. A raw owner `feedback` message
+in the control room's `messages` collection has no such field — nothing
+stops several sessions reading it in the same few minutes and each
+independently deciding to act on it. This is exactly what happened on
+2026-09-07: four sessions simultaneously picked up one piece of owner
+feedback (removing a stale claim-map note) with no GitHub issue involved
+at all, producing four competing PRs.
+
+The fix is to extend "claim first, investigate second" to cover this case
+explicitly, reusing the `tasks` collection rather than inventing a new
+mechanism: the moment you decide to act on a `messages` feedback doc
+(whether or not it's worth a real GitHub issue), immediately write a
+`tasks` doc for it — id `feedback-<message id>` if you don't file a real
+issue, `status: "in_progress"`, your session name — *before* you start
+investigating or coding, exactly as you would self-assign an issue.
+Check `tasks` for an existing doc against that message id first, the same
+way you'd check an issue's `assignees`. A feedback item small enough that
+filing a real GitHub issue feels like overkill is still worth a `tasks`
+doc for this reason alone — the claim is the point, not the issue
+tracker.
+
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
