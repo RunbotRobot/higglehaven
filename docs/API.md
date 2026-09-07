@@ -3287,11 +3287,18 @@ section is gated on `currentLandletId`, so both still render even outside
 an active Build session — same as Land Cap above them. Two independent
 sections:
 
-- **Sell Your Land** — if the active identity currently owns a claimed
-  landlet with no active auction on it, a small form (starting bid in
-  dollars, duration in hours) and a Start Auction button. Once that
-  landlet has an active auction, this collapses to a one-line summary
-  instead of offering a second start form.
+- **Sell Your Land** — a landlet picker (#249) when the active identity
+  currently owns more than one claimed landlet at once (a normal state
+  since #199 lets a seller claim a second landlet the moment they start
+  a $0 auction, or get a first bid on any starting amount, on their
+  current one — before that auction even resolves), defaulting to
+  whichever landlet the builder is currently in Build mode on. Below the
+  picker (or standing alone, with no picker, for the common one-landlet
+  case): if the selected landlet has no active auction on it, a small
+  form (starting bid in dollars, duration in hours) and a Start Auction
+  button; once it has an active auction, this collapses to a one-line
+  summary instead of offering a second start form. Switching the picker
+  re-renders this status/form for whichever landlet is newly selected.
 - **Active Auctions** — every currently-active auction world-wide, each
   row showing the landlet, current high bid (or the starting bid if none
   yet), time remaining, and the unsold outcome in plain language. A
