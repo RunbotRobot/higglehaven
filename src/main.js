@@ -4033,7 +4033,20 @@ function renderBuildSettingsSection() {
   historyField.appendChild(historyList);
   settingsSectionEl.appendChild(historyField);
 
+  // renderVersionHistory() is called from several places in quick
+  // succession — the initial render, and again after Publish or after
+  // either row's own Set Live resolves — each doing its own network
+  // round-trip before touching historyList. Only the button that was
+  // clicked gets disabled, so nothing stops a second call (e.g. clicking
+  // Set Live on a different row) from starting before an earlier one's
+  // response has come back; without a staleness guard, an earlier, slower
+  // call's response can land after a later one's and overwrite the DOM
+  // with out-of-date version/activeVersionId data. Same monotonic-token
+  // fix as friendsLoadToken (#448).
+  let versionHistoryLoadToken = 0;
+
   async function renderVersionHistory() {
+    const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let versions;
     let activeVersionId;
@@ -4043,6 +4056,7 @@ function renderBuildSettingsSection() {
         fetchLandlet(landletId),
       ]);
     } catch (err) {
+      if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
       historyList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -4050,6 +4064,7 @@ function renderBuildSettingsSection() {
       historyList.appendChild(errNote);
       return;
     }
+    if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
     historyList.innerHTML = '';
     if (versions.length === 0) {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
@@ -4230,7 +4245,20 @@ async function renderAuctionSection() {
   listField.appendChild(auctionList);
   settingsSectionEl.appendChild(listField);
 
+  // Guards against the picker's `change` handler firing renderForLandlet
+  // again before a previous call's own fetchAuctions round-trip has
+  // resolved (#442) — without this, switching the picker quickly (A→B, or
+  // A→B→A) races two async renders over the same shared startField/
+  // startStatus DOM nodes, and whichever fetch happens to resolve last
+  // wins regardless of which landlet is actually selected by then. Bumped
+  // at the start of every call; a call whose token has been superseded by
+  // a newer one bails out without touching the DOM once its await
+  // returns, the same generation-counter idiom #424/#425 already use for
+  // this exact race shape elsewhere in Settings.
+  let landletRenderToken = 0;
+
   async function renderForLandlet(landletId) {
+    const myToken = ++landletRenderToken;
     startStatus.textContent = '';
     startStatus.classList.remove('error');
     for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
@@ -4238,10 +4266,12 @@ async function renderAuctionSection() {
     try {
       activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
+      if (myToken !== landletRenderToken) return;
       startStatus.textContent = err.message || 'Could not check for an existing auction.';
       startStatus.classList.add('error');
       return;
     }
+    if (myToken !== landletRenderToken) return;
     if (activeForMine.length > 0) {
       const row = document.createElement('div');
       row.className = 'auction-row';
@@ -4441,7 +4471,10 @@ async function renderAuctionSection() {
         bidBtn.textContent = 'Place Bid';
         bidBtn.addEventListener('click', async () => {
           const dollars = Number(bidInput.value);
-          if (!Number.isFinite(dollars) || dollars < 0) return;
+          if (!Number.isFinite(dollars) || dollars < 0) {
+            alert('Enter a bid amount of zero or more.');
+            return;
+          }
           bidBtn.disabled = true;
           try {
             await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
