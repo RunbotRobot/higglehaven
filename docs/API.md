@@ -2196,6 +2196,9 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- A friend request or its acceptance (see "Friendship object" below): the
+  recipient is notified of a new request, and the requester is notified
+  once it's accepted.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -2340,7 +2343,8 @@ reference an existing builder. `409` if a friendship or pending request
 already exists between the two builders **in either direction** — sending
 B→A when A→B is already pending doesn't create a second row; the existing
 one has to be accepted or declined first. Returns `201` with the new
-`pending` friendship.
+`pending` friendship. Notifies `recipientBuilderId` (the generic
+notification system below, not a dedicated channel).
 
 ### `PATCH /api/friendships/:friendshipId`
 
@@ -2350,7 +2354,7 @@ accepting their own would skip the other side's consent entirely). Accepts
 a request: `{ "status": "accepted" }` is the only valid body — `400` on
 anything else. `404` if the friendship doesn't exist. There is no
 "decline" status; declining a pending request or removing an accepted
-friendship are both just `DELETE`.
+friendship are both just `DELETE`. Notifies the `requesterBuilderId`.
 
 ### `DELETE /api/friendships/:friendshipId`
 
