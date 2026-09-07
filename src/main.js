@@ -4110,26 +4110,13 @@ async function renderAuctionSection() {
   listField.appendChild(auctionList);
   settingsSectionEl.appendChild(listField);
 
-  async function renderStartSection() {
+  async function renderForLandlet(landletId) {
     startStatus.textContent = '';
     startStatus.classList.remove('error');
     for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
-    let owned;
-    try {
-      owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
-    } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your landlet.';
-      startStatus.classList.add('error');
-      return;
-    }
-    if (owned.length === 0) {
-      startStatus.textContent = 'Claim a landlet first to auction it off.';
-      return;
-    }
-    const myLandletId = owned[0].landletId;
     let activeForMine;
     try {
-      activeForMine = await fetchAuctions({ status: 'active', landletId: myLandletId });
+      activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
       startStatus.textContent = err.message || 'Could not check for an existing auction.';
       startStatus.classList.add('error');
@@ -4186,11 +4173,11 @@ async function renderAuctionSection() {
       }
       startBtn.disabled = true;
       try {
-        await startAuction(myLandletId, {
+        await startAuction(landletId, {
           startingBidCents: Math.round(dollars * 100),
           durationHours: Math.round(hours),
         });
-        await renderStartSection();
+        await renderForLandlet(landletId);
         await renderAuctionList();
       } catch (err) {
         startStatus.textContent = err.message || 'Could not start the auction.';
@@ -4200,6 +4187,64 @@ async function renderAuctionSection() {
     });
     form.appendChild(startBtn);
     startField.appendChild(form);
+  }
+
+  async function renderStartSection() {
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row, .landlet-picker')) el.remove();
+    let owned;
+    try {
+      // fetchAllLandlets pages through every one of this builder's owned
+      // landlets, not just fetchLandlets's own first 100-per-page limit
+      // (#186's own shape). Needed here too now that #199 lets a seller
+      // hold two simultaneously-claimed landlets (starting a $0 auction,
+      // or getting a first bid on any starting amount, frees the claim
+      // lock immediately rather than waiting for resolution) — "exactly
+      // one owned landlet" is no longer a safe assumption (#249).
+      owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check your landlets.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (owned.length === 0) {
+      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      return;
+    }
+
+    // Per the owner's own #249 product call: a picker across every
+    // claimed landlet the builder owns, defaulting to whichever one
+    // they're currently in Build mode on (falling back to the first
+    // owned landlet when that one isn't in this list at all — e.g.
+    // Settings opened from Shop mode with no Build-mode landlet active).
+    let selectedLandletId = owned.some((l) => l.landletId === currentLandletId)
+      ? currentLandletId
+      : owned[0].landletId;
+
+    if (owned.length > 1) {
+      const pickerRow = document.createElement('div');
+      pickerRow.className = 'landlet-picker';
+      const pickerLabel = document.createElement('label');
+      pickerLabel.textContent = 'Landlet';
+      const picker = document.createElement('select');
+      for (const landlet of owned) {
+        const option = document.createElement('option');
+        option.value = landlet.landletId;
+        option.textContent = landlet.name || landlet.landletId;
+        if (landlet.landletId === selectedLandletId) option.selected = true;
+        picker.appendChild(option);
+      }
+      picker.addEventListener('change', () => {
+        selectedLandletId = picker.value;
+        renderForLandlet(selectedLandletId);
+      });
+      pickerLabel.appendChild(picker);
+      pickerRow.appendChild(pickerLabel);
+      startField.appendChild(pickerRow);
+    }
+
+    await renderForLandlet(selectedLandletId);
   }
 
   async function renderAuctionList() {
