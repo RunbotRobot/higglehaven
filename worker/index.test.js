@@ -2428,6 +2428,42 @@ describe('Community signs', () => {
     });
     expect(limited.response.status).toBe(429);
   });
+
+  // Found via backlog audit (#356): the list above was `ORDER BY created_at`
+  // with no `DESC` — ascending, so once a sign passed 200 posts, `LIMIT 200`
+  // always kept the *oldest* 200, permanently hiding every post made after
+  // that point (the newest ones always fell outside the window). Explicit
+  // created_at values, rather than relying on insertion order/timing, make
+  // "which 200 survive" deterministic to assert on.
+  it('reports the true post count and keeps the newest 200 (in ascending order) past the list\'s own cap', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-past-cap-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 6,
+        y: 6,
+        isCommunitySign: true,
+      }),
+    }));
+    const statements = Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO sign_posts (post_id, instance_id, author_label, text, created_at) VALUES (?, 'sign-past-cap-instance', 'A Shopper', ?, ?)
+      `).bind(`sign-past-cap-${i}`, `Post ${i}`, new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()));
+    await env.DB.batch(statements);
+
+    const list = await api('/instances/sign-past-cap-instance/posts');
+    expect(list.body.posts).toHaveLength(200);
+    expect(list.body.totalCount).toBe(205);
+    // The surviving window is the newest 200 (post 5 through post 204), not
+    // the oldest 200 (post 0 through post 199) the pre-#356 query kept —
+    // and still returned oldest-first within that window, since
+    // rebuildSignSprites (src/main.js) depends on that ordering to grab the
+    // most recent posts via .slice(-SIGN_MAX_VISIBLE_POSTS).
+    expect(list.body.posts[0].postId).toBe('sign-past-cap-5');
+    expect(list.body.posts[199].postId).toBe('sign-past-cap-204');
+  });
 });
 
 describe('Community calendar', () => {
@@ -2649,6 +2685,33 @@ describe('Community calendar', () => {
     expect(scheduled.response.status).toBe(201);
     expect(scheduled.body.event.scheduledAt).toBe('2026-08-26T20:00:00.000Z');
     expect(scheduled.body.event.triggeredAt).toBeNull();
+  });
+
+  // Same ascending-window/no-count gap as sign posts' own "reports the true
+  // post count..." test above (#356), fixed the same way.
+  it('reports the true event count and keeps the newest 200 (in ascending order) past the list\'s own cap', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-past-cap-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 12,
+        y: 12,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const statements = Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO calendar_events (event_id, instance_id, author_label, text, created_at) VALUES (?, 'calendar-past-cap-instance', 'Someone', ?, ?)
+      `).bind(`calendar-past-cap-${i}`, `Event ${i}`, new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()));
+    await env.DB.batch(statements);
+
+    const list = await api('/instances/calendar-past-cap-instance/events');
+    expect(list.body.events).toHaveLength(200);
+    expect(list.body.totalCount).toBe(205);
+    expect(list.body.events[0].eventId).toBe('calendar-past-cap-5');
+    expect(list.body.events[199].eventId).toBe('calendar-past-cap-204');
   });
 
   it('only triggers the creative-tool effect once it is actually due, and only once ever', async () => {

@@ -2566,8 +2566,17 @@ itself.
 
 ### `GET /api/instances/:instanceId/posts`
 
-Lists every post on that sign, oldest first, capped at 200. `404` if the
-instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
+Lists the newest 200 posts on that sign, oldest first (within that window),
+plus a real `totalCount` (uncapped `COUNT(*)`) so a client can tell the
+list is truncated — `#356` fixed this from an earlier uncounted `LIMIT 200`
+with no `DESC`, which always selected the *oldest* 200 posts overall once a
+sign passed 200, silently hiding every post made after that (the newest
+ones always fell outside that window and could never appear). The response
+array's own order is unchanged (oldest first) — only which 200 rows the
+`LIMIT` window selects changed — since `rebuildSignSprites` (`src/main.js`)
+depends on that ordering to grab the *most recent* posts via
+`.slice(-SIGN_MAX_VISIBLE_POSTS)`. `404` if the instance doesn't exist.
+Returns `{ "posts": [...], "totalCount": <number> }` where each post is:
 
 ```json
 {
@@ -2739,9 +2748,10 @@ must choose one or the other for a given placed object.
 Same shape as the sign posts endpoints above, with `event`/`events` in
 place of `post`/`posts` and `eventId` in place of `postId`:
 `{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
-280 characters, `POST` rejected with `400` unless the target instance is
-currently flagged `isCommunityCalendar`, deletion cascades when the
-instance itself is deleted.
+280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
+`POST` rejected with `400` unless the target instance is currently flagged
+`isCommunityCalendar`, deletion cascades when the instance itself is
+deleted.
 
 **`POST` is not open the way sign posts' is.** Requires a session logged
 in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
