@@ -3902,8 +3902,9 @@ last line of defense if two such calls ever raced each other. Returns
 actually succeeded yet, or `409` if the instance/template/landlet it was
 created against no longer exists.
 
-Refund/reversal against a real-money purchase's PaymentIntent is not yet
-implemented — tracked separately as #348.
+Refund/reversal against a real-money purchase's PaymentIntent is handled by
+`POST /api/purchases/:purchaseId/refund` alongside the dáller clawback — see
+"Refunds" below (#348).
 
 ### Frontend wiring
 
@@ -3973,6 +3974,26 @@ has opted into "no returns" (`metadata.noReturns === true`, docs/SPEC.md
 §5's "No-returns-policy respected as seller-set default" — absent/false is
 the spec's own default of accepting returns).
 
+**Real-money purchases also reverse the Stripe side (#348).** A purchase
+with a `payment_intent_id` (set by "Real-money checkout (#453)" above —
+`null` for a simulated/dáller-only purchase, which never moved real money
+and has nothing for Stripe to reverse) issues a Stripe refund against that
+PaymentIntent before touching this table at all: `reverse_transfer: true`
+pulls the seller's ~98% share back from their connected account (the
+platform's own balance holds none of it by refund time — that's where
+`transfer_data` sent it at checkout), and `refund_application_fee: true`
+returns higglehaven's own commission share to the buyer too, since every
+refund here is a full refund of the whole purchase (there's no partial-
+refund UI). Returns `503` if Stripe isn't configured for a real-money
+purchase, same convention as checkout/finalize above. Running the Stripe
+call before the `refunded_at` DB guard below means a failed Stripe refund
+(already refunded on Stripe's side, a network error) never leaves this
+purchase marked refunded, or the builder's dáller commission clawed back,
+without the buyer's real money actually having been returned — the
+concurrent-double-refund case the DB guard exists for is independently
+covered by Stripe's own refund-amount bookkeeping (a second full refund
+against the same PaymentIntent errors on Stripe's side).
+
 A purchase's `builderId` can itself be null (migrations/0062 — the host
 builder's account was later deleted; `SET NULL`, not `CASCADE`, keeps the
 purchase record itself alive, matching this table's "permanent historical
@@ -4007,7 +4028,15 @@ platform-controlled-key simplicity as digital goods' disclaimer) —
 refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
 negative-balance case, the `templateId` listing filter, and — for a
 seller-less purchase specifically — that refunding it is rejected with no
-session or a non-admin session and only succeeds with one.
+session or a non-admin session and only succeeds with one. It also covers
+the real-money reversal path (#348) up to the same "Stripe isn't configured"
+boundary as checkout/finalize above: a purchase with a real
+`payment_intent_id` attached (same direct-DB-write idiom as the finalize
+idempotency test, since this suite never configures Stripe) 503s on refund
+without marking it refunded or touching the builder's balance — the actual
+`reverse_transfer`/`refund_application_fee` round trip against Stripe's real
+API is not covered by any automated test in this repo, same caveat as
+checkout/finalize's own PaymentIntent round trip above.
 `e2e/purchase-refunds.test.mjs` covers the Sales panel's refund button and
 the Edit Returns Policy panel through the real UI — the no-returns
 *rejection* path isn't covered there for the same reason prohibited-content

@@ -5626,7 +5626,7 @@ async function handlePurchases(request, env, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
-    return handlePurchaseRefund(request, db, route[1]);
+    return handlePurchaseRefund(request, env, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5640,7 +5640,8 @@ async function handlePurchases(request, env, route, url) {
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
 // self-service, since shoppers have no account here to authenticate a
 // "my purchases" view against in the first place.
-async function handlePurchaseRefund(request, db, purchaseId) {
+async function handlePurchaseRefund(request, env, purchaseId) {
+  const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
   // A purchase's seller_id can genuinely be null — catalog templates don't
@@ -5670,6 +5671,38 @@ async function handlePurchaseRefund(request, db, purchaseId) {
     throw new HttpError('This product\'s seller does not accept returns', 400);
   }
   const templateName = template?.name || 'A product';
+
+  // #348: createPurchaseCheckout (#453) sent totalCents - commissionCents to
+  // the seller's connected Stripe account via transfer_data and
+  // commissionCents to higglehaven's own balance via application_fee_amount
+  // — by the time a refund is issued, our own platform balance holds none
+  // of the seller's share, so a plain refund would fail (or, worse, only
+  // partially reverse the payment) without reverse_transfer pulling the
+  // seller's share back from their connected account first.
+  // refund_application_fee returns higglehaven's own commission share to
+  // the buyer too, since every refund here is a full refund of the whole
+  // purchase (no partial-refund UI exists), never a partial one. A purchase
+  // with no payment_intent_id predates #453 (a dáller-only "simulated"
+  // purchase, or a $0 checkout) and never moved real money in the first
+  // place, so there's nothing for Stripe to reverse — the dáller-only
+  // clawback below is already the complete fix for those. Runs before the
+  // atomic refunded_at guard below so a failed Stripe call (already
+  // refunded on Stripe's side, network error, etc.) never leaves this
+  // purchase marked refunded, or the builder's dáller commission clawed
+  // back, without the buyer's real money having actually been returned —
+  // Stripe's own refund-amount bookkeeping (a second full refund on the
+  // same PaymentIntent errors) covers the same concurrent-double-refund
+  // case this function's own DB-level guard exists for below.
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    }
+    await stripeRequest(env, 'POST', 'refunds', {
+      payment_intent: purchase.payment_intent_id,
+      reverse_transfer: true,
+      refund_application_fee: true,
+    });
+  }
 
   // The refunded_at read above is a fast-path only — two concurrent refund
   // requests (a double-click, or a client retry) can both pass it before

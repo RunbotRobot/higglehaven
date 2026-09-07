@@ -1811,6 +1811,37 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(400);
   });
 
+  // #348: a purchase with a real payment_intent_id (set by #453's checkout
+  // flow once a buyer actually pays with Stripe) needs its refund to also
+  // reverse the Stripe charge/transfer, not just claw back the builder's
+  // dáller commission share — see handlePurchaseRefund's own comment for
+  // why that Stripe call runs before the DB-side refunded_at guard.
+  // Directly attaches a fake payment_intent_id to an otherwise-simulated
+  // purchase (same idiom as the /purchases/finalize idempotency test above)
+  // since this suite never configures real Stripe access.
+  it('503s refunding a purchase with a real payment_intent_id, since Stripe is never configured in this test suite, without touching the builder\'s balance or marking it refunded', async () => {
+    const seller = await signupBuilder('purchase-refund-stripe-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-stripe-landlet', 1000);
+    await claim('purchase-refund-stripe-landlet', seller);
+    await createTemplate('purchase-refund-stripe-template', { priceCents: 10000 });
+    await placeInstance('purchase-refund-stripe-instance', 'purchase-refund-stripe-landlet', 'purchase-refund-stripe-template', seller);
+
+    const purchased = await api('/instances/purchase-refund-stripe-instance/purchase', { method: 'POST' });
+    const { purchaseId, builderShareCents } = purchased.body.purchase;
+    await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+      .bind('pi_real_money_purchase', purchaseId).run();
+    const balanceBefore = (await builderRow(seller.builderId)).dallers_balance_cents;
+
+    const rejected = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(rejected.response.status).toBe(503);
+
+    const purchaseAfter = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseAfter.refunded_at).toBeNull();
+    const balanceAfter = await builderRow(seller.builderId);
+    expect(balanceAfter.dallers_balance_cents).toBe(balanceBefore);
+    expect(builderShareCents).toBeGreaterThan(0); // sanity: this refund would have clawed back something real
+  });
+
   it('rejects a non-boolean metadata.noReturns', async () => {
     const rejected = await api('/catalog', {
       method: 'POST',
