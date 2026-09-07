@@ -2067,14 +2067,23 @@ const LEVEL_HEIGHT_M = 10;
 // alone to imply it.
 const MIN_LEVEL_FOOTPRINT_M2 = 10;
 
-// A level's own cap cost, computed at the level's outer boundary from
-// ground (the strictest point within it, since the cone's cross-section
-// only shrinks/grows monotonically across one level's height) — level
-// 1's boundary sits at z = LEVEL_HEIGHT_M, level -1's at z = -LEVEL_HEIGHT_M,
-// and so on. footprintScaleAtHeight gives the linear cross-section ratio
-// at that height; squaring it converts to the area ratio docs/SPEC.md §1
-// actually describes ("cross-sectional area grows/shrinks"), then scales
-// the lándlet's own ground-level area by it.
+// A level's own cap cost, sampled at z = levelIndex * LEVEL_HEIGHT_M —
+// level 1 at z = LEVEL_HEIGHT_M, level -1 at z = -LEVEL_HEIGHT_M, and so
+// on. Found via backlog audit (#409): this is each level's boundary
+// *nearest ground*, not its outer one — for a below-ground level that's
+// also the strictest (deepest, smallest-cross-section) point within it,
+// matching the MIN_LEVEL_FOOTPRINT_M2 dig-limit check's own intent above,
+// but for an above-ground level it's the cheaper near edge shared with the
+// level below, not the pricier far edge the cone-widening formula would
+// give at that level's true outer boundary. The resulting undercharge is
+// negligible in practice (LEVEL_HEIGHT_M vs. DEFAULT_EARTH_RADIUS_M puts
+// it around 1e-6 relative), so this is left as-is rather than changed —
+// re-pricing live land-cap costs isn't a call to make unilaterally: flag
+// for the project owner if a real formula fix is ever wanted here.
+// footprintScaleAtHeight gives the linear cross-section ratio at that
+// height; squaring it converts to the area ratio docs/SPEC.md §1 actually
+// describes ("cross-sectional area grows/shrinks"), then scales the
+// lándlet's own ground-level area by it.
 function levelCapConsumedM2(landletAreaM2, levelIndex) {
   const z = levelIndex * LEVEL_HEIGHT_M;
   const scale = footprintScaleAtHeight(z, DEFAULT_EARTH_RADIUS_M);
