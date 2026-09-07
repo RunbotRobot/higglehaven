@@ -6820,7 +6820,19 @@ function showAuthView(view) {
   setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
 }
 
+// Found via backlog audit (#373): refreshAccountAuthUI's pioneer-badge
+// fetch had no re-entrancy guard, unlike the monotonic load-token pattern
+// used everywhere else in this file for an async render that can be
+// called again before its own fetch resolves (axisPreviewLoadToken,
+// uploadFlowToken, friendsLoadToken above, ...). Reopening the account
+// menu quickly, or a login -> logout -> login-as-different-account
+// sequence within one round trip, could let an earlier, slower fetch
+// resolve after a newer one and overwrite the pioneer badge with stale
+// data from the wrong request.
+let accountAuthLoadToken = 0;
+
 function refreshAccountAuthUI() {
+  const myLoadToken = ++accountAuthLoadToken;
   if (currentAuthUser) {
     accountAuthBtn.textContent = currentAuthUser.username;
     authLoggedOutEl.hidden = true;
@@ -6839,6 +6851,7 @@ function refreshAccountAuthUI() {
     // between one open and the next.
     authAccountPioneerEl.textContent = '';
     fetchMyBuilder().then((builder) => {
+      if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading — a newer call owns the panel now
       if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
     }).catch(() => {});
   } else {
@@ -8927,18 +8940,29 @@ renderer.domElement.addEventListener('click', (event) => {
 // anything's actually due.
 const SCHEDULED_EVENT_CHECK_INTERVAL_MS = 10000;
 let lastScheduledEventCheck = 0;
+// event.triggeredAt is only ever set once a trigger request's own .then()
+// resolves — with nothing tracking a request already in flight, a call
+// slower than one 10s check interval (slow network, a throttled
+// backgrounded tab, or many due events firing in the same tick) let the
+// next tick re-issue a request for that same still-untriggered event.
+// pendingCalendarEventTriggers closes that gap; eventId is unique enough
+// on its own (no instanceId needed) since it's never reused across events.
+const pendingCalendarEventTriggers = new Set();
 function checkScheduledCalendarEvents() {
   const nowIso = new Date().toISOString();
   for (const calendar of shopCalendars) {
     for (const event of calendar.events) {
       if (!event.scheduledAt || event.triggeredAt || event.scheduledAt > nowIso) continue;
+      if (pendingCalendarEventTriggers.has(event.eventId)) continue;
+      pendingCalendarEventTriggers.add(event.eventId);
       triggerCalendarEvent(calendar.instanceId, event.eventId).then(({ event: updated, triggered }) => {
         // Cache the server's own triggeredAt locally regardless of who
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
         if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
-      }).catch(() => {});
+        pendingCalendarEventTriggers.delete(event.eventId);
+      }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
   }
 }

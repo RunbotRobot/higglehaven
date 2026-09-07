@@ -10,7 +10,7 @@
 // Policy" panel through the real UI; the no-returns-policy REJECTION path
 // isn't covered here for the same reason prohibited-content rejection
 // isn't in e2e/digital-goods.test.mjs — a real 400 trips the shared
-// errors.length===0 check (see worker/index.test.js's own "Simulated
+// errors.length===0 check (see worker/commerce.test.js's own "Simulated
 // purchases" describe block instead).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -114,7 +114,7 @@ console.log('Community Sign button label after unflagging (should be plain again
 console.log('isCommunitySign persisted after unflagging (should be false):', signInstanceAfterOff.isCommunitySign);
 
 // (The 400 rejection for posting to a non-sign instance is covered by
-// worker/index.test.js's own "Community signs" describe block instead of
+// worker/land.test.js's own "Community signs" describe block instead of
 // here — a deliberately-triggered non-2xx fetch logs a "Failed to load
 // resource" console error in the page itself, which this suite's own
 // errors-must-be-empty convention would otherwise misread as a real bug.)

@@ -9,7 +9,7 @@
 // path requires the auction to actually be past its end time, and the
 // shortest duration the API accepts is 1 hour (matching the spec's own
 // 24-hour default), so waiting for a real one isn't practical in an e2e
-// run. That's covered instead by worker/index.test.js, which can set
+// run. That's covered instead by worker/commerce.test.js, which can set
 // ends_at into the past directly via the D1 test binding.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin } from './helpers.mjs';
 
