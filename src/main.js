@@ -609,10 +609,20 @@ const alignmentGuideX = makeAlignmentGuide(); // shown when the dragged item's X
 const alignmentGuideY = makeAlignmentGuide(); // same, for a Y snap — drawn running along X
 
 // null per axis when nothing's currently snapped; otherwise
-// { guideCoordinate, snappedValue } — guideCoordinate is the world
-// coordinate the snap is holding onto (what the hysteresis check below
-// measures the raw drag against), snappedValue is what the dragged mesh's
-// own center gets set to so its matching edge/center actually lands there.
+// { guideCoordinate, snappedValue, capturedRawValue } — guideCoordinate is
+// the target edge/center coordinate the snap matched against (drawn as the
+// guide line), snappedValue is what the dragged mesh's own center gets set
+// to so its matching edge/center actually lands there, and capturedRawValue
+// is the raw drag position at the moment this snap was captured — what the
+// hysteresis check below measures the current raw drag against. That has
+// to be capturedRawValue rather than guideCoordinate: an edge-matched snap
+// (see findAlignmentSnap's own min/center/max candidates) has a
+// guideCoordinate offset from the dragged mesh's own center by its
+// half-extent, a different coordinate space than the raw center-drag
+// position resolveAlignmentAxis is called with — comparing rawValue
+// against guideCoordinate directly made the release band effectively
+// never apply to edge snaps (the common case), since that offset is
+// almost always bigger than ALIGNMENT_RELEASE_M.
 const alignmentSnapState = { x: null, y: null };
 
 // Own local half-extent along `axis` — ignoring rotation, same simplifying
@@ -660,10 +670,11 @@ function findAlignmentSnap(movingMesh, axis, rawValue) {
 
 function resolveAlignmentAxis(axis, movingMesh, rawValue) {
   const held = alignmentSnapState[axis];
-  if (held && Math.abs(rawValue - held.guideCoordinate) < ALIGNMENT_RELEASE_M) {
+  if (held && Math.abs(rawValue - held.capturedRawValue) < ALIGNMENT_RELEASE_M) {
     return held.snappedValue; // still within the release band — keep holding, ignore rawValue entirely
   }
   const found = findAlignmentSnap(movingMesh, axis, rawValue);
+  if (found) found.capturedRawValue = rawValue;
   alignmentSnapState[axis] = found;
   return found ? found.snappedValue : rawValue;
 }
