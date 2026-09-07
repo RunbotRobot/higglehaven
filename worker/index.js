@@ -688,7 +688,14 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.results.length !== templateIds.length) {
       throw new HttpError('Every templateId must reference an existing catalog template', 404);
     }
-    const ownerSellerIds = new Set(existing.results.map((row) => row.seller_id).filter(Boolean));
+    // See sellerExists' own comment (below): a dangling seller_id (its
+    // seller self-deleted) counts as unowned, same as this endpoint's
+    // single-item sibling — otherwise a template a self-deleted seller once
+    // owned becomes permanently un-deletable via this batch route, since no
+    // live session's seller_id can ever match one that no longer exists.
+    const candidateSellerIds = [...new Set(existing.results.map((row) => row.seller_id).filter(Boolean))];
+    const ownerSellerIds = new Set();
+    for (const sellerId of candidateSellerIds) if (await sellerExists(db, sellerId)) ownerSellerIds.add(sellerId);
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
@@ -716,8 +723,17 @@ async function handleCatalog(request, db, route, url, models) {
     const existingOwnerRows = await db.prepare(`
       SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
+    // sellerIds (the templates' own requested sellerId values) already went
+    // through assertReferencesExist above, so they're live by construction.
+    // existingOwnerRows.results' seller_id is a pre-existing row's own
+    // owner, which (see sellerExists' comment below) can be dangling if
+    // that seller has since self-deleted — treat that the same as a null
+    // seller_id (unowned), not as still-owned-forever, the same fix as the
+    // batch DELETE handler above.
     const sellerIdsToCheck = new Set(sellerIds);
-    for (const row of existingOwnerRows.results) if (row.seller_id) sellerIdsToCheck.add(row.seller_id);
+    for (const row of existingOwnerRows.results) {
+      if (row.seller_id && await sellerExists(db, row.seller_id)) sellerIdsToCheck.add(row.seller_id);
+    }
     if (sellerIdsToCheck.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of sellerIdsToCheck) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
