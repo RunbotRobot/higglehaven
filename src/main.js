@@ -154,12 +154,15 @@ let shopActive = false;
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Placeholder buildable volume: a basic single-level landlet, one level
-// (10m, per spec §3) straight up, modeled as a plain cuboid rather than the
-// spec's actual cone-shaped volume (cross-section changes with distance
-// from Earth's center once curvature is modeled). Same simplification as
-// using a flat plane instead of a curved one for the ground right now — get
-// the mechanic working, model the real geometry later.
+// Buildable volume: one level (10m, per spec §3) straight up from whichever
+// level's own floor is currently in view. No longer the flat-plane/plain-
+// cuboid placeholder this comment used to describe — the ground itself is
+// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
+// already widens/narrows the X/Y footprint per height via
+// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
+// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
+// see clampToLandlet's own comment for how the cross-section at that height
+// gets corrected.
 const LANDLET_HEIGHT_M = 10;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
