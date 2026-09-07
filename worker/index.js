@@ -5399,6 +5399,21 @@ function validateTemplate(input, fallbackId) {
     modelUrl: input.modelUrl || null,
     metadata: input.metadata || {},
   };
+  // Found via backlog audit (#375): modelUrl went straight through with no
+  // format check at all — assertUploadedModelExists (below, at the actual
+  // R2-reference check) only validates a `/uploads/`-prefixed value and
+  // silently no-ops for anything else, so an arbitrary external URL sailed
+  // through untouched. src/main.js's model loader (createMeshForInstance ->
+  // loadModelInstance -> GLTFLoader) then unconditionally fetches
+  // template.modelUrl from the browser of every shopper/builder who loads a
+  // landlet with that template placed on it, not just whoever set it -- a
+  // real SSRF-shaped hole (tracking pixel, IP/UA/timing leak, or a chance to
+  // feed the model loader an oversized/malformed payload). The only
+  // supported shapes, per docs/API.md, are "absent" and a real uploaded
+  // model reference.
+  if (template.modelUrl !== null && (typeof template.modelUrl !== 'string' || !template.modelUrl.startsWith('/uploads/'))) {
+    throw new HttpError('modelUrl must reference an uploaded model (starting with /uploads/) or be omitted', 400);
+  }
   JSON.stringify(template.metadata);
   assertNotProhibitedContent(template);
   assertValidDigitalGoodDisclaimer(template.metadata, template.modelUrl);
