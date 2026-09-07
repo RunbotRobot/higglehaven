@@ -456,7 +456,10 @@ Requires a session (`401` without one). Request body: `{ "secret" }`.
 `404` if the Worker secret `ADMIN_BOOTSTRAP_SECRET` isn't configured in
 this environment at all (local dev's `.dev.vars`, or `wrangler secret put`
 in production — never committed, same pattern `ACCESS_PASSPHRASE`/
-`RESEND_API_KEY` already use). `403` if `secret` doesn't match it exactly.
+`RESEND_API_KEY` already use). Rate-limited per IP (10 attempts per
+window, `429` past that) — the only endpoint that grants admin privilege,
+so it gets the same brute-force protection as signup/password-reset.
+`403` if `secret` doesn't match it exactly.
 On success, promotes the calling account to admin and returns
 `{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
 who currently holds the secret can promote themselves (or, by sharing it
@@ -978,6 +981,14 @@ endpoint never reassigns a template to a different seller, the same way
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.
+
+When the existing template has a null `sellerId` (or a dangling one — see
+"unlocks review moderation" above), this endpoint requires no session at
+all, and its dimension-change notification fan-out makes it worth throttling
+even so: `429` after 20 PATCHes per 15 minutes from one client IP (see
+"Rate limiting" above), same shape as sign-post/community-calendar posting.
+A seller-owned template's PATCH is not rate-limited — the session
+requirement already bounds it.
 
 ### `DELETE /api/catalog/:templateId`
 
@@ -2566,8 +2577,17 @@ itself.
 
 ### `GET /api/instances/:instanceId/posts`
 
-Lists every post on that sign, oldest first, capped at 200. `404` if the
-instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
+Lists the newest 200 posts on that sign, oldest first (within that window),
+plus a real `totalCount` (uncapped `COUNT(*)`) so a client can tell the
+list is truncated — `#356` fixed this from an earlier uncounted `LIMIT 200`
+with no `DESC`, which always selected the *oldest* 200 posts overall once a
+sign passed 200, silently hiding every post made after that (the newest
+ones always fell outside that window and could never appear). The response
+array's own order is unchanged (oldest first) — only which 200 rows the
+`LIMIT` window selects changed — since `rebuildSignSprites` (`src/main.js`)
+depends on that ordering to grab the *most recent* posts via
+`.slice(-SIGN_MAX_VISIBLE_POSTS)`. `404` if the instance doesn't exist.
+Returns `{ "posts": [...], "totalCount": <number> }` where each post is:
 
 ```json
 {
@@ -2739,9 +2759,10 @@ must choose one or the other for a given placed object.
 Same shape as the sign posts endpoints above, with `event`/`events` in
 place of `post`/`posts` and `eventId` in place of `postId`:
 `{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
-280 characters, `POST` rejected with `400` unless the target instance is
-currently flagged `isCommunityCalendar`, deletion cascades when the
-instance itself is deleted.
+280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
+`POST` rejected with `400` unless the target instance is currently flagged
+`isCommunityCalendar`, deletion cascades when the instance itself is
+deleted.
 
 **`POST` is not open the way sign posts' is.** Requires a session logged
 in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
