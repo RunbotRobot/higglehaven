@@ -697,12 +697,16 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}
   return purchase;
 }
 
+// The list is capped at 100 rows server-side (no pagination) — totalCount
+// comes from a dedicated, uncapped COUNT so callers can show the real total
+// even past that cap (same fix already applied to notifications' unread
+// badge — see fetchUnreadNotificationCount above).
 export async function fetchPurchases({ builderId, templateId } = {}) {
   const params = new URLSearchParams();
   if (builderId) params.set('builderId', builderId);
   if (templateId) params.set('templateId', templateId);
-  const { purchases } = await requestJson(`/purchases?${params.toString()}`);
-  return purchases;
+  const { purchases, totalCount } = await requestJson(`/purchases?${params.toString()}`);
+  return { purchases, totalCount };
 }
 
 // Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql).
