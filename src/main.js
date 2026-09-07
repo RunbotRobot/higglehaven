@@ -8934,8 +8934,12 @@ shopSignHintEl.addEventListener('click', async () => {
 shopCalendarHintEl.addEventListener('click', async () => {
   const calendar = nearestActiveCalendar;
   if (!calendar) return;
-  const authorLabel = shopperLabel();
-  if (!authorLabel) return;
+  // Unlike signs (anonymous shopperLabel()), docs/SPEC.md §6 calls calendar
+  // events "builder-authored" — the server now derives authorLabel from a
+  // real logged-in builder and rejects anyone but the hosting landlet's own
+  // owner, so this needs a real identity, not a free-text name prompt.
+  const builder = await ensureBuilderIdentity();
+  if (!builder) return;
   const text = prompt('Event details (up to 280 characters):', '');
   if (!text || !text.trim()) return;
   // Optional third step — most events are just a plain announcement (the
@@ -8957,7 +8961,7 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
   shopCalendarHintEl.disabled = true;
   try {
-    const event = await createCalendarEvent(calendar.instanceId, { authorLabel, text: text.trim(), scheduledAt });
+    const event = await createCalendarEvent(calendar.instanceId, { text: text.trim(), scheduledAt });
     calendar.events.push(event);
     rebuildCalendarSprites(calendar);
   } catch (err) {

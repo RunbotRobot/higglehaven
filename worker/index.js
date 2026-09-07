@@ -4502,12 +4502,16 @@ function signPostFromRow(row) {
 }
 
 // Events on a "community calendar" instance (docs/SPEC.md §6,
-// migrations/0042) — structurally identical to handleSignPosts above
-// (nested under /instances/:id/events for the same "never exists
-// independent of its instance" reasoning, same moderation-gated-to-the-
-// hosting-landlet's-owner DELETE), deliberately kept as its own separate
-// function and table rather than a shared "board" abstraction over both —
-// see migrations/0042's own comment on why.
+// migrations/0042) — nested under /instances/:id/events for the same
+// "never exists independent of its instance" reasoning handleSignPosts
+// above uses, and the same moderation-gated-to-the-hosting-landlet's-owner
+// DELETE — but POST is deliberately NOT structurally identical to
+// handleSignPosts: docs/SPEC.md §6 explicitly calls calendar events
+// "builder-authored," unlike sign posts' "shopper-authored" free-text
+// authorLabel. Only the hosting landlet's own owner may post one, and
+// authorLabel comes from their real builder profile, not client input —
+// otherwise anyone could post a "confetti-cannon" trigger (or any other
+// event) on someone else's shop under that builder's own name.
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -4521,13 +4525,14 @@ async function handleCalendarEvents(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id, is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    const instance = await db.prepare('SELECT instance_id, is_community_calendar, landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     if (!instance.is_community_calendar) {
       throw new HttpError('This placed instance is not marked as a community calendar', 400);
     }
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // scheduledAt is optional — most events are just a plain announcement
@@ -4540,7 +4545,7 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = `event-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at) VALUES (?, ?, ?, ?, ?)
-    `).bind(eventId, instanceId, authorLabel, text, scheduledAt).run();
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt).run();
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
   }

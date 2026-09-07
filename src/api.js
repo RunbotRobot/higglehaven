@@ -556,11 +556,15 @@ export async function fetchCalendarEvents(instanceId) {
   return events;
 }
 
-export async function createCalendarEvent(instanceId, { authorLabel, text, scheduledAt } = {}) {
+// authorLabel is not accepted here — docs/SPEC.md §6 calls calendar events
+// "builder-authored" (unlike sign posts' anonymous shopper authorLabel),
+// so the server derives it from the logged-in, landlet-owning builder's
+// own profile instead of trusting client-supplied free text.
+export async function createCalendarEvent(instanceId, { text, scheduledAt } = {}) {
   const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, text, scheduledAt }),
+    body: JSON.stringify({ text, scheduledAt }),
   });
   return event;
 }

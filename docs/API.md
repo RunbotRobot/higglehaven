@@ -2652,22 +2652,24 @@ moving it to `bottom: 180px`, clear of that column entirely.
 ## Community calendar
 
 docs/SPEC.md §6: "Community calendar reuses the identical pattern
-[as community signs], builder-authored (event postings, creative-tool
-support like a scheduled confetti-cannon trigger)." Structurally a twin of
+[as community signs], **builder-authored** (event postings, creative-tool
+support like a scheduled confetti-cannon trigger)." A near-twin of
 "Community signs" just above — same per-instance opt-in flag
 (`isCommunityCalendar`, `migrations/0042_community_calendar.sql`), same
 nested-under-the-instance events collection (`calendar_events`, a separate
-table from `sign_posts`), same toggle-then-manage Build-mode button, same
-Shop-mode fade-and-post-a-note flow. Deliberately kept as its own
-independent flag/table rather than merged into one generic "community
-board" concept — see migrations/0042's own comment: calendar events are
-the more likely of the two to grow real fielded data later (an actual
-date/time, RSVPs), at which point a shared abstraction would need
-reworking anyway, so duplicating a small, well-understood pattern now is
-cheaper than guessing at that shared shape today. The "creative-tool
-support like a scheduled confetti-cannon trigger" half of the spec
-sentence is explicitly out of scope here — a stated example of where the
-feature *could* grow, not a requirement of it.
+table from `sign_posts`), same toggle-then-manage Build-mode button — but
+**not** identical on POST: the spec's own wording explicitly distinguishes
+calendar events (builder-authored) from sign posts (shopper-authored), and
+`POST .../events` enforces that distinction, unlike `POST .../posts`
+above. Deliberately kept as its own independent flag/table rather than
+merged into one generic "community board" concept — see migrations/0042's
+own comment: calendar events are the more likely of the two to grow real
+fielded data later (an actual date/time, RSVPs), at which point a shared
+abstraction would need reworking anyway, so duplicating a small,
+well-understood pattern now is cheaper than guessing at that shared shape
+today. The "creative-tool support like a scheduled confetti-cannon
+trigger" half of the spec sentence is explicitly out of scope here — a
+stated example of where the feature *could* grow, not a requirement of it.
 
 An instance can be a sign and a calendar at once (independent flags,
 independently toggled and moderated) — nothing in the spec says a builder
@@ -2675,12 +2677,22 @@ must choose one or the other for a given placed object.
 
 ### `GET /api/instances/:instanceId/events`, `POST .../events`, `DELETE .../events/:eventId`
 
-Identical contract to the sign posts endpoints above, with `event`/`events`
-in place of `post`/`posts` and `eventId` in place of `postId`:
+Same shape as the sign posts endpoints above, with `event`/`events` in
+place of `post`/`posts` and `eventId` in place of `postId`:
 `{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
 280 characters, `POST` rejected with `400` unless the target instance is
 currently flagged `isCommunityCalendar`, deletion cascades when the
 instance itself is deleted.
+
+**`POST` is not open the way sign posts' is.** Requires a session logged
+in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
+`requireSessionBuilder` + `requireOwnedLandlet` — the same ownership gate
+`DELETE` on either endpoint already uses) — the client no longer sends
+`authorLabel` at all; it's derived server-side from that builder's own
+`label`. Without this, any shopper could post an event under an
+arbitrary/spoofed `authorLabel` — including a real builder's own name —
+directly contradicting docs/SPEC.md §6's "builder-authored" distinction
+from sign posts' genuinely anonymous, shopper-authored `authorLabel`.
 
 ### Frontend wiring
 
@@ -2702,6 +2714,17 @@ fixed vertical offset (`bottom: 230px`) than `#shop-sign-hint`
 calendar without colliding — each is a plain fixed-offset placement rather
 than the dynamic flex-wrap layout that caused the overlap bug described
 in "Community signs" above, so this pairing doesn't share that risk.
+
+One deliberate divergence from the sign flow: `#shop-sign-hint`'s click
+handler calls the anonymous `shopperLabel()` prompt, but `#shop-calendar-
+hint`'s calls `ensureBuilderIdentity()` instead (the same sign-up/log-in
+flow Build/Sell mode entry already uses) — matching the POST endpoint's
+own builder-only enforcement above. A logged-in builder who isn't that
+landlet's owner still sees the hint (Shop mode has no per-instance
+ownership context to gate the hint's visibility on) and gets a clear `403`
+surfaced through the existing `alert(err.message)` on attempting to post —
+a known, deliberately out-of-scope gap (hiding the hint itself for
+non-owners) rather than a silent failure.
 
 ### Testing note
 
@@ -2892,7 +2915,7 @@ unparseable value):
 
 ```json
 POST /api/instances/:instanceId/events
-{ "authorLabel": "...", "text": "...", "scheduledAt": "2026-08-26T20:00:00.000Z" }
+{ "text": "...", "scheduledAt": "2026-08-26T20:00:00.000Z" }
 ```
 
 The response's `event` object gains `scheduledAt`/`triggeredAt` (both `null`
