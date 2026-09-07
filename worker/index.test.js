@@ -4371,6 +4371,13 @@ describe('Prohibited categories and digital goods', () => {
     expect(batch.response.status).toBe(400);
   });
 
+  async function uploadTestModel() {
+    const form = new FormData();
+    form.set('file', glbFile());
+    const response = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    return (await response.json()).modelUrl;
+  }
+
   it('rejects an invalid digitalGoodDisclaimer key and accepts a valid one', async () => {
     const invalid = await api('/catalog', {
       method: 'POST',
@@ -4385,6 +4392,7 @@ describe('Prohibited categories and digital goods', () => {
     expect(invalid.response.status).toBe(400);
     expect(invalid.body.error).toMatch(/digitalGoodDisclaimer must be one of/);
 
+    const modelUrl = await uploadTestModel();
     const valid = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -4392,6 +4400,7 @@ describe('Prohibited categories and digital goods', () => {
         name: 'Downloadable Gift Card',
         color: '#111111',
         dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        modelUrl,
         metadata: { digitalGoodDisclaimer: 'gift-card' },
       }),
     });
@@ -4402,7 +4411,46 @@ describe('Prohibited categories and digital goods', () => {
     expect(fetched.body.template.metadata.digitalGoodDisclaimer).toBe('gift-card');
   });
 
+  // Found via backlog audit: docs/SPEC.md §4's digital-goods exception is
+  // conditional on *both* (a) a representative 3D model and (b) a clear
+  // disclaimer — modelUrl is optional for an ordinary template (a plain
+  // colored box is a normal fallback look), so without this guard a
+  // disclaimer alone was silently sufficient, satisfying only condition (b).
+  it('rejects a digital-good listing with no representative 3D model', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-no-model',
+        name: 'Modelless Download',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        metadata: { digitalGoodDisclaimer: 'art-file' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/must include modelUrl/);
+
+    // Also enforced on update — flagging an existing modelUrl-less listing
+    // as a digital good after the fact shouldn't be possible either.
+    const plainListing = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'digital-good-retrofit',
+        name: 'Plain Product',
+        color: '#111111',
+        dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+      }),
+    });
+    expect(plainListing.response.status).toBe(201);
+    const retrofitted = await api('/catalog/digital-good-retrofit', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: { digitalGoodDisclaimer: 'art-file' } }),
+    });
+    expect(retrofitted.response.status).toBe(400);
+  });
+
   it('lets a digital-good flag be cleared by omitting it from a metadata replace', async () => {
+    const modelUrl = await uploadTestModel();
     await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -4410,6 +4458,7 @@ describe('Prohibited categories and digital goods', () => {
         name: 'Temporary Digital Good',
         color: '#111111',
         dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+        modelUrl,
         metadata: { digitalGoodDisclaimer: 'art-file' },
       }),
     });
