@@ -79,10 +79,57 @@ await page.waitForFunction(
 const digitalGoodRowTextAfterClear = await digitalRow().locator('.seller-row-digital-good').textContent();
 console.log('digital-good row text after unchecking + saving (should be "Not a digital good"):', digitalGoodRowTextAfterClear);
 
+// Cross-panel metadata-save race guard (issue #424): "Edit Digital Good"
+// and "Edit Shipping" independently spread-and-replace the whole
+// template.metadata object (see either save handler's own comment on the
+// server doing a full replace, not a merge), so saving both in an
+// overlapping window used to let whichever response landed last silently
+// discard the other panel's just-saved change. Delaying the Shipping
+// PATCH here (the only one of the two that actually mutates the record —
+// nothing else on this page issues any other PATCH to this template
+// concurrently, so this is the only in-flight request the delay needs to
+// distinguish from) makes the race's timing window reliably observable
+// instead of depending on real network jitter.
+await page.route('**/api/catalog/*', async (route) => {
+  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 800));
+  await route.continue();
+});
+await digitalRow().locator('button', { hasText: 'Edit Shipping' }).click();
+await page.waitForTimeout(300);
+await digitalRow().locator('.seller-domestic-only-checkbox-label input').check();
+// "Edit Digital Good" is still open from earlier in this test (its own
+// toggle click above never closed it) — clicking the toggle again here
+// would close it instead of opening it, so just use the panel directly.
+await digitalRow().locator('.seller-digital-good-checkbox-label input').check();
+await digitalRow().locator('.seller-digital-good-select').selectOption('gift-card');
+await digitalRow().locator('button', { hasText: 'Save Shipping' }).click();
+const digitalGoodSaveDisabledMidFlight = await digitalRow().locator('button', { hasText: 'Save Digital Good' }).isDisabled();
+console.log('Save Digital Good disabled while Save Shipping request is in flight (should be true):', digitalGoodSaveDisabledMidFlight);
+await page.waitForFunction(
+  () => Array.from(document.querySelectorAll('.seller-domestic-only-status')).some((el) => el.textContent === 'Saved.'),
+  { timeout: 10000 },
+);
+await digitalRow().locator('button', { hasText: 'Save Digital Good' }).click();
+await page.waitForFunction(
+  () => Array.from(document.querySelectorAll('.seller-digital-good-status')).some((el) => el.textContent === 'Saved.'),
+  { timeout: 10000 },
+);
+await page.unroute('**/api/catalog/*');
+const afterRace = await page.evaluate(async () => {
+  const res = await fetch('/api/catalog?limit=100');
+  return res.json();
+});
+const raceTemplate = afterRace.templates.find((t) => t.name === DIGITAL_PRODUCT);
+console.log('after the cross-panel race, metadata.domesticOnly (should be true — not silently reverted):', raceTemplate?.metadata?.domesticOnly);
+console.log('after the cross-panel race, metadata.digitalGoodDisclaimer (should be "gift-card"):', raceTemplate?.metadata?.digitalGoodDisclaimer);
+
 const pass = disclaimerLabelVisibleAfterCheck &&
   digitalGoodRowText.includes('Digital good') && digitalGoodRowText.toLowerCase().includes('gift') &&
   digitalTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   checkboxCheckedInPanel &&
   digitalGoodRowTextAfterClear.trim() === 'Not a digital good' &&
+  digitalGoodSaveDisabledMidFlight &&
+  raceTemplate?.metadata?.domesticOnly === true &&
+  raceTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Digital-good upload/edit round-trip via the Seller modal', errors });
