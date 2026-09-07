@@ -1063,6 +1063,7 @@ trimControls.addEventListener('dragging-changed', (event) => {
     const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
     if (!current) return; // deleted, or otherwise gone, since this drag ended
     const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+    if (!updated) return; // deleted while this crop's model was loading
     const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
     updated.position.set(clamped.x, clamped.y, clamped.z);
     updated.userData.safePosition = updated.position.clone();
@@ -1318,8 +1319,23 @@ async function replaceMeshWithCrop(mesh, crop) {
   const newMesh = await createMeshForInstance(instanceLike);
   if (!newMesh) return mesh;
 
+  // The await above is a real gap the original instance can be deleted
+  // across (e.g. a Delete press while this crop's model is still
+  // loading) — `mesh` itself already got spliced out of productMeshes,
+  // removed from the scene, and disposed by deleteInstance in that case.
+  // Discard the now-orphaned newMesh instead of unconditionally adding it
+  // to the scene: without this check it would still land in `scene`
+  // despite never being registered in productMeshes, becoming a
+  // permanently unselectable "ghost" (every raycast targets
+  // productMeshes, never the raw scene graph) until reload. Returning
+  // null lets every caller bail out the same way they already do for a
+  // deletion caught *before* this function was even called.
   const index = productMeshes.indexOf(mesh);
-  if (index !== -1) productMeshes[index] = newMesh;
+  if (index === -1) {
+    disposeObject(newMesh);
+    return null;
+  }
+  productMeshes[index] = newMesh;
   scene.remove(mesh);
   disposeObject(mesh);
   scene.add(newMesh);
@@ -4584,6 +4600,11 @@ async function restoreSnapshot(snapshot) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
       mesh = await replaceMeshWithCrop(mesh, inst.crop);
+      // A null here means `mesh` was deleted by some other in-flight
+      // action (e.g. a concurrent Delete) while this crop's model was
+      // still loading — nothing left to restore state onto for this
+      // instance, so skip it rather than crash on the null below.
+      if (!mesh) continue;
       // replaceMeshWithCrop only reconciles crop — a Resize scale change
       // (with no crop change alongside it, the common case for an undo/redo
       // jump across just a resize) would otherwise never get restored on a
@@ -5022,6 +5043,7 @@ for (const field of trimAxisFieldEls) {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
       const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      if (!updated) return; // deleted while this crop's model was loading
       const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
       updated.position.set(clamped.x, clamped.y, clamped.z);
       updated.userData.safePosition = updated.position.clone();
