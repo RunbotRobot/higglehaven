@@ -940,7 +940,11 @@ Required fields:
 - `dimensions.height`
 
 All dimensions must be numbers greater than zero. `priceCents`, when present,
-must be a non-negative integer.
+must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
+same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
+value large enough to lose precision past `Number.isSafeInteger` once
+persisted, or to mint an outsized `dallers_balance_cents` credit through a
+self-purchase or auction win.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
@@ -3124,12 +3128,13 @@ removed outright by a DB-level cascade, not transitioned to `ended` — see
 Requires a session (`401` without one). Starts a voluntary auction as the
 calling account's own builder — `builderId` is derived from the session,
 never a client-supplied field. Body: `{ "startingBidCents"?,
-"durationHours"? }`. `startingBidCents` defaults to `0`; `durationHours`
-defaults to `24` (docs/SPEC.md §5's own default), capped at `8760` (one
-year) as a sanity bound against a malformed request, not a spec
-requirement. `400` unless the calling builder is the landlet's current
-owner and the landlet is `claimed`. `409` if that landlet already has an
-active auction — one at a time per landlet.
+"durationHours"? }`. `startingBidCents` defaults to `0`, capped at
+100,000,000 (the same money-field sanity bound as `priceCents` above);
+`durationHours` defaults to `24` (docs/SPEC.md §5's own default), capped
+at `8760` (one year) as a sanity bound against a malformed request, not a
+spec requirement. `400` unless the calling builder is the landlet's
+current owner and the landlet is `claimed`. `409` if that landlet already
+has an active auction — one at a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather
@@ -3163,7 +3168,8 @@ capped at 200. `404` if the auction doesn't exist.
 
 Requires a session (`401` without one). Places a bid as the calling
 account's own builder — `builderId` is derived from the session, never a
-client-supplied field. Body: `{ "amountCents" }`. Resolves the
+client-supplied field. Body: `{ "amountCents" }`, capped at 100,000,000
+(the same money-field sanity bound as `priceCents` above). Resolves the
 auction first if it's due, then `409` if it's not (or is no longer)
 `active`. `400` if the bidder is the seller, or if `amountCents` is below
 the minimum acceptable amount:
