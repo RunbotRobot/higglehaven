@@ -383,6 +383,123 @@ describe('Auctions', () => {
     expect(landlet.body.landlet.activeVersionId).toBeNull();
   });
 
+  // #456: same race shape as the draft/version/activate tests above, for
+  // the plain instance-create endpoint — it had no atomic ownership guard
+  // at all before this fix (unlike those three, which #415 already closed).
+  it('does not let a concurrent instance create land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('instance-create-resolve-race-owner');
+    const bidder = await signupBuilder('instance-create-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-create-resolve-race-landlet');
+    await claim('instance-create-resolve-race-landlet', owner);
+    const started = await api('/landlets/instance-create-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [created] = await Promise.all([
+      api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: 'instance-create-resolve-race-instance', landletId: 'instance-create-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here (same shape as #455): the endpoint's own
+    // early requireOwnedLandlet check can itself lose the race and see the
+    // new owner already in place, ahead of ever reaching the write-time
+    // guard this fix adds (which is what produces 409 instead).
+    expect([201, 403, 409]).toContain(created.response.status);
+
+    const landlet = await api('/landlets/instance-create-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    // Whichever ran first: the create's own guard rejected it if resolve
+    // won, or resolve's unconditional wipe removed it right after if the
+    // create won — the old owner's instance never survives under the new
+    // owner either way.
+    const instances = await api('/instances?landletId=instance-create-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  // #456: same race shape, for the batch create/replace endpoint.
+  it('does not let a concurrent batch instance create land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('instance-batch-resolve-race-owner');
+    const bidder = await signupBuilder('instance-batch-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-batch-resolve-race-landlet');
+    await claim('instance-batch-resolve-race-landlet', owner);
+    const started = await api('/landlets/instance-batch-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [created] = await Promise.all([
+      api('/instances/batch', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instances: [{ instanceId: 'instance-batch-resolve-race-instance', landletId: 'instance-batch-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }],
+        }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here — same reasoning as the single-create
+    // test above (requireOwnedLandlets' own early check can itself lose
+    // the race).
+    expect([201, 403, 409]).toContain(created.response.status);
+
+    const landlet = await api('/landlets/instance-batch-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=instance-batch-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  // #456: same race shape, for the single instance update endpoint —
+  // places an instance first (before the race) so there's something to
+  // update; resolveAuction's own wipe means the row can already be gone by
+  // the time the update's initial existence check runs, hence the extra
+  // legitimate 404 outcome (mirroring the activate test's own 404 case
+  // above, for the same "existence check itself lost the race" reason),
+  // and the endpoint's own early requireOwnedLandlet check can likewise
+  // lose the race and see the new owner already in place (403, same
+  // reasoning as the create tests above).
+  it('does not let a concurrent instance update land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('instance-update-resolve-race-owner');
+    const bidder = await signupBuilder('instance-update-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-update-resolve-race-landlet');
+    await claim('instance-update-resolve-race-landlet', owner);
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'instance-update-resolve-race-instance', landletId: 'instance-update-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    }));
+    const started = await api('/landlets/instance-update-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [updated] = await Promise.all([
+      api('/instances/instance-update-resolve-race-instance', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ x: 5, y: 5 }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    expect([200, 403, 404, 409]).toContain(updated.response.status);
+
+    const landlet = await api('/landlets/instance-update-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=instance-update-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');

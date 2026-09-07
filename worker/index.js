@@ -4921,12 +4921,20 @@ async function handleInstances(request, db, route, url) {
         is_community_calendar = excluded.is_community_calendar,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
-    await db.batch(instances.map((instance) => db.prepare(`
+    // #456: same reasoning as the single-create endpoint above — fold the
+    // ownership re-check into each write instead of trusting the
+    // point-in-time requireOwnedLandlets check above alone, and reject the
+    // whole batch if any one instance's guard didn't hold at write time.
+    const batchResults = await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
         (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       ${conflictClause}
-    `).bind(...instanceParams(instance))));
+    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id)));
+    if (batchResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const stored = await getInstancesById(db, instanceIds);
     return json({ instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, request.method === 'POST' ? 201 : 200);
   }
@@ -4977,10 +4985,20 @@ async function handleInstances(request, db, route, url) {
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await assertInstanceZWithinLevels(db, [instance]);
-    await db.prepare(`
+    // #456: requireOwnedLandlet above is a point-in-time check — an auction
+    // resolving (transferring ownership, wiping placed_instances) in the
+    // await gap between it and this write would otherwise let this request
+    // still plant an instance on a landlet that's no longer the caller's.
+    // Same "fold the ownership re-check into the write itself" idiom #415
+    // already used for handleLandletVersions/handleLandletDraft.
+    const created = await db.prepare(`
       INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0).run();
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id).run();
+    if (created.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
     return json({ instance: instanceFromRow(stored) }, 201);
   }
@@ -5027,11 +5045,27 @@ async function handleInstances(request, db, route, url) {
     if (instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
       await assertInstanceZWithinLevels(db, [instance]);
     }
-    await db.prepare(`
+    // #456: fold the ownership re-check into the write itself — same
+    // reasoning as the create endpoints above. Without this, a landlet
+    // transfer (which deletes every placed_instances row on it — see
+    // resolveAuction) landing in the await gap since existing was fetched
+    // means this UPDATE's plain "WHERE instance_id = ?" would silently
+    // affect zero rows, and (before this fix) that went unchecked: the
+    // response still fed the stale `existing` id into a fresh SELECT that
+    // now returns nothing, feeding a null row into instanceFromRow.
+    // Re-checking ownership explicitly (rather than relying on the row
+    // simply being gone) also closes the same gap for any other write that
+    // might one day mutate a landlet's ownership without deleting its
+    // instances.
+    const updated = await db.prepare(`
       UPDATE placed_instances
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1]).run();
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1], instance.landletId, sessionBuilder.builder_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }
