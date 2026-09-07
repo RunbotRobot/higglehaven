@@ -7734,7 +7734,7 @@ let shopLookX = 0;
 let shopLookY = 0;
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
-const shopLandlets = new Map(); // landletId -> { record, group, loaded, objects }
+const shopLandlets = new Map(); // landletId -> { record, group, loaded, loadToken, objects }
 let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode — see updateShopLandletInfo
 let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
@@ -8588,7 +8588,10 @@ function updateShopProximity() {
     const distance = Math.hypot(entry.record.center.x - camera.position.x, entry.record.center.y - camera.position.y);
     if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
       entry.loaded = true; // set before awaiting so a second tick can't double-load
-      loadShopLandletInstances(entry);
+      // Each load gets its own token (see loadShopLandletInstances) so a
+      // fast unload-then-reload cycle can't let an earlier, still in-flight
+      // fetch resurrect itself once entry.loaded flips back to true.
+      loadShopLandletInstances(entry, ++entry.loadToken);
     } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
       unloadShopLandletInstances(entry);
     }
@@ -8635,7 +8638,14 @@ function updateShopLandletInfo() {
   shopLandletInfoEl.classList.add('visible');
 }
 
-async function loadShopLandletInstances(entry) {
+// myToken pins this call to the specific load that started it (see the
+// ++entry.loadToken call site) — entry.loaded alone can't tell "still this
+// load" from "unloaded and reloaded again while this was in flight," since
+// both leave entry.loaded === true. Every checkpoint below compares against
+// entry.loadToken instead, so a superseded call quietly stops contributing
+// meshes/signs/calendars/reviews rather than duplicating whatever the
+// current load already added.
+async function loadShopLandletInstances(entry, myToken) {
   let instances;
   try {
     // A landlet that's actually been published (see the Build settings
@@ -8648,13 +8658,13 @@ async function loadShopLandletInstances(entry) {
       ? (await fetchLandletVersion(entry.record.landletId, entry.record.activeVersionId)).instances
       : await fetchInstances(entry.record.landletId);
   } catch {
-    entry.loaded = false; // allow a later pass to retry
+    if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
     return;
   }
   for (const instance of instances) {
-    if (!entry.loaded) return; // unloaded again while this was in flight
+    if (myToken !== entry.loadToken) return; // superseded while this was in flight
     const object = await createMeshForInstance(instance);
-    if (!object || !entry.loaded) continue;
+    if (!object || myToken !== entry.loadToken) continue;
     entry.group.add(object);
     entry.objects.push(object);
     growShopDomeIfNeeded(object);
@@ -9184,6 +9194,7 @@ function disposeObject3D(object) {
 
 function unloadShopLandletInstances(entry) {
   entry.loaded = false;
+  entry.loadToken++; // invalidate any in-flight loadShopLandletInstances call, reload or not
   for (const object of entry.objects) {
     entry.group.remove(object);
     disposeObject3D(object);
@@ -9390,7 +9401,7 @@ async function enterShopMode() {
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
-    shopLandlets.set(record.landletId, { record, group, loaded: false, objects: [] });
+    shopLandlets.set(record.landletId, { record, group, loaded: false, loadToken: 0, objects: [] });
   }
 
   // Shop mode can be (re-)entered without a reload (see this function's own
