@@ -154,12 +154,15 @@ let shopActive = false;
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Placeholder buildable volume: a basic single-level landlet, one level
-// (10m, per spec §3) straight up, modeled as a plain cuboid rather than the
-// spec's actual cone-shaped volume (cross-section changes with distance
-// from Earth's center once curvature is modeled). Same simplification as
-// using a flat plane instead of a curved one for the ground right now — get
-// the mechanic working, model the real geometry later.
+// Buildable volume: one level (10m, per spec §3) straight up from whichever
+// level's own floor is currently in view. No longer the flat-plane/plain-
+// cuboid placeholder this comment used to describe — the ground itself is
+// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
+// already widens/narrows the X/Y footprint per height via
+// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
+// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
+// see clampToLandlet's own comment for how the cross-section at that height
+// gets corrected.
 const LANDLET_HEIGHT_M = 10;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -3622,16 +3625,17 @@ function renderSellerList() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
       let purchases;
+      let totalCount;
       try {
-        purchases = await fetchPurchases({ templateId: template.templateId });
+        ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
-      salesEmptyEl.hidden = purchases.length > 0;
-      if (purchases.length > 0) {
-        salesSummaryEl.textContent = `${purchases.length} sale${purchases.length === 1 ? '' : 's'}`;
+      salesEmptyEl.hidden = totalCount > 0;
+      if (totalCount > 0) {
+        salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
       }
       for (const purchase of purchases) {
         const saleRow = document.createElement('div');
@@ -3848,17 +3852,16 @@ async function renderLandCapField() {
   field.appendChild(status);
   settingsSectionEl.appendChild(field);
   try {
-    // fetchAllLandlets pages through every one of this builder's owned
-    // landlets, not just fetchLandlets's own first 100 — auctions place no
-    // hard ceiling on how many a builder can accumulate, and the backend's
-    // own land-cap formula sums all of them, so a single-page read here
-    // would silently undercount past that point (#186).
-    const [builders, ownedLandlets] = await Promise.all([
-      fetchBuilders(),
-      fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId }),
-    ]);
+    // ownedAreaM2 comes straight from the builder object now (#312) —
+    // the backend's own recomputeLandCapsBatch already sums every owned
+    // landlet's ground area *and* every level's own cap_consumed_m2
+    // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
+    // so reading it back here is both more accurate (a frontend-side sum
+    // over fetchAllLandlets alone silently ignored level area) and
+    // cheaper (no second paginated fetch needed at all).
+    const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
-    const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
+    const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
       'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
   } catch (err) {

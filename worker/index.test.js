@@ -1001,6 +1001,50 @@ describe('Worker API', () => {
     });
   });
 
+  // Found via backlog audit (#318): priceCents had no upper bound and used
+  // Number.isInteger rather than Number.isSafeInteger, letting a value past
+  // MAX_MONEY_CENTS (or past safe-integer range entirely) through — a
+  // seller could set an astronomical priceCents on their own template and
+  // self-purchase it once to mint an outsized dallers_balance_cents credit.
+  it('rejects a priceCents over the money-field cap, and a non-safe-integer value', async () => {
+    const overCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-over-test',
+        name: 'Price cap over test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_001,
+      }),
+    });
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-unsafe-test',
+        name: 'Price cap unsafe test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    });
+    expect(notSafe.response.status).toBe(400);
+
+    const atCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-at-test',
+        name: 'Price cap at test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_000,
+      }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.template.priceCents).toBe(100_000_000);
+  });
+
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', draftBuilder.session({
@@ -3436,6 +3480,43 @@ describe('Auctions', () => {
     expect(endsAt - createdAt).toBeLessThan(61 * 60 * 1000);
   });
 
+  // Found via backlog audit (#318): startingBidCents/amountCents had no
+  // upper bound and used Number.isInteger rather than Number.isSafeInteger,
+  // letting a value past MAX_MONEY_CENTS (or past safe-integer range
+  // entirely) through to a persisted balance/ledger.
+  it('rejects a startingBidCents or amountCents over the money-field cap, and a non-safe-integer value', async () => {
+    const owner = await signupBuilder('bid-cap-owner');
+    const bidder = await signupBuilder('bid-cap-bidder');
+    await createGreenbeltLandlet('auction-bid-cap-landlet');
+    await claim('auction-bid-cap-landlet', owner);
+
+    const overCap = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_001 }),
+    }));
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: Number.MAX_SAFE_INTEGER + 1 }),
+    }));
+    expect(notSafe.response.status).toBe(400);
+
+    const started = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_000 }),
+    }));
+    expect(started.response.status).toBe(201);
+    const auctionId = started.body.auction.auctionId;
+
+    const bidOverCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_001 }),
+    }));
+    expect(bidOverCap.response.status).toBe(400);
+
+    const bidAtCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+    }));
+    expect(bidAtCap.response.status).toBe(201);
+  });
+
   it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
     const owner = await signupBuilder('bid-rules-owner');
     const bidderA = await signupBuilder('bidder-a');
@@ -4194,6 +4275,12 @@ describe('Friendships', () => {
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
+    // Found via backlog audit (#319): a new request/its acceptance had no
+    // passive way to reach the other side.
+    const bobNoticesAfterRequest = await api('/notifications', bob.session());
+    expect(bobNoticesAfterRequest.body.notifications.some(
+      (n) => n.message === 'friendship-alice sent you a friend request.')).toBe(true);
+
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
     const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
@@ -4219,6 +4306,10 @@ describe('Friendships', () => {
     }));
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
+
+    const aliceNoticesAfterAccept = await api('/notifications', alice.session());
+    expect(aliceNoticesAfterAccept.body.notifications.some(
+      (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
 
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
@@ -4934,6 +5025,28 @@ describe('Landlet levels', () => {
     expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
   });
 
+  it('exposes ownedAreaM2 on the builder object, including level area (#312)', async () => {
+    const owner = await signupBuilder('levels-owned-area-owner');
+    await createGreenbeltLandletWithArea('levels-owned-area-landlet', 1000);
+    await claim('levels-owned-area-landlet', owner);
+    await api('/landlets/levels-owned-area-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    const expectedOwnedAreaM2 = 1000 + levelCapM2;
+
+    const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
+    expect(listed.ownedAreaM2).toBe(expectedOwnedAreaM2);
+
+    const me = await api('/builders/me', owner.session());
+    expect(me.body.builder.ownedAreaM2).toBe(expectedOwnedAreaM2);
+  });
+
+  it('leaves ownedAreaM2 null on a builder response that never recomputed it (plain create)', async () => {
+    const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owned Area Null Builder' }) });
+    expect(created.body.builder.ownedAreaM2).toBeNull();
+  });
+
   it('cascades landlet_levels cleanup on builder deletion, same as placed_instances/landlet_versions', async () => {
     const owner = await signupBuilder('levels-delete-owner');
     await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);
@@ -5249,6 +5362,34 @@ describe('Simulated purchases', () => {
     const byTemplate = await api('/purchases?templateId=purchase-list-template');
     expect(byTemplate.response.status).toBe(200);
     expect(byTemplate.body.purchases).toHaveLength(2);
+  });
+
+  // The list above is capped at 100 rows with no pagination — reading a
+  // seller's own "N sales" summary straight off that capped list's own
+  // .length (the Seller modal's Sales panel, before this fix) silently
+  // undercounts once a product has passed 100 sales. totalCount is a
+  // dedicated, uncapped COUNT instead (same fix already applied to
+  // notifications' unread badge — see 'reports the true unread count past
+  // the notifications list's own 100-row cap' above).
+  it('reports the true purchase count past the purchases list\'s own 100-row cap, by both builderId and templateId', async () => {
+    const seller = await signupBuilder('purchase-count-seller');
+    await createTemplate('purchase-count-template', { priceCents: 500 });
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO purchases
+          (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity,
+           total_cents, commission_cents, builder_share_cents, platform_share_cents)
+        VALUES (?, 'purchase-count-instance', 'purchase-count-template', ?, 500, 1, 500, 10, 5, 5)
+      `).bind(`purchase-count-${i}`, seller.builderId));
+    await env.DB.batch(statements);
+
+    const byBuilder = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(byBuilder.body.purchases).toHaveLength(100);
+    expect(byBuilder.body.totalCount).toBe(105);
+
+    const byTemplate = await api('/purchases?templateId=purchase-count-template');
+    expect(byTemplate.body.purchases).toHaveLength(100);
+    expect(byTemplate.body.totalCount).toBe(105);
   });
 
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {

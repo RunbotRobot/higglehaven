@@ -1362,6 +1362,15 @@ function builderFromRow(row) {
     // area this builder may own at once, distinct from dallersBalanceCents
     // above (which land-specific lándlets can be acquired via auction).
     landCapM2: row.land_cap_m2,
+    // The real total currently counted against that cap — ground-level
+    // landlet area plus every level's own cap_consumed_m2 (docs/API.md's
+    // "Vertical construction"), the same sum recomputeLandCap/
+    // recomputeLandCapsBatch already compute internally to grow landCapM2
+    // itself. Only present (non-null) on a row that just went through one
+    // of those — GET /api/builders and GET /api/builders/me both do; a
+    // plain create/rename response doesn't recompute anything, so stays
+    // null rather than a stale or misleadingly-precise-looking number.
+    ownedAreaM2: row.owned_area_m2 ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1395,7 +1404,9 @@ async function getOrCreateBuilderForUser(db, user) {
 async function handleMyBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
   const row = await getOrCreateBuilderForUser(db, user);
-  row.land_cap_m2 = await recomputeLandCap(db, row.builder_id);
+  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
+  row.land_cap_m2 = nextCap;
+  row.owned_area_m2 = ownedAreaM2;
   return json({ builder: builderFromRow(row) });
 }
 
@@ -1647,6 +1658,13 @@ async function handleFriendships(request, db, route, url) {
     if (inserted.meta.changes === 0) {
       throw new HttpError('A friendship or pending request already exists between these builders', 409);
     }
+    // Found via backlog audit (#319): a new request/an acceptance had no
+    // passive way to reach the other side — they'd have to proactively
+    // re-poll GET /api/friendships. Best-effort, same as every other
+    // notification in this file (fired after the write it's about, not
+    // batched atomically with it).
+    await notificationStatement(db, recipientBuilderId,
+      `${sessionBuilder.label} sent you a friend request.`).run();
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
@@ -1671,6 +1689,10 @@ async function handleFriendships(request, db, route, url) {
     // instead of the clean 404 this should be.
     const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
     if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
+    // Same "no passive way to find out" gap as the new-request notification
+    // above (#319), for the requester's side of an acceptance.
+    await notificationStatement(db, existing.requester_builder_id,
+      `${sessionBuilder.label} accepted your friend request.`).run();
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
@@ -2231,9 +2253,15 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
   return Math.max(currentCapM2, candidateCap);
 }
 
+// Returns both the (possibly ratcheted-up) cap itself and the real total
+// owned area (ground + levels) that fed the formula — callers that only
+// care about the cap can ignore ownedAreaM2, but GET /api/builders/me
+// exposes it so the frontend's own "you own X of Y" display (#312) never
+// has to re-derive it (and risk leaving out level area the way its
+// original ground-only-landlets sum did).
 async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
-  if (!builder) return LAND_CAP_STARTER_M2;
+  if (!builder) return { nextCap: LAND_CAP_STARTER_M2, ownedAreaM2: 0 };
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earningsRow, ownedRow, levelsRow] = await Promise.all([
     db.prepare(`
@@ -2254,17 +2282,20 @@ async function recomputeLandCap(db, builderId) {
   if (nextCap !== builder.land_cap_m2) {
     await db.prepare('UPDATE builders SET land_cap_m2 = ? WHERE builder_id = ?').bind(nextCap, builderId).run();
   }
-  return nextCap;
+  return { nextCap, ownedAreaM2 };
 }
 
 // List-endpoint version of the above: instead of the same 2-3 queries
 // repeated once per builder (an N+1 round-trip pattern that made GET
 // /api/builders get linearly slower as the builder count grew), pulls
-// earnings and owned-area totals for every builder in exactly 2 aggregate
+// earnings and owned-area totals for every builder in exactly 3 aggregate
 // queries, then applies the identical formula in memory. Mutates each
-// row's land_cap_m2 in place (matching recomputeLandCap's per-row
-// contract) and persists only the rows that actually changed, in a single
-// batched call.
+// row's land_cap_m2 *and* owned_area_m2 in place (matching
+// recomputeLandCap's own two-value contract) and persists only the
+// land_cap_m2 changes, in a single batched call — owned_area_m2 is never
+// itself persisted, just attached to the in-memory row so builderFromRow
+// can expose it (#312: this is what GET /api/builders actually runs, so
+// it's the code path the frontend's own Land Cap display depends on).
 async function recomputeLandCapsBatch(db, rows) {
   if (rows.length === 0) return;
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -2291,6 +2322,7 @@ async function recomputeLandCapsBatch(db, rows) {
   const updates = [];
   for (const row of rows) {
     const ownedAreaM2 = (ownedByBuilder.get(row.builder_id) ?? 0) + (levelsByBuilder.get(row.builder_id) ?? 0);
+    row.owned_area_m2 = ownedAreaM2;
     const nextCap = computeNextLandCap(
       row.land_cap_m2,
       earningsByBuilder.get(row.builder_id) ?? 0,
@@ -2510,7 +2542,9 @@ function auctionBidFromRow(row) {
 
 function nonnegativeInteger(value, field) {
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
+    throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
   return number;
 }
 
@@ -4687,6 +4721,17 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
 // these" simulation while ruling out that abuse.
 const PURCHASE_MAX_QUANTITY = 1000;
+// Same "growth is earned, never purchased" reasoning as
+// PURCHASE_MAX_QUANTITY just above, applied to priceCents/startingBidCents/
+// a bid's amountCents (nonnegativeInteger/optionalInteger below): with no
+// upper bound, a seller could set an astronomical priceCents on their own
+// catalog template and self-purchase it once to mint an arbitrary
+// dallers_balance_cents/daller_earnings_events credit, and the same hole
+// exists on auction bids. $1,000,000 (in cents) stays generous for this
+// dev-mode play economy while ruling out that abuse and, just as
+// importantly, keeping every stored value within Number.isSafeInteger
+// range so it can never silently lose precision once persisted.
+const MAX_MONEY_CENTS = 100_000_000;
 // Same per-IP-throttle mitigation as signup/password-reset/model-upload
 // (checkRateLimit) — this is the one other public, repeatable,
 // balance-crediting endpoint that had no throttle at all, unlike every
@@ -4792,7 +4837,12 @@ async function handlePurchases(request, db, route, url) {
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
-      return json({ purchases: results.map(purchaseFromRow) });
+      // The list above is capped at 100 rows (no pagination) — fine for the
+      // list itself, but a naive .length undercounts once a builder has more
+      // than 100 purchases. A dedicated COUNT has no such cap (same fix
+      // already applied to the notifications unread badge).
+      const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE builder_id = ?').bind(id).first();
+      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
     if (templateId) {
       const id = stringValue(templateId, 'templateId');
@@ -4805,7 +4855,8 @@ async function handlePurchases(request, db, route, url) {
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
       `).bind(id).all();
-      return json({ purchases: results.map(purchaseFromRow) });
+      const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
+      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
     throw new HttpError('builderId or templateId is required', 400);
   }
@@ -5517,7 +5568,9 @@ function finiteNumber(value, field) {
 function optionalInteger(value, field) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
+    throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
   return number;
 }
 

@@ -506,7 +506,7 @@ profile, auto-provisioning one if somehow missing (a defensive fallback —
 signup already creates it, so this should never actually need to):
 
 ```json
-{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "createdAt": "...", "updatedAt": "..." } }
+{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
 ```
 
 Idempotent — the same profile every call, never a new one.
@@ -520,6 +520,8 @@ Idempotent — the same profile every call, never a new one.
   "isPioneer": false,
   "pioneerRank": null,
   "dallersBalanceCents": 0,
+  "landCapM2": 1000,
+  "ownedAreaM2": 1000,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
@@ -529,6 +531,10 @@ Idempotent — the same profile every call, never a new one.
 recognition — see "Founding/pioneer recognition" below. `dallersBalanceCents`
 is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
 acquisition auctions" below for what can (and can't yet) change it.
+`landCapM2`/`ownedAreaM2` are "Land cap" below's cap itself and the real
+ground-plus-levels total counted against it — `ownedAreaM2` is `null`
+instead of a number on a response that didn't just recompute both (a
+plain create/rename), never a stale or silently-wrong figure.
 
 ### `GET /api/builders`
 
@@ -944,7 +950,11 @@ Required fields:
 - `dimensions.height`
 
 All dimensions must be numbers greater than zero. `priceCents`, when present,
-must be a non-negative integer.
+must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
+same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
+value large enough to lose precision past `Number.isSafeInteger` once
+persisted, or to mint an outsized `dallers_balance_cents` credit through a
+self-purchase or auction win.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
@@ -2196,6 +2206,9 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- A friend request or its acceptance (see "Friendship object" below): the
+  recipient is notified of a new request, and the requester is notified
+  once it's accepted.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -2340,7 +2353,8 @@ reference an existing builder. `409` if a friendship or pending request
 already exists between the two builders **in either direction** — sending
 B→A when A→B is already pending doesn't create a second row; the existing
 one has to be accepted or declined first. Returns `201` with the new
-`pending` friendship.
+`pending` friendship. Notifies `recipientBuilderId` (the generic
+notification system below, not a dedicated channel).
 
 ### `PATCH /api/friendships/:friendshipId`
 
@@ -2350,7 +2364,7 @@ accepting their own would skip the other side's consent entirely). Accepts
 a request: `{ "status": "accepted" }` is the only valid body — `400` on
 anything else. `404` if the friendship doesn't exist. There is no
 "decline" status; declining a pending request or removing an accepted
-friendship are both just `DELETE`.
+friendship are both just `DELETE`. Notifies the `requesterBuilderId`.
 
 ### `DELETE /api/friendships/:friendshipId`
 
@@ -3128,12 +3142,13 @@ removed outright by a DB-level cascade, not transitioned to `ended` — see
 Requires a session (`401` without one). Starts a voluntary auction as the
 calling account's own builder — `builderId` is derived from the session,
 never a client-supplied field. Body: `{ "startingBidCents"?,
-"durationHours"? }`. `startingBidCents` defaults to `0`; `durationHours`
-defaults to `24` (docs/SPEC.md §5's own default), capped at `8760` (one
-year) as a sanity bound against a malformed request, not a spec
-requirement. `400` unless the calling builder is the landlet's current
-owner and the landlet is `claimed`. `409` if that landlet already has an
-active auction — one at a time per landlet.
+"durationHours"? }`. `startingBidCents` defaults to `0`, capped at
+100,000,000 (the same money-field sanity bound as `priceCents` above);
+`durationHours` defaults to `24` (docs/SPEC.md §5's own default), capped
+at `8760` (one year) as a sanity bound against a malformed request, not a
+spec requirement. `400` unless the calling builder is the landlet's
+current owner and the landlet is `claimed`. `409` if that landlet already
+has an active auction — one at a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather
@@ -3167,7 +3182,8 @@ capped at 200. `404` if the auction doesn't exist.
 
 Requires a session (`401` without one). Places a bid as the calling
 account's own builder — `builderId` is derived from the session, never a
-client-supplied field. Body: `{ "amountCents" }`. Resolves the
+client-supplied field. Body: `{ "amountCents" }`, capped at 100,000,000
+(the same money-field sanity bound as `priceCents` above). Resolves the
 auction first if it's due, then `409` if it's not (or is no longer)
 `active`. `400` if the bidder is the seller, or if `amountCents` is below
 the minimum acceptable amount:
@@ -3411,9 +3427,16 @@ Settings' Build tab shows a "Land Cap" field (`renderLandCapField` in
 `src/main.js`) above Publish/Version History — a builder-account fact, not
 tied to the currently-active landlet, so it renders whenever a builder
 identity is active regardless of `currentMode`/`currentLandletId` (unlike
-Publish, which needs an active Build-mode landlet). It shows current owned
-area (summed from `GET /api/landlets?status=claimed&ownerBuilderId=...`)
-against `landCapM2` from `GET /api/builders`.
+Publish, which needs an active Build-mode landlet). It shows `ownedAreaM2`
+against `landCapM2`, both read straight off the builder object from
+`GET /api/builders` — not, as an earlier version of this panel did, a
+frontend-side sum over `GET /api/landlets?status=claimed&...` alone, which
+silently missed every level's own `cap_consumed_m2` once vertical
+construction shipped (#312). `ownedAreaM2` is the exact same
+ground-plus-levels total `recomputeLandCapsBatch` already computes
+server-side to grow `landCapM2` itself (see "The formula" above) — read
+back here rather than re-derived, so the two numbers can never drift out
+of sync with each other.
 
 ### Testing note
 
