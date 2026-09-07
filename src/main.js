@@ -4230,7 +4230,20 @@ async function renderAuctionSection() {
   listField.appendChild(auctionList);
   settingsSectionEl.appendChild(listField);
 
+  // Guards against the picker's `change` handler firing renderForLandlet
+  // again before a previous call's own fetchAuctions round-trip has
+  // resolved (#442) — without this, switching the picker quickly (A→B, or
+  // A→B→A) races two async renders over the same shared startField/
+  // startStatus DOM nodes, and whichever fetch happens to resolve last
+  // wins regardless of which landlet is actually selected by then. Bumped
+  // at the start of every call; a call whose token has been superseded by
+  // a newer one bails out without touching the DOM once its await
+  // returns, the same generation-counter idiom #424/#425 already use for
+  // this exact race shape elsewhere in Settings.
+  let landletRenderToken = 0;
+
   async function renderForLandlet(landletId) {
+    const myToken = ++landletRenderToken;
     startStatus.textContent = '';
     startStatus.classList.remove('error');
     for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
@@ -4238,10 +4251,12 @@ async function renderAuctionSection() {
     try {
       activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
+      if (myToken !== landletRenderToken) return;
       startStatus.textContent = err.message || 'Could not check for an existing auction.';
       startStatus.classList.add('error');
       return;
     }
+    if (myToken !== landletRenderToken) return;
     if (activeForMine.length > 0) {
       const row = document.createElement('div');
       row.className = 'auction-row';
@@ -4441,7 +4456,10 @@ async function renderAuctionSection() {
         bidBtn.textContent = 'Place Bid';
         bidBtn.addEventListener('click', async () => {
           const dollars = Number(bidInput.value);
-          if (!Number.isFinite(dollars) || dollars < 0) return;
+          if (!Number.isFinite(dollars) || dollars < 0) {
+            alert('Enter a bid amount of zero or more.');
+            return;
+          }
           bidBtn.disabled = true;
           try {
             await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
