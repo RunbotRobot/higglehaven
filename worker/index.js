@@ -4495,7 +4495,20 @@ async function handleInstances(request, db, route, url) {
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
-    await assertCropWithinTemplateBounds(db, [instance]);
+    // Found via backlog audit (#338): re-validating crop unconditionally
+    // here, even when neither crop nor templateId is actually part of this
+    // request, meant a template shrunk (or its extensible.minM raised)
+    // after an instance's crop was already set could brick that instance —
+    // any later PATCH for something wholly unrelated (moving it, renaming
+    // its label) would re-check the *carried-over* stale crop against the
+    // template's *current* bounds and 400, even though the caller never
+    // touched crop. Only re-validate when this request is actually
+    // asserting a crop/templateId pairing that didn't already exist —
+    // an unchanged crop against an unchanged template isn't a new fact
+    // this request is introducing, so it isn't this request's to reject.
+    if (input.crop !== undefined || input.templateId !== undefined) {
+      await assertCropWithinTemplateBounds(db, [instance]);
+    }
     await db.prepare(`
       UPDATE placed_instances
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
