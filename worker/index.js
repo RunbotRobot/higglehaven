@@ -851,7 +851,7 @@ async function handleCatalog(request, db, route, url, models) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
-    if (existing.seller_id) {
+    if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -859,9 +859,14 @@ async function handleCatalog(request, db, route, url, models) {
     // sellerId is forced back to its existing value (it wins the spread since
     // it's listed last) — reassigning a template's seller isn't a feature
     // this endpoint supports, same as landlets never letting PUT change
-    // ownerBuilderId.
+    // ownerBuilderId. Because of that, there's no fresh sellerId here to
+    // validate — it's always exactly whatever the row already had, dangling
+    // or not, so re-running assertReferenceExists on every update would
+    // just re-validate unchanged data and (per the sellerExists comment
+    // above) permanently block updates on a template whose seller has
+    // since deleted their account, contradicting docs/API.md's "same as
+    // null seller_id" promise for that case.
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
-    if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       UPDATE catalog_templates
@@ -880,7 +885,7 @@ async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
-    if (existing.seller_id) {
+    if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -991,7 +996,7 @@ async function handleProductReviews(request, db, route) {
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
     const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (template?.seller_id) {
+    if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -1413,6 +1418,24 @@ async function requireSessionBuilder(request, db) {
 // one line instead of re-deriving the same if/throw every time.
 function assertOwner(actualOwnerId, sessionOwnerId, message) {
   if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
+}
+
+// A row's own seller_id column can be non-null yet dangling — pointing at
+// a seller that DELETE /api/sellers/:sellerId already removed (see that
+// handler's own comment: intentionally left as-is, "the same way a
+// template can already have a null seller_id"). A plain truthiness check
+// on seller_id treats that dangling reference as still-owned instead,
+// since no live session can ever match a seller_id that no longer exists
+// — permanently locking the row out of every ownership-gated mutation
+// (catalog template PATCH/DELETE, review moderation, refunds), which
+// contradicts docs/API.md's explicit "same as null" promise. Callers
+// that currently do `if (row.seller_id)` before an ownership check should
+// do `if (row.seller_id && await sellerExists(db, row.seller_id))`
+// instead, so a dangling id falls through to whatever that call site
+// already does for a genuinely null one.
+async function sellerExists(db, sellerId) {
+  const row = await db.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  return !!row;
 }
 
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
@@ -4769,7 +4792,11 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   // read-only/creation paths on ownerless resources do elsewhere — it
   // needs admin instead, the same fallback used for the other genuinely
   // ownerless-but-sensitive mutations (see requireAdmin's other callers).
-  if (purchase.seller_id) {
+  // sellerExists also catches a *dangling* (non-null but deleted) seller_id
+  // the same way — otherwise a refund on a purchase whose seller has since
+  // deleted their account would 403 forever, since no live session can
+  // ever match an id that no longer exists in `sellers`.
+  if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
   } else {
