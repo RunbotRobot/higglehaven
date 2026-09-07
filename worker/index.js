@@ -2645,8 +2645,11 @@ const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
 // are both unauthenticated and repeatable and (once RESEND_API_KEY is
 // configured) can trigger a real outbound email to an arbitrary address:
 // signup and password-reset-request. Login already has its own real
-// per-account lockout (failed_login_attempts/locked_until above), and
-// resend-verification requires an existing session, so neither needs this.
+// per-account lockout (failed_login_attempts/locked_until above).
+// resend-verification (#363) is session-gated rather than IP+email
+// bucketed like the two above — it doesn't have an arbitrary-address
+// enumeration angle to guard against, but still needs a cap keyed by the
+// caller's own user id, or one logged-in user could loop it indefinitely.
 //
 // Bucketed by client IP + the specific email being targeted, not IP alone
 // — this limits hammering one target from one source without any new
@@ -3077,6 +3080,12 @@ async function issueEmailVerification(env, db, userId, email) {
 async function handleResendVerification(request, env, db) {
   const user = await requireCurrentUser(request, db);
   if (user.email_verified_at !== null) throw new HttpError('Email is already verified', 400);
+  // #363: this endpoint requires a session, so it doesn't need the IP+email
+  // bucketing signup/password-reset use to stop targeted enumeration/
+  // harassment — but with no limit at all, one logged-in user could still
+  // loop this to burn the operator's Resend quota/sending reputation.
+  // Keyed by user id alone since the caller's identity is already proven.
+  await checkRateLimit(db, `resend-verification:${user.user_id}`, 5);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
   return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }

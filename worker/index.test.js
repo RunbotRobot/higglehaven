@@ -6326,6 +6326,21 @@ describe('Authentication', () => {
     expect(alreadyVerified.response.status).toBe(400);
   });
 
+  // #363: previously had no rate limit at all — a logged-in user could loop
+  // this endpoint to burn the operator's real Resend email quota.
+  it('rate-limits repeated resend-verification requests for the same user', async () => {
+    const email = `auth-ratelimit-resend-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const sessionToken = extractSessionCookie(signedUp.response);
+
+    for (let i = 0; i < 5; i++) {
+      const attempt = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const sixth = await api('/auth/resend-verification', withSession(sessionToken, { method: 'POST' }));
+    expect(sixth.response.status).toBe(429);
+  });
+
   it('signup automatically provisions a linked builder profile', async () => {
     const email = `auth-builder-${crypto.randomUUID()}@example.com`;
     const signedUp = await signup(email, 'a fine long password', { username: 'Ada Builder' });
