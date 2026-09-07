@@ -1001,6 +1001,50 @@ describe('Worker API', () => {
     });
   });
 
+  // Found via backlog audit (#318): priceCents had no upper bound and used
+  // Number.isInteger rather than Number.isSafeInteger, letting a value past
+  // MAX_MONEY_CENTS (or past safe-integer range entirely) through — a
+  // seller could set an astronomical priceCents on their own template and
+  // self-purchase it once to mint an outsized dallers_balance_cents credit.
+  it('rejects a priceCents over the money-field cap, and a non-safe-integer value', async () => {
+    const overCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-over-test',
+        name: 'Price cap over test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_001,
+      }),
+    });
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-unsafe-test',
+        name: 'Price cap unsafe test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    });
+    expect(notSafe.response.status).toBe(400);
+
+    const atCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-at-test',
+        name: 'Price cap at test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_000,
+      }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.template.priceCents).toBe(100_000_000);
+  });
+
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', draftBuilder.session({
@@ -3409,6 +3453,43 @@ describe('Auctions', () => {
     const createdAt = new Date(started.body.auction.createdAt).getTime();
     expect(endsAt - createdAt).toBeGreaterThan(59 * 60 * 1000);
     expect(endsAt - createdAt).toBeLessThan(61 * 60 * 1000);
+  });
+
+  // Found via backlog audit (#318): startingBidCents/amountCents had no
+  // upper bound and used Number.isInteger rather than Number.isSafeInteger,
+  // letting a value past MAX_MONEY_CENTS (or past safe-integer range
+  // entirely) through to a persisted balance/ledger.
+  it('rejects a startingBidCents or amountCents over the money-field cap, and a non-safe-integer value', async () => {
+    const owner = await signupBuilder('bid-cap-owner');
+    const bidder = await signupBuilder('bid-cap-bidder');
+    await createGreenbeltLandlet('auction-bid-cap-landlet');
+    await claim('auction-bid-cap-landlet', owner);
+
+    const overCap = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_001 }),
+    }));
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: Number.MAX_SAFE_INTEGER + 1 }),
+    }));
+    expect(notSafe.response.status).toBe(400);
+
+    const started = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_000 }),
+    }));
+    expect(started.response.status).toBe(201);
+    const auctionId = started.body.auction.auctionId;
+
+    const bidOverCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_001 }),
+    }));
+    expect(bidOverCap.response.status).toBe(400);
+
+    const bidAtCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+    }));
+    expect(bidAtCap.response.status).toBe(201);
   });
 
   it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
