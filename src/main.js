@@ -3615,18 +3615,28 @@ function renderSellerList() {
     reviewEmptyEl.textContent = 'No reviews yet.';
     reviewPanel.appendChild(reviewEmptyEl);
 
+    // #425: per-row, not module-level — signPostsLoadToken/
+    // calendarEventsLoadToken's own single shared counter works there
+    // because only one of those panels is ever open at a time, but every
+    // seller row here has its own independent Reviews panel, so a shared
+    // counter would have unrelated rows' toggles spuriously invalidate
+    // each other's still-in-flight loads.
+    let reviewLoadToken = 0;
     async function renderReviews() {
       reviewListEl.innerHTML = '';
       reviewSummaryEl.textContent = '';
+      const myLoadToken = ++reviewLoadToken;
       let reviews;
       let averageRating;
       try {
         ({ reviews, averageRating } = await fetchProductReviews(template.templateId));
       } catch (err) {
+        if (myLoadToken !== reviewLoadToken) return; // superseded while fetching
         reviewEmptyEl.textContent = err.message || 'Could not load reviews.';
         reviewEmptyEl.hidden = false;
         return;
       }
+      if (myLoadToken !== reviewLoadToken) return; // superseded — a newer call owns the list now
       reviewEmptyEl.hidden = reviews.length > 0;
       if (reviews.length > 0) {
         const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
@@ -3715,18 +3725,23 @@ function renderSellerList() {
     salesEmptyEl.textContent = 'No sales yet.';
     salesPanel.appendChild(salesEmptyEl);
 
+    // #425: same per-row reasoning as reviewLoadToken above.
+    let salesLoadToken = 0;
     async function renderSales() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
+      const myLoadToken = ++salesLoadToken;
       let purchases;
       let totalCount;
       try {
         ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
+        if (myLoadToken !== salesLoadToken) return; // superseded while fetching
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
+      if (myLoadToken !== salesLoadToken) return; // superseded — a newer call owns the list now
       salesEmptyEl.hidden = totalCount > 0;
       if (totalCount > 0) {
         salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
