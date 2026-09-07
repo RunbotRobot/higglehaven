@@ -4593,6 +4593,29 @@ describe('Friendships', () => {
     });
   });
 
+  // #369: the existing-pair 409 guard only blocks a repeat against the
+  // *same* recipient, so nothing stopped one account cycling through fresh
+  // recipients to spam friend-request notifications with no limit at all.
+  it('rate-limits repeated friend requests from the same builder, even against different recipients', async () => {
+    const requester = await signupBuilder('friendship-rate-limit-requester');
+    for (let i = 0; i < 20; i++) {
+      const recipient = await signupBuilder(`friendship-rate-limit-recipient-${i}`);
+      const attempt = await api('/friendships', requester.session({
+        method: 'POST', body: JSON.stringify({ recipientBuilderId: recipient.builderId }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const oneMore = await signupBuilder('friendship-rate-limit-recipient-one-more');
+    const limited = await api('/friendships', requester.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: oneMore.builderId }),
+    }));
+    expect(limited.response.status).toBe(429);
+  }, 45000); // 21 real signups (password hashing each time) plus 21 POSTs
+  // reliably finishes well under 20s in isolation, but the same
+  // scheduling-contention flake documented on the purchase rate-limit
+  // test below (this whole file, 300+ tests, one process) applies here too
+  // — matching its timeout rather than re-discovering the same flake.
+
   // #353: the accept UPDATE previously matched regardless of the row's
   // current status, so re-PATCHing an already-accepted friendship kept
   // re-sending the requester a duplicate notification with no limit.

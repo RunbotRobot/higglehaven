@@ -1644,6 +1644,11 @@ function notificationFromRow(row) {
 // so there is no real "current location" to report regardless of how this
 // endpoint is built. A builder's claimed lándlet is the one stable,
 // already-known location the backend actually has for them.
+// See the POST branch's own comment below (issue #369) — an authenticated
+// builder id, not an IP, since this gates a real account's own request
+// volume rather than an anonymous caller's.
+const FRIEND_REQUEST_RATE_LIMIT_MAX = 20;
+
 async function handleFriendships(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
@@ -1671,6 +1676,11 @@ async function handleFriendships(request, db, route, url) {
     // who the request targets, not a claim of identity.
     const sessionBuilder = await requireSessionBuilder(request, db);
     const requesterBuilderId = sessionBuilder.builder_id;
+    // The existing-pair guard below only blocks a repeat against the *same*
+    // recipient — cycling through fresh, previously-unrequested recipients
+    // sidesteps it entirely, and each one fires a real notification (see
+    // below), so this needs its own throttle (#369).
+    await checkRateLimit(db, `friend-request:${requesterBuilderId}`, FRIEND_REQUEST_RATE_LIMIT_MAX);
     const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
     if (requesterBuilderId === recipientBuilderId) {
       throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
