@@ -446,10 +446,10 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // factor a real fixed-angular-footprint lándlet would have at that height —
 // genuinely tiny at this scale (LANDLET_HEIGHT_M=10 against Earth's ~6.371
 // million meter radius is a ~0.00016% change), but the correct shape rather
-// than a flat placeholder. Only the above-ground case exists to correct
-// here — below-ground levels (where the spec says the cone narrows
-// instead) depend on a vertical-construction/digging feature this app
-// doesn't have yet (see #136's own scoping note).
+// than a flat placeholder. footprintScaleAtHeight's own formula already
+// covers both directions (> 1 above ground, < 1 below), so below-ground
+// levels (vertical digging, currentLevelIndex < 0 — see #169's own comment
+// just below) narrow correctly here too, not just the above-ground case.
 //
 // Widening around THIS lándlet's own local center, rather than around the
 // single shared point (Earth's center, projected as the world origin) a
