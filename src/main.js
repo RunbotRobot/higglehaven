@@ -4033,7 +4033,17 @@ function renderBuildSettingsSection() {
   historyField.appendChild(historyList);
   settingsSectionEl.appendChild(historyField);
 
+  // #448: renderVersionHistory() can be re-triggered (setLiveBtn's own
+  // handler, publishBtn's handler) while an earlier call's
+  // Promise.all is still in flight — e.g. clicking "Set Live" on two
+  // different rows in quick succession. Without a guard, an older call's
+  // slower response can land after a newer call's and overwrite the
+  // just-rendered, correct state with stale data. Same monotonic-token
+  // idiom as friendsLoadToken/entry.loadToken elsewhere in this file.
+  let versionHistoryLoadToken = 0;
+
   async function renderVersionHistory() {
+    const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let versions;
     let activeVersionId;
@@ -4043,6 +4053,7 @@ function renderBuildSettingsSection() {
         fetchLandlet(landletId),
       ]);
     } catch (err) {
+      if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
       historyList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -4050,6 +4061,7 @@ function renderBuildSettingsSection() {
       historyList.appendChild(errNote);
       return;
     }
+    if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
     historyList.innerHTML = '';
     if (versions.length === 0) {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
