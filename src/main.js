@@ -2501,6 +2501,13 @@ async function handleUploadDimensionsStep() {
     priceCents = Math.round(dollars * 100);
   }
 
+  // #423: same uploadFlowToken idiom as handleUploadFileStep above — this
+  // step's own await chain (rescale/upload/create) is just as cancelable
+  // via uploadCancelBtn (which stays enabled throughout, per its own
+  // comment) as the file step's, but without this it kept running to
+  // completion in the background after Cancel, silently creating the
+  // product anyway.
+  const myFlowToken = uploadFlowToken;
   uploadSubmitBtn.disabled = true;
   try {
     let finalModelUrl = uploadModelUrl;
@@ -2514,9 +2521,12 @@ async function handleUploadDimensionsStep() {
       setUploadStatus('Applying your size change…');
       const scaleFactor = dimensions.width / uploadOriginalDimensions.width;
       const originalBlob = await fetch(uploadModelUrl).then((res) => res.blob());
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while re-fetching the original
       const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while rescaling
       setUploadStatus('Uploading resized model…');
       finalModelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading the resized model
     }
 
     setUploadStatus('Creating product…');
@@ -2524,6 +2534,7 @@ async function handleUploadDimensionsStep() {
     // which already guaranteed a seller identity to open at all — this is
     // just a defensive fallback, not the primary path to one.
     const uploaderSellerId = await ensureSellerIdentity();
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while resolving the seller identity
     const metadata = {};
     if (uploadDigitalGoodCheckbox.checked) {
       metadata.digitalGoodDisclaimer = uploadDigitalGoodDisclaimerSelect.value;
@@ -2537,6 +2548,7 @@ async function handleUploadDimensionsStep() {
       priceCents,
       metadata,
     });
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — the template still exists server-side, but nothing here should act on it
 
     activeCatalog.push(template);
     buildCatalogPickerButtons();
@@ -2547,10 +2559,11 @@ async function handleUploadDimensionsStep() {
     // place onto at all) as easily as from Build.
     renderSellerList();
   } catch (err) {
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
   } finally {
-    uploadSubmitBtn.disabled = false;
+    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
 }
 
