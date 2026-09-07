@@ -9181,7 +9181,15 @@ function checkScheduledCalendarEvents() {
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
-        if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
+        // The calendar's landlet can unload (or reload, replacing this
+        // object with a fresh one of the same instanceId) while the
+        // trigger request above is in flight — the same guard the
+        // click-driven sign-post/calendar/review handlers already apply
+        // after their own awaits (#426). Without it, a burst still spawns
+        // into the stale calendar's now-detached THREE.Group, so the effect
+        // silently fails to render even though the server recorded the
+        // trigger correctly.
+        if (triggered && shopCalendars.includes(calendar)) spawnConfettiBurst(calendar.mesh.position, calendar.group);
         pendingCalendarEventTriggers.delete(event.eventId);
       }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
