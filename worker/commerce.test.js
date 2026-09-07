@@ -376,6 +376,142 @@ describe('Auctions', () => {
     expect(landlet.body.landlet.activeVersionId).toBeNull();
   });
 
+  // #456: same shape of race as the three above, for handleInstances'
+  // three write paths — each checked ownership once, early, then wrote
+  // unconditionally with no re-check against a concurrently resolving
+  // auction, letting the old owner plant (or move) content onto the
+  // landlet after it had already transferred to a new owner.
+  it('does not let a concurrent single instance create plant content on a landlet once an auction transfers it', async () => {
+    const owner = await signupBuilder('instance-create-resolve-race-owner');
+    const bidder = await signupBuilder('instance-create-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-create-resolve-race-landlet');
+    await claim('instance-create-resolve-race-landlet', owner);
+    const started = await api('/landlets/instance-create-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [created] = await Promise.all([
+      api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-create-resolve-race-instance', landletId: 'instance-create-resolve-race-landlet',
+          templateId: 'placeholder-tree', x: 1, y: 1,
+        }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here: the initial requireOwnedLandlet check
+    // can itself lose the race and reject before ever reaching the new
+    // write-time guard.
+    expect([201, 403, 409]).toContain(created.response.status);
+
+    const landlet = await api('/landlets/instance-create-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=instance-create-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  it('does not let a concurrent batch instance create plant content on a landlet once an auction transfers it', async () => {
+    const owner = await signupBuilder('instance-batch-resolve-race-owner');
+    const bidder = await signupBuilder('instance-batch-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-batch-resolve-race-landlet');
+    await claim('instance-batch-resolve-race-landlet', owner);
+    const started = await api('/landlets/instance-batch-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [created] = await Promise.all([
+      api('/instances/batch', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ instances: [
+          { instanceId: 'instance-batch-resolve-race-a', landletId: 'instance-batch-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 },
+        ] }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here: the initial requireOwnedLandlets check
+    // can itself lose the race and reject before ever reaching the new
+    // write-time guard.
+    expect([201, 403, 409]).toContain(created.response.status);
+
+    const landlet = await api('/landlets/instance-batch-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=instance-batch-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  it('does not let a concurrent instance update move content onto a landlet once an auction transfers it', async () => {
+    const owner = await signupBuilder('instance-update-resolve-race-owner');
+    const priorTargetOwner = await signupBuilder('instance-update-race-prior-owner');
+    const bidder = await signupBuilder('instance-update-resolve-race-bidder');
+    await createGreenbeltLandlet('instance-update-resolve-race-target');
+    await createGreenbeltLandlet('instance-update-resolve-race-source');
+    await claim('instance-update-resolve-race-source', owner);
+    const createdOnSource = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-update-resolve-race-instance', landletId: 'instance-update-resolve-race-source',
+        templateId: 'placeholder-tree', x: 1, y: 1,
+      }),
+    }));
+    expect(createdOnSource.response.status).toBe(201);
+
+    // A builder can only ever have one landlet claimed directly (see
+    // POST .../claim's own "one claimed landlet per builder" invariant),
+    // so the only legitimate way for `owner` to also come to own the
+    // target landlet here is to win it at auction — same as any other
+    // builder accumulating a second landlet in the real app.
+    await claim('instance-update-resolve-race-target', priorTargetOwner);
+    const firstAuction = await api('/landlets/instance-update-resolve-race-target/auction', priorTargetOwner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const firstAuctionId = firstAuction.body.auction.auctionId;
+    await api(`/auctions/${firstAuctionId}/bids`, owner.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(firstAuctionId).run();
+    const firstResolve = await api(`/auctions/${firstAuctionId}/resolve`, { method: 'POST' });
+    expect(firstResolve.response.status).toBe(200);
+
+    const started = await api('/landlets/instance-update-resolve-race-target/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // Owner still owns both landlets at the moment this fires — the race
+    // is entirely in the gap between handleInstances' own ownership checks
+    // and its write, not in the request's own legitimacy at send time.
+    const [moved] = await Promise.all([
+      api('/instances/instance-update-resolve-race-instance', owner.session({
+        method: 'PATCH', body: JSON.stringify({ landletId: 'instance-update-resolve-race-target' }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here: the initial requireOwnedLandlets check
+    // can itself lose the race and reject before ever reaching the new
+    // write-time guard.
+    expect([200, 403, 409]).toContain(moved.response.status);
+
+    const targetLandlet = await api('/landlets/instance-update-resolve-race-target');
+    expect(targetLandlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const targetInstances = await api('/instances?landletId=instance-update-resolve-race-target');
+    expect(targetInstances.body.instances).toEqual([]);
+  });
+
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');
