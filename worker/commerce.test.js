@@ -1905,4 +1905,45 @@ describe('Simulated purchases', () => {
       expect(finalized.body.purchase.purchaseId).toBe(purchaseId);
     });
   });
+
+  // #348: refunding a real-money purchase (one with a paymentIntentId, see
+  // #453) needs to reverse the actual Stripe charge, not just flag the
+  // local row. Same limitation as the "Real-money checkout" tests above —
+  // this suite never configures STRIPE_SECRET_KEY, so the only exercisable
+  // path is the 503 "not configured" branch — which is exactly what proves
+  // the important safety property: a purchase whose Stripe reversal never
+  // happened must not end up looking refunded, and the builder's dáller
+  // share must stay untouched until it does.
+  describe('Real-money refunds (#348)', () => {
+    it('leaves the purchase unrefunded and the builder\'s balance untouched when Stripe is not configured', async () => {
+      const seller = await signupBuilder('real-refund-seller');
+      await createGreenbeltLandletWithArea('real-refund-landlet', 1000);
+      await claim('real-refund-landlet', seller);
+      await createTemplate('real-refund-template', { priceCents: 8000 });
+      await placeInstance('real-refund-instance', 'real-refund-landlet', 'real-refund-template', seller);
+      const purchased = await api('/instances/real-refund-instance/purchase', { method: 'POST' });
+      const { purchaseId } = purchased.body.purchase;
+
+      // Stands in for a real-money purchase handlePurchaseFinalize would
+      // have written (same technique as the idempotent-finalize test
+      // above) — the refund path only cares that payment_intent_id is set.
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_real_refund_test', purchaseId).run();
+
+      const before = await builderRow(seller.builderId);
+      const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+      expect(refunded.response.status).toBe(503);
+
+      const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(purchaseRow.refunded_at).toBeNull();
+      const after = await builderRow(seller.builderId);
+      expect(after.dallers_balance_cents).toBe(before.dallers_balance_cents);
+
+      // The refunded_at guard was released, not left stuck — a retry (once
+      // Stripe is actually configured) isn't permanently blocked by this
+      // failed attempt.
+      const retried = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+      expect(retried.response.status).toBe(503);
+    });
+  });
 });

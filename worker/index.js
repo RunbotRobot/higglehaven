@@ -5626,7 +5626,7 @@ async function handlePurchases(request, env, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
-    return handlePurchaseRefund(request, db, route[1]);
+    return handlePurchaseRefund(request, env, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5640,7 +5640,8 @@ async function handlePurchases(request, env, route, url) {
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
 // self-service, since shoppers have no account here to authenticate a
 // "my purchases" view against in the first place.
-async function handlePurchaseRefund(request, db, purchaseId) {
+async function handlePurchaseRefund(request, env, purchaseId) {
+  const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
   // A purchase's seller_id can genuinely be null — catalog templates don't
@@ -5684,6 +5685,33 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   ).bind(purchaseId).run();
   if (guard.meta.changes === 0) {
     throw new HttpError('This purchase has already been refunded', 400);
+  }
+
+  // #348: a real-money purchase (payment_intent_id set — see #453) needs
+  // its Stripe charge actually reversed, not just the local row flagged.
+  // reverse_transfer pulls the ~98% share back out of the seller's
+  // connected-account balance (the same way the block below claws back
+  // the builder's dáller share); refund_application_fee reverses
+  // higglehaven's own cut too, so nobody keeps money on a refunded sale.
+  // If Stripe's call fails, the guard above is released (refunded_at reset
+  // to NULL) and the error propagates before the builder's dáller balance
+  // is ever touched — a failed real-money reversal should never look like
+  // a successful refund, and should stay retryable.
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    }
+    try {
+      await stripeRequest(env, 'POST', 'refunds', {
+        payment_intent: purchase.payment_intent_id,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      });
+    } catch (err) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      throw err;
+    }
   }
 
   // builder_id can be null (migrations/0062 — SET NULL on the host
