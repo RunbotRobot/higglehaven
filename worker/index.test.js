@@ -3040,6 +3040,31 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // #336: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — requireSessionBuilder bumps last_active_at on every real
+  // builder-owned mutation, but not on mere signup/session-check reads
+  // (GET /builders/me goes through getOrCreateBuilderForUser directly,
+  // not requireSessionBuilder), matching the column's own migration
+  // comment on why every pre-existing/never-yet-mutating builder should
+  // read as NULL rather than some backdated guess.
+  it('bumps last_active_at on a real mutation but not on signup/session checks alone', async () => {
+    const builder = await signupBuilder('activity-test-builder');
+    const beforeMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(beforeMutation.last_active_at).toBeNull();
+
+    await createGreenbeltLandlet('activity-test-landlet');
+    const claimed = await api('/landlets/activity-test-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const afterMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(afterMutation.last_active_at).not.toBeNull();
+    expect(new Date(afterMutation.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
+  });
+
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
     const builder = await signupBuilder('release-test-builder');
 

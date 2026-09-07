@@ -488,6 +488,16 @@ unreachable through the UI going forward (not deleted — their landlets/
 placed content stay intact) — an acceptable one-time cost specifically
 because this app has no real users yet; see the migration's own comment.
 
+`builders.last_active_at` (migrations/0067) is an internal-only column,
+never returned in any Builder object below — `requireSessionBuilder` in
+`worker/index.js` bumps it on every real builder-owned mutation (claiming,
+placing, bidding, publishing, ...), not on a mere signup or `GET
+/api/builders/me` session check. It's prerequisite infrastructure for a
+future inactivity-triggered auction job (docs/SPEC.md §5's "greenbelt via
+inactivity"), which doesn't exist yet — see the tracking issue for that.
+`NULL` for any builder who hasn't triggered a real mutation since this
+column was added, deliberately not backfilled to any guessed value.
+
 ### `GET /api/builders/me`
 
 Requires a session (`401` without one, the same `requireCurrentUser` gate

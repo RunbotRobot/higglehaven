@@ -1406,7 +1406,16 @@ async function handleMyBuilder(request, db) {
 // handler can compare it against whatever it's about to modify.
 async function requireSessionBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
-  return getOrCreateBuilderForUser(db, user);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  // #336: keeps a real "was this builder recently active" signal fresh —
+  // see migrations/0067's own comment for why neither of this table's
+  // existing timestamps works for that. Bumped here rather than at each
+  // of this function's own many call sites, since every one of them is
+  // already a builder-owned mutation by definition.
+  await db.prepare(
+    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
+  ).bind(builder.builder_id).run();
+  return builder;
 }
 
 // Thrown wherever an existing row's own owner column doesn't match the
