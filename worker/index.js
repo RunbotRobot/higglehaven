@@ -265,12 +265,18 @@ async function handleUploadedAsset(request, env) {
     // isn't a meaningful bar here.
     await requireAdmin(request, env.DB);
     const modelUrl = `/uploads/${key}`;
+    const existing = await env.MODELS.head(key);
+    if (!existing) return json({ error: 'Not found' }, 404);
+    // #376: re-checked as the very last thing before the actual R2 delete
+    // (not at the top of this handler) to keep this as close as this
+    // codebase's D1-vs-R2 split allows to the atomic check-then-act idiom
+    // used everywhere else here (auction bids, reviews, friendships) — a
+    // template referencing this model created between an earlier check and
+    // now would otherwise still lose its file out from under it.
     const referenced = await env.DB.prepare(`
       SELECT template_id FROM catalog_templates WHERE model_url = ? LIMIT 1
     `).bind(modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced by a catalog template', 409);
-    const existing = await env.MODELS.head(key);
-    if (!existing) return json({ error: 'Not found' }, 404);
     await env.MODELS.delete(key);
     return json({ deleted: true });
   }
@@ -582,11 +588,28 @@ async function handleModelCleanup(request, env) {
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (!completeScan && targets.length < maxDeletes);
 
-  if (!dryRun && targets.length > 0) await env.MODELS.delete(targets.map((object) => object.key));
+  // #376: each target's "unreferenced" check above ran against whatever
+  // page it was scanned on, potentially many awaits before this point (the
+  // scan can span several 100-object pages) — a catalog template could
+  // have started referencing one of them in the meantime. Re-verify against
+  // the final target set immediately before the actual delete, as close to
+  // the R2 call as this D1-vs-R2 split allows, and only delete/report
+  // whatever is still genuinely unreferenced.
+  let toDelete = targets;
+  if (targets.length > 0) {
+    const targetUrls = targets.map((object) => `/uploads/${object.key}`);
+    const placeholders = targetUrls.map(() => '?').join(', ');
+    const stillReferenced = await env.DB.prepare(`
+      SELECT DISTINCT model_url FROM catalog_templates WHERE model_url IN (${placeholders})
+    `).bind(...targetUrls).all();
+    const rescuedUrls = new Set(stillReferenced.results.map((row) => row.model_url));
+    toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
+  }
+  if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
   return json({
-    targetModelUrls: targets.map((object) => `/uploads/${object.key}`),
-    targetCount: targets.length,
-    reclaimedBytes: targets.reduce((sum, object) => sum + object.size, 0),
+    targetModelUrls: toDelete.map((object) => `/uploads/${object.key}`),
+    targetCount: toDelete.length,
+    reclaimedBytes: toDelete.reduce((sum, object) => sum + object.size, 0),
     completeScan,
     dryRun,
   });
