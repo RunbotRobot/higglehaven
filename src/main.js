@@ -7095,12 +7095,25 @@ friendsAddBtn.addEventListener('click', async () => {
   friendsAddBtn.disabled = true;
   try {
     const builders = await fetchBuilders();
-    const match = builders.find((b) => b.label.toLowerCase() === label.trim().toLowerCase());
-    if (!match) {
-      friendsStatusEl.textContent = `No builder named "${label.trim()}" found.`;
+    const trimmed = label.trim();
+    const matches = builders.filter((b) => b.label.toLowerCase() === trimmed.toLowerCase());
+    if (matches.length === 0) {
+      friendsStatusEl.textContent = `No builder named "${trimmed}" found.`;
       friendsStatusEl.classList.add('error');
       return;
     }
+    // Builder labels have no uniqueness constraint (migrations/0054's own
+    // comment: "a unique label was never even guaranteed") — docs/API.md's
+    // "unmatched or ambiguous label surfaces as a status message rather
+    // than a dead end" promise covers this case explicitly, so more than
+    // one match must never silently resolve to whichever one happened to
+    // sort first.
+    if (matches.length > 1) {
+      friendsStatusEl.textContent = `Multiple builders are named "${trimmed}" — ask them to rename to something unique before sending a request.`;
+      friendsStatusEl.classList.add('error');
+      return;
+    }
+    const match = matches[0];
     await sendFriendRequest(match.builderId);
     friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
     await renderFriends();
@@ -9828,12 +9841,6 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    // #221 previously surfaced a "Borders water" note here — removed per
-    // explicit owner direction: shoreline scarcity should be something a
-    // builder organically notices (or doesn't), not something the UI
-    // calls out mechanically. bordersWater() itself (src/landletAdjacency.js)
-    // stays, for whatever #221's own eventual desirability mechanic turns
-    // out to need — this only pulls it out of the claim-map label.
     claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);

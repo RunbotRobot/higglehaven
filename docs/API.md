@@ -4581,17 +4581,22 @@ set of keys — never freeform seller text, matching the spec's own "clear
 | `software-tool` | "This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item." |
 
 `assertValidDigitalGoodDisclaimer` (also called from inside `validateTemplate`)
-rejects any other value with `400`. Requirement (a) from the spec quote
-above — "a representative 3D model" — needs no separate check here, since
-every catalog template already either has a real `modelUrl` or renders as
-a placeholder box regardless of this feature; there was never a path to a
-template with no visual representation at all.
+rejects any other value with `400`. It also enforces requirement (a) from
+the spec quote above — "a representative 3D model" — by requiring a
+non-null `modelUrl` whenever `metadata.digitalGoodDisclaimer` is set:
+`modelUrl` is optional for an *ordinary* template (a plain colored box is a
+normal, supported fallback look for a regular product — see "Catalog
+templates" above), so without this check a disclaimer alone was silently
+sufficient to list a digital good with no visual representation at all,
+satisfying only half of the spec's own two-part condition. Applies on
+create, update, and the batch-import path alike, since all three route
+through `validateTemplate`.
 
 Since this dev-mode app has no checkout or delivery mechanism of any kind
 (real or digital), "digital goods are excluded by default" has nothing
-concrete to be excepted *from* here — the only part of this spec item with
-a real, enforceable rule is (b), the mandatory controlled disclaimer, which
-is what this actually implements.
+concrete to be excepted *from* here — the two parts of this spec item with
+a real, enforceable rule are exactly the model requirement and the
+mandatory controlled disclaimer, both implemented above.
 
 ### Frontend wiring
 
