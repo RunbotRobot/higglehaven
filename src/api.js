@@ -148,6 +148,22 @@ export async function renameSeller(sellerId, label) {
   return seller;
 }
 
+// Stripe Connect (Custom account) payout onboarding — #452. See
+// worker/index.js's own comment: no KYC field submitted here (name, DOB,
+// SSN, bank account) is ever stored on our own seller row, only Stripe's
+// resulting account id and a derived onboarding status.
+export async function fetchSellerStripeAccount() {
+  return requestJson('/sellers/me/stripe-account');
+}
+
+export async function submitSellerStripeAccount(payload) {
+  return requestJson('/sellers/me/stripe-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 // Pages through every instance on a landlet rather than returning just the
 // first 100 (the server's per-request cap) — a landlet with a large build
 // (a brick wall hundreds of pieces deep, say) silently lost everything
@@ -684,15 +700,35 @@ export async function resolveAuctionNow(auctionId) {
   return auction;
 }
 
-// Simulated purchases (see migrations/0051_purchases.sql) — a dev-mode-only
-// "buy" that never charges anything real, but does run the actual
-// commission math and credit a real builder, completing the earning loop
-// land cap (migrations/0050) is normalized against.
+// Buying a priced, placed product (migrations/0051_purchases.sql). Most
+// sellers have no Stripe Connect account (or haven't finished onboarding),
+// in which case this stays exactly the dev-mode simulation it always was —
+// no real payment, but the real commission math still credits the
+// builder, completing the earning loop land cap (migrations/0050) is
+// normalized against. For a seller who HAS fully connected (#452), this
+// instead returns `{ requiresPayment: true, clientSecret, paymentIntentId,
+// publishableKey }` — the caller must collect real payment via Stripe
+// Elements (see runCheckoutFlow in src/main.js) and then call
+// finalizePurchase below once Stripe confirms it succeeded, before the
+// purchase is actually recorded (#453).
 export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
-  const { purchase } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ quantity, buyerLabel }),
+  });
+}
+
+// Called once stripe.confirmCardPayment resolves successfully client-side
+// — the server independently re-verifies the PaymentIntent actually
+// succeeded (via Stripe's own API, using our secret key) before writing
+// the purchases row and crediting the builder, rather than trusting that
+// client-side signal on its own (#453).
+export async function finalizePurchase(paymentIntentId) {
+  const { purchase } = await requestJson('/purchases/finalize', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paymentIntentId }),
   });
   return purchase;
 }

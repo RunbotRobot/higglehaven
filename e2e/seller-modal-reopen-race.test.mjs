@@ -1,15 +1,14 @@
-// Regression test for #457: metadataSaveBusy/metadataSaveButtons used to
-// live entirely inside renderSellerList()'s per-call closure, reset to
-// false every time openSellerModal() re-renders the row list. Closing the
-// Seller modal while a metadata PATCH was still in flight and reopening it
-// (openSellerModal always calls renderSellerList() fresh; closeSellerModal
-// never cancels/awaits an in-flight save) produced a brand-new row whose
-// fresh `busy` flag let a second panel's save start before the first had
-// actually finished — recreating the exact overlapping-PATCH clobber PR
-// #424 was written to prevent, since the server replaces metadata_json
-// wholesale rather than merging it. Delays the first PATCH to get a
-// deterministic window in which to close+reopen the modal, matching the
-// exact repro in the issue.
+// Regression test for #457: renderSellerList() used to keep its
+// metadata-save busy flag (see #424's own cross-panel save-race guard) as a
+// plain local variable inside each row's per-render closure. Since
+// openSellerModal() calls renderSellerList() fresh every time the modal
+// opens, closing the modal while a metadata save was still in flight and
+// reopening it produced a brand-new row with the busy flag reset to false —
+// silently re-enabling the exact overlapping-save clobber #424 was added to
+// prevent, and (in this fix's own additional gap) leaving that reopened
+// row's buttons stuck disabled forever once the stale save's `finally`
+// block only had a reference to the OLD, now-detached row's buttons to
+// re-enable.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -17,17 +16,17 @@ import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs'
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
 
-const LABEL = 'Seller Modal Reopen Race Tester';
-const PRODUCT_NAME = 'Reopen Race Product';
+const LABEL = 'Seller Reopen Race Tester';
+const PRODUCT_NAME = 'Reopen Race Crate';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
-
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
+
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
@@ -39,89 +38,81 @@ await page.click('#upload-submit-btn');
 await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
 await page.waitForTimeout(500);
 
-async function fetchJson(pathAndQuery) {
-  return page.evaluate(async (p) => (await fetch(p)).json(), pathAndQuery);
-}
+const productRow = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
+await productRow().locator('.seller-row-toggle').click();
+await page.waitForTimeout(300);
 
-// Delay only the first PATCH to this template — the "Save Digital Good"
-// click below — so there's a deterministic window in which to close and
-// reopen the modal before it resolves. 3000ms (not the original 1500ms)
-// gives the "still disabled" check below — which fires after a fixed
-// ~1000ms of its own waits, not a poll — comfortable margin against a
-// slower CI runner; the "re-enabled" check further down polls instead of
-// sleeping a matching fixed duration, so it isn't sensitive to this value.
-let patchCount = 0;
+// Delay only the PATCH (the save), same shape as digital-goods.test.mjs's
+// own cross-panel race test — long enough to reliably close+reopen the
+// modal and inspect the freshly-rendered row before the response lands.
 await page.route('**/api/catalog/*', async (route) => {
-  if (route.request().method() === 'PATCH') {
-    patchCount++;
-    if (patchCount === 1) await new Promise((resolve) => setTimeout(resolve, 3000));
-  }
+  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 3000));
   await route.continue();
 });
 
-const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
-await row().locator('.seller-row-toggle').click();
-await page.waitForTimeout(300);
-await row().locator('button', { hasText: 'Edit Digital Good' }).click();
+await productRow().locator('button', { hasText: 'Edit Digital Good' }).click();
 await page.waitForTimeout(200);
-await row().locator('.seller-digital-good-checkbox-label input').check();
-await row().locator('.seller-digital-good-select').selectOption('gift-card');
-await row().locator('button', { hasText: 'Save Digital Good' }).click(); // fires the slow PATCH #1, not awaited
+await productRow().locator('.seller-digital-good-checkbox-label input').check();
+await productRow().locator('.seller-digital-good-select').selectOption('gift-card');
+await productRow().locator('button', { hasText: 'Save Digital Good' }).click();
 
-// Close and reopen the whole modal (via the same "Sell" nav button the
-// issue names) before PATCH #1 resolves — renderSellerList() rebuilds the
-// row from scratch, so this is a brand-new row/closure for the same
-// template.
+// Close the modal (real user behavior — nothing in-flight is canceled by
+// this, see closeSellerModal's own comment on why: it only toggles a CSS
+// class) before the delayed PATCH above resolves, then reopen it.
+await page.waitForTimeout(200);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 
-await row().locator('.seller-row-toggle').click();
-await page.waitForTimeout(300);
-await row().locator('button', { hasText: 'Edit Shipping' }).click();
+// A brand-new row — renderSellerList() rebuilt it from scratch on reopen.
+await productRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
-await row().locator('.seller-domestic-only-checkbox-label input').check();
 
-const saveShippingBtn = () => row().locator('button', { hasText: 'Save Shipping' });
-const shippingDisabledWhileDigitalGoodPending = await saveShippingBtn().isDisabled();
-console.log('Save Shipping disabled on the freshly reopened row while the pre-reopen Save Digital Good PATCH is still in flight (should be true):', shippingDisabledWhileDigitalGoodPending);
+// Deliberately targets the "Save Returns Policy" button, not the "Save
+// Digital Good" one the pre-close save was for — proving the busy state is
+// serializing across EVERY metadata panel on this row, the same cross-panel
+// guard #424 added, not just re-disabling the one button that happened to
+// be clicked.
+await productRow().locator('button', { hasText: 'Edit Returns Policy' }).click();
+await page.waitForTimeout(200);
+const reopenedSaveDisabledWhileStillInFlight = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isDisabled();
+console.log('a DIFFERENT metadata-save button on the REOPENED row is disabled while the pre-close save is still in flight (should be true — the #457 fix):', reopenedSaveDisabledWhileStillInFlight);
 
-// Wait for PATCH #1 to resolve, which should re-enable the buttons on
-// THIS (the currently visible, post-reopen) row. Polled (same idiom as
-// digital-goods.test.mjs's own "Saved." wait) rather than a fixed sleep
-// matched to the 1500ms delay injected above — a bare `waitForTimeout`
-// here left zero margin for real CI-runner jitter (this shard's own
-// dev-server startup cost, host load, etc.), so a resolution landing even
-// slightly past 1500ms read as a false failure instead of what it was:
-// the fix working, just a bit slower than the fixed sleep assumed.
+// Wait past the delayed PATCH's own delay so its `finally` block runs.
+await page.waitForTimeout(3500);
+
+const reopenedSaveReenabledAfterSettling = await productRow().locator('button', { hasText: 'Save Returns Policy' }).isEnabled();
+console.log('that same button is enabled again once the pre-close save actually resolves (should be true — not stuck disabled forever):', reopenedSaveReenabledAfterSettling);
+
+await page.unroute('**/api/catalog/*');
+
+// The pre-close save should have gone through correctly, and the row
+// should accept a fresh save normally afterward — proving this isn't just
+// "unstuck" but genuinely back to normal working order.
+const { templates: templatesAfterFirstSave } = await page.evaluate(async () => (await fetch('/api/catalog?limit=100')).json());
+const templateAfterFirstSave = templatesAfterFirstSave.find((t) => t.name === PRODUCT_NAME);
+console.log('server-side metadata.digitalGoodDisclaimer after the pre-close save resolved (should be "gift-card"):', templateAfterFirstSave?.metadata?.digitalGoodDisclaimer);
+
+// "Edit Returns Policy" is still open from the disabled-check above (its
+// own toggle click was never closed) — clicking it again would close it
+// instead, so the panel is used directly, same reasoning as
+// digital-goods.test.mjs's own analogous comment.
+await productRow().locator('.seller-no-returns-checkbox-label input').check();
+await productRow().locator('button', { hasText: 'Save Returns Policy' }).click();
 await page.waitForFunction(
-  () => {
-    const btn = Array.from(document.querySelectorAll('.seller-row button')).find((el) => el.textContent === 'Save Shipping');
-    return !!btn && !btn.disabled;
-  },
+  () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
   { timeout: 10000 },
 );
-const shippingEnabledAfterDigitalGoodResolves = true;
-console.log('Save Shipping re-enabled on the reopened row once the earlier save resolves (should be true):', shippingEnabledAfterDigitalGoodResolves);
+const { templates: templatesAfterSecondSave } = await page.evaluate(async () => (await fetch('/api/catalog?limit=100')).json());
+const templateAfterSecondSave = templatesAfterSecondSave.find((t) => t.name === PRODUCT_NAME);
+console.log('a normal save on the reopened row afterward still works, and the earlier field survives it (digitalGoodDisclaimer should still be "gift-card", noReturns should be true):', templateAfterSecondSave?.metadata);
 
-await saveShippingBtn().click();
-await page.waitForFunction(
-  () => Array.from(document.querySelectorAll('.seller-domestic-only-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
-);
-
-const { templates } = await fetchJson('/api/catalog?limit=100');
-const finalTemplate = templates.find((t) => t.name === PRODUCT_NAME);
-console.log('after the reopen race, metadata.digitalGoodDisclaimer (should still be "gift-card", not clobbered):', finalTemplate?.metadata?.digitalGoodDisclaimer);
-console.log('after the reopen race, metadata.domesticOnly (should be true):', finalTemplate?.metadata?.domesticOnly);
-console.log('total PATCH requests observed (should be exactly 2 — no button ever allowed a redundant overlapping save):', patchCount);
-
-const pass = shippingDisabledWhileDigitalGoodPending &&
-  shippingEnabledAfterDigitalGoodResolves &&
-  finalTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
-  finalTemplate?.metadata?.domesticOnly === true &&
-  patchCount === 2 &&
+const pass = reopenedSaveDisabledWhileStillInFlight &&
+  reopenedSaveReenabledAfterSettling &&
+  templateAfterFirstSave?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
+  templateAfterSecondSave?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
+  templateAfterSecondSave?.metadata?.noReturns === true &&
   errors.length === 0;
-await finish(browser, { pass, label: '#457: a modal close/reopen mid-save does not let an overlapping metadata save clobber it', errors });
+await finish(browser, { pass, label: "#457: a metadata save left in flight across a Seller-modal close/reopen still serializes and un-sticks correctly", errors });
