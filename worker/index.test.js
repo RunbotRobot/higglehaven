@@ -3132,29 +3132,27 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
-  // #336: prerequisite infrastructure for #325's inactivity-triggered
-  // auctions — requireSessionBuilder bumps last_active_at on every real
-  // builder-owned mutation, but not on mere signup/session-check reads
-  // (GET /builders/me goes through getOrCreateBuilderForUser directly,
-  // not requireSessionBuilder), matching the column's own migration
-  // comment on why every pre-existing/never-yet-mutating builder should
-  // read as NULL rather than some backdated guess.
-  it('bumps last_active_at on a real mutation but not on signup/session checks alone', async () => {
-    const builder = await signupBuilder('activity-test-builder');
-    const beforeMutation = await env.DB.prepare(
+  // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
+  // session resolves *your* builder profile, mutation or not (per the
+  // owner's #325 decision: "any login... even if only logging in for
+  // shopping or selling" counts as activity). A builder created directly
+  // via the DB (never through a real session, the way a pre-existing
+  // dev-mode row or the pioneer-cohort filler rows above come to exist)
+  // still reads as NULL — matching migrations/0067's own comment on why
+  // that should never be backdated to a guess.
+  it('bumps last_active_at on any resolved session (including a mere GET /builders/me), not on a DB-only row', async () => {
+    const direct = await env.DB.prepare(
+      "INSERT INTO builders (builder_id, label) VALUES ('builder-activity-test-direct', 'Direct row') RETURNING last_active_at",
+    ).first();
+    expect(direct.last_active_at).toBeNull();
+
+    const builder = await signupBuilder('activity-test-builder'); // itself resolves /builders/me
+    const afterSignup = await env.DB.prepare(
       'SELECT last_active_at FROM builders WHERE builder_id = ?',
     ).bind(builder.builderId).first();
-    expect(beforeMutation.last_active_at).toBeNull();
-
-    await createGreenbeltLandlet('activity-test-landlet');
-    const claimed = await api('/landlets/activity-test-landlet/claim', builder.session({ method: 'POST' }));
-    expect(claimed.response.status).toBe(200);
-
-    const afterMutation = await env.DB.prepare(
-      'SELECT last_active_at FROM builders WHERE builder_id = ?',
-    ).bind(builder.builderId).first();
-    expect(afterMutation.last_active_at).not.toBeNull();
-    expect(new Date(afterMutation.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
+    expect(afterSignup.last_active_at).not.toBeNull();
+    expect(new Date(afterSignup.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
   });
 
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
@@ -3988,6 +3986,93 @@ describe('Auctions', () => {
     // frees now, not at resolution.
     const afterBid = await claim('release-bid-landlet-b', seller);
     expect(afterBid.response.status).toBe(200);
+  });
+});
+
+// #325: land held by a genuinely abandoned builder auto-auctions itself
+// (SPEC §5's "greenbelt via inactivity") via the same scheduled() cron
+// world growth already uses — see autoAuctionInactiveLandlets in
+// worker/index.js. Backdating last_active_at directly via env.DB rather
+// than actually waiting 30 days, same "cheap and exact" precedent the
+// pioneer-rank tests above already use for bulk DB setup.
+describe('Inactivity-triggered auctions', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function backdateLastActive(builderId, daysAgo) {
+    const timestamp = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare('UPDATE builders SET last_active_at = ? WHERE builder_id = ?')
+      .bind(timestamp, builderId).run();
+  }
+
+  async function runScheduled() {
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function activeAuctionFor(landletId) {
+    return env.DB.prepare(
+      "SELECT * FROM auctions WHERE landlet_id = ? AND status = 'active'",
+    ).bind(landletId).first();
+  }
+
+  it('auto-starts a $0 auction on a claimed landlet whose owner has been inactive past 30 days', async () => {
+    const owner = await signupBuilder('inactive-owner');
+    await createGreenbeltLandlet('inactivity-landlet-a');
+    await claim('inactivity-landlet-a', owner);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-a');
+    expect(auction).toBeTruthy();
+    expect(auction.seller_builder_id).toBe(owner.builderId);
+    expect(auction.starting_bid_cents).toBe(0);
+  });
+
+  it('does not auction a landlet whose owner has been active within 30 days', async () => {
+    const owner = await signupBuilder('active-owner');
+    await createGreenbeltLandlet('inactivity-landlet-b');
+    await claim('inactivity-landlet-b', owner); // last_active_at bumped to "now" by the claim itself
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-b')).toBeNull();
+  });
+
+  it('does not auction a landlet whose owner has never had last_active_at tracked (NULL, not "long inactive")', async () => {
+    const owner = await signupBuilder('never-tracked-owner');
+    await createGreenbeltLandlet('inactivity-landlet-c');
+    await claim('inactivity-landlet-c', owner);
+    // Simulates a builder who existed before migrations/0067, or whose
+    // profile has genuinely never been resolved since — NULL is supposed
+    // to mean "not yet tracked," never "definitely inactive."
+    await env.DB.prepare('UPDATE builders SET last_active_at = NULL WHERE builder_id = ?')
+      .bind(owner.builderId).run();
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-c')).toBeNull();
+  });
+
+  it('does not start a second active auction on a landlet an inactive owner already voluntarily listed', async () => {
+    const owner = await signupBuilder('already-listed-owner');
+    await createGreenbeltLandlet('inactivity-landlet-d');
+    await claim('inactivity-landlet-d', owner);
+    const started = await api('/landlets/inactivity-landlet-d/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+    }));
+    expect(started.response.status).toBe(201);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-d');
+    expect(auction.auction_id).toBe(started.body.auction.auctionId);
+    expect(auction.starting_bid_cents).toBe(500); // untouched — not replaced by the cron's own $0 listing
   });
 });
 

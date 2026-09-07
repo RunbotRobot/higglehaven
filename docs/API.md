@@ -489,14 +489,18 @@ placed content stay intact) — an acceptable one-time cost specifically
 because this app has no real users yet; see the migration's own comment.
 
 `builders.last_active_at` (migrations/0067) is an internal-only column,
-never returned in any Builder object below — `requireSessionBuilder` in
-`worker/index.js` bumps it on every real builder-owned mutation (claiming,
-placing, bidding, publishing, ...), not on a mere signup or `GET
-/api/builders/me` session check. It's prerequisite infrastructure for a
-future inactivity-triggered auction job (docs/SPEC.md §5's "greenbelt via
-inactivity"), which doesn't exist yet — see the tracking issue for that.
-`NULL` for any builder who hasn't triggered a real mutation since this
-column was added, deliberately not backfilled to any guessed value.
+never returned in any Builder object below — `getOrCreateBuilderForUser`
+in `worker/index.js` bumps it every time a session resolves *your*
+builder profile, whether that's to mutate something (claiming, placing,
+bidding, publishing, ...) or just to load it (`GET /api/builders/me`, hit
+on entering any mode — see "Build mode now requires a real, logged-in
+account" above). Per the owner's #325 decision: "I'm inclined to count
+any login as activity — even if only logging in for shopping or selling."
+It's the activity signal the inactivity-triggered auction job under "Land
+acquisition auctions" below runs on. `NULL` for any builder who hasn't
+resolved their profile at all since this column was added, deliberately
+not backfilled to any guessed value — the auction job treats `NULL` as
+"not yet tracked," not "long inactive."
 
 ### `GET /api/builders/me`
 
@@ -3112,12 +3116,18 @@ neither has anywhere to attach to in this dev-mode backend yet:
   ledger (not a UI-only number) so a winning seller's proceeds land
   somewhere meaningful, ready for balance-gating to be added later without
   a schema change.
-- **Inactivity-triggered auto-listing.** Every auction reachable today is
-  builder-initiated (`POST /api/landlets/:id/auction`) — there's no
-  inactivity-detection job in this dev-mode backend to trigger one
-  automatically, so the spec's "default 24-hour duration for inactivity-
-  triggered listings" just applies as the uniform default for every
-  auction, voluntary or not.
+- ~~Inactivity-triggered auto-listing~~ — implemented (#325):
+  `autoAuctionInactiveLandlets` runs on the same Cloudflare Cron Trigger
+  as automatic world growth (see `scheduled()` near the top of
+  `worker/index.js`) and auto-starts a `startingBidCents: 0` auction
+  (same immediate land-cap release as a voluntary `$0` start, per "Land
+  cap" below) on any claimed landlet whose owner's `builders.last_active_at`
+  is more than `INACTIVITY_AUCTION_DAYS` (30, the owner's own call) in the
+  past — skipping any builder whose `last_active_at` is still `NULL`
+  (never tracked, not "long inactive" — see that column's own note
+  above). The spec's "default 24-hour duration for inactivity-triggered
+  listings" still just applies as the uniform default for every auction,
+  voluntary or not — there's no separate duration for this path.
 - **No scheduled resolution job.** There's no Cloudflare Cron Trigger
   wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
   resolves due auctions before returning results (`resolveDueAuctions` in
