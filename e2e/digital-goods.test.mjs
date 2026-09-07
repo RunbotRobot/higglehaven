@@ -15,7 +15,7 @@
 // community-calendar.test.mjs for their own analogous 400 cases. The full
 // prohibited-content and digital-good validation matrix (phrase matching,
 // batch/PATCH paths, invalid disclaimer keys) is covered instead by
-// worker/index.test.js's own "Prohibited categories and digital goods"
+// worker/commerce.test.js's own "Prohibited categories and digital goods"
 // describe block.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

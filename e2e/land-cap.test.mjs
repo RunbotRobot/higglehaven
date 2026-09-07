@@ -2,7 +2,7 @@
 // mechanic, distinct from land ACQUISITION (auctions, §5). This covers only
 // the Settings > Build tab's own display of a builder's current cap and
 // owned area, through the real UI. The formula/ratchet/per-event ledger
-// themselves are covered by worker/index.test.js's own "Land cap" describe
+// themselves are covered by worker/land.test.js's own "Land cap" describe
 // block, which documents in detail why this is deliberately tracking-only
 // (displayed, not enforced against auction bids) for now.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
