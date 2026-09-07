@@ -3899,11 +3899,33 @@ returns that same purchase rather than crediting the builder twice; the
 `payment_intent_id` column's own `UNIQUE` index (`migrations/0069`) is the
 last line of defense if two such calls ever raced each other. Returns
 `503` if Stripe isn't configured, `400` if the PaymentIntent hasn't
-actually succeeded yet, or `409` if the instance/template/landlet it was
-created against no longer exists.
+actually succeeded yet.
 
-Refund/reversal against a real-money purchase's PaymentIntent is not yet
-implemented — tracked separately as #348.
+#### Orphaned real-money purchases (#472)
+
+By the time this endpoint runs, Stripe has already moved real money — the
+buyer was charged and the seller's connected account already received its
+transfer via `transfer_data`, independent of anything in this app's DB.
+If the purchased instance, its template, or the landlet's claim has since
+vanished (a concurrent delete, or an auction resolving mid-payment), this
+no longer 409s with the `purchases` row left unwritten — that would mean
+real money moved with zero record of it, and no way to even find it again
+(the idempotency check above has nothing to match against). Instead it
+always writes a `purchases` row, using only what's locked into the
+PaymentIntent's own metadata at checkout time (no live lookups needed for
+what's already meant to be a permanent historical receipt). `builderId` is
+only used if it still resolves to a real builder account (the same `NULL`
+state an ordinary purchase already reaches when its builder self-deletes
+*after* a normal purchase, `migrations/0062`) — otherwise the row is
+written with a `null` `builderId` and no dáller credit, since there's no
+one to credit. This deliberately does **not** decide what should happen
+next for a sale like this (auto-refund, manual reconciliation, re-crediting
+if the instance reappears, ...) — that's a reconciliation-policy call left
+for separate design/owner input; it only guarantees the money is never
+unaccounted for.
+
+Refund/reversal against a real-money purchase's PaymentIntent is handled by
+`POST /api/purchases/:purchaseId/refund` — see "Refunds" below (#348).
 
 ### Frontend wiring
 
@@ -3942,8 +3964,9 @@ isn't configured, `POST /purchases/finalize`'s validation-before-503
 ordering, and its idempotency short-circuit for an already-finalized
 `paymentIntentId` (which needs no live Stripe call at all, so it's fully
 exercisable here). The actual PaymentIntent-creation/confirmation round
-trip against Stripe's real API is not covered by any automated test in
-this repo.
+trip against Stripe's real API — including the "Orphaned real-money
+purchases" fallback above, which only runs after that round trip — is not
+covered by any automated test in this repo.
 
 ### Refunds
 
