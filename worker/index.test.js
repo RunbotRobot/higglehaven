@@ -4409,6 +4409,38 @@ describe('Friendships', () => {
     });
   });
 
+  // #353: the accept UPDATE previously matched regardless of the row's
+  // current status, so re-PATCHing an already-accepted friendship kept
+  // re-sending the requester a duplicate notification with no limit.
+  it('does not re-send a notification (or error) when accepting an already-accepted friendship', async () => {
+    const alice = await signupBuilder('friendship-reaccept-alice');
+    const bob = await signupBuilder('friendship-reaccept-bob');
+    const sent = await api('/friendships', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId }),
+    }));
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    const firstAccept = await api(`/friendships/${friendshipId}`, bob.session({
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    }));
+    expect(firstAccept.response.status).toBe(200);
+    expect(firstAccept.body.friendship.status).toBe('accepted');
+
+    for (let i = 0; i < 4; i += 1) {
+      const reaccept = await api(`/friendships/${friendshipId}`, bob.session({
+        method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+      }));
+      expect(reaccept.response.status).toBe(200);
+      expect(reaccept.body.friendship.status).toBe('accepted');
+    }
+
+    const aliceNotices = await api('/notifications', alice.session());
+    const acceptNotices = aliceNotices.body.notifications.filter(
+      (n) => n.message === 'friendship-reaccept-bob accepted your friend request.',
+    );
+    expect(acceptNotices).toHaveLength(1);
+  });
+
   it('rejects a second request between the same pair in either direction', async () => {
     const a = await signupBuilder('friendship-duplicate-a');
     const b = await signupBuilder('friendship-duplicate-b');
