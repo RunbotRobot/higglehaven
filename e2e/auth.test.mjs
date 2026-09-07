@@ -108,6 +108,50 @@ await page.click('#auth-login-form button[type="submit"]');
 const btnLabelAfterNewPasswordLogin = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after logging in with the NEW password (should be "Ada Suite"):', btnLabelAfterNewPasswordLogin);
 
+// --- #432: logging out while staying in Shop mode must not leave a stale
+// sellerId cached for the next account that logs in ---
+// Sell is a modal overlay, not a currentMode change (see #mode-nav's own
+// comment), so this logout — still in Shop mode from the whole test above —
+// takes the no-reload path that #432 found didn't clear builderId/sellerId.
+const firstSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET');
+await page.click('.mode-nav-btn[data-mode="sell"]');
+await firstSellerFetch;
+const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No custom products yet');
+console.log('seller status for the first account (should say no products yet):', sellerStatusForFirstAccount);
+await page.click('#seller-close-btn');
+await page.waitForTimeout(200);
+
+await openAuthModal(page);
+await page.click('#auth-logout-btn');
+await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
+
+const secondEmail = `auth-suite-second-${Date.now()}@example.com`;
+await openAuthModal(page);
+await page.click('.auth-tab-btn[data-auth-view="signup"]');
+await page.fill('#auth-signup-username', 'Bea Suite');
+await page.fill('#auth-signup-email', secondEmail);
+await page.fill('#auth-signup-password', 'a different fine password');
+await page.click('#auth-signup-form button[type="submit"]');
+const btnLabelAfterSecondSignup = await waitForText(page, '#account-auth-btn', 'Bea Suite');
+console.log('account button after the second account signs up (should be "Bea Suite"):', btnLabelAfterSecondSignup);
+await page.click('#auth-close-btn');
+await page.waitForTimeout(200);
+
+// If sellerId were still cached from the first account, ensureSellerIdentity
+// would short-circuit and this second GET would never fire at all.
+const secondSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET', { timeout: 5000 });
+await page.click('.mode-nav-btn[data-mode="sell"]');
+let sellerRefetchedForSecondAccount = true;
+try {
+  await secondSellerFetch;
+} catch {
+  sellerRefetchedForSecondAccount = false;
+}
+console.log('a fresh /sellers/me GET fired for the second account (should be true — a stale cache would skip it):', sellerRefetchedForSecondAccount);
+const sellerStatusForSecondAccount = await waitForText(page, '#seller-status', 'No custom products yet');
+console.log('seller status for the second account (should say no products yet, not the first account\'s list):', sellerStatusForSecondAccount);
+await page.click('#seller-close-btn');
+
 const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   btnLabelAfterSignup === 'Ada Suite' &&
   verifyStatus.includes('Email verified!') &&
@@ -118,5 +162,13 @@ const pass = signupStatus.includes('dev mode') && !!verifyUrlMatch &&
   !!resetUrlMatch && resetFormVisible &&
   resetStatus.includes('Password reset!') &&
   btnLabelAfterNewPasswordLogin === 'Ada Suite' &&
+  sellerStatusForFirstAccount.includes('No custom products yet') &&
+  btnLabelAfterSecondSignup === 'Bea Suite' &&
+  sellerRefetchedForSecondAccount &&
+  sellerStatusForSecondAccount.includes('No custom products yet') &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Authentication: signup + verify-email link + logout/login + forgot/reset password', errors });
+await finish(browser, {
+  pass,
+  label: 'Authentication: signup + verify-email link + logout/login + forgot/reset password + no stale sellerId leak across a Shop-mode logout (#432)',
+  errors,
+});
