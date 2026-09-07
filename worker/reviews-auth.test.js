@@ -717,14 +717,14 @@ describe('Authentication', () => {
     expect(reused.response.status).toBe(400);
   });
 
-  // #377: the consumed-check was a separate SELECT before the UPDATE, a
-  // check-then-act race — two concurrent calls with the same valid token
-  // could both pass the SELECT and both "succeed".
-  it('accepts only one of two concurrent verify-email calls with the same token', async () => {
+  it('does not double-consume the same verify-email token under a concurrent race', async () => {
     const email = `auth-verify-race-${crypto.randomUUID()}@example.com`;
     const signedUp = await signup(email, 'a fine long password');
     const token = new URL(signedUp.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
 
+    // Fired together, not awaited one at a time — a SELECT-then-UPDATE
+    // implementation could let both requests read "not yet consumed" and
+    // both report success, even though only one should ever win (#377).
     const [first, second] = await Promise.all([
       api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
       api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
@@ -771,16 +771,18 @@ describe('Authentication', () => {
     expect(reusedToken.response.status).toBe(400);
   });
 
-  // #377: same check-then-act race as verify-email above, for reset-password.
-  it('accepts only one of two concurrent reset-password calls with the same token', async () => {
+  it('does not double-consume the same reset-password token under a concurrent race', async () => {
     const email = `auth-reset-race-${crypto.randomUUID()}@example.com`;
     await signup(email, 'the original password');
     const requested = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
     const token = new URL(requested.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
 
+    // Same race shape as the verify-email test above (#377) — only one of
+    // these two concurrent requests should ever actually reset the
+    // password and sign every session out.
     const [first, second] = await Promise.all([
-      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'a brand new password' }) }),
-      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'a different new password' }) }),
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'password from request A' }) }),
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'password from request B' }) }),
     ]);
     expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
   });
