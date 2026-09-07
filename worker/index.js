@@ -633,6 +633,11 @@ function formatBytes(bytes) {
   return `${bytes}B`;
 }
 
+// See the PATCH/PUT handler's own comment below (issue #361) — only gates
+// the unauthenticated (no owning seller) path, same shape as
+// SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
+const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
+
 async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
@@ -857,6 +862,16 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller to gate this PATCH behind a session (a system/
+      // placeholder template, or one whose seller has since deleted their
+      // account — see the sellerExists comment on the DELETE handler below),
+      // so anyone can hit this unauthenticated. Its side effect —
+      // notifyBuildersOfDimensionChange, below — fires a real notification
+      // to every builder hosting this template, so cap the request rate the
+      // same way handleSignPosts/handleInstancePurchase already do for their
+      // own unauthenticated-write endpoints.
+      await checkRateLimit(db, `catalog-patch:${clientIp(request)}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     }
     const input = await readJson(request);
     // sellerId is forced back to its existing value (it wins the spread since
@@ -1706,20 +1721,30 @@ async function handleFriendships(request, db, route, url) {
     assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
-    // Found via backlog audit: without checking this UPDATE's own
-    // meta.changes, a concurrent DELETE (the requester cancelling, or
-    // either side unfriending) landing between the existence check above
-    // and this UPDATE would silently affect 0 rows — the follow-up SELECT
-    // below then returns undefined, and dereferencing
-    // updated.requester_builder_id throws an uncaught TypeError (a 500)
-    // instead of the clean 404 this should be.
-    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
-    if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
+    // #353: gated on the row's *current* status (mirroring resolveAuction's
+    // `WHERE status = 'active'` and the calendar-trigger's `WHERE
+    // triggered_at IS NULL`) so a repeated accept of an already-accepted
+    // friendship is a silent no-op instead of re-sending the notification
+    // below on every single call — previously this UPDATE matched
+    // regardless of the row's status, so the recipient could spam the
+    // requester with unlimited duplicate notifications just by re-PATCHing.
+    // meta.changes === 0 here is ambiguous on its own (already-accepted, or
+    // a concurrent DELETE mid-race) — disambiguated below via the
+    // follow-up SELECT instead of trusting this count alone.
+    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ? AND status = 'pending'`).bind(route[1]).run();
     // Same "no passive way to find out" gap as the new-request notification
-    // above (#319), for the requester's side of an acceptance.
-    await notificationStatement(db, existing.requester_builder_id,
-      `${sessionBuilder.label} accepted your friend request.`).run();
+    // above (#319), for the requester's side of an acceptance — only fired
+    // when this call is the one that actually made the transition.
+    if (result.meta.changes === 1) {
+      await notificationStatement(db, existing.requester_builder_id,
+        `${sessionBuilder.label} accepted your friend request.`).run();
+    }
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+    // Not found here means a concurrent DELETE (the requester cancelling,
+    // or either side unfriending) landed between the existence check above
+    // and the UPDATE — a genuine 404, distinct from the already-accepted
+    // no-op case above (where this SELECT still finds the row).
+    if (!updated) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
     return json({ friendship: friendshipFromRow(updated, updated.recipient_builder_id, labelsById, landletsById) });
@@ -2973,9 +2998,17 @@ async function handleAuth(request, env, db, route, url) {
 // this codebase's existing dev-mode-first, don't-build-what-isn't-needed-
 // yet posture. Revoking admin status has no endpoint either; it's a rare
 // enough operation to do directly against the database.
+// Found via backlog audit (#360): unlike every other secret-bearing auth
+// endpoint in this file (login's failed_login_attempts/locked_until
+// lockout, signup/password-reset's checkRateLimit calls), this one had no
+// brute-force protection at all — and it's the one endpoint that grants
+// admin privilege, not just account access.
+const ADMIN_BOOTSTRAP_RATE_LIMIT_MAX = 10;
+
 async function handleAdminBootstrap(request, env, db) {
   if (!env.ADMIN_BOOTSTRAP_SECRET) throw new HttpError('Admin bootstrap is not configured', 404);
   const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `admin-bootstrap:${clientIp(request)}`, ADMIN_BOOTSTRAP_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const secret = stringValue(input.secret, 'secret');
   if (!timingSafeEqual(secret, env.ADMIN_BOOTSTRAP_SECRET)) {
@@ -4622,9 +4655,21 @@ async function handleSignPosts(request, db, route) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const { results } = await db.prepare(`
-      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(instanceId).all();
-    return json({ posts: results.map(signPostFromRow) });
+    // #356: this was ORDER BY created_at with no DESC — ascending, so once
+    // a sign passed 200 posts, the LIMIT window was always the *oldest*
+    // 200, permanently hiding every post made after that point (the newest
+    // ones always fell outside it). Selecting DESC picks the right window
+    // (always the newest 200) but .reverse() restores the response's own
+    // ascending order (oldest of that window first) — rebuildSignSprites'
+    // `sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS)` (src/main.js) depends on
+    // that ordering to grab the *most recent* posts for in-world display,
+    // so only the SQL window changes, not the array's own order. A real
+    // COUNT (same pattern handlePurchases already uses) lets a client tell
+    // the list is truncated at all, which the old shape never exposed.
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM sign_posts WHERE instance_id = ?').bind(instanceId).first();
+    return json({ posts: results.reverse().map(signPostFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
@@ -4692,9 +4737,14 @@ async function handleCalendarEvents(request, db, route) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const { results } = await db.prepare(`
-      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(instanceId).all();
-    return json({ events: results.map(calendarEventFromRow) });
+    // #356: same ascending-window/no-count gap as handleSignPosts above,
+    // fixed the same way — DESC for the right LIMIT window, .reverse() to
+    // keep the response ascending (calendar.events.slice(-SIGN_MAX_VISIBLE_POSTS)
+    // in src/main.js depends on that order too).
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?').bind(instanceId).first();
+    return json({ events: results.reverse().map(calendarEventFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
