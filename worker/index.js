@@ -1530,13 +1530,31 @@ async function handleNotifications(request, db, route, url) {
     const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
     assertOwner(builderId, sessionBuilder.builder_id, 'Not your notifications');
     const unreadOnlyParam = url.searchParams.get('unreadOnly');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = ['builder_id = ?'];
     const bindings = [builderId];
     if (unreadOnlyParam === 'true') conditions.push('read_at IS NULL');
+    // Newest-first, so the cursor walks backward in time (< rather than the
+    // > every other cursor-paginated list here uses for its own ascending
+    // order) — otherwise identical to auctions'/landlets' own encodeCursor/
+    // decodeCursor pattern, notification_id as the tiebreaker for rows
+    // sharing one created_at timestamp.
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND notification_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
     const { results } = await db.prepare(`
-      SELECT * FROM notifications WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100
-    `).bind(...bindings).all();
-    return json({ notifications: results.map(notificationFromRow) });
+      SELECT * FROM notifications WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, notification_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      notifications: page.map(notificationFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.notification_id) : null,
+    });
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {

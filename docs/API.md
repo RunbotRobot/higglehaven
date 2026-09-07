@@ -2217,16 +2217,20 @@ stays meaningful without a live template to point back at.
 ### `GET /api/notifications`
 
 Requires a session. Lists the calling account's own notifications, newest
-first, capped at 100 with no pagination past that (matching this API's
-other uncapped-in-practice lists, e.g. bundles/purchases). `builderId` is
-an optional query parameter — omitted, it defaults to the session's own
-builder; if present, it must equal the session's own builder ID (`403`
-otherwise — this was a spoofable "whose notifications" field before
-session-based authorization, see "Authorization model" above).
-`unreadOnly=true` narrows the list to `readAt IS NULL` server-side, for the
-frontend's full history list (the unread badge count uses
-`GET /api/notifications/unread-count` below instead, precisely because
-this list's own 100-row cap would undercount past that).
+first, cursor-paginated the same way `GET /api/auctions`/`GET /api/landlets`
+are — `limit` (default and max 100) and `cursor`/`nextCursor` via the same
+`encodeCursor`/`decodeCursor` helpers, just walking backward in time
+(`created_at DESC, notification_id DESC`, so the cursor comparison is `<`
+rather than those endpoints' own ascending `>`) to match this list's
+newest-first order. `builderId` is an optional query parameter — omitted,
+it defaults to the session's own builder; if present, it must equal the
+session's own builder ID (`403` otherwise — this was a spoofable "whose
+notifications" field before session-based authorization, see
+"Authorization model" above). `unreadOnly=true` narrows the list to
+`readAt IS NULL` server-side, for the frontend's full history list (the
+unread badge count uses `GET /api/notifications/unread-count` below
+instead, since paging through the full list just to count unread ones
+would be wasteful for a number the frontend needs on every load).
 
 ### `GET /api/notifications/unread-count`
 

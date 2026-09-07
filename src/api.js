@@ -370,11 +370,15 @@ export async function deleteCatalogTemplate(templateId) {
 // and (without the flag) the full history list.
 // No builderId param — the server derives "whose notifications" from the
 // session cookie, never from a client-supplied field.
-export async function fetchNotifications({ unreadOnly = false } = {}) {
+// Returns the full { notifications, nextCursor } shape, not just the array
+// — unlike fetchAuctions/fetchLandlets' single-page callers, renderNotifications
+// needs nextCursor itself to drive its own "Load more" button.
+export async function fetchNotifications({ unreadOnly = false, limit, cursor } = {}) {
   const query = new URLSearchParams();
   if (unreadOnly) query.set('unreadOnly', 'true');
-  const { notifications } = await requestJson(`/notifications?${query.toString()}`);
-  return notifications;
+  if (limit) query.set('limit', String(limit));
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/notifications?${query.toString()}`);
 }
 
 // The list above is capped at 100 rows server-side (no pagination) — fine

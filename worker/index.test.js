@@ -3891,6 +3891,47 @@ describe('Notifications', () => {
     expect(spoofed.response.status).toBe(403);
   });
 
+  it('cursor-paginates notifications newest first, matching the un-paginated list with no duplicates or gaps', async () => {
+    const owner = await signupBuilder('notif-owner-page');
+    const bidder = await signupBuilder('notif-bidder-page');
+    const landletId = 'notif-landlet-page';
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    // 5 escalating bids from the same bidder — 5 distinct notifications for
+    // the owner, enough to exercise a limit of 2 across three pages
+    // (2 + 2 + 1) without relying on more than one builder's worth of setup.
+    for (let amountCents = 500; amountCents <= 2500; amountCents += 500) {
+      const bid = await api(`/auctions/${auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents }),
+      }));
+      expect(bid.response.status).toBe(201);
+    }
+
+    const firstPage = await api('/notifications?limit=2', owner.session());
+    expect(firstPage.response.status).toBe(200);
+    expect(firstPage.body.notifications).toHaveLength(2);
+    expect(firstPage.body.nextCursor).not.toBeNull();
+
+    const secondPage = await api(`/notifications?limit=2&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`, owner.session());
+    expect(secondPage.body.notifications).toHaveLength(2);
+    expect(secondPage.body.nextCursor).not.toBeNull();
+
+    const thirdPage = await api(`/notifications?limit=2&cursor=${encodeURIComponent(secondPage.body.nextCursor)}`, owner.session());
+    expect(thirdPage.body.notifications).toHaveLength(1);
+    expect(thirdPage.body.nextCursor).toBeNull();
+
+    const pagedIds = [...firstPage.body.notifications, ...secondPage.body.notifications, ...thirdPage.body.notifications]
+      .map((n) => n.notificationId);
+    expect(new Set(pagedIds).size).toBe(5); // no duplicates or skips across pages
+
+    const full = await api('/notifications', owner.session());
+    expect(full.body.notifications.map((n) => n.notificationId)).toEqual(pagedIds);
+  });
+
   it('filters to unread-only when requested', async () => {
     const { owner } = await seedNotifications('unread-filter');
     const all = await api('/notifications', owner.session());
