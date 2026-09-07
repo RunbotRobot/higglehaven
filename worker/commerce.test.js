@@ -293,9 +293,14 @@ describe('Auctions', () => {
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
     // Whichever ran first, both landing 200 is impossible — the loser's
-    // write is guarded out with a 409 (the draft) or was simply too late
-    // to matter for the caller to notice (resolve, already idempotent).
-    expect([200, 409]).toContain(drafted.response.status);
+    // write is guarded out with a 409 (the draft's own atomic write-time
+    // guard), or, if the transfer commits before this PUT's own
+    // requireLandlet() read even resolves, a 403 (its assertOwner check,
+    // using that now-already-stale-relative-to-the-transfer read, correctly
+    // sees the new owner and rejects — same root cause #455 already fixed
+    // for the sibling "concurrent version save" race just below this one,
+    // just never ported to this test's own accepted-outcomes list).
+    expect([200, 403, 409]).toContain(drafted.response.status);
 
     const landlet = await api('/landlets/draft-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -376,7 +381,13 @@ describe('Auctions', () => {
     // itself: activate's own getVersion existence check can race against
     // resolveAuction's DELETE FROM landlet_versions and lose, the version
     // it was about to activate having genuinely ceased to exist by then.
-    expect([200, 409, 404]).toContain(activated.response.status);
+    // 403 is legitimate too (same root cause #455 already fixed for the
+    // sibling "concurrent version save" test above, just never ported
+    // here): if the transfer commits before this endpoint's own
+    // requireLandlet() read resolves, its assertOwner check correctly
+    // sees the new owner and rejects, ahead of ever reaching the
+    // write-time guard that would otherwise produce 409.
+    expect([200, 403, 404, 409]).toContain(activated.response.status);
 
     const landlet = await api('/landlets/activate-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -1008,25 +1019,33 @@ describe('Bundles', () => {
     expect(missing.response.status).toBe(404);
   });
 
-  // Found via backlog audit (#468): a rename PATCH and a share-toggle PATCH
-  // firing concurrently each used to fill in the field they omitted from a
-  // pre-race snapshot of the row, so whichever UPDATE landed second
-  // silently overwrote the first request's change with that stale value.
+  // #468: unlike the sequential test above, this fires a rename and a
+  // share-toggle PATCH genuinely concurrently (Promise.all) — the actual
+  // shape of the race, since the old code merged the omitted field in
+  // from a snapshot read at the top of each request, so whichever request
+  // resolved that read *last* still overwrote the other's just-written
+  // field with a stale value once its own UPDATE landed. Both edits must
+  // survive regardless of which request's DB read/write happens to
+  // interleave first.
   it('does not let a concurrent rename and share-toggle clobber each other', async () => {
-    const owner = await signupBuilder('bundle-patch-concurrent-owner');
+    const owner = await signupBuilder('bundle-patch-race-owner');
     const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
     const bundleId = created.body.bundle.bundleId;
 
     const [renamed, shared] = await Promise.all([
-      api(`/bundles/${bundleId}`, owner.session({ method: 'PATCH', body: JSON.stringify({ name: 'Concurrent rename' }) })),
-      api(`/bundles/${bundleId}`, owner.session({ method: 'PATCH', body: JSON.stringify({ shared: true }) })),
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Raced rename' }),
+      })),
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ shared: true }),
+      })),
     ]);
     expect(renamed.response.status).toBe(200);
     expect(shared.response.status).toBe(200);
 
-    const list = await api(`/bundles?builderId=${owner.builderId}`, owner.session());
+    const list = await api('/bundles', owner.session());
     const final = list.body.bundles.find((b) => b.bundleId === bundleId);
-    expect(final).toMatchObject({ name: 'Concurrent rename', shared: true });
+    expect(final).toMatchObject({ name: 'Raced rename', shared: true });
   });
 
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {

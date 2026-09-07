@@ -2008,16 +2008,17 @@ async function handleBundles(request, db, route, url) {
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
-    // also resend the current shared flag, and vice versa. Bound as NULL
-    // (not `existing`'s own value) when absent from the request, and
-    // merged back in by the UPDATE's own COALESCE below — found via
-    // backlog audit (#468): filling in the omitted field from `existing`
-    // (read once, before this request's own write) let a concurrent
-    // PATCH to the *other* field get silently clobbered back to its
-    // pre-race value once this write landed second, with no error or
-    // conflict response. COALESCE folds the "field not provided" merge
-    // into the UPDATE itself, so it can never race a concurrent update
-    // to the other field.
+    // also resend the current shared flag, and vice versa. #468: this used
+    // to fill in whichever field the caller omitted from `existing` (read
+    // once at the top of this handler) and write BOTH fields back
+    // unconditionally — so two concurrent partial updates (a rename and a
+    // share-toggle landing close together) each recomputed the OTHER
+    // field from the same pre-race snapshot, and whichever UPDATE landed
+    // second silently clobbered the first with that stale value. Binding
+    // `null` for an omitted field and resolving it via COALESCE at the SQL
+    // level instead makes the merge atomic against whatever the row
+    // actually holds at UPDATE time, not a value read before this
+    // request's own await gap.
     const name = input.name === undefined ? null : labelValue(input.name, 'name');
     const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
     // Found via backlog audit: without checking this UPDATE's own
