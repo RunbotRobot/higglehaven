@@ -4422,6 +4422,24 @@ describe('Bundles', () => {
     expect(badTemplate.response.status).toBe(400);
   });
 
+  // Found during a broader backlog-exploration pass (#358): name had no
+  // length cap at all, unlike authorLabel/buyerLabel (#337).
+  it('rejects a bundle name over the length cap, on both create and rename', async () => {
+    const builder = await signupBuilder('bundle-name-too-long');
+    const rejectedCreate = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'x'.repeat(101) })),
+    }));
+    expect(rejectedCreate.response.status).toBe(400);
+
+    const created = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody()),
+    }));
+    const rejectedRename = await api(`/bundles/${created.body.bundle.bundleId}`, builder.session({
+      method: 'PATCH', body: JSON.stringify({ name: 'x'.repeat(101) }),
+    }));
+    expect(rejectedRename.response.status).toBe(400);
+  });
+
   it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {
     const owner = await signupBuilder('bundle-list-owner');
     const other = await signupBuilder('bundle-list-other');
