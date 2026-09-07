@@ -4378,6 +4378,117 @@ describe('Shipping', () => {
   });
 });
 
+describe('Extensibility (crop floor)', () => {
+  it('rejects a non-object metadata.extensible', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-not-an-object',
+        name: 'Bad extensible shape',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: 'x' },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible must be an object/);
+  });
+
+  it('rejects an unrecognized axis key', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-bad-axis',
+        name: 'Bad extensible axis',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { w: { minM: 1 } } },
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/metadata\.extensible key "w" must be one of/);
+  });
+
+  // The actual bug (#271): a bypassed-frontend request that sets a
+  // non-numeric/missing/negative minM used to sail straight through with
+  // no validation at all, defeating assertCropWithinTemplateBounds's crop
+  // floor at read time (JS's numeric comparison makes `anything < NaN` and
+  // `anything < undefined` both false).
+  it('rejects a missing, non-numeric, NaN, zero, or negative metadata.extensible.x.minM', async () => {
+    let n = 0;
+    for (const minM of [undefined, 'not-a-number', NaN, 0, -1]) {
+      n += 1;
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `extensible-bad-minm-${n}`,
+          name: 'Bad extensible minM',
+          color: '#111111',
+          dimensions: { width: 2, depth: 2, height: 2 },
+          metadata: { extensible: { x: minM === undefined ? {} : { minM } } },
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/metadata\.extensible\.x\.minM must be a positive number/);
+    }
+  });
+
+  it('rejects a minM at or above the template\'s own dimension for that axis', async () => {
+    const atMax = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-minm-at-max',
+        name: 'minM equals width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 2 } } },
+      }),
+    });
+    expect(atMax.response.status).toBe(400);
+    expect(atMax.body.error).toMatch(/metadata\.extensible\.x\.minM must be less than this template's own width/);
+
+    const overMax = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-minm-over-max',
+        name: 'minM exceeds width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 3 } } },
+      }),
+    });
+    expect(overMax.response.status).toBe(400);
+  });
+
+  it('accepts a valid multi-axis metadata.extensible and round-trips it through GET and PATCH', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-valid-template',
+        name: 'Extensible along x and y',
+        color: '#111111',
+        dimensions: { width: 4, depth: 3, height: 1 },
+        metadata: { extensible: { x: { minM: 1 }, y: { minM: 0.5 } } },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
+
+    const fetched = await api('/catalog/extensible-valid-template');
+    expect(fetched.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
+
+    // Clearing it (an all-axes-unchecked save, per src/main.js's own "full
+    // replace, not merge" contract) removes the key entirely, same as the
+    // sibling flags above.
+    const cleared = await api('/catalog/extensible-valid-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.extensible).toBeUndefined();
+  });
+});
+
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
 // enforced against auction bids — see worker/index.js's own long comment
 // on recomputeLandCap for why a hard block was tried and reverted (claiming
