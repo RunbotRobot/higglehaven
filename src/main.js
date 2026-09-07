@@ -9181,7 +9181,12 @@ function checkScheduledCalendarEvents() {
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
-        if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
+        // The landlet (and this calendar) can unload while the trigger
+        // request is in flight — same guard as the click-driven handlers
+        // use before touching a calendar's group/sprites (#426), needed
+        // here too since spawning into a since-disposed group would
+        // silently fail to render (or land in a stale duplicate object).
+        if (triggered && shopCalendars.includes(calendar)) spawnConfettiBurst(calendar.mesh.position, calendar.group);
         pendingCalendarEventTriggers.delete(event.eventId);
       }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
