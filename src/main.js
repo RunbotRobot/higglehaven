@@ -9265,6 +9265,12 @@ shopSignHintEl.addEventListener('click', async () => {
   shopSignHintEl.disabled = true;
   try {
     const post = await createSignPost(sign.instanceId, { authorLabel, text: text.trim() });
+    // The landlet this sign belongs to can unload while the request above
+    // was in flight (registerShopSign's own fetch has the same guard, for
+    // the same reason — see its own comment) — without this, a post that
+    // resolves after the sign is gone still gets added to its still-live
+    // THREE.Group, an orphaned sprite nothing will ever dispose (#426).
+    if (!shopSigns.includes(sign)) return;
     sign.posts.push(post);
     rebuildSignSprites(sign);
   } catch (err) {
@@ -9305,6 +9311,14 @@ shopCalendarHintEl.addEventListener('click', async () => {
   shopCalendarHintEl.disabled = true;
   try {
     const event = await createCalendarEvent(calendar.instanceId, { text: text.trim(), scheduledAt });
+    // The window between the two prompts and the ensureBuilderIdentity()
+    // auth-modal wait above is genuinely unbounded — the landlet this
+    // calendar belongs to can unload well before this request resolves.
+    // registerShopCalendar's own fetch already guards against exactly
+    // this; without the same check here, a post that resolves after the
+    // calendar is gone still gets added to its still-live THREE.Group, an
+    // orphaned sprite nothing will ever dispose (#426).
+    if (!shopCalendars.includes(calendar)) return;
     calendar.events.push(event);
     rebuildCalendarSprites(calendar);
   } catch (err) {
@@ -9333,6 +9347,9 @@ shopReviewHintEl.addEventListener('click', async () => {
   shopReviewHintEl.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { authorLabel, rating, text: text?.trim() || undefined });
+    // Same unloaded-landlet guard as the sign-post and calendar handlers
+    // above (#426) — registerShopReview's own fetch already checks this.
+    if (!shopReviews.includes(review)) return;
     review.reviews.push(posted);
     rebuildReviewSprites(review);
   } catch (err) {
