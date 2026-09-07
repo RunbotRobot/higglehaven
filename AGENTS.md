@@ -261,7 +261,12 @@ before starting to code:
    breakdown behind the scenes. If you genuinely need investigation time
    before you can scope sub-issues with confidence, say so with an issue
    comment or a control room `tasks` doc note rather than leaving the
-   tracking issue silent in the meantime.
+   tracking issue silent in the meantime. The Control Room board itself
+   surfaces this too: set `subIssues` (an array of the sub-issue numbers)
+   on the tracking task's own `tasks` doc alongside `sub_issue_write`'s
+   real GitHub linking — the board renders it as a linked "Sub-issues:
+   #218 #219 ..." line on the card, so the breakdown is visible without
+   opening GitHub at all.
 3. **Recurse.** If a sub-issue is still big enough that landing it risks a
    painful merge or a multi-day session, break *it* into its own
    sub-issues the same way. Keep nesting until every leaf task is roughly
