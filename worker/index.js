@@ -4622,9 +4622,21 @@ async function handleSignPosts(request, db, route) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const { results } = await db.prepare(`
-      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(instanceId).all();
-    return json({ posts: results.map(signPostFromRow) });
+    // #356: this was ORDER BY created_at with no DESC — ascending, so once
+    // a sign passed 200 posts, the LIMIT window was always the *oldest*
+    // 200, permanently hiding every post made after that point (the newest
+    // ones always fell outside it). Selecting DESC picks the right window
+    // (always the newest 200) but .reverse() restores the response's own
+    // ascending order (oldest of that window first) — rebuildSignSprites'
+    // `sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS)` (src/main.js) depends on
+    // that ordering to grab the *most recent* posts for in-world display,
+    // so only the SQL window changes, not the array's own order. A real
+    // COUNT (same pattern handlePurchases already uses) lets a client tell
+    // the list is truncated at all, which the old shape never exposed.
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM sign_posts WHERE instance_id = ?').bind(instanceId).first();
+    return json({ posts: results.reverse().map(signPostFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
@@ -4692,9 +4704,14 @@ async function handleCalendarEvents(request, db, route) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const { results } = await db.prepare(`
-      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(instanceId).all();
-    return json({ events: results.map(calendarEventFromRow) });
+    // #356: same ascending-window/no-count gap as handleSignPosts above,
+    // fixed the same way — DESC for the right LIMIT window, .reverse() to
+    // keep the response ascending (calendar.events.slice(-SIGN_MAX_VISIBLE_POSTS)
+    // in src/main.js depends on that order too).
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?').bind(instanceId).first();
+    return json({ events: results.reverse().map(calendarEventFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST' && route.length === 3) {
