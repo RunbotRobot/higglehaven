@@ -5507,6 +5507,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       instanceId: instance.instance_id,
       templateId: template.template_id,
       builderId: landlet.owner_builder_id,
+      sellerId: template.seller_id || '',
       quantity: String(amounts.quantity),
       buyerLabel: amounts.buyerLabel || '',
       unitPriceCents: String(amounts.unitPriceCents),
@@ -5567,11 +5568,10 @@ async function handlePurchaseFinalize(request, env) {
   }
   const meta = paymentIntent.metadata || {};
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(meta.instanceId).first();
-  if (!instance) throw new HttpError('The purchased instance no longer exists', 409);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(meta.templateId).first();
-  if (!template) throw new HttpError('The purchased catalog template no longer exists', 409);
-  const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
-  if (!landlet?.owner_builder_id) throw new HttpError('This instance is no longer on a claimed lándlet', 409);
+  const landlet = instance
+    ? await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first()
+    : null;
 
   const amounts = {
     quantity: Number(meta.quantity) || 1,
@@ -5582,7 +5582,68 @@ async function handlePurchaseFinalize(request, env) {
     builderShareCents: Number(meta.builderShareCents),
     platformShareCents: Number(meta.platformShareCents),
   };
-  return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+
+  if (instance && template && landlet?.owner_builder_id) {
+    return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+  }
+
+  // #472: the buyer has already been charged and the seller's connected
+  // account has already received its transfer via Stripe's own
+  // transfer_data — independent of anything in this app's DB — by the
+  // time this call runs. A concurrent delete of the instance/template, or
+  // the landlet's claim being wiped by an auction resolving mid-payment,
+  // used to throw a 409 here with the purchases row never written at
+  // all: real money moved with zero record of it, and no way to even
+  // find it again (the payment_intent_id idempotency check above has
+  // nothing to match against). This always writes a row instead, using
+  // only what's locked into the PaymentIntent's own metadata (no live
+  // lookups needed for what's already a permanent historical receipt —
+  // see purchases' own "not a live reference" design). Deliberately does
+  // NOT decide what happens next for an orphaned sale like this
+  // (auto-refund, manual review, ...) — that's a reconciliation-policy
+  // call left for separate design/owner input; this only guarantees the
+  // money is never unaccounted for.
+  return writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId);
+}
+
+async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
+  const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
+  const purchaseId = `purchase-${crypto.randomUUID()}`;
+  // builder_id is a real foreign key (unlike instance_id/template_id) —
+  // the builder locked into this PaymentIntent's metadata at checkout
+  // time may have since self-deleted, so it's only usable here if it
+  // still resolves to a live row. NULL otherwise, the same state an
+  // ordinary purchase already reaches when its builder self-deletes
+  // *after* a normal purchase (migrations/0062) — nothing to credit.
+  const builderStillExists = meta.builderId
+    ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.builderId).first()
+    : null;
+  const builderId = builderStillExists ? meta.builderId : null;
+  const sellerId = meta.sellerId || null;
+
+  const statements = [
+    db.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+  ];
+  if (builderId) {
+    statements.push(
+      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+        .bind(builderShareCents, builderId),
+      db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+      notificationStatement(db, builderId,
+        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+    );
+  }
+  await db.batch(statements);
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(row) }, 201);
 }
 
 async function writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId = null) {
