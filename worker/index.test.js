@@ -6134,6 +6134,29 @@ describe('Authentication', () => {
     expect(again.body.user.isAdmin).toBe(true);
   });
 
+  // Found via backlog audit (#360): unlike every other secret-bearing auth
+  // endpoint in this file (login lockout, signup/password-reset's
+  // checkRateLimit), admin-bootstrap — the one endpoint that grants admin
+  // privilege — had no rate limit at all, letting a logged-in account brute
+  // force ADMIN_BOOTSTRAP_SECRET with no friction. Synthetic cf-connecting-ip
+  // per the sign-post/purchase rate-limit tests' own approach, so this
+  // test's bucket doesn't collide with the shared-admin bootstrap call in
+  // beforeAll or the test above (both on the default 'unknown' IP bucket).
+  it('rate-limits repeated admin-bootstrap attempts from the same client', async () => {
+    const account = await signupBuilder('bootstrap-rate-limit-tester');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 10; i++) {
+      const attempt = await api('/auth/admin-bootstrap', account.session({
+        method: 'POST', headers, body: JSON.stringify({ secret: 'guess-me' }),
+      }));
+      expect(attempt.response.status).toBe(403);
+    }
+    const limited = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST', headers, body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');
