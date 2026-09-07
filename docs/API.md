@@ -986,15 +986,16 @@ cut down like real dimensional lumber. The template is uploaded at its
 }
 ```
 
-`minM` is validated when the template itself is created or updated: it must be
-a positive finite number strictly less than that axis's own declared
-dimension, and the axis key must be `x`, `y`, or `z` — the same rule the
-frontend's own Managing-extensibility form already enforces before saving,
-now also enforced against a direct API call bypassing that form.
-
 Axis keys are `x`, `y`, `z`, matching how `dimensions.width` / `.depth` /
-`.height` map onto the scene's local axes. A template can declare any subset
-of the three at once — e.g. a wall resizable in thickness, length, and
+`.height` map onto the scene's local axes — validated server-side
+(`assertValidExtensible` in `worker/index.js`, called from `validateTemplate`)
+on every create/update, not just enforced by the frontend's own Extensibility
+panel: an unrecognized axis key, or a `minM` that isn't a finite number
+strictly between `0` and that axis's own dimension, is rejected with `400`
+(#271 — a bypassed-frontend request that snuck in a non-numeric/missing/
+negative `minM` used to defeat the crop-floor check below entirely, since
+JS's numeric comparison makes `anything < NaN`/`anything < undefined` both
+`false`). A template can declare any subset of the three at once — e.g. a wall resizable in thickness, length, and
 height all independently — and the frontend's Trim gizmo shows a separate
 handle (and a separate numeric field) for every axis a selected item's
 template declares, all active simultaneously; each still crops exactly one

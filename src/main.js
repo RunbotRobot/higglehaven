@@ -7245,6 +7245,14 @@ const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 // with an occupancy slot) that doesn't exist yet.
 const SHOP_IDLE_DELAY_S = 3; // no movement input for this long before idle sway starts easing in
 const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in on stillness, out the instant movement resumes)
+// docs/SPEC.md §2's "stationary-too-long triggers an AFK indicator" — a
+// floating label above the avatar's own head (see makeSignPostSprite),
+// visible on the player's own third-person avatar in Shop mode so it's
+// directly self-testable. Deliberately much longer than SHOP_IDLE_DELAY_S:
+// idle sway should read as "still paying attention," AFK should only show
+// once that stops being a believable read — a minute-plus of true stillness.
+const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the AFK label starts fading in
+const SHOP_AFK_BLEND_PER_S = 0.6; // matches SHOP_IDLE_BLEND_PER_S's own feel — in on stillness, out instantly on movement
 const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
 const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
 const SHOP_IDLE_SWAY_PERIOD_MAX_S = 6;
@@ -7944,10 +7952,20 @@ function createShopAvatar() {
   headPivot.add(head);
   group.add(headPivot);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot };
+  // On `group` rather than `headPivot` so idle's own head-turn sway
+  // (updateShopAvatarIdle) doesn't drag the label along with it — a sprite
+  // always faces the camera regardless of parent rotation anyway, but its
+  // *position* still would inherit headPivot's yaw if parented there.
+  // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
+  const afkSprite = makeSignPostSprite('AFK');
+  afkSprite.position.z = headPivot.position.z + SHOP_AVATAR_HEAD_RADIUS_M + 0.3;
+  afkSprite.material.opacity = 0;
+  group.add(afkSprite);
+
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot } — see createShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite } — see createShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
@@ -7955,6 +7973,7 @@ let shopAvatarWalkPhase = 0;
 // Idle sway state (docs/SPEC.md §2) — see updateShopAvatarIdle.
 let shopIdleElapsedS = 0; // seconds since the last real movement input
 let shopIdleBlend = 0; // 0..1 eased "how much idle sway is showing"
+let shopAfkBlend = 0; // 0..1 eased "how visible the AFK label is" — see SHOP_AFK_DELAY_S
 let shopIdleSwayPhase = 0;
 let shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
 let shopIdleSwayYawOffset = 0; // read by updateShopMovement to offset the avatar's own facing
@@ -8014,11 +8033,15 @@ function updateShopAvatarIdle(moveMagnitude, dt) {
   if (moveMagnitude > 0) {
     shopIdleElapsedS = 0;
     shopIdleBlend = 0;
+    shopAfkBlend = 0;
   } else {
     shopIdleElapsedS += dt;
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+    const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
+    shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
   }
+  shopAvatar.afkSprite.material.opacity = shopAfkBlend;
 
   shopIdleSwayPhase += (dt / shopIdleSwayPeriodS) * Math.PI * 2;
   if (shopIdleSwayPhase >= Math.PI * 2) {
@@ -9224,6 +9247,7 @@ async function enterShopMode() {
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
   shopIdleBlend = 0;
+  shopAfkBlend = 0;
   shopIdleSwayYawOffset = 0;
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;

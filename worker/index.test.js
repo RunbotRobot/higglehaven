@@ -4378,52 +4378,54 @@ describe('Shipping', () => {
   });
 });
 
-describe('Extensible products (crop)', () => {
-  // #271: a direct PATCH bypassing the frontend's own Managing-
-  // extensibility form must not be able to set an unenforceable crop
-  // floor — assertCropWithinTemplateBounds's `length < extensible.minM`
-  // would otherwise silently pass for a non-numeric/negative/missing
-  // minM (JS numeric comparisons against undefined/NaN are always false).
+describe('Extensibility (crop floor)', () => {
   it('rejects a non-object metadata.extensible', async () => {
     const rejected = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
-        templateId: 'extensible-bad-shape-template',
+        templateId: 'extensible-not-an-object',
         name: 'Bad extensible shape',
-        color: '#123456',
-        dimensions: { width: 1, depth: 1, height: 1 },
-        metadata: { extensible: 'yes' },
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: 'x' },
       }),
     });
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/metadata\.extensible must be an object/);
   });
 
-  it('rejects an unknown axis key', async () => {
+  it('rejects an unrecognized axis key', async () => {
     const rejected = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
-        templateId: 'extensible-bad-axis-template',
+        templateId: 'extensible-bad-axis',
         name: 'Bad extensible axis',
-        color: '#123456',
-        dimensions: { width: 1, depth: 1, height: 1 },
-        metadata: { extensible: { w: { minM: 0.1 } } },
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { w: { minM: 1 } } },
       }),
     });
     expect(rejected.response.status).toBe(400);
-    expect(rejected.body.error).toMatch(/axis "w" must be one of: x, y, z/);
+    expect(rejected.body.error).toMatch(/metadata\.extensible key "w" must be one of/);
   });
 
-  it('rejects a non-numeric, negative, or missing minM', async () => {
-    for (const minM of ['not-a-number', -1, 0, undefined]) {
+  // The actual bug (#271): a bypassed-frontend request that sets a
+  // non-numeric/missing/negative minM used to sail straight through with
+  // no validation at all, defeating assertCropWithinTemplateBounds's crop
+  // floor at read time (JS's numeric comparison makes `anything < NaN` and
+  // `anything < undefined` both false).
+  it('rejects a missing, non-numeric, NaN, zero, or negative metadata.extensible.x.minM', async () => {
+    let n = 0;
+    for (const minM of [undefined, 'not-a-number', NaN, 0, -1]) {
+      n += 1;
       const rejected = await api('/catalog', {
         method: 'POST',
         body: JSON.stringify({
-          templateId: `extensible-bad-min-template-${String(minM)}`,
+          templateId: `extensible-bad-minm-${n}`,
           name: 'Bad extensible minM',
-          color: '#123456',
-          dimensions: { width: 1, depth: 1, height: 1 },
-          metadata: { extensible: { x: { minM } } },
+          color: '#111111',
+          dimensions: { width: 2, depth: 2, height: 2 },
+          metadata: { extensible: { x: minM === undefined ? {} : { minM } } },
         }),
       });
       expect(rejected.response.status).toBe(400);
@@ -4432,36 +4434,58 @@ describe('Extensible products (crop)', () => {
   });
 
   it('rejects a minM at or above the template\'s own dimension for that axis', async () => {
-    const rejected = await api('/catalog', {
+    const atMax = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
-        templateId: 'extensible-min-too-large-template',
-        name: 'Extensible minM too large',
-        color: '#123456',
-        dimensions: { width: 1, depth: 1, height: 1 },
-        metadata: { extensible: { x: { minM: 1 } } },
+        templateId: 'extensible-minm-at-max',
+        name: 'minM equals width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 2 } } },
       }),
     });
-    expect(rejected.response.status).toBe(400);
-    expect(rejected.body.error).toMatch(/metadata\.extensible\.x\.minM must be less than this template's own width/);
+    expect(atMax.response.status).toBe(400);
+    expect(atMax.body.error).toMatch(/metadata\.extensible\.x\.minM must be less than this template's own width/);
+
+    const overMax = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-minm-over-max',
+        name: 'minM exceeds width',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 3 } } },
+      }),
+    });
+    expect(overMax.response.status).toBe(400);
   });
 
-  it('accepts a valid metadata.extensible and round-trips it through GET', async () => {
+  it('accepts a valid multi-axis metadata.extensible and round-trips it through GET and PATCH', async () => {
     const created = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
         templateId: 'extensible-valid-template',
-        name: 'Valid extensible product',
-        color: '#123456',
-        dimensions: { width: 2, depth: 1, height: 1 },
-        metadata: { extensible: { x: { minM: 0.5 } } },
+        name: 'Extensible along x and y',
+        color: '#111111',
+        dimensions: { width: 4, depth: 3, height: 1 },
+        metadata: { extensible: { x: { minM: 1 }, y: { minM: 0.5 } } },
       }),
     });
     expect(created.response.status).toBe(201);
-    expect(created.body.template.metadata.extensible).toEqual({ x: { minM: 0.5 } });
+    expect(created.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
 
     const fetched = await api('/catalog/extensible-valid-template');
-    expect(fetched.body.template.metadata.extensible).toEqual({ x: { minM: 0.5 } });
+    expect(fetched.body.template.metadata.extensible).toEqual({ x: { minM: 1 }, y: { minM: 0.5 } });
+
+    // Clearing it (an all-axes-unchecked save, per src/main.js's own "full
+    // replace, not merge" contract) removes the key entirely, same as the
+    // sibling flags above.
+    const cleared = await api('/catalog/extensible-valid-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: {} }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
 });
 
