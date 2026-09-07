@@ -2338,6 +2338,13 @@ describe('Community signs', () => {
     });
     expect(tooLong.response.status).toBe(400);
 
+    // Found via backlog audit (#337): authorLabel had no length cap at all.
+    const authorLabelTooLong = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), text: 'Hello!' }),
+    });
+    expect(authorLabelTooLong.response.status).toBe(400);
+
     const posted = await api('/instances/sign-with-posts/posts', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
@@ -2389,6 +2396,37 @@ describe('Community signs', () => {
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
     expect(afterDelete.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): unlike every other public, repeatable
+  // mutation in this file, posting to a community sign requires no
+  // session and had no rate limit at all. Synthetic cf-connecting-ip per
+  // the purchase rate-limit test's own approach, so this test's bucket
+  // doesn't collide with any other sign-post test above.
+  it('rate-limits repeated posts from the same client', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-rate-limit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/instances/sign-rate-limit-instance/posts', {
+        method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: `Post ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/sign-rate-limit-instance/posts', {
+      method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
   });
 });
 
@@ -2741,6 +2779,16 @@ describe('Product reviews', () => {
     expect(rejected.response.status).toBe(404);
   });
 
+  // Found via backlog audit (#337): authorLabel had no length cap at all.
+  it('rejects a review authorLabel over the length cap', async () => {
+    const templateId = await createTemplate('review-author-label-too-long');
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
+  });
+
   it('rejects a review from a shopper who never purchased the product', async () => {
     const templateId = await createTemplate('review-gate-unpurchased');
     const rejected = await api(`/catalog/${templateId}/reviews`, {
@@ -3082,6 +3130,31 @@ describe('Builders', () => {
       method: 'PATCH', body: JSON.stringify({ label: 'x' }),
     }));
     expect(renameMissing.response.status).toBe(404);
+  });
+
+  // #336: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — requireSessionBuilder bumps last_active_at on every real
+  // builder-owned mutation, but not on mere signup/session-check reads
+  // (GET /builders/me goes through getOrCreateBuilderForUser directly,
+  // not requireSessionBuilder), matching the column's own migration
+  // comment on why every pre-existing/never-yet-mutating builder should
+  // read as NULL rather than some backdated guess.
+  it('bumps last_active_at on a real mutation but not on signup/session checks alone', async () => {
+    const builder = await signupBuilder('activity-test-builder');
+    const beforeMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(beforeMutation.last_active_at).toBeNull();
+
+    await createGreenbeltLandlet('activity-test-landlet');
+    const claimed = await api('/landlets/activity-test-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const afterMutation = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(afterMutation.last_active_at).not.toBeNull();
+    expect(new Date(afterMutation.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
   });
 
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
@@ -3966,6 +4039,48 @@ describe('Notifications', () => {
     expect(bidderNotices.body.notifications).toHaveLength(0);
   });
 
+  // Issue #320: the list was hardcoded to LIMIT 100 with no way to page
+  // further — a builder with more notifications than that could never see
+  // or individually mark read anything older than the newest 100.
+  it('paginates the notifications list via cursor, newest first, with no gaps or duplicates', async () => {
+    const owner = await signupBuilder('notif-page-owner');
+    const bidder = await signupBuilder('notif-page-bidder');
+    const landletId = 'notif-page-landlet';
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Three strictly increasing bids — three separate bid notifications
+    // for the owner, enough to exercise a limit=1 page boundary twice.
+    for (const amountCents of [500, 1000, 1500]) {
+      await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents }),
+      }));
+    }
+    const whole = await api('/notifications', owner.session());
+    expect(whole.body.notifications.length).toBeGreaterThanOrEqual(3);
+    expect(whole.body.nextCursor).toBeNull(); // under the default limit — nothing more to page to
+
+    const seenIds = [];
+    let cursor = null;
+    for (let i = 0; i < whole.body.notifications.length; i++) {
+      const page = await api(
+        `/notifications?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        owner.session(),
+      );
+      expect(page.body.notifications).toHaveLength(1);
+      seenIds.push(page.body.notifications[0].notificationId);
+      cursor = page.body.nextCursor;
+    }
+    expect(cursor).toBeNull(); // exhausted after exactly as many pages as there are rows
+    expect(seenIds).toEqual(whole.body.notifications.map((n) => n.notificationId)); // same order, one row at a time
+
+    const invalidCursor = await api('/notifications?cursor=not-base64', owner.session());
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
   it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
     const { owner, bidder } = await seedNotifications('spoof');
     const spoofed = await api(`/notifications?builderId=${owner.builderId}`, bidder.session());
@@ -4250,6 +4365,12 @@ describe('Friendships', () => {
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
+    // Found via backlog audit (#319): a new request/its acceptance had no
+    // passive way to reach the other side.
+    const bobNoticesAfterRequest = await api('/notifications', bob.session());
+    expect(bobNoticesAfterRequest.body.notifications.some(
+      (n) => n.message === 'friendship-alice sent you a friend request.')).toBe(true);
+
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
     const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
@@ -4275,6 +4396,10 @@ describe('Friendships', () => {
     }));
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
+
+    const aliceNoticesAfterAccept = await api('/notifications', alice.session());
+    expect(aliceNoticesAfterAccept.body.notifications.some(
+      (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
 
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
@@ -4729,6 +4854,66 @@ describe('Extensibility (crop floor)', () => {
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
+
+  // Found via backlog audit (#338): shrinking a template's width (or
+  // raising its extensible.x.minM) after an instance already has a valid
+  // crop set used to brick that instance -- any later PATCH re-validated
+  // the *carried-over* crop against the template's *current* bounds, even
+  // when the request itself never touched crop or templateId.
+  it('does not re-validate an unchanged crop against a template shrunk after the crop was set', async () => {
+    const builder = await signupBuilder('crop-revalidation-builder');
+    await createGreenbeltLandlet('crop-revalidation-landlet');
+    await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'crop-revalidation-instance',
+        landletId: 'crop-revalidation-landlet',
+        templateId: 'crop-revalidation-template',
+        x: 1, y: 1,
+        crop: { x: 2 },
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    // Seller shrinks the template — the now-stale crop.x=2 no longer fits
+    // (width 4 -> 1.5), but nothing re-validates existing instances yet.
+    const shrunk = await api('/catalog/crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // An unrelated PATCH (just moving it) must still succeed -- it never
+    // touched crop or templateId, so the stale crop isn't re-checked.
+    const moved = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ x: 5, y: 5 }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instance.crop).toEqual({ x: 2 });
+    expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
+
+    // But explicitly re-asserting that same crop value now correctly 400s
+    // -- the caller IS asking for this crop/template pairing to hold today.
+    const reassertedCrop = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ crop: { x: 2 } }),
+    }));
+    expect(reassertedCrop.response.status).toBe(400);
+  });
 });
 
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
@@ -5178,6 +5363,13 @@ describe('Simulated purchases', () => {
       body: JSON.stringify({ quantity: 0 }),
     });
     expect(badQuantity.response.status).toBe(400);
+
+    // Found via backlog audit (#337): buyerLabel had no length cap at all.
+    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
+    });
+    expect(badBuyerLabel.response.status).toBe(400);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {

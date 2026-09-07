@@ -488,6 +488,16 @@ unreachable through the UI going forward (not deleted — their landlets/
 placed content stay intact) — an acceptable one-time cost specifically
 because this app has no real users yet; see the migration's own comment.
 
+`builders.last_active_at` (migrations/0067) is an internal-only column,
+never returned in any Builder object below — `requireSessionBuilder` in
+`worker/index.js` bumps it on every real builder-owned mutation (claiming,
+placing, bidding, publishing, ...), not on a mere signup or `GET
+/api/builders/me` session check. It's prerequisite infrastructure for a
+future inactivity-triggered auction job (docs/SPEC.md §5's "greenbelt via
+inactivity"), which doesn't exist yet — see the tracking issue for that.
+`NULL` for any builder who hasn't triggered a real mutation since this
+column was added, deliberately not backfilled to any guessed value.
+
 ### `GET /api/builders/me`
 
 Requires a session (`401` without one, the same `requireCurrentUser` gate
@@ -2043,6 +2053,13 @@ declared size. Every write endpoint below (single and batch create/update, and
 the draft-replace `PUT`) validates `crop` against the referenced template's
 declared extensible axes and `minM`/max-dimension bounds, rejecting anything
 outside them or naming an axis the template didn't declare extensible.
+`PATCH`/`PUT` on an existing single instance only re-runs this check when the
+request body actually includes `crop` and/or `templateId` — if a seller
+shrinks a template (or raises its `minM`) after an instance's crop was
+already validly set, that instance's carried-over crop is not re-validated
+against the template's new bounds on some later, unrelated field-only edit
+(moving it, renaming its label); only a request that itself sets a new
+`crop` or `templateId` is checked against the template's current bounds.
 
 `scale` is a real uniform scale factor, unrelated to `crop` and available on
 any instance regardless of whether its template is extensible — see
@@ -2196,6 +2213,9 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- A friend request or its acceptance (see "Friendship object" below): the
+  recipient is notified of a new request, and the requester is notified
+  once it's accepted.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -2221,26 +2241,29 @@ stays meaningful without a live template to point back at.
 ### `GET /api/notifications`
 
 Requires a session. Lists the calling account's own notifications, newest
-first, capped at 100 with no pagination past that (matching this API's
-other uncapped-in-practice lists, e.g. bundles/purchases). `builderId` is
-an optional query parameter — omitted, it defaults to the session's own
+first, cursor-paginated (issue #320) the same way as this API's other
+paginated lists (e.g. `/catalog`, `/auctions`) — `limit` (default and max
+100) and `cursor`/`nextCursor`, ordered `created_at DESC, notification_id
+DESC` (the tiebreak matters here since several notifications can share the
+same `created_at`, unlike this API's ascending-ordered lists). `builderId`
+is an optional query parameter — omitted, it defaults to the session's own
 builder; if present, it must equal the session's own builder ID (`403`
 otherwise — this was a spoofable "whose notifications" field before
 session-based authorization, see "Authorization model" above).
 `unreadOnly=true` narrows the list to `readAt IS NULL` server-side, for the
 frontend's full history list (the unread badge count uses
-`GET /api/notifications/unread-count` below instead, precisely because
-this list's own 100-row cap would undercount past that).
+`GET /api/notifications/unread-count` below instead, which has no page
+cap at all, rather than paging through this list just to count).
 
 ### `GET /api/notifications/unread-count`
 
 Requires a session. Returns `{ "count": N }` — the calling account's own
 unread notification count via a plain `SELECT COUNT(*)`, with no cap.
-Exists because `GET /api/notifications?unreadOnly=true`'s own 100-row cap
-made its list length an inaccurate stand-in for "how many unread" once a
-builder had more than 100 (e.g. a popular auction generating one bid
-notification per bid) — the frontend's notification badge uses this
-endpoint, not that list's length.
+Exists because reading `GET /api/notifications?unreadOnly=true`'s own
+list — even now that it's paginated — would mean paging through
+potentially many requests just to count "how many unread" (e.g. a popular
+auction generating one bid notification per bid); the frontend's
+notification badge uses this endpoint instead, never that list's length.
 
 ### `PATCH /api/notifications/:notificationId`
 
@@ -2340,7 +2363,8 @@ reference an existing builder. `409` if a friendship or pending request
 already exists between the two builders **in either direction** — sending
 B→A when A→B is already pending doesn't create a second row; the existing
 one has to be accepted or declined first. Returns `201` with the new
-`pending` friendship.
+`pending` friendship. Notifies `recipientBuilderId` (the generic
+notification system below, not a dedicated channel).
 
 ### `PATCH /api/friendships/:friendshipId`
 
@@ -2350,7 +2374,7 @@ accepting their own would skip the other side's consent entirely). Accepts
 a request: `{ "status": "accepted" }` is the only valid body — `400` on
 anything else. `404` if the friendship doesn't exist. There is no
 "decline" status; declining a pending request or removing an accepted
-friendship are both just `DELETE`.
+friendship are both just `DELETE`. Notifies the `requesterBuilderId`.
 
 ### `DELETE /api/friendships/:friendshipId`
 
@@ -2548,9 +2572,12 @@ instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
 ### `POST /api/instances/:instanceId/posts`
 
 Body: `{ "authorLabel", "text" }`, both required, `text` capped at 280
-characters. `400` if the target instance isn't currently flagged
-`isCommunitySign` — a post can't outlive or predate the flag that makes it
-visible at all. `404` if the instance doesn't exist.
+characters and `authorLabel` at 100 (same cap `buyerLabel`/review
+`authorLabel` share, see "Simulated purchases"/"Product reviews" below).
+`400` if the target instance isn't currently flagged `isCommunitySign` —
+a post can't outlive or predate the flag that makes it visible at all.
+`404` if the instance doesn't exist. Unauthenticated and rate-limited per
+client IP, the same as the purchase endpoint below.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
@@ -2779,7 +2806,9 @@ the review's `authorLabel`, case-insensitively (`400` otherwise). An
 anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
-identity system carries everywhere else it's used. Any purchase counts,
+identity system carries everywhere else it's used. `authorLabel` is capped
+at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. Any
+purchase counts,
 refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
 can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
 enforced at the DB level): the purchase gate above is a one-time
@@ -3539,7 +3568,9 @@ POST /api/instances/:instanceId/purchase
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one, anonymously," not a
 400, since a purchase has no other required input beyond which instance is
-being bought. Returns `201` with the created `purchase`:
+being bought. When present, `buyerLabel` is capped at 100 characters, same
+as sign-post/review `authorLabel`. Returns `201` with the created
+`purchase`:
 
 ```json
 {

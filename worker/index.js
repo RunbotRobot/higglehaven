@@ -939,7 +939,7 @@ async function handleProductReviews(request, db, route) {
     const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     // Standard practice on real marketplaces — a review is only credible
     // coming from someone who actually bought the thing. There's no real
     // account system here to check "did this person buy it" against, so
@@ -1417,7 +1417,16 @@ async function handleMyBuilder(request, db) {
 // handler can compare it against whatever it's about to modify.
 async function requireSessionBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
-  return getOrCreateBuilderForUser(db, user);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  // #336: keeps a real "was this builder recently active" signal fresh —
+  // see migrations/0067's own comment for why neither of this table's
+  // existing timestamps works for that. Bumped here rather than at each
+  // of this function's own many call sites, since every one of them is
+  // already a builder-owned mutation by definition.
+  await db.prepare(
+    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
+  ).bind(builder.builder_id).run();
+  return builder;
 }
 
 // Thrown wherever an existing row's own owner column doesn't match the
@@ -1530,13 +1539,30 @@ async function handleNotifications(request, db, route, url) {
     const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
     assertOwner(builderId, sessionBuilder.builder_id, 'Not your notifications');
     const unreadOnlyParam = url.searchParams.get('unreadOnly');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = ['builder_id = ?'];
     const bindings = [builderId];
     if (unreadOnlyParam === 'true') conditions.push('read_at IS NULL');
+    // Newest-first (unlike this file's other cursor-paginated lists, all
+    // ascending) — "older than the last row already seen" is the opposite
+    // comparison, and DESC on both the primary and tiebreak columns keeps
+    // one consistent page order across cursor pages, same as those.
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND notification_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
     const { results } = await db.prepare(`
-      SELECT * FROM notifications WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT 100
-    `).bind(...bindings).all();
-    return json({ notifications: results.map(notificationFromRow) });
+      SELECT * FROM notifications WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, notification_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      notifications: page.map(notificationFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.notification_id) : null,
+    });
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
@@ -1649,6 +1675,13 @@ async function handleFriendships(request, db, route, url) {
     if (inserted.meta.changes === 0) {
       throw new HttpError('A friendship or pending request already exists between these builders', 409);
     }
+    // Found via backlog audit (#319): a new request/an acceptance had no
+    // passive way to reach the other side — they'd have to proactively
+    // re-poll GET /api/friendships. Best-effort, same as every other
+    // notification in this file (fired after the write it's about, not
+    // batched atomically with it).
+    await notificationStatement(db, recipientBuilderId,
+      `${sessionBuilder.label} sent you a friend request.`).run();
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
@@ -1673,6 +1706,10 @@ async function handleFriendships(request, db, route, url) {
     // instead of the clean 404 this should be.
     const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
     if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
+    // Same "no passive way to find out" gap as the new-request notification
+    // above (#319), for the requester's side of an acceptance.
+    await notificationStatement(db, existing.requester_builder_id,
+      `${sessionBuilder.label} accepted your friend request.`).run();
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
@@ -4458,7 +4495,20 @@ async function handleInstances(request, db, route, url) {
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
-    await assertCropWithinTemplateBounds(db, [instance]);
+    // Found via backlog audit (#338): re-validating crop unconditionally
+    // here, even when neither crop nor templateId is actually part of this
+    // request, meant a template shrunk (or its extensible.minM raised)
+    // after an instance's crop was already set could brick that instance —
+    // any later PATCH for something wholly unrelated (moving it, renaming
+    // its label) would re-check the *carried-over* stale crop against the
+    // template's *current* bounds and 400, even though the caller never
+    // touched crop. Only re-validate when this request is actually
+    // asserting a crop/templateId pairing that didn't already exist —
+    // an unchanged crop against an unchanged template isn't a new fact
+    // this request is introducing, so it isn't this request's to reject.
+    if (input.crop !== undefined || input.templateId !== undefined) {
+      await assertCropWithinTemplateBounds(db, [instance]);
+    }
     await db.prepare(`
       UPDATE placed_instances
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -4499,6 +4549,13 @@ async function handleInstances(request, db, route, url) {
 // stays open to any shopper (authorLabel is free text, no account backs
 // it) but DELETE (moderation) is gated to the sign's own hosting landlet's
 // owner — see that branch's own comment.
+// Found via backlog audit (#337): unlike every other public, repeatable
+// mutation in this file (signup, password-reset, model-upload, purchase),
+// posting to a community sign requires no session and had no
+// checkRateLimit call at all — an anonymous caller could post an
+// unlimited number of times per second, unboundedly growing sign_posts.
+const SIGN_POST_RATE_LIMIT_MAX = 20;
+
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
 
@@ -4512,13 +4569,14 @@ async function handleSignPosts(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
+    await checkRateLimit(db, `sign-post:${clientIp(request)}`, SIGN_POST_RATE_LIMIT_MAX);
     const instance = await db.prepare('SELECT instance_id, is_community_sign FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     if (!instance.is_community_sign) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     const postId = `post-${crypto.randomUUID()}`;
@@ -4763,7 +4821,7 @@ async function finishPurchase(db, instance, template, landlet, input) {
   // the checkRateLimit call above closes the other half of that gap
   // (repeated smaller requests instead of one large one).
   if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
-  const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
+  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;
   const totalCents = unitPriceCents * quantity;
@@ -5531,6 +5589,24 @@ function integerValue(value, field) {
 function stringValue(value, field) {
   if (typeof value !== 'string' || value.trim() === '') throw new HttpError(`${field} is required`, 400);
   return value.trim();
+}
+
+// Found via backlog audit (#337): sign-post authorLabel, review
+// authorLabel, and purchase buyerLabel are all free-text "who's this
+// from" display labels validated with plain stringValue — unlike every
+// other user-facing free-text field in this file (a post's own text
+// capped at 280, catalog search's q at 100, password at 200), none of
+// them had an upper bound. The frontend's own shopperLabel() prompt
+// (src/main.js) has no maxlength either, so nothing stops an arbitrarily
+// long value even through the normal UI, let alone a direct API call.
+const MAX_LABEL_LENGTH = 100;
+
+function labelValue(value, field) {
+  const label = stringValue(value, field);
+  if (label.length > MAX_LABEL_LENGTH) {
+    throw new HttpError(`${field} must be ${MAX_LABEL_LENGTH} characters or fewer`, 400);
+  }
+  return label;
 }
 
 function positiveNumber(value, field) {
