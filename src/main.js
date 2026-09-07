@@ -4033,7 +4033,16 @@ function renderBuildSettingsSection() {
   historyField.appendChild(historyList);
   settingsSectionEl.appendChild(historyField);
 
+  // Set Live/Restore/Publish can all trigger their own renderVersionHistory()
+  // call while a previous one is still awaiting its fetch (fast clicks
+  // across different rows, or a click landing mid-fetch from the initial
+  // render) — this token drops a stale call's result instead of letting it
+  // overwrite historyList with out-of-date data, same idiom as
+  // friendsLoadToken/entry.loadToken elsewhere in this file (found via
+  // backlog audit, #448).
+  let versionHistoryLoadToken = 0;
   async function renderVersionHistory() {
+    const myToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let versions;
     let activeVersionId;
@@ -4043,6 +4052,7 @@ function renderBuildSettingsSection() {
         fetchLandlet(landletId),
       ]);
     } catch (err) {
+      if (myToken !== versionHistoryLoadToken) return;
       historyList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -4050,6 +4060,7 @@ function renderBuildSettingsSection() {
       historyList.appendChild(errNote);
       return;
     }
+    if (myToken !== versionHistoryLoadToken) return;
     historyList.innerHTML = '';
     if (versions.length === 0) {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
