@@ -9786,9 +9786,7 @@ async function loadLandletMap(resolve) {
     // #221 previously surfaced a "Borders water" note here — removed per
     // explicit owner direction: shoreline scarcity should be something a
     // builder organically notices (or doesn't), not something the UI
-    // calls out mechanically. bordersWater() itself (src/landletAdjacency.js)
-    // stays, for whatever #221's own eventual desirability mechanic turns
-    // out to need — this only pulls it out of the claim-map label.
+    // calls out mechanically.
     claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
