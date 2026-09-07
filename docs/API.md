@@ -2054,6 +2054,15 @@ the draft-replace `PUT`) validates `crop` against the referenced template's
 declared extensible axes and `minM`/max-dimension bounds, rejecting anything
 outside them or naming an axis the template didn't declare extensible.
 
+The single-instance `PATCH`/`PUT /instances/:id` route skips this
+revalidation when the request's merged `crop` and `templateId` are both
+unchanged from the instance's stored row — otherwise a template shrinking
+its bounds (or raising `minM`) after an instance's crop was already
+validated would reject that instance's every future edit, even ones that
+never touch `crop` at all. Actually changing `crop`, or switching
+`templateId` while reusing the same crop values, is still validated against
+the (possibly new) template's current bounds.
+
 `scale` is a real uniform scale factor, unrelated to `crop` and available on
 any instance regardless of whether its template is extensible — see
 "Frontend-only Resize" for why this exists and where it's applied. `1` (the

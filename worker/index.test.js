@@ -4854,6 +4854,81 @@ describe('Extensibility (crop floor)', () => {
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
+
+  // #338: shrinking a template's bounds after an instance's crop was
+  // validated against its old (wider) bounds must not permanently brick
+  // that instance for every future, unrelated PATCH.
+  it('does not re-reject an unrelated instance PATCH after its template shrinks below the instance\'s existing crop', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-shrink-template', name: 'Crop shrink template', color: '#111111',
+        dimensions: { width: 4, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+    const builder = await signupBuilder('crop-shrink-builder');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'crop-shrink-landlet', name: 'Crop shrink landlet', areaM2: 100,
+        status: 'claimed', ownerBuilderId: builder.builderId,
+      }),
+    }));
+    const created = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'crop-shrink-instance', landletId: 'crop-shrink-landlet',
+        templateId: 'crop-shrink-template', x: 0, y: 0, crop: { x: 2 },
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    // Shrinks width to 1.5 — the instance's existing crop.x of 2 is now out
+    // of bounds (max is the template's own width).
+    const shrunk = await api('/catalog/crop-shrink-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 2, height: 2 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // An edit that never touches crop — but, matching src/main.js's
+    // syncUpdate, resends the instance's full current state including its
+    // now-stale crop.x: 2 unchanged — must still succeed.
+    const relabeled = await api('/instances/crop-shrink-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ label: 'Renamed', crop: { x: 2 } }),
+    }));
+    expect(relabeled.response.status).toBe(200);
+    expect(relabeled.body.instance.label).toBe('Renamed');
+    expect(relabeled.body.instance.crop).toEqual({ x: 2 });
+
+    // An edit that actually tries to change the crop to a new value is
+    // still validated against the template's current (shrunk) bounds.
+    const realCropChange = await api('/instances/crop-shrink-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ crop: { x: 1.8 } }),
+    }));
+    expect(realCropChange.response.status).toBe(400);
+    expect(realCropChange.body.error).toMatch(/crop\.x for template "crop-shrink-template" must be between/);
+
+    // Switching to a different template is still validated even if the
+    // crop value itself is untouched, since it's now measured against a
+    // different template's bounds.
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-shrink-other-template', name: 'Crop shrink other template', color: '#111111',
+        dimensions: { width: 1, depth: 2, height: 2 },
+        metadata: { extensible: { x: { minM: 0.5 } } },
+      }),
+    });
+    const templateSwap = await api('/instances/crop-shrink-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ templateId: 'crop-shrink-other-template', crop: { x: 2 } }),
+    }));
+    expect(templateSwap.response.status).toBe(400);
+  });
 });
 
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not

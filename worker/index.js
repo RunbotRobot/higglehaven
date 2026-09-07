@@ -4495,7 +4495,20 @@ async function handleInstances(request, db, route, url) {
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
-    await assertCropWithinTemplateBounds(db, [instance]);
+    // #338: a template can shrink (or raise its extensible minM) after an
+    // instance's crop was already validated against its old bounds. Without
+    // this check, that now-stale-but-untouched crop would fail
+    // assertCropWithinTemplateBounds on *any* later edit — even one that
+    // never touches crop at all — permanently bricking the instance for
+    // unrelated edits. Only re-validate when the crop or its template
+    // actually changed in this request; a template change still needs the
+    // check even if the crop value itself didn't move, since it's now being
+    // measured against different bounds.
+    const cropOrTemplateChanged = instance.templateId !== existing.template_id
+      || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
+    if (cropOrTemplateChanged) {
+      await assertCropWithinTemplateBounds(db, [instance]);
+    }
     await db.prepare(`
       UPDATE placed_instances
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -5027,6 +5040,19 @@ async function assertReferencesExist(db, table, column, values, field) {
 // AXIS_DIMENSION_KEY uses, so a template's extensible axes and its crop
 // bounds are always checked against the same dimension.
 const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' };
+
+// #338: whether two crop objects describe the same override, regardless of
+// key order — used by the single-instance PATCH/PUT handler to tell "this
+// request actually changed the crop" apart from "this request just resent
+// the instance's existing crop unchanged" (which src/main.js's syncUpdate
+// always does, since it round-trips the mesh's full state on every edit).
+function cropsEqual(a, b) {
+  const axes = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const axis of axes) {
+    if (a[axis] !== b[axis]) return false;
+  }
+  return true;
+}
 
 // Confirms every instance's crop overrides actually reference an axis the
 // instance's template declared extensible (via metadata.extensible, see
