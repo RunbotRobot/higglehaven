@@ -3307,22 +3307,43 @@ async function handleSellerStripeAccount(request, env, db) {
     }
 
     let account;
+    let createdNewAccount = false;
     if (sessionSeller.stripe_account_id) {
       // country can't be changed on an existing Stripe account.
       const { country, ...updateParams } = params;
       account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
     } else {
       account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+      createdNewAccount = true;
     }
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
     const nowIso = new Date().toISOString();
-    await db.prepare(`
+    // Found via backlog audit (#474): two concurrent first-time submissions
+    // (double-click, a retried request) both read stripe_account_id as
+    // null above and both create their own real, distinct Stripe account —
+    // an unconditional write here would let the loser's account id get
+    // silently discarded, leaving a live Stripe account holding real KYC
+    // PII that nothing in this app ever references again. Only matters
+    // for first-time creation — two concurrent updates to an *existing*
+    // account both target the same id, so there's no orphaning risk there.
+    const result = await db.prepare(`
       UPDATE sellers
       SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-      WHERE seller_id = ?
+      WHERE seller_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
     `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionSeller.seller_id).run();
+
+    if (createdNewAccount && result.meta.changes === 0) {
+      // Lost the race — another request's account already won. Don't leave
+      // the account this request just created live and unreferenced:
+      // best-effort delete it (a Custom account with no completed
+      // onboarding can be deleted), then hand back the winning
+      // submission's own state instead of this one's.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      return json(stripeAccountStatusJson(env, winner));
+    }
 
     return json(stripeAccountStatusJson(env, {
       stripe_account_id: account.id,
