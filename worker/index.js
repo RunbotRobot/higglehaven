@@ -704,9 +704,8 @@ async function handleCatalog(request, db, route, url, models) {
     // single-item sibling — otherwise a template a self-deleted seller once
     // owned becomes permanently un-deletable via this batch route, since no
     // live session's seller_id can ever match one that no longer exists.
-    const candidateSellerIds = [...new Set(existing.results.map((row) => row.seller_id).filter(Boolean))];
-    const ownerSellerIds = new Set();
-    for (const sellerId of candidateSellerIds) if (await sellerExists(db, sellerId)) ownerSellerIds.add(sellerId);
+    const candidateSellerIds = existing.results.map((row) => row.seller_id).filter(Boolean);
+    const ownerSellerIds = await existingSellerIds(db, candidateSellerIds);
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
@@ -742,9 +741,8 @@ async function handleCatalog(request, db, route, url, models) {
     // seller_id (unowned), not as still-owned-forever, the same fix as the
     // batch DELETE handler above.
     const sellerIdsToCheck = new Set(sellerIds);
-    for (const row of existingOwnerRows.results) {
-      if (row.seller_id && await sellerExists(db, row.seller_id)) sellerIdsToCheck.add(row.seller_id);
-    }
+    const danglingCandidates = existingOwnerRows.results.map((row) => row.seller_id).filter(Boolean);
+    for (const sellerId of await existingSellerIds(db, danglingCandidates)) sellerIdsToCheck.add(sellerId);
     if (sellerIdsToCheck.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of sellerIdsToCheck) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
@@ -1584,6 +1582,22 @@ function assertOwner(actualOwnerId, sessionOwnerId, message) {
 async function sellerExists(db, sellerId) {
   const row = await db.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(sellerId).first();
   return !!row;
+}
+
+// Batched counterpart to sellerExists — for checking many candidate
+// seller_ids at once (see the catalog batch handlers below) so N
+// candidates cost one query instead of N sequential ones. Same shape as
+// assertReferencesExist further down, but returns the found set instead
+// of throwing, since callers here treat "not found" as "unowned," not
+// as a validation error.
+async function existingSellerIds(db, sellerIds) {
+  const uniqueIds = [...new Set(sellerIds)];
+  if (uniqueIds.length === 0) return new Set();
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT seller_id FROM sellers WHERE seller_id IN (${placeholders})`,
+  ).bind(...uniqueIds).all();
+  return new Set(results.map((row) => row.seller_id));
 }
 
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
