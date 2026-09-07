@@ -951,7 +951,7 @@ async function handleProductReviews(request, db, route) {
     // same label both times, exactly like this dev-mode identity system's
     // "no accounts, just labels" already means everywhere else it's used.
     const purchase = await db.prepare(
-      'SELECT 1 FROM purchases WHERE template_id = ? AND buyer_label = ? COLLATE NOCASE LIMIT 1',
+      'SELECT 1 FROM purchases WHERE template_id = ? AND buyer_label = ? COLLATE NOCASE AND refunded_at IS NULL LIMIT 1',
     ).bind(templateId, authorLabel).first();
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);

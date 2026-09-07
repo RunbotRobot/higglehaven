@@ -2761,14 +2761,15 @@ describe('Product reviews', () => {
   // "permanent receipt, not tied to a live reference" design), so this can
   // insert directly without a real placed instance — only builder_id needs
   // a real row to satisfy its FK.
-  async function createPurchase(templateId, buyerLabel) {
+  async function createPurchase(templateId, buyerLabel, { refunded = false } = {}) {
     const builder = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Purchaser for ${templateId}` }) })).body.builder;
     await env.DB.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
-      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5)
-    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel).run();
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, refunded_at)
+      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5, ?)
+    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel,
+      refunded ? new Date().toISOString() : null).run();
   }
 
   it('rejects a review on a catalog template that does not exist', async () => {
@@ -2816,6 +2817,21 @@ describe('Product reviews', () => {
       body: JSON.stringify({ authorLabel: 'a shopper', rating: 5 }),
     });
     expect(accepted.response.status).toBe(201);
+  });
+
+  // Found during a broader backlog-exploration pass (#357): the eligibility
+  // check matched any purchase under the buyer's label, refunded or not — a
+  // shopper who'd already been made whole (and whose refund already clawed
+  // back the seller/builder's commission) could still leave a "verified
+  // purchase" review under that same refunded transaction.
+  it('rejects a review backed only by a refunded purchase', async () => {
+    const templateId = await createTemplate('review-gate-refunded-purchase');
+    await createPurchase(templateId, 'Refunded Shopper', { refunded: true });
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Refunded Shopper', rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a second review from the same purchaser label, case-insensitively — one review per purchase', async () => {
