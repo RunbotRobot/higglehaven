@@ -2776,6 +2776,23 @@ async function showAxisPreview(template, container, highlightAxes) {
       : 'Arrows show X (red) / Y (green) / Z (blue). Check axes below to make them extensible. Drag to look around.';
 }
 
+// Owner-reported regression (#457): metadataSaveBusy/metadataSaveButtons
+// used to live entirely inside renderSellerList()'s per-call closure, reset
+// to false every time openSellerModal() re-renders the row list. Closing
+// the Seller modal while a metadata PATCH was still in flight and
+// reopening it (openSellerModal always calls renderSellerList() fresh, and
+// closeSellerModal never cancels/awaits an in-flight save) produced a
+// brand-new row whose fresh `busy` flag let a second panel's save start
+// before the first had actually finished — recreating the exact
+// overlapping-PATCH clobber PR #424 was written to prevent, since the
+// server replaces metadata_json wholesale rather than merging it. Keying
+// this map by template id instead makes the lock survive any number of
+// re-renders; `setDisabled` is overwritten on every render so a save
+// started by a now-discarded row still re-enables whichever row is
+// actually on screen when it resolves, instead of a detached one nobody
+// can see.
+const metadataSaveState = new Map(); // templateId -> { busy, setDisabled }
+
 function renderSellerList() {
   // Row DOM is about to be thrown away — an open preview would be left
   // pointing at a detached container, and any per-row event handler
@@ -2808,8 +2825,13 @@ function renderSellerList() {
     // elsewhere in this file — every metadata-editing button on this row
     // registers itself here and is disabled while any one save is in
     // flight.
-    let metadataSaveBusy = false;
+    let saveState = metadataSaveState.get(template.templateId);
+    if (!saveState) {
+      saveState = { busy: false, setDisabled: () => {} };
+      metadataSaveState.set(template.templateId, saveState);
+    }
     const metadataSaveButtons = [];
+    saveState.setDisabled = (disabled) => { for (const btn of metadataSaveButtons) btn.disabled = disabled; };
 
     // Dims/actions/preview/extensibility only show once this row is
     // actually tapped — mirrors the identity picker's own row redesign
@@ -2914,8 +2936,9 @@ function renderSellerList() {
     digitalGoodSaveBtn.type = 'button';
     digitalGoodSaveBtn.textContent = 'Save Digital Good';
     metadataSaveButtons.push(digitalGoodSaveBtn);
+    digitalGoodSaveBtn.disabled = saveState.busy;
     digitalGoodSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (saveState.busy) return;
       digitalGoodStatus.textContent = '';
       digitalGoodStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2924,8 +2947,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
-      metadataSaveBusy = true;
-      for (const btn of metadataSaveButtons) btn.disabled = true;
+      saveState.busy = true;
+      saveState.setDisabled(true);
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -2935,8 +2958,8 @@ function renderSellerList() {
         digitalGoodStatus.textContent = err.message || 'Could not save.';
         digitalGoodStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        saveState.busy = false;
+        saveState.setDisabled(false);
       }
     });
     digitalGoodPanel.appendChild(digitalGoodSaveBtn);
@@ -2990,8 +3013,9 @@ function renderSellerList() {
     noReturnsSaveBtn.type = 'button';
     noReturnsSaveBtn.textContent = 'Save Returns Policy';
     metadataSaveButtons.push(noReturnsSaveBtn);
+    noReturnsSaveBtn.disabled = saveState.busy;
     noReturnsSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (saveState.busy) return;
       noReturnsStatus.textContent = '';
       noReturnsStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3000,8 +3024,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.noReturns;
       }
-      metadataSaveBusy = true;
-      for (const btn of metadataSaveButtons) btn.disabled = true;
+      saveState.busy = true;
+      saveState.setDisabled(true);
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -3011,8 +3035,8 @@ function renderSellerList() {
         noReturnsStatus.textContent = err.message || 'Could not save.';
         noReturnsStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        saveState.busy = false;
+        saveState.setDisabled(false);
       }
     });
     noReturnsPanel.appendChild(noReturnsSaveBtn);
@@ -3065,8 +3089,9 @@ function renderSellerList() {
     domesticOnlySaveBtn.type = 'button';
     domesticOnlySaveBtn.textContent = 'Save Shipping';
     metadataSaveButtons.push(domesticOnlySaveBtn);
+    domesticOnlySaveBtn.disabled = saveState.busy;
     domesticOnlySaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (saveState.busy) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3075,8 +3100,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.domesticOnly;
       }
-      metadataSaveBusy = true;
-      for (const btn of metadataSaveButtons) btn.disabled = true;
+      saveState.busy = true;
+      saveState.setDisabled(true);
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -3086,8 +3111,8 @@ function renderSellerList() {
         domesticOnlyStatus.textContent = err.message || 'Could not save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        saveState.busy = false;
+        saveState.setDisabled(false);
       }
     });
     domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
@@ -3443,12 +3468,13 @@ function renderSellerList() {
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
     metadataSaveButtons.push(flooringToggleBtn);
+    flooringToggleBtn.disabled = saveState.busy;
     flooringToggleBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (saveState.busy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      metadataSaveBusy = true;
-      for (const btn of metadataSaveButtons) btn.disabled = true;
+      saveState.busy = true;
+      saveState.setDisabled(true);
       try {
         const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
         if (!nextMetadata.flooring) delete nextMetadata.flooring;
@@ -3461,8 +3487,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not update.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        saveState.busy = false;
+        saveState.setDisabled(false);
       }
     });
     actions.appendChild(flooringToggleBtn);
@@ -3540,9 +3566,10 @@ function renderSellerList() {
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
     metadataSaveButtons.push(saveBtn);
+    saveBtn.disabled = saveState.busy;
 
     saveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (saveState.busy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const nextExtensible = {};
@@ -3563,8 +3590,8 @@ function renderSellerList() {
         }
         nextExtensible[axis] = { minM };
       }
-      metadataSaveBusy = true;
-      for (const btn of metadataSaveButtons) btn.disabled = true;
+      saveState.busy = true;
+      saveState.setDisabled(true);
       try {
         // A full replace, not a merge — validateTemplate on the worker
         // side takes whatever `metadata` is sent as the template's entire
@@ -3587,8 +3614,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        saveState.busy = false;
+        saveState.setDisabled(false);
       }
     });
 
