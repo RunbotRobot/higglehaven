@@ -1,0 +1,20 @@
+-- Prerequisite infrastructure for #325's inactivity-triggered auctions
+-- (docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation
+-- mechanic). Neither existing timestamp on builders works as a real
+-- activity signal: `updated_at` only bumps on a label rename, and
+-- `sessions.created_at` only marks login time, not ongoing activity
+-- during that session. Using either as-is for an inactivity threshold
+-- would misfire on real active players' land, not just abandoned
+-- accounts (#325's own investigation).
+--
+-- Nullable, and deliberately left NULL here rather than backfilled to
+-- created_at/updated_at/"now" for every existing builder: a future
+-- consumer of this column needs to be able to tell "genuinely never
+-- tracked yet" apart from "was recently active," and backdating every
+-- pre-existing builder to some guessed value would instantly flag all
+-- of them as equally (and often wrongly) "long inactive" the moment any
+-- inactivity threshold gets applied. worker/index.js's requireSessionBuilder
+-- starts keeping this fresh on every real builder-owned mutation from
+-- here on; it fills in for any given builder the first time they act
+-- again after this migration lands.
+ALTER TABLE builders ADD COLUMN last_active_at TEXT;
