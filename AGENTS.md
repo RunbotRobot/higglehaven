@@ -181,10 +181,13 @@ cost when it happens anyway:
   it. Claim first, investigate second. This applies equally to an
   unresolved control-room `feedback` message you're about to act on,
   not just a GitHub Issue: the moment you decide to do it, write (or
-  update) its `tasks` doc with `status: "in_progress"` and your session
-  name, *then* start reading code — don't let "just reply to the owner
-  first" or "just check the code first" become the de facto claim
-  instead.
+  update) its `tasks` doc — id `feedback-<message id>` if you don't
+  also file a real GitHub issue for it — with `status: "in_progress"`
+  and your session name, *then* start reading code. Don't let "just
+  reply to the owner first" or "just check the code first" become the
+  de facto claim instead. A feedback item small enough that filing a
+  real issue feels like overkill is still worth a `tasks` doc for this
+  reason alone — the claim is the point, not the issue tracker.
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —
