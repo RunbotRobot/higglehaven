@@ -2773,6 +2773,23 @@ function renderSellerList() {
     const row = document.createElement('div');
     row.className = 'seller-row';
 
+    // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
+    // Extensibility, Flooring) independently does
+    // `{ ...template.metadata, someKey: ... }` then PATCHes the whole
+    // metadata object back — the server replaces metadata wholesale rather
+    // than merging it (see the Extensibility save handler's own comment
+    // below), so two of these panels saved in overlapping in-flight
+    // windows would otherwise race: whichever response lands last
+    // silently discards the other panel's change, since its own
+    // `nextMetadata` snapshot was taken before the first save's
+    // `Object.assign(template, updated)` landed. One shared busy flag
+    // serializes them, the same idiom as undoRedoBusy/levelActionBusy
+    // elsewhere in this file — every metadata-editing button on this row
+    // registers itself here and is disabled while any one save is in
+    // flight.
+    let metadataSaveBusy = false;
+    const metadataSaveButtons = [];
+
     // Dims/actions/preview/extensibility only show once this row is
     // actually tapped — mirrors the identity picker's own row redesign
     // (task #87), for the same reason: a product's full name matters more
@@ -2875,7 +2892,9 @@ function renderSellerList() {
     digitalGoodSaveBtn.className = 'seller-digital-good-save-btn';
     digitalGoodSaveBtn.type = 'button';
     digitalGoodSaveBtn.textContent = 'Save Digital Good';
+    metadataSaveButtons.push(digitalGoodSaveBtn);
     digitalGoodSaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       digitalGoodStatus.textContent = '';
       digitalGoodStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2884,7 +2903,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
-      digitalGoodSaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -2894,7 +2914,8 @@ function renderSellerList() {
         digitalGoodStatus.textContent = err.message || 'Could not save.';
         digitalGoodStatus.classList.add('error');
       } finally {
-        digitalGoodSaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     digitalGoodPanel.appendChild(digitalGoodSaveBtn);
@@ -2947,7 +2968,9 @@ function renderSellerList() {
     noReturnsSaveBtn.className = 'seller-no-returns-save-btn';
     noReturnsSaveBtn.type = 'button';
     noReturnsSaveBtn.textContent = 'Save Returns Policy';
+    metadataSaveButtons.push(noReturnsSaveBtn);
     noReturnsSaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       noReturnsStatus.textContent = '';
       noReturnsStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2956,7 +2979,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.noReturns;
       }
-      noReturnsSaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -2966,7 +2990,8 @@ function renderSellerList() {
         noReturnsStatus.textContent = err.message || 'Could not save.';
         noReturnsStatus.classList.add('error');
       } finally {
-        noReturnsSaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     noReturnsPanel.appendChild(noReturnsSaveBtn);
@@ -3018,7 +3043,9 @@ function renderSellerList() {
     domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn';
     domesticOnlySaveBtn.type = 'button';
     domesticOnlySaveBtn.textContent = 'Save Shipping';
+    metadataSaveButtons.push(domesticOnlySaveBtn);
     domesticOnlySaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3027,7 +3054,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.domesticOnly;
       }
-      domesticOnlySaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -3037,7 +3065,8 @@ function renderSellerList() {
         domesticOnlyStatus.textContent = err.message || 'Could not save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
-        domesticOnlySaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
@@ -3392,10 +3421,13 @@ function renderSellerList() {
     flooringToggleBtn.type = 'button';
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
+    metadataSaveButtons.push(flooringToggleBtn);
     flooringToggleBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      flooringToggleBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
         if (!nextMetadata.flooring) delete nextMetadata.flooring;
@@ -3408,7 +3440,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not update.';
         rowStatus.classList.add('error');
       } finally {
-        flooringToggleBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     actions.appendChild(flooringToggleBtn);
@@ -3485,8 +3518,10 @@ function renderSellerList() {
     saveBtn.className = 'seller-save-btn';
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
+    metadataSaveButtons.push(saveBtn);
 
     saveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const nextExtensible = {};
@@ -3507,7 +3542,8 @@ function renderSellerList() {
         }
         nextExtensible[axis] = { minM };
       }
-      saveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         // A full replace, not a merge — validateTemplate on the worker
         // side takes whatever `metadata` is sent as the template's entire
@@ -3530,7 +3566,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
       } finally {
-        saveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
 
