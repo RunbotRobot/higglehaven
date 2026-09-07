@@ -285,6 +285,42 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
+  // #417: completeScan used to be derived purely from R2's listing.truncated
+  // flag, which only says whether a *further page* exists — not whether the
+  // inner loop actually finished examining every object already fetched on
+  // this (single, untruncated) page before it broke out early on hitting
+  // maxDeletes. Three orphans fit on one R2 list() page (well under its
+  // 100-object page size), so with maxDeletes=2 the loop must stop after
+  // examining only 2 of the 3 objects on that single, non-truncated page.
+  it('reports an incomplete scan when maxDeletes is hit partway through the final (non-truncated) R2 page', async () => {
+    const orphanUrls = [];
+    for (let i = 0; i < 3; i++) {
+      const form = new FormData();
+      form.set('file', glbFile({ json: `{"completeScanRegression":${i}}` }));
+      const uploaded = await (await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form })).json();
+      orphanUrls.push(uploaded.modelUrl);
+    }
+
+    const partial = await api('/models/cleanup', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ maxDeletes: 2, dryRun: true }),
+    }));
+    expect(partial.response.status).toBe(200);
+    expect(partial.body.targetCount).toBe(2);
+    expect(partial.body.completeScan).toBe(false);
+
+    const full = await api('/models/cleanup', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ maxDeletes: 100 }),
+    }));
+    expect(full.response.status).toBe(200);
+    expect(full.body.completeScan).toBe(true);
+    for (const url of orphanUrls) {
+      expect(full.body.targetModelUrls).toContain(url);
+      expect((await SELF.fetch(`https://higglehaven.test${url}`)).status).toBe(404);
+    }
+  });
+
   it('rejects invalid uploaded-model paths', async () => {
     const missingKey = await SELF.fetch('https://higglehaven.test/uploads/');
     expect(missingKey.status).toBe(400);
