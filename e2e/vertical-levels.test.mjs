@@ -27,7 +27,16 @@ console.log('Build button shows a cost preview at ground (should mention "m²"):
 
 // Build a level up.
 await page.click('#level-build-btn');
+// Concurrent-click guard (issue #403): Dig/Remove (not just Build itself)
+// must also be disabled while the Build request is still in flight —
+// otherwise a second click before this one resolves could race on
+// currentLevelIndex/currentLandletLevels, each independently overwriting
+// the other's result depending on which server round-trip finishes last.
+const digDisabledMidFlight = await page.isDisabled('#level-dig-btn');
+console.log('Dig button disabled while Build request is in flight (should be true):', digDisabledMidFlight);
 await page.waitForTimeout(800);
+const digEnabledAfterBuild = !(await page.isDisabled('#level-dig-btn'));
+console.log('Dig button re-enabled after Build settles (should be true):', digEnabledAfterBuild);
 const labelAfterBuild = await levelLabel();
 const removeVisibleAfterBuild = !(await removeHidden());
 console.log('level label after building up (should be Level +1):', labelAfterBuild);
@@ -89,6 +98,8 @@ const pass =
   removeHiddenAtGround &&
   buildBtnAtGround.includes('m²') &&
   labelAfterBuild === 'Level +1' &&
+  digDisabledMidFlight &&
+  digEnabledAfterBuild &&
   removeVisibleAfterBuild &&
   labelAfterNavDown === 'Ground' &&
   labelAfterNavUp === 'Level +1' &&
