@@ -154,12 +154,15 @@ let shopActive = false;
 // side length = sqrt(area), giving an edge just over 31.6 meters.
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Placeholder buildable volume: a basic single-level landlet, one level
-// (10m, per spec §3) straight up, modeled as a plain cuboid rather than the
-// spec's actual cone-shaped volume (cross-section changes with distance
-// from Earth's center once curvature is modeled). Same simplification as
-// using a flat plane instead of a curved one for the ground right now — get
-// the mechanic working, model the real geometry later.
+// Buildable volume: one level (10m, per spec §3) straight up from whichever
+// level's own floor is currently in view. No longer the flat-plane/plain-
+// cuboid placeholder this comment used to describe — the ground itself is
+// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
+// already widens/narrows the X/Y footprint per height via
+// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
+// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
+// see clampToLandlet's own comment for how the cross-section at that height
+// gets corrected.
 const LANDLET_HEIGHT_M = 10;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -446,10 +449,10 @@ function resolveGroupAxisDelta(meshes, startPositions, axis, candidateOffset, ex
 // factor a real fixed-angular-footprint lándlet would have at that height —
 // genuinely tiny at this scale (LANDLET_HEIGHT_M=10 against Earth's ~6.371
 // million meter radius is a ~0.00016% change), but the correct shape rather
-// than a flat placeholder. Only the above-ground case exists to correct
-// here — below-ground levels (where the spec says the cone narrows
-// instead) depend on a vertical-construction/digging feature this app
-// doesn't have yet (see #136's own scoping note).
+// than a flat placeholder. footprintScaleAtHeight's own formula already
+// covers both directions (> 1 above ground, < 1 below), so below-ground
+// levels (vertical digging, currentLevelIndex < 0 — see #169's own comment
+// just below) narrow correctly here too, not just the above-ground case.
 //
 // Widening around THIS lándlet's own local center, rather than around the
 // single shared point (Earth's center, projected as the world origin) a
@@ -3622,16 +3625,17 @@ function renderSellerList() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
       let purchases;
+      let totalCount;
       try {
-        purchases = await fetchPurchases({ templateId: template.templateId });
+        ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
-      salesEmptyEl.hidden = purchases.length > 0;
-      if (purchases.length > 0) {
-        salesSummaryEl.textContent = `${purchases.length} sale${purchases.length === 1 ? '' : 's'}`;
+      salesEmptyEl.hidden = totalCount > 0;
+      if (totalCount > 0) {
+        salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
       }
       for (const purchase of purchases) {
         const saleRow = document.createElement('div');
@@ -3848,17 +3852,16 @@ async function renderLandCapField() {
   field.appendChild(status);
   settingsSectionEl.appendChild(field);
   try {
-    // fetchAllLandlets pages through every one of this builder's owned
-    // landlets, not just fetchLandlets's own first 100 — auctions place no
-    // hard ceiling on how many a builder can accumulate, and the backend's
-    // own land-cap formula sums all of them, so a single-page read here
-    // would silently undercount past that point (#186).
-    const [builders, ownedLandlets] = await Promise.all([
-      fetchBuilders(),
-      fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId }),
-    ]);
+    // ownedAreaM2 comes straight from the builder object now (#312) —
+    // the backend's own recomputeLandCapsBatch already sums every owned
+    // landlet's ground area *and* every level's own cap_consumed_m2
+    // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
+    // so reading it back here is both more accurate (a frontend-side sum
+    // over fetchAllLandlets alone silently ignored level area) and
+    // cheaper (no second paginated fetch needed at all).
+    const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
-    const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
+    const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
       'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
   } catch (err) {
@@ -4110,26 +4113,13 @@ async function renderAuctionSection() {
   listField.appendChild(auctionList);
   settingsSectionEl.appendChild(listField);
 
-  async function renderStartSection() {
+  async function renderForLandlet(landletId) {
     startStatus.textContent = '';
     startStatus.classList.remove('error');
     for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
-    let owned;
-    try {
-      owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
-    } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your landlet.';
-      startStatus.classList.add('error');
-      return;
-    }
-    if (owned.length === 0) {
-      startStatus.textContent = 'Claim a landlet first to auction it off.';
-      return;
-    }
-    const myLandletId = owned[0].landletId;
     let activeForMine;
     try {
-      activeForMine = await fetchAuctions({ status: 'active', landletId: myLandletId });
+      activeForMine = await fetchAuctions({ status: 'active', landletId });
     } catch (err) {
       startStatus.textContent = err.message || 'Could not check for an existing auction.';
       startStatus.classList.add('error');
@@ -4186,11 +4176,11 @@ async function renderAuctionSection() {
       }
       startBtn.disabled = true;
       try {
-        await startAuction(myLandletId, {
+        await startAuction(landletId, {
           startingBidCents: Math.round(dollars * 100),
           durationHours: Math.round(hours),
         });
-        await renderStartSection();
+        await renderForLandlet(landletId);
         await renderAuctionList();
       } catch (err) {
         startStatus.textContent = err.message || 'Could not start the auction.';
@@ -4200,6 +4190,64 @@ async function renderAuctionSection() {
     });
     form.appendChild(startBtn);
     startField.appendChild(form);
+  }
+
+  async function renderStartSection() {
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row, .landlet-picker')) el.remove();
+    let owned;
+    try {
+      // fetchAllLandlets pages through every one of this builder's owned
+      // landlets, not just fetchLandlets's own first 100-per-page limit
+      // (#186's own shape). Needed here too now that #199 lets a seller
+      // hold two simultaneously-claimed landlets (starting a $0 auction,
+      // or getting a first bid on any starting amount, frees the claim
+      // lock immediately rather than waiting for resolution) — "exactly
+      // one owned landlet" is no longer a safe assumption (#249).
+      owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check your landlets.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (owned.length === 0) {
+      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      return;
+    }
+
+    // Per the owner's own #249 product call: a picker across every
+    // claimed landlet the builder owns, defaulting to whichever one
+    // they're currently in Build mode on (falling back to the first
+    // owned landlet when that one isn't in this list at all — e.g.
+    // Settings opened from Shop mode with no Build-mode landlet active).
+    let selectedLandletId = owned.some((l) => l.landletId === currentLandletId)
+      ? currentLandletId
+      : owned[0].landletId;
+
+    if (owned.length > 1) {
+      const pickerRow = document.createElement('div');
+      pickerRow.className = 'landlet-picker';
+      const pickerLabel = document.createElement('label');
+      pickerLabel.textContent = 'Landlet';
+      const picker = document.createElement('select');
+      for (const landlet of owned) {
+        const option = document.createElement('option');
+        option.value = landlet.landletId;
+        option.textContent = landlet.name || landlet.landletId;
+        if (landlet.landletId === selectedLandletId) option.selected = true;
+        picker.appendChild(option);
+      }
+      picker.addEventListener('change', () => {
+        selectedLandletId = picker.value;
+        renderForLandlet(selectedLandletId);
+      });
+      pickerLabel.appendChild(picker);
+      pickerRow.appendChild(pickerLabel);
+      startField.appendChild(pickerRow);
+    }
+
+    await renderForLandlet(selectedLandletId);
   }
 
   async function renderAuctionList() {
@@ -6343,14 +6391,16 @@ const notificationsCloseBtn = document.getElementById('notifications-close-btn')
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
 async function refreshNotificationsBadge() {
   if (!builderId) return;
   try {
     // A real count query, not fetchNotifications({ unreadOnly: true })'s
-    // own .length — that list is capped at 100 rows server-side, which
-    // would silently undercount the badge past that (e.g. a popular
-    // auction's worth of bid notifications).
+    // own first page — that list is cursor-paginated (issue #320) one
+    // page at a time, which would still undercount the badge if this read
+    // only the first page's own .length (e.g. a popular auction's worth
+    // of bid notifications).
     const count = await fetchUnreadNotificationCount();
     notificationsBadgeEl.textContent = String(count);
     notificationsBadgeEl.hidden = count === 0;
@@ -6378,14 +6428,50 @@ function formatNotificationTime(isoString) {
 // latest afterward; a superseded call bails out quietly instead of
 // rendering anything.
 let notificationsLoadToken = 0;
+// The cursor for whatever page comes after the ones currently rendered —
+// null once there's nothing more to load (see fetchNotifications'/
+// handleNotifications' nextCursor, issue #320). Reset to null every time
+// renderNotifications starts a fresh first page; advanced by
+// loadMoreNotifications as later pages come in.
+let notificationsNextCursor = null;
+
+function appendNotificationRow(notification) {
+  const row = document.createElement('div');
+  row.className = 'notification-row';
+  row.classList.toggle('unread', !notification.readAt);
+  const message = document.createElement('div');
+  message.textContent = notification.message;
+  row.appendChild(message);
+  const time = document.createElement('div');
+  time.className = 'notification-row-time';
+  time.textContent = formatNotificationTime(notification.createdAt);
+  row.appendChild(time);
+  // Tapping any notice marks just that one read — simpler than a
+  // separate per-row dismiss button, and "Mark all read" still exists
+  // for clearing the whole list at once.
+  if (!notification.readAt) {
+    row.addEventListener('click', async () => {
+      try {
+        await markNotificationRead(notification.notificationId);
+        row.classList.remove('unread');
+        refreshNotificationsBadge();
+      } catch (err) {
+        console.warn('Could not mark notification read:', err);
+      }
+    });
+  }
+  notificationsListEl.appendChild(row);
+}
 
 async function renderNotifications() {
   const myLoadToken = ++notificationsLoadToken;
   notificationsListEl.innerHTML = '';
+  notificationsLoadMoreBtn.hidden = true;
+  notificationsNextCursor = null;
   if (!builderId) return;
-  let notifications;
+  let page;
   try {
-    notifications = await fetchNotifications();
+    page = await fetchNotifications();
   } catch (err) {
     if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
     notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
@@ -6393,35 +6479,27 @@ async function renderNotifications() {
     return;
   }
   if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
-  notificationsEmptyEl.hidden = notifications.length > 0;
-  for (const notification of notifications) {
-    const row = document.createElement('div');
-    row.className = 'notification-row';
-    row.classList.toggle('unread', !notification.readAt);
-    const message = document.createElement('div');
-    message.textContent = notification.message;
-    row.appendChild(message);
-    const time = document.createElement('div');
-    time.className = 'notification-row-time';
-    time.textContent = formatNotificationTime(notification.createdAt);
-    row.appendChild(time);
-    // Tapping any notice marks just that one read — simpler than a
-    // separate per-row dismiss button, and "Mark all read" still exists
-    // for clearing the whole list at once.
-    if (!notification.readAt) {
-      row.addEventListener('click', async () => {
-        try {
-          await markNotificationRead(notification.notificationId);
-          row.classList.remove('unread');
-          refreshNotificationsBadge();
-        } catch (err) {
-          console.warn('Could not mark notification read:', err);
-        }
-      });
-    }
-    notificationsListEl.appendChild(row);
-  }
+  notificationsEmptyEl.hidden = page.notifications.length > 0;
+  for (const notification of page.notifications) appendNotificationRow(notification);
+  notificationsNextCursor = page.nextCursor;
+  notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
 }
+
+notificationsLoadMoreBtn.addEventListener('click', async () => {
+  const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+  notificationsLoadMoreBtn.disabled = true;
+  try {
+    const page = await fetchNotifications({ cursor: notificationsNextCursor });
+    if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
+    for (const notification of page.notifications) appendNotificationRow(notification);
+    notificationsNextCursor = page.nextCursor;
+    notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
+  } catch (err) {
+    console.warn('Could not load more notifications:', err);
+  } finally {
+    notificationsLoadMoreBtn.disabled = false;
+  }
+});
 
 notificationsBtn.addEventListener('click', () => {
   notificationsModalEl.classList.add('visible');

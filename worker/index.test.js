@@ -1001,6 +1001,50 @@ describe('Worker API', () => {
     });
   });
 
+  // Found via backlog audit (#318): priceCents had no upper bound and used
+  // Number.isInteger rather than Number.isSafeInteger, letting a value past
+  // MAX_MONEY_CENTS (or past safe-integer range entirely) through — a
+  // seller could set an astronomical priceCents on their own template and
+  // self-purchase it once to mint an outsized dallers_balance_cents credit.
+  it('rejects a priceCents over the money-field cap, and a non-safe-integer value', async () => {
+    const overCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-over-test',
+        name: 'Price cap over test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_001,
+      }),
+    });
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-unsafe-test',
+        name: 'Price cap unsafe test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    });
+    expect(notSafe.response.status).toBe(400);
+
+    const atCap = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'price-cap-at-test',
+        name: 'Price cap at test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 100_000_000,
+      }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.template.priceCents).toBe(100_000_000);
+  });
+
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', draftBuilder.session({
@@ -2294,6 +2338,13 @@ describe('Community signs', () => {
     });
     expect(tooLong.response.status).toBe(400);
 
+    // Found via backlog audit (#337): authorLabel had no length cap at all.
+    const authorLabelTooLong = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), text: 'Hello!' }),
+    });
+    expect(authorLabelTooLong.response.status).toBe(400);
+
     const posted = await api('/instances/sign-with-posts/posts', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
@@ -2345,6 +2396,73 @@ describe('Community signs', () => {
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
     expect(afterDelete.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): unlike every other public, repeatable
+  // mutation in this file, posting to a community sign requires no
+  // session and had no rate limit at all. Synthetic cf-connecting-ip per
+  // the purchase rate-limit test's own approach, so this test's bucket
+  // doesn't collide with any other sign-post test above.
+  it('rate-limits repeated posts from the same client', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-rate-limit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/instances/sign-rate-limit-instance/posts', {
+        method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: `Post ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/sign-rate-limit-instance/posts', {
+      method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
+  // Found via backlog audit (#356): the list above was `ORDER BY created_at`
+  // with no `DESC` — ascending, so once a sign passed 200 posts, `LIMIT 200`
+  // always kept the *oldest* 200, permanently hiding every post made after
+  // that point (the newest ones always fell outside the window). Explicit
+  // created_at values, rather than relying on insertion order/timing, make
+  // "which 200 survive" deterministic to assert on.
+  it('reports the true post count and keeps the newest 200 (in ascending order) past the list\'s own cap', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-past-cap-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 6,
+        y: 6,
+        isCommunitySign: true,
+      }),
+    }));
+    const statements = Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO sign_posts (post_id, instance_id, author_label, text, created_at) VALUES (?, 'sign-past-cap-instance', 'A Shopper', ?, ?)
+      `).bind(`sign-past-cap-${i}`, `Post ${i}`, new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()));
+    await env.DB.batch(statements);
+
+    const list = await api('/instances/sign-past-cap-instance/posts');
+    expect(list.body.posts).toHaveLength(200);
+    expect(list.body.totalCount).toBe(205);
+    // The surviving window is the newest 200 (post 5 through post 204), not
+    // the oldest 200 (post 0 through post 199) the pre-#356 query kept —
+    // and still returned oldest-first within that window, since
+    // rebuildSignSprites (src/main.js) depends on that ordering to grab the
+    // most recent posts via .slice(-SIGN_MAX_VISIBLE_POSTS).
+    expect(list.body.posts[0].postId).toBe('sign-past-cap-5');
+    expect(list.body.posts[199].postId).toBe('sign-past-cap-204');
   });
 });
 
@@ -2569,6 +2687,33 @@ describe('Community calendar', () => {
     expect(scheduled.body.event.triggeredAt).toBeNull();
   });
 
+  // Same ascending-window/no-count gap as sign posts' own "reports the true
+  // post count..." test above (#356), fixed the same way.
+  it('reports the true event count and keeps the newest 200 (in ascending order) past the list\'s own cap', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-past-cap-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 12,
+        y: 12,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const statements = Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO calendar_events (event_id, instance_id, author_label, text, created_at) VALUES (?, 'calendar-past-cap-instance', 'Someone', ?, ?)
+      `).bind(`calendar-past-cap-${i}`, `Event ${i}`, new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()));
+    await env.DB.batch(statements);
+
+    const list = await api('/instances/calendar-past-cap-instance/events');
+    expect(list.body.events).toHaveLength(200);
+    expect(list.body.totalCount).toBe(205);
+    expect(list.body.events[0].eventId).toBe('calendar-past-cap-5');
+    expect(list.body.events[199].eventId).toBe('calendar-past-cap-204');
+  });
+
   it('only triggers the creative-tool effect once it is actually due, and only once ever', async () => {
     await api('/instances', calendarBuilder.session({
       method: 'POST',
@@ -2679,14 +2824,15 @@ describe('Product reviews', () => {
   // "permanent receipt, not tied to a live reference" design), so this can
   // insert directly without a real placed instance — only builder_id needs
   // a real row to satisfy its FK.
-  async function createPurchase(templateId, buyerLabel) {
+  async function createPurchase(templateId, buyerLabel, { refunded = false } = {}) {
     const builder = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Purchaser for ${templateId}` }) })).body.builder;
     await env.DB.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents)
-      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5)
-    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel).run();
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, refunded_at)
+      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5, ?)
+    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel,
+      refunded ? new Date().toISOString() : null).run();
   }
 
   it('rejects a review on a catalog template that does not exist', async () => {
@@ -2695,6 +2841,16 @@ describe('Product reviews', () => {
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
     });
     expect(rejected.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): authorLabel had no length cap at all.
+  it('rejects a review authorLabel over the length cap', async () => {
+    const templateId = await createTemplate('review-author-label-too-long');
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a review from a shopper who never purchased the product', async () => {
@@ -2724,6 +2880,21 @@ describe('Product reviews', () => {
       body: JSON.stringify({ authorLabel: 'a shopper', rating: 5 }),
     });
     expect(accepted.response.status).toBe(201);
+  });
+
+  // Found during a broader backlog-exploration pass (#357): the eligibility
+  // check matched any purchase under the buyer's label, refunded or not — a
+  // shopper who'd already been made whole (and whose refund already clawed
+  // back the seller/builder's commission) could still leave a "verified
+  // purchase" review under that same refunded transaction.
+  it('rejects a review backed only by a refunded purchase', async () => {
+    const templateId = await createTemplate('review-gate-refunded-purchase');
+    await createPurchase(templateId, 'Refunded Shopper', { refunded: true });
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Refunded Shopper', rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a second review from the same purchaser label, case-insensitively — one review per purchase', async () => {
@@ -2965,6 +3136,26 @@ describe('Product reviews', () => {
     expect(templateDeleted.response.status).toBe(200);
   });
 
+  // Found via backlog audit (#361): PATCH on a seller-less template requires
+  // no session (see the test above) and fires a real notification to every
+  // builder hosting it (notifyBuildersOfDimensionChange) on every dimension
+  // change, with no rate limit at all. Synthetic cf-connecting-ip per the
+  // sign-post rate-limit test's own approach.
+  it('rate-limits repeated unauthenticated PATCHes on a seller-less template', async () => {
+    const templateId = await createTemplate('catalog-patch-rate-limit');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/catalog/${templateId}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 } }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/catalog/${templateId}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ dimensions: { width: 9, depth: 1, height: 1 } }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
@@ -3038,6 +3229,29 @@ describe('Builders', () => {
       method: 'PATCH', body: JSON.stringify({ label: 'x' }),
     }));
     expect(renameMissing.response.status).toBe(404);
+  });
+
+  // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
+  // session resolves *your* builder profile, mutation or not (per the
+  // owner's #325 decision: "any login... even if only logging in for
+  // shopping or selling" counts as activity). A builder created directly
+  // via the DB (never through a real session, the way a pre-existing
+  // dev-mode row or the pioneer-cohort filler rows above come to exist)
+  // still reads as NULL — matching migrations/0067's own comment on why
+  // that should never be backdated to a guess.
+  it('bumps last_active_at on any resolved session (including a mere GET /builders/me), not on a DB-only row', async () => {
+    const direct = await env.DB.prepare(
+      "INSERT INTO builders (builder_id, label) VALUES ('builder-activity-test-direct', 'Direct row') RETURNING last_active_at",
+    ).first();
+    expect(direct.last_active_at).toBeNull();
+
+    const builder = await signupBuilder('activity-test-builder'); // itself resolves /builders/me
+    const afterSignup = await env.DB.prepare(
+      'SELECT last_active_at FROM builders WHERE builder_id = ?',
+    ).bind(builder.builderId).first();
+    expect(afterSignup.last_active_at).not.toBeNull();
+    expect(new Date(afterSignup.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
   });
 
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
@@ -3409,6 +3623,43 @@ describe('Auctions', () => {
     const createdAt = new Date(started.body.auction.createdAt).getTime();
     expect(endsAt - createdAt).toBeGreaterThan(59 * 60 * 1000);
     expect(endsAt - createdAt).toBeLessThan(61 * 60 * 1000);
+  });
+
+  // Found via backlog audit (#318): startingBidCents/amountCents had no
+  // upper bound and used Number.isInteger rather than Number.isSafeInteger,
+  // letting a value past MAX_MONEY_CENTS (or past safe-integer range
+  // entirely) through to a persisted balance/ledger.
+  it('rejects a startingBidCents or amountCents over the money-field cap, and a non-safe-integer value', async () => {
+    const owner = await signupBuilder('bid-cap-owner');
+    const bidder = await signupBuilder('bid-cap-bidder');
+    await createGreenbeltLandlet('auction-bid-cap-landlet');
+    await claim('auction-bid-cap-landlet', owner);
+
+    const overCap = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_001 }),
+    }));
+    expect(overCap.response.status).toBe(400);
+
+    const notSafe = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: Number.MAX_SAFE_INTEGER + 1 }),
+    }));
+    expect(notSafe.response.status).toBe(400);
+
+    const started = await api('/landlets/auction-bid-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100_000_000 }),
+    }));
+    expect(started.response.status).toBe(201);
+    const auctionId = started.body.auction.auctionId;
+
+    const bidOverCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_001 }),
+    }));
+    expect(bidOverCap.response.status).toBe(400);
+
+    const bidAtCap = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+    }));
+    expect(bidAtCap.response.status).toBe(201);
   });
 
   it('enforces increasing bids and rejects the seller bidding on their own auction', async () => {
@@ -3837,6 +4088,93 @@ describe('Auctions', () => {
   });
 });
 
+// #325: land held by a genuinely abandoned builder auto-auctions itself
+// (SPEC §5's "greenbelt via inactivity") via the same scheduled() cron
+// world growth already uses — see autoAuctionInactiveLandlets in
+// worker/index.js. Backdating last_active_at directly via env.DB rather
+// than actually waiting 30 days, same "cheap and exact" precedent the
+// pioneer-rank tests above already use for bulk DB setup.
+describe('Inactivity-triggered auctions', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function backdateLastActive(builderId, daysAgo) {
+    const timestamp = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare('UPDATE builders SET last_active_at = ? WHERE builder_id = ?')
+      .bind(timestamp, builderId).run();
+  }
+
+  async function runScheduled() {
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function activeAuctionFor(landletId) {
+    return env.DB.prepare(
+      "SELECT * FROM auctions WHERE landlet_id = ? AND status = 'active'",
+    ).bind(landletId).first();
+  }
+
+  it('auto-starts a $0 auction on a claimed landlet whose owner has been inactive past 30 days', async () => {
+    const owner = await signupBuilder('inactive-owner');
+    await createGreenbeltLandlet('inactivity-landlet-a');
+    await claim('inactivity-landlet-a', owner);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-a');
+    expect(auction).toBeTruthy();
+    expect(auction.seller_builder_id).toBe(owner.builderId);
+    expect(auction.starting_bid_cents).toBe(0);
+  });
+
+  it('does not auction a landlet whose owner has been active within 30 days', async () => {
+    const owner = await signupBuilder('active-owner');
+    await createGreenbeltLandlet('inactivity-landlet-b');
+    await claim('inactivity-landlet-b', owner); // last_active_at bumped to "now" by the claim itself
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-b')).toBeNull();
+  });
+
+  it('does not auction a landlet whose owner has never had last_active_at tracked (NULL, not "long inactive")', async () => {
+    const owner = await signupBuilder('never-tracked-owner');
+    await createGreenbeltLandlet('inactivity-landlet-c');
+    await claim('inactivity-landlet-c', owner);
+    // Simulates a builder who existed before migrations/0067, or whose
+    // profile has genuinely never been resolved since — NULL is supposed
+    // to mean "not yet tracked," never "definitely inactive."
+    await env.DB.prepare('UPDATE builders SET last_active_at = NULL WHERE builder_id = ?')
+      .bind(owner.builderId).run();
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-c')).toBeNull();
+  });
+
+  it('does not start a second active auction on a landlet an inactive owner already voluntarily listed', async () => {
+    const owner = await signupBuilder('already-listed-owner');
+    await createGreenbeltLandlet('inactivity-landlet-d');
+    await claim('inactivity-landlet-d', owner);
+    const started = await api('/landlets/inactivity-landlet-d/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+    }));
+    expect(started.response.status).toBe(201);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-d');
+    expect(auction.auction_id).toBe(started.body.auction.auctionId);
+    expect(auction.starting_bid_cents).toBe(500); // untouched — not replaced by the cron's own $0 listing
+  });
+});
+
 // The Auctions tests above exercise notification creation as a side effect
 // (a bid triggers one); these exercise the endpoints themselves — GET's
 // unreadOnly filter and builderId spoof guard, PATCH's mark-read and its
@@ -3883,6 +4221,48 @@ describe('Notifications', () => {
 
     const bidderNotices = await api('/notifications', bidder.session());
     expect(bidderNotices.body.notifications).toHaveLength(0);
+  });
+
+  // Issue #320: the list was hardcoded to LIMIT 100 with no way to page
+  // further — a builder with more notifications than that could never see
+  // or individually mark read anything older than the newest 100.
+  it('paginates the notifications list via cursor, newest first, with no gaps or duplicates', async () => {
+    const owner = await signupBuilder('notif-page-owner');
+    const bidder = await signupBuilder('notif-page-bidder');
+    const landletId = 'notif-page-landlet';
+    await createGreenbeltLandlet(landletId);
+    await claim(landletId, owner);
+    const started = await api(`/landlets/${landletId}/auction`, owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    // Three strictly increasing bids — three separate bid notifications
+    // for the owner, enough to exercise a limit=1 page boundary twice.
+    for (const amountCents of [500, 1000, 1500]) {
+      await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents }),
+      }));
+    }
+    const whole = await api('/notifications', owner.session());
+    expect(whole.body.notifications.length).toBeGreaterThanOrEqual(3);
+    expect(whole.body.nextCursor).toBeNull(); // under the default limit — nothing more to page to
+
+    const seenIds = [];
+    let cursor = null;
+    for (let i = 0; i < whole.body.notifications.length; i++) {
+      const page = await api(
+        `/notifications?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        owner.session(),
+      );
+      expect(page.body.notifications).toHaveLength(1);
+      seenIds.push(page.body.notifications[0].notificationId);
+      cursor = page.body.nextCursor;
+    }
+    expect(cursor).toBeNull(); // exhausted after exactly as many pages as there are rows
+    expect(seenIds).toEqual(whole.body.notifications.map((n) => n.notificationId)); // same order, one row at a time
+
+    const invalidCursor = await api('/notifications?cursor=not-base64', owner.session());
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
   it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {
@@ -4169,6 +4549,12 @@ describe('Friendships', () => {
     });
     const friendshipId = sent.body.friendship.friendshipId;
 
+    // Found via backlog audit (#319): a new request/its acceptance had no
+    // passive way to reach the other side.
+    const bobNoticesAfterRequest = await api('/notifications', bob.session());
+    expect(bobNoticesAfterRequest.body.notifications.some(
+      (n) => n.message === 'friendship-alice sent you a friend request.')).toBe(true);
+
     // Alice's own list shows it outgoing; Bob's shows the same row incoming.
     const aliceList = await api('/friendships', alice.session());
     expect(aliceList.body.friendships).toHaveLength(1);
@@ -4195,12 +4581,48 @@ describe('Friendships', () => {
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.friendship.status).toBe('accepted');
 
+    const aliceNoticesAfterAccept = await api('/notifications', alice.session());
+    expect(aliceNoticesAfterAccept.body.notifications.some(
+      (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
+
     // From Alice's side, the "approximate location" is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
     expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
     expect(aliceListAfter.body.friendships[0].otherLandlet).toMatchObject({
       landletId: 'friendship-bob-landlet',
     });
+  });
+
+  // #353: the accept UPDATE previously matched regardless of the row's
+  // current status, so re-PATCHing an already-accepted friendship kept
+  // re-sending the requester a duplicate notification with no limit.
+  it('does not re-send a notification (or error) when accepting an already-accepted friendship', async () => {
+    const alice = await signupBuilder('friendship-reaccept-alice');
+    const bob = await signupBuilder('friendship-reaccept-bob');
+    const sent = await api('/friendships', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId }),
+    }));
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    const firstAccept = await api(`/friendships/${friendshipId}`, bob.session({
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    }));
+    expect(firstAccept.response.status).toBe(200);
+    expect(firstAccept.body.friendship.status).toBe('accepted');
+
+    for (let i = 0; i < 4; i += 1) {
+      const reaccept = await api(`/friendships/${friendshipId}`, bob.session({
+        method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+      }));
+      expect(reaccept.response.status).toBe(200);
+      expect(reaccept.body.friendship.status).toBe('accepted');
+    }
+
+    const aliceNotices = await api('/notifications', alice.session());
+    const acceptNotices = aliceNotices.body.notifications.filter(
+      (n) => n.message === 'friendship-reaccept-bob accepted your friend request.',
+    );
+    expect(acceptNotices).toHaveLength(1);
   });
 
   it('rejects a second request between the same pair in either direction', async () => {
@@ -4648,6 +5070,89 @@ describe('Extensibility (crop floor)', () => {
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
+
+  // Found via backlog audit (#338): shrinking a template's width (or
+  // raising its extensible.x.minM) after an instance already has a valid
+  // crop set used to brick that instance -- any later PATCH re-validated
+  // the *carried-over* crop against the template's *current* bounds, even
+  // when the request itself never touched crop or templateId.
+  it('does not re-validate an unchanged crop value against a template shrunk after the crop was set', async () => {
+    const builder = await signupBuilder('crop-revalidation-builder');
+    await createGreenbeltLandlet('crop-revalidation-landlet');
+    await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'crop-revalidation-instance',
+        landletId: 'crop-revalidation-landlet',
+        templateId: 'crop-revalidation-template',
+        x: 1, y: 1,
+        crop: { x: 2 },
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    // Seller shrinks the template — the now-stale crop.x=2 no longer fits
+    // (width 4 -> 1.5), but nothing re-validates existing instances yet.
+    const shrunk = await api('/catalog/crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // An unrelated PATCH (just moving it) must still succeed even though it
+    // resends the same unchanged crop.x=2 -- matching src/main.js's
+    // syncUpdate, which always round-trips the mesh's full current state
+    // (crop included) on every edit, not just a sparse diff. A presence-only
+    // check ("did the body include crop?") would wrongly re-reject this.
+    const moved = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ x: 5, y: 5, crop: { x: 2 } }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instance.crop).toEqual({ x: 2 });
+    expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
+
+    // But actually changing the crop value now correctly 400s -- the caller
+    // IS asserting a new crop/template pairing that must hold today. 1.6 is
+    // above the shrunk template's own width (1.5), so it's out of bounds
+    // regardless of this fix.
+    const realCropChange = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ crop: { x: 1.6 } }),
+    }));
+    expect(realCropChange.response.status).toBe(400);
+
+    // Switching templateId is re-validated even with the same crop value,
+    // since it's now measured against a different template's bounds.
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-other-template',
+        name: 'Another extensible product',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 0.5 } } },
+      }),
+    });
+    const templateSwap = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ templateId: 'crop-revalidation-other-template', crop: { x: 2 } }),
+    }));
+    expect(templateSwap.response.status).toBe(400);
+  });
 });
 
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
@@ -4909,6 +5414,28 @@ describe('Landlet levels', () => {
     expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
   });
 
+  it('exposes ownedAreaM2 on the builder object, including level area (#312)', async () => {
+    const owner = await signupBuilder('levels-owned-area-owner');
+    await createGreenbeltLandletWithArea('levels-owned-area-landlet', 1000);
+    await claim('levels-owned-area-landlet', owner);
+    await api('/landlets/levels-owned-area-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    const expectedOwnedAreaM2 = 1000 + levelCapM2;
+
+    const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
+    expect(listed.ownedAreaM2).toBe(expectedOwnedAreaM2);
+
+    const me = await api('/builders/me', owner.session());
+    expect(me.body.builder.ownedAreaM2).toBe(expectedOwnedAreaM2);
+  });
+
+  it('leaves ownedAreaM2 null on a builder response that never recomputed it (plain create)', async () => {
+    const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owned Area Null Builder' }) });
+    expect(created.body.builder.ownedAreaM2).toBeNull();
+  });
+
   it('cascades landlet_levels cleanup on builder deletion, same as placed_instances/landlet_versions', async () => {
     const owner = await signupBuilder('levels-delete-owner');
     await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);
@@ -5075,6 +5602,13 @@ describe('Simulated purchases', () => {
       body: JSON.stringify({ quantity: 0 }),
     });
     expect(badQuantity.response.status).toBe(400);
+
+    // Found via backlog audit (#337): buyerLabel had no length cap at all.
+    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
+    });
+    expect(badBuyerLabel.response.status).toBe(400);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
@@ -5224,6 +5758,34 @@ describe('Simulated purchases', () => {
     const byTemplate = await api('/purchases?templateId=purchase-list-template');
     expect(byTemplate.response.status).toBe(200);
     expect(byTemplate.body.purchases).toHaveLength(2);
+  });
+
+  // The list above is capped at 100 rows with no pagination — reading a
+  // seller's own "N sales" summary straight off that capped list's own
+  // .length (the Seller modal's Sales panel, before this fix) silently
+  // undercounts once a product has passed 100 sales. totalCount is a
+  // dedicated, uncapped COUNT instead (same fix already applied to
+  // notifications' unread badge — see 'reports the true unread count past
+  // the notifications list's own 100-row cap' above).
+  it('reports the true purchase count past the purchases list\'s own 100-row cap, by both builderId and templateId', async () => {
+    const seller = await signupBuilder('purchase-count-seller');
+    await createTemplate('purchase-count-template', { priceCents: 500 });
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO purchases
+          (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity,
+           total_cents, commission_cents, builder_share_cents, platform_share_cents)
+        VALUES (?, 'purchase-count-instance', 'purchase-count-template', ?, 500, 1, 500, 10, 5, 5)
+      `).bind(`purchase-count-${i}`, seller.builderId));
+    await env.DB.batch(statements);
+
+    const byBuilder = await api(`/purchases?builderId=${seller.builderId}`, seller.session());
+    expect(byBuilder.body.purchases).toHaveLength(100);
+    expect(byBuilder.body.totalCount).toBe(105);
+
+    const byTemplate = await api('/purchases?templateId=purchase-count-template');
+    expect(byTemplate.body.purchases).toHaveLength(100);
+    expect(byTemplate.body.totalCount).toBe(105);
   });
 
   it('rejects a malformed JSON purchase body cleanly instead of a raw parse error', async () => {
@@ -5570,6 +6132,29 @@ describe('Authentication', () => {
     }));
     expect(again.response.status).toBe(200);
     expect(again.body.user.isAdmin).toBe(true);
+  });
+
+  // Found via backlog audit (#360): unlike every other secret-bearing auth
+  // endpoint in this file (login lockout, signup/password-reset's
+  // checkRateLimit), admin-bootstrap — the one endpoint that grants admin
+  // privilege — had no rate limit at all, letting a logged-in account brute
+  // force ADMIN_BOOTSTRAP_SECRET with no friction. Synthetic cf-connecting-ip
+  // per the sign-post/purchase rate-limit tests' own approach, so this
+  // test's bucket doesn't collide with the shared-admin bootstrap call in
+  // beforeAll or the test above (both on the default 'unknown' IP bucket).
+  it('rate-limits repeated admin-bootstrap attempts from the same client', async () => {
+    const account = await signupBuilder('bootstrap-rate-limit-tester');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 10; i++) {
+      const attempt = await api('/auth/admin-bootstrap', account.session({
+        method: 'POST', headers, body: JSON.stringify({ secret: 'guess-me' }),
+      }));
+      expect(attempt.response.status).toBe(403);
+    }
+    const limited = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST', headers, body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    expect(limited.response.status).toBe(429);
   });
 
   it('rejects signup with an already-registered email, case-insensitively', async () => {

@@ -370,18 +370,18 @@ export async function deleteCatalogTemplate(templateId) {
 // and (without the flag) the full history list.
 // No builderId param — the server derives "whose notifications" from the
 // session cookie, never from a client-supplied field.
-export async function fetchNotifications({ unreadOnly = false } = {}) {
+export async function fetchNotifications({ unreadOnly = false, cursor = null } = {}) {
   const query = new URLSearchParams();
   if (unreadOnly) query.set('unreadOnly', 'true');
-  const { notifications } = await requestJson(`/notifications?${query.toString()}`);
-  return notifications;
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/notifications?${query.toString()}`);
 }
 
-// The list above is capped at 100 rows server-side (no pagination) — fine
-// for the actual history list, but its own .length silently undercounts
-// once a builder has more than 100 unread (e.g. a popular auction's worth
-// of bid notifications). This hits a dedicated COUNT query instead, with
-// no such cap, for the unread badge specifically.
+// fetchNotifications' own list is now cursor-paginated (issue #320) — a
+// builder with more than one page of notifications would still make this
+// undercount if it just read that first page's own .length, same shape
+// as the bug #245/#288 already fixed for the unread badge specifically.
+// This hits a dedicated COUNT query instead, with no page cap at all.
 export async function fetchUnreadNotificationCount() {
   const { count } = await requestJson('/notifications/unread-count');
   return count;
@@ -697,12 +697,16 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}
   return purchase;
 }
 
+// The list is capped at 100 rows server-side (no pagination) — totalCount
+// comes from a dedicated, uncapped COUNT so callers can show the real total
+// even past that cap (same fix already applied to notifications' unread
+// badge — see fetchUnreadNotificationCount above).
 export async function fetchPurchases({ builderId, templateId } = {}) {
   const params = new URLSearchParams();
   if (builderId) params.set('builderId', builderId);
   if (templateId) params.set('templateId', templateId);
-  const { purchases } = await requestJson(`/purchases?${params.toString()}`);
-  return purchases;
+  const { purchases, totalCount } = await requestJson(`/purchases?${params.toString()}`);
+  return { purchases, totalCount };
 }
 
 // Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql).

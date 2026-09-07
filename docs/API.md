@@ -456,7 +456,10 @@ Requires a session (`401` without one). Request body: `{ "secret" }`.
 `404` if the Worker secret `ADMIN_BOOTSTRAP_SECRET` isn't configured in
 this environment at all (local dev's `.dev.vars`, or `wrangler secret put`
 in production — never committed, same pattern `ACCESS_PASSPHRASE`/
-`RESEND_API_KEY` already use). `403` if `secret` doesn't match it exactly.
+`RESEND_API_KEY` already use). Rate-limited per IP (10 attempts per
+window, `429` past that) — the only endpoint that grants admin privilege,
+so it gets the same brute-force protection as signup/password-reset.
+`403` if `secret` doesn't match it exactly.
 On success, promotes the calling account to admin and returns
 `{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
 who currently holds the secret can promote themselves (or, by sharing it
@@ -488,6 +491,20 @@ unreachable through the UI going forward (not deleted — their landlets/
 placed content stay intact) — an acceptable one-time cost specifically
 because this app has no real users yet; see the migration's own comment.
 
+`builders.last_active_at` (migrations/0067) is an internal-only column,
+never returned in any Builder object below — `getOrCreateBuilderForUser`
+in `worker/index.js` bumps it every time a session resolves *your*
+builder profile, whether that's to mutate something (claiming, placing,
+bidding, publishing, ...) or just to load it (`GET /api/builders/me`, hit
+on entering any mode — see "Build mode now requires a real, logged-in
+account" above). Per the owner's #325 decision: "I'm inclined to count
+any login as activity — even if only logging in for shopping or selling."
+It's the activity signal the inactivity-triggered auction job under "Land
+acquisition auctions" below runs on. `NULL` for any builder who hasn't
+resolved their profile at all since this column was added, deliberately
+not backfilled to any guessed value — the auction job treats `NULL` as
+"not yet tracked," not "long inactive."
+
 ### `GET /api/builders/me`
 
 Requires a session (`401` without one, the same `requireCurrentUser` gate
@@ -496,7 +513,7 @@ profile, auto-provisioning one if somehow missing (a defensive fallback —
 signup already creates it, so this should never actually need to):
 
 ```json
-{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "createdAt": "...", "updatedAt": "..." } }
+{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
 ```
 
 Idempotent — the same profile every call, never a new one.
@@ -510,6 +527,8 @@ Idempotent — the same profile every call, never a new one.
   "isPioneer": false,
   "pioneerRank": null,
   "dallersBalanceCents": 0,
+  "landCapM2": 1000,
+  "ownedAreaM2": 1000,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
@@ -519,6 +538,10 @@ Idempotent — the same profile every call, never a new one.
 recognition — see "Founding/pioneer recognition" below. `dallersBalanceCents`
 is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
 acquisition auctions" below for what can (and can't yet) change it.
+`landCapM2`/`ownedAreaM2` are "Land cap" below's cap itself and the real
+ground-plus-levels total counted against it — `ownedAreaM2` is `null`
+instead of a number on a response that didn't just recompute both (a
+plain create/rename), never a stale or silently-wrong figure.
 
 ### `GET /api/builders`
 
@@ -934,7 +957,11 @@ Required fields:
 - `dimensions.height`
 
 All dimensions must be numbers greater than zero. `priceCents`, when present,
-must be a non-negative integer.
+must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
+same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
+value large enough to lose precision past `Number.isSafeInteger` once
+persisted, or to mint an outsized `dallers_balance_cents` credit through a
+self-purchase or auction win.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
@@ -954,6 +981,14 @@ endpoint never reassigns a template to a different seller, the same way
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.
+
+When the existing template has a null `sellerId` (or a dangling one — see
+"unlocks review moderation" above), this endpoint requires no session at
+all, and its dimension-change notification fan-out makes it worth throttling
+even so: `429` after 20 PATCHes per 15 minutes from one client IP (see
+"Rate limiting" above), same shape as sign-post/community-calendar posting.
+A seller-owned template's PATCH is not rate-limited — the session
+requirement already bounds it.
 
 ### `DELETE /api/catalog/:templateId`
 
@@ -2033,6 +2068,19 @@ declared size. Every write endpoint below (single and batch create/update, and
 the draft-replace `PUT`) validates `crop` against the referenced template's
 declared extensible axes and `minM`/max-dimension bounds, rejecting anything
 outside them or naming an axis the template didn't declare extensible.
+`PATCH`/`PUT` on an existing single instance only re-runs this check when the
+request's `crop` and/or `templateId` actually differ from the instance's
+stored values, not merely whether the request body includes those keys —
+the frontend always resends an instance's full current state (crop
+included) on every edit, so a presence check alone would re-validate on
+every request. If a seller shrinks a template (or raises its `minM`) after
+an instance's crop was already validly set, that instance's carried-over
+crop is not re-validated against the template's new bounds on some later,
+unrelated field-only edit (moving it, renaming its label) that resends the
+same crop unchanged; only a request that actually changes `crop` to a new
+value, or switches `templateId` (even while reusing the same crop values,
+now measured against different bounds), is checked against the template's
+current bounds.
 
 `scale` is a real uniform scale factor, unrelated to `crop` and available on
 any instance regardless of whether its template is extensible — see
@@ -2186,6 +2234,9 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- A friend request or its acceptance (see "Friendship object" below): the
+  recipient is notified of a new request, and the requester is notified
+  once it's accepted.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -2211,26 +2262,29 @@ stays meaningful without a live template to point back at.
 ### `GET /api/notifications`
 
 Requires a session. Lists the calling account's own notifications, newest
-first, capped at 100 with no pagination past that (matching this API's
-other uncapped-in-practice lists, e.g. bundles/purchases). `builderId` is
-an optional query parameter — omitted, it defaults to the session's own
+first, cursor-paginated (issue #320) the same way as this API's other
+paginated lists (e.g. `/catalog`, `/auctions`) — `limit` (default and max
+100) and `cursor`/`nextCursor`, ordered `created_at DESC, notification_id
+DESC` (the tiebreak matters here since several notifications can share the
+same `created_at`, unlike this API's ascending-ordered lists). `builderId`
+is an optional query parameter — omitted, it defaults to the session's own
 builder; if present, it must equal the session's own builder ID (`403`
 otherwise — this was a spoofable "whose notifications" field before
 session-based authorization, see "Authorization model" above).
 `unreadOnly=true` narrows the list to `readAt IS NULL` server-side, for the
 frontend's full history list (the unread badge count uses
-`GET /api/notifications/unread-count` below instead, precisely because
-this list's own 100-row cap would undercount past that).
+`GET /api/notifications/unread-count` below instead, which has no page
+cap at all, rather than paging through this list just to count).
 
 ### `GET /api/notifications/unread-count`
 
 Requires a session. Returns `{ "count": N }` — the calling account's own
 unread notification count via a plain `SELECT COUNT(*)`, with no cap.
-Exists because `GET /api/notifications?unreadOnly=true`'s own 100-row cap
-made its list length an inaccurate stand-in for "how many unread" once a
-builder had more than 100 (e.g. a popular auction generating one bid
-notification per bid) — the frontend's notification badge uses this
-endpoint, not that list's length.
+Exists because reading `GET /api/notifications?unreadOnly=true`'s own
+list — even now that it's paginated — would mean paging through
+potentially many requests just to count "how many unread" (e.g. a popular
+auction generating one bid notification per bid); the frontend's
+notification badge uses this endpoint instead, never that list's length.
 
 ### `PATCH /api/notifications/:notificationId`
 
@@ -2330,7 +2384,8 @@ reference an existing builder. `409` if a friendship or pending request
 already exists between the two builders **in either direction** — sending
 B→A when A→B is already pending doesn't create a second row; the existing
 one has to be accepted or declined first. Returns `201` with the new
-`pending` friendship.
+`pending` friendship. Notifies `recipientBuilderId` (the generic
+notification system below, not a dedicated channel).
 
 ### `PATCH /api/friendships/:friendshipId`
 
@@ -2340,7 +2395,7 @@ accepting their own would skip the other side's consent entirely). Accepts
 a request: `{ "status": "accepted" }` is the only valid body — `400` on
 anything else. `404` if the friendship doesn't exist. There is no
 "decline" status; declining a pending request or removing an accepted
-friendship are both just `DELETE`.
+friendship are both just `DELETE`. Notifies the `requesterBuilderId`.
 
 ### `DELETE /api/friendships/:friendshipId`
 
@@ -2522,8 +2577,17 @@ itself.
 
 ### `GET /api/instances/:instanceId/posts`
 
-Lists every post on that sign, oldest first, capped at 200. `404` if the
-instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
+Lists the newest 200 posts on that sign, oldest first (within that window),
+plus a real `totalCount` (uncapped `COUNT(*)`) so a client can tell the
+list is truncated — `#356` fixed this from an earlier uncounted `LIMIT 200`
+with no `DESC`, which always selected the *oldest* 200 posts overall once a
+sign passed 200, silently hiding every post made after that (the newest
+ones always fell outside that window and could never appear). The response
+array's own order is unchanged (oldest first) — only which 200 rows the
+`LIMIT` window selects changed — since `rebuildSignSprites` (`src/main.js`)
+depends on that ordering to grab the *most recent* posts via
+`.slice(-SIGN_MAX_VISIBLE_POSTS)`. `404` if the instance doesn't exist.
+Returns `{ "posts": [...], "totalCount": <number> }` where each post is:
 
 ```json
 {
@@ -2538,9 +2602,12 @@ instance doesn't exist. Returns `{ "posts": [...] }` where each post is:
 ### `POST /api/instances/:instanceId/posts`
 
 Body: `{ "authorLabel", "text" }`, both required, `text` capped at 280
-characters. `400` if the target instance isn't currently flagged
-`isCommunitySign` — a post can't outlive or predate the flag that makes it
-visible at all. `404` if the instance doesn't exist.
+characters and `authorLabel` at 100 (same cap `buyerLabel`/review
+`authorLabel` share, see "Simulated purchases"/"Product reviews" below).
+`400` if the target instance isn't currently flagged `isCommunitySign` —
+a post can't outlive or predate the flag that makes it visible at all.
+`404` if the instance doesn't exist. Unauthenticated and rate-limited per
+client IP, the same as the purchase endpoint below.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
@@ -2692,9 +2759,10 @@ must choose one or the other for a given placed object.
 Same shape as the sign posts endpoints above, with `event`/`events` in
 place of `post`/`posts` and `eventId` in place of `postId`:
 `{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
-280 characters, `POST` rejected with `400` unless the target instance is
-currently flagged `isCommunityCalendar`, deletion cascades when the
-instance itself is deleted.
+280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
+`POST` rejected with `400` unless the target instance is currently flagged
+`isCommunityCalendar`, deletion cascades when the instance itself is
+deleted.
 
 **`POST` is not open the way sign posts' is.** Requires a session logged
 in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
@@ -2769,7 +2837,9 @@ the review's `authorLabel`, case-insensitively (`400` otherwise). An
 anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
-identity system carries everywhere else it's used. Any purchase counts,
+identity system carries everywhere else it's used. `authorLabel` is capped
+at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. Any
+purchase counts,
 refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
 can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
 enforced at the DB level): the purchase gate above is a one-time
@@ -3067,12 +3137,18 @@ neither has anywhere to attach to in this dev-mode backend yet:
   ledger (not a UI-only number) so a winning seller's proceeds land
   somewhere meaningful, ready for balance-gating to be added later without
   a schema change.
-- **Inactivity-triggered auto-listing.** Every auction reachable today is
-  builder-initiated (`POST /api/landlets/:id/auction`) — there's no
-  inactivity-detection job in this dev-mode backend to trigger one
-  automatically, so the spec's "default 24-hour duration for inactivity-
-  triggered listings" just applies as the uniform default for every
-  auction, voluntary or not.
+- ~~Inactivity-triggered auto-listing~~ — implemented (#325):
+  `autoAuctionInactiveLandlets` runs on the same Cloudflare Cron Trigger
+  as automatic world growth (see `scheduled()` near the top of
+  `worker/index.js`) and auto-starts a `startingBidCents: 0` auction
+  (same immediate land-cap release as a voluntary `$0` start, per "Land
+  cap" below) on any claimed landlet whose owner's `builders.last_active_at`
+  is more than `INACTIVITY_AUCTION_DAYS` (30, the owner's own call) in the
+  past — skipping any builder whose `last_active_at` is still `NULL`
+  (never tracked, not "long inactive" — see that column's own note
+  above). The spec's "default 24-hour duration for inactivity-triggered
+  listings" still just applies as the uniform default for every auction,
+  voluntary or not — there's no separate duration for this path.
 - **No scheduled resolution job.** There's no Cloudflare Cron Trigger
   wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
   resolves due auctions before returning results (`resolveDueAuctions` in
@@ -3118,12 +3194,13 @@ removed outright by a DB-level cascade, not transitioned to `ended` — see
 Requires a session (`401` without one). Starts a voluntary auction as the
 calling account's own builder — `builderId` is derived from the session,
 never a client-supplied field. Body: `{ "startingBidCents"?,
-"durationHours"? }`. `startingBidCents` defaults to `0`; `durationHours`
-defaults to `24` (docs/SPEC.md §5's own default), capped at `8760` (one
-year) as a sanity bound against a malformed request, not a spec
-requirement. `400` unless the calling builder is the landlet's current
-owner and the landlet is `claimed`. `409` if that landlet already has an
-active auction — one at a time per landlet.
+"durationHours"? }`. `startingBidCents` defaults to `0`, capped at
+100,000,000 (the same money-field sanity bound as `priceCents` above);
+`durationHours` defaults to `24` (docs/SPEC.md §5's own default), capped
+at `8760` (one year) as a sanity bound against a malformed request, not a
+spec requirement. `400` unless the calling builder is the landlet's
+current owner and the landlet is `claimed`. `409` if that landlet already
+has an active auction — one at a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather
@@ -3157,7 +3234,8 @@ capped at 200. `404` if the auction doesn't exist.
 
 Requires a session (`401` without one). Places a bid as the calling
 account's own builder — `builderId` is derived from the session, never a
-client-supplied field. Body: `{ "amountCents" }`. Resolves the
+client-supplied field. Body: `{ "amountCents" }`, capped at 100,000,000
+(the same money-field sanity bound as `priceCents` above). Resolves the
 auction first if it's due, then `409` if it's not (or is no longer)
 `active`. `400` if the bidder is the seller, or if `amountCents` is below
 the minimum acceptable amount:
@@ -3281,11 +3359,18 @@ section is gated on `currentLandletId`, so both still render even outside
 an active Build session — same as Land Cap above them. Two independent
 sections:
 
-- **Sell Your Land** — if the active identity currently owns a claimed
-  landlet with no active auction on it, a small form (starting bid in
-  dollars, duration in hours) and a Start Auction button. Once that
-  landlet has an active auction, this collapses to a one-line summary
-  instead of offering a second start form.
+- **Sell Your Land** — a landlet picker (#249) when the active identity
+  currently owns more than one claimed landlet at once (a normal state
+  since #199 lets a seller claim a second landlet the moment they start
+  a $0 auction, or get a first bid on any starting amount, on their
+  current one — before that auction even resolves), defaulting to
+  whichever landlet the builder is currently in Build mode on. Below the
+  picker (or standing alone, with no picker, for the common one-landlet
+  case): if the selected landlet has no active auction on it, a small
+  form (starting bid in dollars, duration in hours) and a Start Auction
+  button; once it has an active auction, this collapses to a one-line
+  summary instead of offering a second start form. Switching the picker
+  re-renders this status/form for whichever landlet is newly selected.
 - **Active Auctions** — every currently-active auction world-wide, each
   row showing the landlet, current high bid (or the starting bid if none
   yet), time remaining, and the unsold outcome in plain language. A
@@ -3394,9 +3479,16 @@ Settings' Build tab shows a "Land Cap" field (`renderLandCapField` in
 `src/main.js`) above Publish/Version History — a builder-account fact, not
 tied to the currently-active landlet, so it renders whenever a builder
 identity is active regardless of `currentMode`/`currentLandletId` (unlike
-Publish, which needs an active Build-mode landlet). It shows current owned
-area (summed from `GET /api/landlets?status=claimed&ownerBuilderId=...`)
-against `landCapM2` from `GET /api/builders`.
+Publish, which needs an active Build-mode landlet). It shows `ownedAreaM2`
+against `landCapM2`, both read straight off the builder object from
+`GET /api/builders` — not, as an earlier version of this panel did, a
+frontend-side sum over `GET /api/landlets?status=claimed&...` alone, which
+silently missed every level's own `cap_consumed_m2` once vertical
+construction shipped (#312). `ownedAreaM2` is the exact same
+ground-plus-levels total `recomputeLandCapsBatch` already computes
+server-side to grow `landCapM2` itself (see "The formula" above) — read
+back here rather than re-derived, so the two numbers can never drift out
+of sync with each other.
 
 ### Testing note
 
@@ -3513,7 +3605,9 @@ POST /api/instances/:instanceId/purchase
 Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one, anonymously," not a
 400, since a purchase has no other required input beyond which instance is
-being bought. Returns `201` with the created `purchase`:
+being bought. When present, `buyerLabel` is capped at 100 characters, same
+as sign-post/review `authorLabel`. Returns `201` with the created
+`purchase`:
 
 ```json
 {
