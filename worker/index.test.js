@@ -2338,6 +2338,13 @@ describe('Community signs', () => {
     });
     expect(tooLong.response.status).toBe(400);
 
+    // Found via backlog audit (#337): authorLabel had no length cap at all.
+    const authorLabelTooLong = await api('/instances/sign-with-posts/posts', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), text: 'Hello!' }),
+    });
+    expect(authorLabelTooLong.response.status).toBe(400);
+
     const posted = await api('/instances/sign-with-posts/posts', {
       method: 'POST',
       body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
@@ -2389,6 +2396,37 @@ describe('Community signs', () => {
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
     expect(afterDelete.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): unlike every other public, repeatable
+  // mutation in this file, posting to a community sign requires no
+  // session and had no rate limit at all. Synthetic cf-connecting-ip per
+  // the purchase rate-limit test's own approach, so this test's bucket
+  // doesn't collide with any other sign-post test above.
+  it('rate-limits repeated posts from the same client', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-rate-limit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/instances/sign-rate-limit-instance/posts', {
+        method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: `Post ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/sign-rate-limit-instance/posts', {
+      method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
   });
 });
 
@@ -2739,6 +2777,16 @@ describe('Product reviews', () => {
       body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
     });
     expect(rejected.response.status).toBe(404);
+  });
+
+  // Found via backlog audit (#337): authorLabel had no length cap at all.
+  it('rejects a review authorLabel over the length cap', async () => {
+    const templateId = await createTemplate('review-author-label-too-long');
+    const rejected = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'x'.repeat(101), rating: 5 }),
+    });
+    expect(rejected.response.status).toBe(400);
   });
 
   it('rejects a review from a shopper who never purchased the product', async () => {
@@ -5188,6 +5236,13 @@ describe('Simulated purchases', () => {
       body: JSON.stringify({ quantity: 0 }),
     });
     expect(badQuantity.response.status).toBe(400);
+
+    // Found via backlog audit (#337): buyerLabel had no length cap at all.
+    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
+    });
+    expect(badBuyerLabel.response.status).toBe(400);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {

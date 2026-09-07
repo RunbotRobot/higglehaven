@@ -939,7 +939,7 @@ async function handleProductReviews(request, db, route) {
     const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     // Standard practice on real marketplaces — a review is only credible
     // coming from someone who actually bought the thing. There's no real
     // account system here to check "did this person buy it" against, so
@@ -4510,6 +4510,13 @@ async function handleInstances(request, db, route, url) {
 // stays open to any shopper (authorLabel is free text, no account backs
 // it) but DELETE (moderation) is gated to the sign's own hosting landlet's
 // owner — see that branch's own comment.
+// Found via backlog audit (#337): unlike every other public, repeatable
+// mutation in this file (signup, password-reset, model-upload, purchase),
+// posting to a community sign requires no session and had no
+// checkRateLimit call at all — an anonymous caller could post an
+// unlimited number of times per second, unboundedly growing sign_posts.
+const SIGN_POST_RATE_LIMIT_MAX = 20;
+
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
 
@@ -4523,13 +4530,14 @@ async function handleSignPosts(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
+    await checkRateLimit(db, `sign-post:${clientIp(request)}`, SIGN_POST_RATE_LIMIT_MAX);
     const instance = await db.prepare('SELECT instance_id, is_community_sign FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     if (!instance.is_community_sign) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
+    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     const postId = `post-${crypto.randomUUID()}`;
@@ -4774,7 +4782,7 @@ async function finishPurchase(db, instance, template, landlet, input) {
   // the checkRateLimit call above closes the other half of that gap
   // (repeated smaller requests instead of one large one).
   if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
-  const buyerLabel = input.buyerLabel ? stringValue(input.buyerLabel, 'buyerLabel') : null;
+  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
 
   const unitPriceCents = template.price_cents;
   const totalCents = unitPriceCents * quantity;
@@ -5542,6 +5550,24 @@ function integerValue(value, field) {
 function stringValue(value, field) {
   if (typeof value !== 'string' || value.trim() === '') throw new HttpError(`${field} is required`, 400);
   return value.trim();
+}
+
+// Found via backlog audit (#337): sign-post authorLabel, review
+// authorLabel, and purchase buyerLabel are all free-text "who's this
+// from" display labels validated with plain stringValue — unlike every
+// other user-facing free-text field in this file (a post's own text
+// capped at 280, catalog search's q at 100, password at 200), none of
+// them had an upper bound. The frontend's own shopperLabel() prompt
+// (src/main.js) has no maxlength either, so nothing stops an arbitrarily
+// long value even through the normal UI, let alone a direct API call.
+const MAX_LABEL_LENGTH = 100;
+
+function labelValue(value, field) {
+  const label = stringValue(value, field);
+  if (label.length > MAX_LABEL_LENGTH) {
+    throw new HttpError(`${field} must be ${MAX_LABEL_LENGTH} characters or fewer`, 400);
+  }
+  return label;
 }
 
 function positiveNumber(value, field) {
