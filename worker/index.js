@@ -2008,9 +2008,19 @@ async function handleBundles(request, db, route, url) {
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
-    // also resend the current shared flag, and vice versa.
-    const name = input.name === undefined ? existing.name : labelValue(input.name, 'name');
-    const shared = input.shared === undefined ? Boolean(existing.shared) : input.shared === true;
+    // also resend the current shared flag, and vice versa. #468: this used
+    // to fill in whichever field the caller omitted from `existing` (read
+    // once at the top of this handler) and write BOTH fields back
+    // unconditionally — so two concurrent partial updates (a rename and a
+    // share-toggle landing close together) each recomputed the OTHER
+    // field from the same pre-race snapshot, and whichever UPDATE landed
+    // second silently clobbered the first with that stale value. Binding
+    // `null` for an omitted field and resolving it via COALESCE at the SQL
+    // level instead makes the merge atomic against whatever the row
+    // actually holds at UPDATE time, not a value read before this
+    // request's own await gap.
+    const name = input.name === undefined ? null : labelValue(input.name, 'name');
+    const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
     // existence check above and this UPDATE would silently affect 0 rows —
@@ -2018,8 +2028,8 @@ async function handleBundles(request, db, route, url) {
     // bundleFromRow(undefined) throws an uncaught TypeError (a 500) instead
     // of the clean 404 this should be. Same shape as #288's friendship fix.
     const result = await db.prepare(`
-      UPDATE bundles SET name = ?, shared = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, shared ? 1 : 0, route[1]).run();
+      UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, shared, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     return json({ bundle: bundleFromRow(updated) });

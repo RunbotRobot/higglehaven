@@ -1008,6 +1008,35 @@ describe('Bundles', () => {
     expect(missing.response.status).toBe(404);
   });
 
+  // #468: unlike the sequential test above, this fires a rename and a
+  // share-toggle PATCH genuinely concurrently (Promise.all) — the actual
+  // shape of the race, since the old code merged the omitted field in
+  // from a snapshot read at the top of each request, so whichever request
+  // resolved that read *last* still overwrote the other's just-written
+  // field with a stale value once its own UPDATE landed. Both edits must
+  // survive regardless of which request's DB read/write happens to
+  // interleave first.
+  it('does not let a concurrent rename and share-toggle clobber each other', async () => {
+    const owner = await signupBuilder('bundle-patch-race-owner');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const [renamed, shared] = await Promise.all([
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Raced rename' }),
+      })),
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ shared: true }),
+      })),
+    ]);
+    expect(renamed.response.status).toBe(200);
+    expect(shared.response.status).toBe(200);
+
+    const list = await api('/bundles', owner.session());
+    const final = list.body.bundles.find((b) => b.bundleId === bundleId);
+    expect(final).toMatchObject({ name: 'Raced rename', shared: true });
+  });
+
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
     const owner = await signupBuilder('bundle-delete-owner');
     const other = await signupBuilder('bundle-delete-other');
