@@ -103,8 +103,8 @@ console.log('events persisted server-side after the panel delete (should be 1, t
 // endpoint's own no-op-before-due behavior, are both real UI/API surfaces
 // this test can and does cover. The full due->fires->shows-"Fired at"
 // path needs scheduled_at forced into the past, which (unlike
-// worker/index.test.js) this suite has no direct D1 access to do — that
-// half is covered by worker/index.test.js's own dedicated case instead.
+// worker/land.test.js) this suite has no direct D1 access to do — that
+// half is covered by worker/land.test.js's own dedicated case instead.
 await page.click('#calendar-events-close-btn');
 await page.waitForTimeout(300);
 const scheduledPost = await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
@@ -137,7 +137,7 @@ console.log('isCommunityCalendar persisted after unflagging (should be false):',
 
 // (The 400 rejection for posting to a non-calendar instance, and
 // isCommunityCalendar's independence from isCommunitySign, are covered by
-// worker/index.test.js's own "Community calendar" describe block instead
+// worker/land.test.js's own "Community calendar" describe block instead
 // of here — same reasoning as community-signs.test.mjs's own note.)
 
 const pass = labelBefore.trim() === 'Community Calendar' &&

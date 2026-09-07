@@ -120,7 +120,7 @@ const afterDelete = (await fetchJson(`/api/catalog/${template.templateId}/review
 console.log('reviews persisted server-side after the panel delete (should be 1, the surviving one authored by "A Shopper"):', afterDelete.reviews.map((r) => r.authorLabel));
 
 // (Rating-bounds validation, the optional text field, average computation,
-// and cascade-on-template-delete are covered by worker/index.test.js's own
+// and cascade-on-template-delete are covered by worker/reviews-auth.test.js's own
 // "Product reviews" describe block instead of here.)
 
 const pass = !!template &&

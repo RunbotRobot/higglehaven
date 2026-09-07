@@ -1,6 +1,6 @@
 // Vertical construction — Build-mode UI (issue #169, sub-issue of #167's
 // tracking issue). The data model/API (#168) and the cap-cost math itself
-// are covered by worker/index.test.js's own "Landlet levels" tests; this
+// are covered by worker/land.test.js's own "Landlet levels" tests; this
 // covers only the real frontend flow this issue adds: digging down/
 // building up a level through #level-controls, navigating between
 // already-built levels, the cap-cost preview shown before committing, and

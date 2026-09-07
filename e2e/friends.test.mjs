@@ -10,7 +10,7 @@
 // here, not a live position). Also covers canceling a still-pending
 // outgoing request. Duplicate-request rejection, the self-request 400, and
 // the "declined" (recipient-side DELETE) path are covered instead by
-// worker/index.test.js's own "Friendships" describe block.
+// worker/profiles.test.js's own "Friendships" describe block.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
 
 const ALICE = 'Friends Suite Alice';

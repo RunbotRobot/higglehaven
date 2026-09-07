@@ -10,7 +10,7 @@
 // deterministically land ranks #1 and #2 — exercising the actual
 // user-facing change from a single "first claimer only" pioneer to a
 // whole ranked cohort. The cutoff itself (rank stops being granted past
-// the cohort size) is covered by worker/index.test.js instead, where
+// the cohort size) is covered by worker/profiles.test.js instead, where
 // filling 100 rows directly via the D1 binding is cheap; doing that
 // through 100 real browser-driven claims here would not be.
 import {
