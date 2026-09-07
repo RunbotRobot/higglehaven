@@ -377,6 +377,16 @@ export async function fetchNotifications({ unreadOnly = false } = {}) {
   return notifications;
 }
 
+// The list above is capped at 100 rows server-side (no pagination) — fine
+// for the actual history list, but its own .length silently undercounts
+// once a builder has more than 100 unread (e.g. a popular auction's worth
+// of bid notifications). This hits a dedicated COUNT query instead, with
+// no such cap, for the unread badge specifically.
+export async function fetchUnreadNotificationCount() {
+  const { count } = await requestJson('/notifications/unread-count');
+  return count;
+}
+
 export async function markNotificationRead(notificationId) {
   const { notification } = await requestJson(`/notifications/${encodeURIComponent(notificationId)}`, {
     method: 'PATCH',
