@@ -124,6 +124,36 @@ const aliceFriendshipsAfterCancel = (await fetchJson(alicePage, '/api/friendship
 const carolFriendshipsAfterCancel = aliceFriendshipsAfterCancel.filter((f) => f.otherBuilderId === carol.builderId);
 console.log('Alice has no friendship record with Carol after the cancel (should be 0):', carolFriendshipsAfterCancel.length);
 
+// Ambiguous label (docs/API.md's "+ Add Friend" contract: "an unmatched or
+// ambiguous label surfaces as a status message rather than a dead end") —
+// builder labels have no uniqueness constraint, so a second builder can
+// share Carol's exact name. Resolving "+ Add Friend" against that name
+// must not silently pick one of the two (it used to: a plain .find()
+// always resolved to whichever sorted first) and must not send a request
+// to either.
+const carolTwin = (await fetchJson(alicePage, '/api/builders', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ label: CAROL }),
+})).body.builder;
+
+// The friends modal from the cancel step above is still open — close it
+// first, same as the earlier accepted-friend re-check does, since it
+// otherwise intercepts the account-menu click below.
+await alicePage.click('#friends-close-btn');
+await alicePage.waitForTimeout(300);
+
+await openAccountMenu(alicePage);
+await alicePage.click('#friends-btn');
+await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
+alicePage.removeAllListeners('dialog');
+alicePage.on('dialog', (dialog) => dialog.accept(CAROL));
+await alicePage.click('#friends-add-btn');
+const aliceStatusAfterAmbiguous = await waitForText(alicePage, '#friends-status', 'Multiple builders');
+console.log('Alice status after an ambiguous name (should mention multiple builders):', aliceStatusAfterAmbiguous);
+const aliceOutgoingAfterAmbiguous = await alicePage.locator('#friends-outgoing-list .friend-row').filter({ hasText: CAROL }).count();
+console.log('Alice\'s outgoing list still has no request to either Carol after the ambiguous attempt (should be 0):', aliceOutgoingAfterAmbiguous);
+
 const pass = aliceOutgoingCount === 1 &&
   bobIncomingText.includes(ALICE) &&
   bobAcceptedText.includes(ALICE) &&
@@ -131,6 +161,9 @@ const pass = aliceOutgoingCount === 1 &&
   aliceOutgoingToCarolCount === 1 &&
   aliceOutgoingToCarolAfterCancel === 0 &&
   carolFriendshipsAfterCancel.length === 0 &&
+  aliceStatusAfterAmbiguous.includes('Multiple builders') &&
+  aliceOutgoingAfterAmbiguous === 0 &&
+  !!carolTwin.builderId &&
   errors.length === 0;
 await bobSession.browser.close();
 await finish(aliceSession.browser, { pass, label: 'Friend requests: send + accept + approximate location + cancel', errors });
