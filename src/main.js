@@ -2029,6 +2029,14 @@ function renderBundlePicker() {
         try {
           const updated = await updateBundle(bundle.bundleId, { name: next.trim() });
           Object.assign(bundle, updated);
+          // #435: a shared bundle intentionally exists as two separate JS
+          // objects, one per tab's own fetch (myBundles/communityBundles)
+          // — the Object.assign above only ever patches whichever tab's
+          // copy this rename was triggered from, leaving the other tab's
+          // tile showing the stale name. Refetching both, the same fix
+          // the share-toggle handler below already uses for the same
+          // divergence risk, keeps both tabs' copies in sync.
+          [myBundles, communityBundles] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           renderBundlePicker();
         } catch (err) {
           console.warn('Could not rename bundle:', err);
