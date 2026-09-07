@@ -2779,6 +2779,31 @@ async function showAxisPreview(template, container, highlightAxes) {
       : 'Arrows show X (red) / Y (green) / Z (blue). Check axes below to make them extensible. Drag to look around.';
 }
 
+// #457: metadataSaveBusy used to live entirely inside renderSellerList()'s
+// per-template closure, so a save left in flight when the Seller modal is
+// closed and reopened (renderSellerList() runs fresh each open, per
+// openSellerModal() below) got a brand-new `metadataSaveBusy = false` with
+// no memory of the still-in-flight PATCH — re-enabling the exact overlap
+// #424 was added to prevent. Keyed by templateId (not a single flag) since
+// a save against one product must never block a save against another.
+const metadataSaveBusyByTemplateId = new Map();
+
+// A row's own metadataSaveButtons closure array (see inside the loop below)
+// only ever points at whichever DOM nodes existed at the moment it was
+// captured — stale once a modal close/reopen rebuilds the row (#457), so a
+// save's completion couldn't re-enable a NEW row's buttons through it.
+// Looking the row up fresh by data-template-id instead always finds
+// whichever row is actually in the DOM right now, in this render or a
+// later one, and every metadata-save button carries the shared
+// .metadata-save-btn hook class (alongside its own specific class) so they
+// can all be found here in one query regardless of which panel they save.
+function syncMetadataSaveButtonsDisabled(templateId) {
+  const busy = metadataSaveBusyByTemplateId.get(templateId) === true;
+  const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(templateId))}"]`);
+  if (!row) return;
+  for (const btn of row.querySelectorAll('.metadata-save-btn')) btn.disabled = busy;
+}
+
 function renderSellerList() {
   // Row DOM is about to be thrown away — an open preview would be left
   // pointing at a detached container, and any per-row event handler
@@ -2796,6 +2821,10 @@ function renderSellerList() {
   for (const template of templates) {
     const row = document.createElement('div');
     row.className = 'seller-row';
+    // Lets syncMetadataSaveButtonsDisabled (#457, see its own comment
+    // above) find this row again from outside this closure, even after a
+    // modal close/reopen has replaced it with a different row instance.
+    row.dataset.templateId = String(template.templateId);
 
     // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
     // Extensibility, Flooring) independently does
@@ -2810,8 +2839,15 @@ function renderSellerList() {
     // serializes them, the same idiom as undoRedoBusy/levelActionBusy
     // elsewhere in this file — every metadata-editing button on this row
     // registers itself here and is disabled while any one save is in
-    // flight.
-    let metadataSaveBusy = false;
+    // flight. Backed by the module-level metadataSaveBusyByTemplateId map
+    // (see its own comment above) rather than a local variable, so the
+    // flag survives this row's own DOM/closures being thrown away by a
+    // modal close/reopen (#457) while an earlier save is still pending.
+    const isMetadataSaveBusy = () => metadataSaveBusyByTemplateId.get(template.templateId) === true;
+    const setMetadataSaveBusy = (busy) => {
+      if (busy) metadataSaveBusyByTemplateId.set(template.templateId, true);
+      else metadataSaveBusyByTemplateId.delete(template.templateId);
+    };
     const metadataSaveButtons = [];
 
     // Dims/actions/preview/extensibility only show once this row is
@@ -2913,12 +2949,12 @@ function renderSellerList() {
     digitalGoodStatus.className = 'seller-digital-good-status';
 
     const digitalGoodSaveBtn = document.createElement('button');
-    digitalGoodSaveBtn.className = 'seller-digital-good-save-btn';
+    digitalGoodSaveBtn.className = 'seller-digital-good-save-btn metadata-save-btn';
     digitalGoodSaveBtn.type = 'button';
     digitalGoodSaveBtn.textContent = 'Save Digital Good';
     metadataSaveButtons.push(digitalGoodSaveBtn);
     digitalGoodSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       digitalGoodStatus.textContent = '';
       digitalGoodStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2927,7 +2963,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -2938,8 +2974,13 @@ function renderSellerList() {
         digitalGoodStatus.textContent = err.message || 'Could not save.';
         digitalGoodStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        // Re-enable via a fresh DOM lookup (#457), not metadataSaveButtons
+        // directly -- if the modal was closed and reopened while this save
+        // was in flight, that array points at now-detached buttons from a
+        // row that no longer exists, and the CURRENT row (same templateId,
+        // freshly rendered) would otherwise stay disabled forever.
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     digitalGoodPanel.appendChild(digitalGoodSaveBtn);
@@ -2989,12 +3030,12 @@ function renderSellerList() {
     noReturnsStatus.className = 'seller-no-returns-status';
 
     const noReturnsSaveBtn = document.createElement('button');
-    noReturnsSaveBtn.className = 'seller-no-returns-save-btn';
+    noReturnsSaveBtn.className = 'seller-no-returns-save-btn metadata-save-btn';
     noReturnsSaveBtn.type = 'button';
     noReturnsSaveBtn.textContent = 'Save Returns Policy';
     metadataSaveButtons.push(noReturnsSaveBtn);
     noReturnsSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       noReturnsStatus.textContent = '';
       noReturnsStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3003,7 +3044,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.noReturns;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -3014,8 +3055,8 @@ function renderSellerList() {
         noReturnsStatus.textContent = err.message || 'Could not save.';
         noReturnsStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     noReturnsPanel.appendChild(noReturnsSaveBtn);
@@ -3064,12 +3105,12 @@ function renderSellerList() {
     domesticOnlyStatus.className = 'seller-domestic-only-status';
 
     const domesticOnlySaveBtn = document.createElement('button');
-    domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn';
+    domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn metadata-save-btn';
     domesticOnlySaveBtn.type = 'button';
     domesticOnlySaveBtn.textContent = 'Save Shipping';
     metadataSaveButtons.push(domesticOnlySaveBtn);
     domesticOnlySaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3078,7 +3119,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.domesticOnly;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -3089,8 +3130,8 @@ function renderSellerList() {
         domesticOnlyStatus.textContent = err.message || 'Could not save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
@@ -3441,16 +3482,16 @@ function renderSellerList() {
     // or Edit Size, so a plain immediate-PATCH toggle button fits better
     // than a collapsed panel with its own Save step.
     const flooringToggleBtn = document.createElement('button');
-    flooringToggleBtn.className = 'seller-row-action-btn';
+    flooringToggleBtn.className = 'seller-row-action-btn metadata-save-btn';
     flooringToggleBtn.type = 'button';
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
     metadataSaveButtons.push(flooringToggleBtn);
     flooringToggleBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
@@ -3464,8 +3505,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not update.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     actions.appendChild(flooringToggleBtn);
@@ -3539,13 +3580,13 @@ function renderSellerList() {
     }
 
     const saveBtn = document.createElement('button');
-    saveBtn.className = 'seller-save-btn';
+    saveBtn.className = 'seller-save-btn metadata-save-btn';
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
     metadataSaveButtons.push(saveBtn);
 
     saveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const nextExtensible = {};
@@ -3566,7 +3607,7 @@ function renderSellerList() {
         }
         nextExtensible[axis] = { minM };
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         // A full replace, not a merge — validateTemplate on the worker
@@ -3590,8 +3631,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
 
@@ -3810,6 +3851,15 @@ function renderSellerList() {
     });
 
     details.appendChild(rowStatus);
+    // #457: a save begun before the modal was closed can still be in
+    // flight against this templateId when it's reopened and this row is
+    // rebuilt from scratch — disable this row's own freshly-created
+    // buttons up front in that case, rather than leaving them clickable
+    // and relying solely on isMetadataSaveBusy()'s silent no-op inside
+    // each handler (correct, but reads as unresponsive buttons).
+    if (isMetadataSaveBusy()) {
+      for (const btn of metadataSaveButtons) btn.disabled = true;
+    }
     sellerListEl.appendChild(row);
   }
 }
