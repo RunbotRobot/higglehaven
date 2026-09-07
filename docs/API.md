@@ -3623,6 +3623,21 @@ auction) — matching the existing "a new owner gets the land, not the
 previous owner's stuff on it" reasoning already applied to
 `placed_instances`/`landlet_versions` there.
 
+### Instance placement is bounded by purchased levels (#394)
+
+Every instance create/update path (`POST/PUT/PATCH /api/instances*`,
+including the batch and draft-save endpoints) rejects a `z` outside the
+lándlet's currently *purchased* vertical extent — `400` if `z` falls
+outside `[min(0, ...levelIndices) * LEVEL_HEIGHT_M - LEVEL_HEIGHT_M / 2,
+max(0, ...levelIndices) * LEVEL_HEIGHT_M + LEVEL_HEIGHT_M / 2]` (the half-
+level slack accounts for an instance's own thickness carrying it slightly
+past a level's exact boundary). A lándlet with no `landlet_levels` rows
+still has the implicit ground level at index `0`, so its instances must
+sit within one level's height of the ground. This closes a gap where
+placing an instance directly could build arbitrarily high or deep without
+ever calling `POST /api/landlets/:landletId/levels` — the only place land
+cap is actually charged for going vertical.
+
 ## Simulated purchases
 
 Land cap's own commentary above flags the actual gap directly: this
@@ -4565,9 +4580,15 @@ the built-in catalog:
   page's catalog references in one D1 query. The response reports
   `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
   reached the end of the bucket. Objects are collected before the bulk delete
-  so deleting them cannot invalidate an in-progress R2 cursor. Set boolean
-  `dryRun` to `true` to return the same proposed targets and reclaimed-byte
-  total without deleting anything; the response echoes `dryRun`.
+  so deleting them cannot invalidate an in-progress R2 cursor. Immediately
+  before that delete (not only during the earlier per-page scan), the full
+  target set is re-checked against `catalog_templates` in one more query, and
+  any object referenced by a template created in the meantime is dropped
+  from the response and left alone — narrowing (not eliminating; R2 and D1
+  aren't a single transaction) the window for a template creation racing
+  this cleanup. Set boolean `dryRun` to `true` to return the same proposed
+  targets and reclaimed-byte total without deleting anything (including that
+  same final re-check); the response echoes `dryRun`.
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
@@ -4580,7 +4601,10 @@ the built-in catalog:
   upload from R2 so dev model iterations do not permanently consume the
   application storage allowance. Uploads still referenced by a catalog
   template return `409`; delete the catalog template first. Missing uploads
-  return `404`. `GET`/`HEAD` above stay unauthenticated — serving an
+  return `404`. The referenced-model check runs as the very last step before
+  the actual R2 delete (after confirming the object exists), narrowing the
+  window against a template referencing this model being created in
+  between. `GET`/`HEAD` above stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
