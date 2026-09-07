@@ -320,7 +320,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'sellers') {
-    return handleSellers(request, env.DB, route);
+    return handleSellers(request, env, env.DB, route);
   }
 
   if (route[0] === 'notifications') {
@@ -1510,7 +1510,11 @@ async function sellerExists(db, sellerId) {
 // any of their existing templates' seller_id pointing at an ID no longer
 // in the roster, the same way a template can already have a null
 // seller_id for an unclaimed custom upload.
-async function handleSellers(request, db, route) {
+async function handleSellers(request, env, db, route) {
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
+    return handleSellerStripeAccount(request, env, db);
+  }
+
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     return handleMySeller(request, db);
   }
@@ -3003,6 +3007,179 @@ async function sendEmail(env, { to, subject, html, text }) {
     return false;
   }
   return true;
+}
+
+// ---- Stripe Connect (Custom accounts) — #452, first leaf under #347's
+// real-money payment processing. Owner-confirmed account type (see #347's
+// comments): Stripe is entirely invisible to the seller, higglehaven
+// builds 100% of the onboarding UI itself and submits collected KYC info
+// straight to Stripe's Accounts API. Same guarded-secret shape sendEmail/
+// RESEND_API_KEY established above, except unlike a best-effort
+// notification email, a seller mid-onboarding needs to actually know it
+// didn't go through — so stripeConfigured is checked explicitly by the
+// route handler below and returns a real error, not a silent no-op.
+function stripeConfigured(env) {
+  return !!env.STRIPE_SECRET_KEY;
+}
+
+// Stripe's REST API takes application/x-www-form-urlencoded bodies with
+// bracket-notation nesting for nested objects/arrays (e.g.
+// individual[dob][day]=12), not JSON — this flattens a plain JS object
+// into that shape recursively.
+function flattenStripeParams(value, prefix) {
+  const pairs = [];
+  for (const [key, val] of Object.entries(value)) {
+    if (val === undefined || val === null) continue;
+    const paramKey = prefix ? `${prefix}[${key}]` : key;
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      pairs.push(...flattenStripeParams(val, paramKey));
+    } else {
+      pairs.push([paramKey, String(val)]);
+    }
+  }
+  return pairs;
+}
+
+async function stripeRequest(env, method, path, params) {
+  const response = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method,
+    headers: {
+      authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
+  }
+  return data;
+}
+
+// Stripe's own account.requirements is the source of truth for what's
+// still needed — this just collapses it into one of a few states the
+// frontend can show without re-deriving Stripe's own logic.
+function deriveStripeOnboardingStatus(account) {
+  if (account.requirements?.disabled_reason) return 'action_needed';
+  if ((account.requirements?.currently_due || []).length > 0) return 'requirements_due';
+  if (account.charges_enabled && account.payouts_enabled) return 'complete';
+  return 'pending';
+}
+
+function boundedIntegerValue(value, field, min, max) {
+  const number = integerValue(value, field);
+  if (number < min || number > max) throw new HttpError(`${field} must be between ${min} and ${max}`, 400);
+  return number;
+}
+
+// Individual-only for now (the common case for a marketplace seller) —
+// business_type: 'company' would need a different, larger field set
+// (business name, EIN, representative/owner info) and is deliberately
+// left for a fast-follow once an actual seller needs it, per #452's own
+// "not in scope" note on document-verification UI.
+function buildStripeIndividualParams(input, userEmail, request) {
+  const individual = input.individual || {};
+  const externalAccount = input.externalAccount || {};
+  const country = stringValue(individual.addressCountry, 'individual.addressCountry').toUpperCase();
+  const ssnLast4 = stringValue(individual.ssnLast4, 'individual.ssnLast4');
+  if (!/^\d{4}$/.test(ssnLast4)) throw new HttpError('individual.ssnLast4 must be exactly 4 digits', 400);
+
+  return {
+    country,
+    email: userEmail,
+    business_type: 'individual',
+    business_profile: { product_description: 'higglehaven marketplace seller' },
+    capabilities: { transfers: { requested: 'true' }, card_payments: { requested: 'true' } },
+    individual: {
+      first_name: stringValue(individual.firstName, 'individual.firstName'),
+      last_name: stringValue(individual.lastName, 'individual.lastName'),
+      email: userEmail,
+      dob: {
+        day: boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, 31),
+        month: boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12),
+        year: boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear()),
+      },
+      ssn_last_4: ssnLast4,
+      address: {
+        line1: stringValue(individual.addressLine1, 'individual.addressLine1'),
+        city: stringValue(individual.addressCity, 'individual.addressCity'),
+        state: stringValue(individual.addressState, 'individual.addressState'),
+        postal_code: stringValue(individual.addressPostalCode, 'individual.addressPostalCode'),
+        country,
+      },
+    },
+    external_account: {
+      object: 'bank_account',
+      country,
+      currency: stringValue(externalAccount.currency, 'externalAccount.currency').toLowerCase(),
+      routing_number: stringValue(externalAccount.routingNumber, 'externalAccount.routingNumber'),
+      account_number: stringValue(externalAccount.accountNumber, 'externalAccount.accountNumber'),
+    },
+    tos_acceptance: {
+      date: Math.floor(Date.now() / 1000),
+      ip: clientIp(request),
+    },
+  };
+}
+
+function stripeAccountStatusJson(env, row) {
+  return {
+    configured: stripeConfigured(env),
+    connected: !!row.stripe_account_id,
+    status: row.stripe_onboarding_status || 'not_started',
+    requirementsCurrentlyDue: JSON.parse(row.stripe_requirements_due || '[]'),
+    updatedAt: row.stripe_updated_at,
+  };
+}
+
+// GET returns the seller's current onboarding state; POST creates the
+// Stripe Custom account on first submission or updates it (e.g. after
+// Stripe comes back asking for more via requirements.currently_due) on
+// every submission after. No KYC field (name, DOB, SSN, bank account) is
+// ever persisted in our own DB — see the migration's own comment — only
+// Stripe's account id and derived onboarding status are.
+async function handleSellerStripeAccount(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionSeller = await getOrCreateSellerForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json(stripeAccountStatusJson(env, sessionSeller));
+  }
+
+  if (request.method === 'POST') {
+    const input = await readJson(request);
+    const params = buildStripeIndividualParams(input, user.email, request);
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+
+    let account;
+    if (sessionSeller.stripe_account_id) {
+      // country can't be changed on an existing Stripe account.
+      const { country, ...updateParams } = params;
+      account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
+    } else {
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+    }
+
+    const status = deriveStripeOnboardingStatus(account);
+    const requirementsDue = account.requirements?.currently_due || [];
+    const nowIso = new Date().toISOString();
+    await db.prepare(`
+      UPDATE sellers
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      WHERE seller_id = ?
+    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionSeller.seller_id).run();
+
+    return json(stripeAccountStatusJson(env, {
+      stripe_account_id: account.id,
+      stripe_onboarding_status: status,
+      stripe_requirements_due: JSON.stringify(requirementsDue),
+      stripe_updated_at: nowIso,
+    }));
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handleAuth(request, env, db, route, url) {
