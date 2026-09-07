@@ -27,18 +27,23 @@ export default defineConfig(async () => {
       // (Playwright) or manual verification instead, per this project's
       // established convention (see docs/API.md).
       include: ['worker/**/*.test.js', 'src/**/*.test.js'],
-      // worker/index.test.js shares one D1 instance across its entire,
-      // ever-growing set of tests (one instance per test *file*, not per
-      // test) — by the time a test near the file's tail runs, hundreds of
-      // prior tests' setup have accumulated enough real data that even
-      // ordinary, lightweight queries intermittently miss vitest's default
-      // 5000ms per-test timeout (nearby passing tests already clock
-      // 4000-4700ms). This is whole-suite degradation as the file grows,
-      // not a cost problem with any specific test, so it's fixed here
-      // globally rather than as scattered per-test overrides (one test
-      // already carries its own explicit 20000ms override for a genuinely
-      // separate reason — a 40-request concurrent burst — this matches
-      // that same value for consistency).
+      // A single worker/*.test.js file shares one D1 instance across its
+      // own tests (one instance per test *file*, not per test), so a file
+      // with enough tests accumulates real data that can make ordinary,
+      // lightweight queries intermittently miss vitest's default 5000ms
+      // per-test timeout. This used to be the whole (6683-line) worker/
+      // index.test.js at once — see #385, where its ever-growing single
+      // shared D1 instance eventually crashed CI outright with "Maximum
+      // call stack size exceeded" rather than just timing out, once total
+      // suite size crossed some threshold. It's now split into several
+      // files by domain (worker-api/land/profiles/commerce/reviews-auth,
+      // sharing worker/test-helpers.js) so each gets its own fresh
+      // instance and the accumulation resets at every file boundary —
+      // but the raised timeout stays as a global default rather than a
+      // scattered per-test override, since a single busy file can still
+      // reasonably approach it (one test already carries its own explicit
+      // 20000ms override for a genuinely separate reason — a 40-request
+      // concurrent burst — this matches that same value for consistency).
       testTimeout: 20000,
     },
   };

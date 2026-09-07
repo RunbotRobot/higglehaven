@@ -4,7 +4,7 @@ import { fetchAllAuctions, fetchAllLandlets } from './api.js';
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
 // the pagination/param-threading logic itself, not the backend (that's
-// worker/index.test.js's job). See vitest.config.js's own note on why
+// worker/*.test.js's job). See vitest.config.js's own note on why
 // src/**/*.test.js is for dependency-free modules like this one.
 afterEach(() => {
   vi.unstubAllGlobals();

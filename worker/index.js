@@ -265,12 +265,18 @@ async function handleUploadedAsset(request, env) {
     // isn't a meaningful bar here.
     await requireAdmin(request, env.DB);
     const modelUrl = `/uploads/${key}`;
+    const existing = await env.MODELS.head(key);
+    if (!existing) return json({ error: 'Not found' }, 404);
+    // #376: re-checked as the very last thing before the actual R2 delete
+    // (not at the top of this handler) to keep this as close as this
+    // codebase's D1-vs-R2 split allows to the atomic check-then-act idiom
+    // used everywhere else here (auction bids, reviews, friendships) — a
+    // template referencing this model created between an earlier check and
+    // now would otherwise still lose its file out from under it.
     const referenced = await env.DB.prepare(`
       SELECT template_id FROM catalog_templates WHERE model_url = ? LIMIT 1
     `).bind(modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced by a catalog template', 409);
-    const existing = await env.MODELS.head(key);
-    if (!existing) return json({ error: 'Not found' }, 404);
     await env.MODELS.delete(key);
     return json({ deleted: true });
   }
@@ -582,11 +588,28 @@ async function handleModelCleanup(request, env) {
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (!completeScan && targets.length < maxDeletes);
 
-  if (!dryRun && targets.length > 0) await env.MODELS.delete(targets.map((object) => object.key));
+  // #376: each target's "unreferenced" check above ran against whatever
+  // page it was scanned on, potentially many awaits before this point (the
+  // scan can span several 100-object pages) — a catalog template could
+  // have started referencing one of them in the meantime. Re-verify against
+  // the final target set immediately before the actual delete, as close to
+  // the R2 call as this D1-vs-R2 split allows, and only delete/report
+  // whatever is still genuinely unreferenced.
+  let toDelete = targets;
+  if (targets.length > 0) {
+    const targetUrls = targets.map((object) => `/uploads/${object.key}`);
+    const placeholders = targetUrls.map(() => '?').join(', ');
+    const stillReferenced = await env.DB.prepare(`
+      SELECT DISTINCT model_url FROM catalog_templates WHERE model_url IN (${placeholders})
+    `).bind(...targetUrls).all();
+    const rescuedUrls = new Set(stillReferenced.results.map((row) => row.model_url));
+    toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
+  }
+  if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
   return json({
-    targetModelUrls: targets.map((object) => `/uploads/${object.key}`),
-    targetCount: targets.length,
-    reclaimedBytes: targets.reduce((sum, object) => sum + object.size, 0),
+    targetModelUrls: toDelete.map((object) => `/uploads/${object.key}`),
+    targetCount: toDelete.length,
+    reclaimedBytes: toDelete.reduce((sum, object) => sum + object.size, 0),
     completeScan,
     dryRun,
   });
@@ -2103,9 +2126,38 @@ async function handleLandletLevels(request, db, route) {
       );
     }
     const levelId = `level-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
-    `).bind(levelId, landletId, levelIndex, capConsumedM2).run();
+    // Found via backlog audit (#395): levelIndex above was computed from a
+    // plain SELECT snapshot, then this was a plain INSERT — a concurrent
+    // add in the same direction could compute the same levelIndex from its
+    // own stale read, and the loser's INSERT would throw a raw UNIQUE
+    // constraint violation (an unshaped 500) instead of this file's usual
+    // clean 409. Folding the "still the same extent" check into the
+    // INSERT's own WHERE clause (same idiom as the auction-start guard
+    // above) makes the whole read-derived-index-then-insert one atomic
+    // statement: it only succeeds if the table's current extent in this
+    // direction still matches what levelIndex was computed from, catching
+    // both a same-direction race (another add landed the same index first)
+    // and a cross-direction one (a concurrent remove shifted the extent
+    // out from under this read).
+    // A ground floor of 0 has to be included in the extent comparison even
+    // when no row exists on this side yet (e.g. adding the first "down"
+    // level while "up" levels already exist) — mirrors the Math.max(0, ...)/
+    // Math.min(0, ...) floor levelIndex itself was just computed with above,
+    // via a synthetic zero row unioned into the scan.
+    const extentBefore = input.direction === 'up' ? levelIndex - 1 : levelIndex + 1;
+    const inserted = await db.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2)
+      SELECT ?, ?, ?, ?
+      WHERE (
+        SELECT ${input.direction === 'up' ? 'MAX' : 'MIN'}(level_index) FROM (
+          SELECT level_index FROM landlet_levels WHERE landlet_id = ? UNION ALL SELECT 0
+        )
+      ) = ?
+        AND NOT EXISTS (SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = ?)
+    `).bind(levelId, landletId, levelIndex, capConsumedM2, landletId, extentBefore, landletId, levelIndex).run();
+    if (inserted.meta.changes === 0) {
+      throw new HttpError('This landlet\'s levels changed — please retry', 409);
+    }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
     return json({ level: levelFromRow(row) }, 201);
@@ -2116,14 +2168,29 @@ async function handleLandletLevels(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const levelIndex = integerValue(route[3], 'levelIndex');
-    const levels = await landletLevels(db, landletId);
-    const outermost = levelIndex > 0
-      ? Math.max(0, ...levels.map((level) => level.level_index))
-      : Math.min(0, ...levels.map((level) => level.level_index));
-    if (levelIndex === 0 || outermost !== levelIndex) {
+    if (levelIndex === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
     }
-    await db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ? AND level_index = ?').bind(landletId, levelIndex).run();
+    // Found via backlog audit (#395): the outermost check below used to run
+    // against a plain SELECT snapshot, then the actual DELETE was a
+    // separate, unguarded statement — a concurrent add extending past this
+    // level (between the read and the delete) would let this DELETE still
+    // remove what's no longer the outermost row, leaving a gap the
+    // landlet_levels schema comment's own "no gaps" adjacency rule
+    // promises never happens. Re-checking "is this still the current
+    // outermost in its own direction" as part of the DELETE's own WHERE
+    // clause closes that window.
+    const deleted = await db.prepare(`
+      DELETE FROM landlet_levels
+      WHERE landlet_id = ? AND level_index = ?
+        AND level_index = (
+          SELECT CASE WHEN ? > 0 THEN MAX(level_index) ELSE MIN(level_index) END
+          FROM landlet_levels WHERE landlet_id = ?
+        )
+    `).bind(landletId, levelIndex, levelIndex, landletId).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Only the outermost existing level can be removed', 409);
+    }
     await recomputeLandCap(db, landlet.owner_builder_id);
     return json({ deleted: true });
   }
@@ -3529,19 +3596,32 @@ async function handleLandlets(request, db, route, url) {
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
     );
-    await db.prepare(`
+    // Guarded on status/owner_builder_id still matching what was just read
+    // above — without this, a concurrent claim (or auction resolution)
+    // landing between that read and this write would get silently
+    // clobbered back to the stale values this request pinned status/
+    // ownerBuilderId to, undoing the claim with no trace (this endpoint's
+    // own response would even report success). `IS` rather than `=` so the
+    // owner_builder_id IS NULL case binds correctly. A lost race surfaces
+    // as 409 so the caller knows to refetch, the same shape as every other
+    // concurrent-write guard in this file.
+    const result = await db.prepare(`
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
           land_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
+      WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
       landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
+      existing.status, existing.owner_builder_id,
     ).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ landlet });
   }
 
@@ -3558,7 +3638,14 @@ async function handleLandlets(request, db, route, url) {
     if (existing.owner_builder_id !== null) {
       throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
     }
-    await db.prepare('DELETE FROM landlets WHERE landlet_id = ?').bind(route[1]).run();
+    // Re-checked as part of the DELETE itself, not just the read above — a
+    // claim landing in between would otherwise still get deleted out from
+    // under its new owner, matching the same race the PUT/PATCH guard just
+    // above this now also closes.
+    const result = await db.prepare('DELETE FROM landlets WHERE landlet_id = ? AND owner_builder_id IS NULL').bind(route[1]).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
+    }
     return json({ deleted: true });
   }
 
@@ -3612,6 +3699,7 @@ async function handleLandletDraft(request, db, landletId) {
       ids.add(instance.instanceId);
     }
     await assertCropWithinTemplateBounds(db, instances);
+    await assertInstanceZWithinLevels(db, instances);
 
     const versionId = crypto.randomUUID();
     const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
@@ -4525,6 +4613,7 @@ async function handleInstances(request, db, route, url) {
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     await assertCropWithinTemplateBounds(db, instances);
+    await assertInstanceZWithinLevels(db, instances);
     const existingInstances = await getInstancesById(db, instanceIds);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
@@ -4594,6 +4683,7 @@ async function handleInstances(request, db, route, url) {
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
+    await assertInstanceZWithinLevels(db, [instance]);
     await db.prepare(`
       INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -4635,6 +4725,14 @@ async function handleInstances(request, db, route, url) {
       || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
     if (cropOrTemplateChanged) {
       await assertCropWithinTemplateBounds(db, [instance]);
+    }
+    // Same "only re-check what actually changed" reasoning as crop above:
+    // an unrelated PATCH (renaming a label, say) always resends the
+    // instance's full current state, so re-validating an untouched z
+    // against the landlet's *current* levels would risk bricking existing
+    // instances if a level was ever removed out from under them.
+    if (instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
+      await assertInstanceZWithinLevels(db, [instance]);
     }
     await db.prepare(`
       UPDATE placed_instances
@@ -5229,6 +5327,44 @@ async function assertCropWithinTemplateBounds(db, instances) {
           400,
         );
       }
+    }
+  }
+}
+
+// Half a level's height, allowed as slack on each end of a landlet's
+// purchased-levels range below — an instance's own thickness can carry it
+// slightly past a level's exact z boundary (see levelCapConsumedM2's own
+// comment on where that boundary sits) without actually needing the next
+// level purchased just to fit.
+const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
+
+// Confirms every instance's z falls within the landlet's actual purchased
+// vertical extent (landlet_levels — see handleLandletLevels, the only
+// place cap cost for going up/down is ever charged), so placing an
+// instance directly can't be used to build arbitrarily high/deep for free
+// without ever calling that endpoint. A landlet with no landlet_levels
+// rows at all (the common case — most landlets never go vertical) still
+// has an implicit ground level at index 0, matching the Math.min/max(0, ...)
+// pattern handleLandletLevels itself uses to find the current extent.
+async function assertInstanceZWithinLevels(db, instances) {
+  const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
+  if (landletIds.length === 0) return;
+  const placeholders = landletIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT landlet_id, level_index FROM landlet_levels WHERE landlet_id IN (${placeholders})`,
+  ).bind(...landletIds).all();
+  const levelIndicesByLandlet = new Map(landletIds.map((landletId) => [landletId, []]));
+  for (const row of results) levelIndicesByLandlet.get(row.landlet_id).push(row.level_index);
+  for (const instance of instances) {
+    const levelIndices = levelIndicesByLandlet.get(instance.landletId) || [];
+    const minZ = Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const maxZ = Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    if (instance.z < minZ || instance.z > maxZ) {
+      throw new HttpError(
+        `z (${instance.z}) is outside landlet "${instance.landletId}"'s purchased levels `
+        + `(allowed range: ${minZ} to ${maxZ}) — add more levels via POST /landlets/:id/levels first`,
+        400,
+      );
     }
   }
 }
