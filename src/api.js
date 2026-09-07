@@ -148,6 +148,22 @@ export async function renameSeller(sellerId, label) {
   return seller;
 }
 
+// Stripe Connect (Custom account) payout onboarding — #452. See
+// worker/index.js's own comment: no KYC field submitted here (name, DOB,
+// SSN, bank account) is ever stored on our own seller row, only Stripe's
+// resulting account id and a derived onboarding status.
+export async function fetchSellerStripeAccount() {
+  return requestJson('/sellers/me/stripe-account');
+}
+
+export async function submitSellerStripeAccount(payload) {
+  return requestJson('/sellers/me/stripe-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 // Pages through every instance on a landlet rather than returning just the
 // first 100 (the server's per-request cap) — a landlet with a large build
 // (a brick wall hundreds of pieces deep, say) silently lost everything

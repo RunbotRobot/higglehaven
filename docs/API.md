@@ -808,6 +808,75 @@ Response:
 
 Returns `404` if the seller doesn't exist.
 
+### `GET /api/sellers/me/stripe-account`
+### `POST /api/sellers/me/stripe-account`
+
+Stripe Connect (Custom account) payout onboarding (#452) — the owner
+confirmed Custom accounts for real-money seller payouts (see issue #347):
+Stripe stays entirely invisible to the seller, and higglehaven's own
+onboarding form submits the required KYC info directly to Stripe's
+Accounts API. Both require a session (`401` otherwise) and act on the
+calling account's own seller profile (lazily created the same way
+`GET /sellers/me` does).
+
+No field submitted to `POST` (legal name, DOB, SSN, bank account, etc.) is
+ever stored on the seller's own row — only the resulting Stripe account id
+and a derived onboarding status are kept.
+
+`GET` response:
+
+```json
+{
+  "configured": true,
+  "connected": false,
+  "status": "not_started",
+  "requirementsCurrentlyDue": [],
+  "updatedAt": null
+}
+```
+
+`configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
+Worker secret set (e.g. local dev, the automated test suite) — same
+dev-mode-friendly pattern as `RESEND_API_KEY` elsewhere in this API.
+`status` is one of `not_started`, `pending`, `requirements_due` (see
+`requirementsCurrentlyDue`, Stripe's own `requirements.currently_due`
+field names), `action_needed`, or `complete`.
+
+`POST` body — individual sellers only for now (a `business_type: company`
+flow is a fast-follow):
+
+```json
+{
+  "individual": {
+    "firstName": "Ada",
+    "lastName": "Seller",
+    "dobDay": 12,
+    "dobMonth": 6,
+    "dobYear": 1990,
+    "ssnLast4": "1234",
+    "addressLine1": "123 Main St",
+    "addressCity": "Seattle",
+    "addressState": "WA",
+    "addressPostalCode": "98101",
+    "addressCountry": "US"
+  },
+  "externalAccount": {
+    "routingNumber": "110000000",
+    "accountNumber": "000123456789",
+    "currency": "usd"
+  }
+}
+```
+
+Validates every field (`400` on any missing/malformed one — e.g.
+`ssnLast4` must be exactly 4 digits, `dobMonth` 1-12) before checking
+whether Stripe is configured, so a caller always finds out about a bad
+payload rather than a `503` masking it. Returns `503` if `STRIPE_SECRET_KEY`
+isn't configured. Creates the seller's Stripe Custom account on first call,
+or updates the existing one (Stripe's own account id, once assigned, is
+never re-created) on every call after — the same shape as `GET`'s response,
+reflecting whatever Stripe just returned.
+
 ## Catalog templates
 
 Catalog templates describe product-like placeholders that can be placed into a
