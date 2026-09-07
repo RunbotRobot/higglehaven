@@ -573,18 +573,19 @@ builder (migrations/0062) — the purchase is a different party's (the
 product's seller's) sales-history record too, so it survives; see
 "Refunds" below for how a refund handles a null `builderId`.
 
-If this builder is the seller on an active auction, every bidder on it is
-notified their bid is void before the deletion goes through — otherwise
-`auctions.seller_builder_id`'s `ON DELETE CASCADE`
-(`migrations/0045_auctions.sql`) removes that auction row, and every bid on
-it, with no trace and no warning. Unlike purchases above, the auction/bid
-rows themselves are *not* preserved — losing them to the cascade is an
-accepted simplification here (same reasoning as pioneer ranks, above), the
-fix is only that bidders get told first. The auctioned landlet still comes
-back via the release path described above, same as any other claimed land.
+If this builder is the seller on an active auction that already has at
+least one bid, deletion is rejected outright (`409`) — per policy, once an
+auction has bids that decision can't be revoked, including by deleting the
+account to back out of it. Without this, `auctions.seller_builder_id`'s
+`ON DELETE CASCADE` (`migrations/0045_auctions.sql`) would silently remove
+that auction row and every bid on it, releasing the land back to
+`greenbelt` (re-claimable, including by the same person again under a
+fresh auto-provisioned builder profile) at zero cost to the seller. An
+active auction the builder is selling with **no** bids yet is unaffected —
+it cascades away exactly as before, with the land released the normal way.
 
 If this builder currently holds the *highest* bid on someone else's
-still-active auction, deletion is rejected outright (`409`) instead —
+still-active auction, deletion is likewise rejected (`409`) —
 `auction_bids.bidder_builder_id`'s own `ON DELETE CASCADE` would otherwise
 silently erase that bid. A leading bid actively deters every other bidder
 from bidding (a new bid must strictly exceed it) for as long as it stands,

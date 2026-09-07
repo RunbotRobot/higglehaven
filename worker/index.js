@@ -1274,6 +1274,28 @@ async function handleBuilders(request, db, route) {
     if (leadingBid) {
       throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
     }
+    // #279: the owner's stated policy is "once a land is put up for
+    // auction, that decision can't be revoked — at least if it has bids;
+    // if it doesn't, and the builder still has the land cap to retain
+    // their land, they could cancel the auction then." Mirrors the #263
+    // guard above but from the seller's side: without this, a seller could
+    // delete their own account to silently back out of an auction that
+    // already has real bids on it — their land reverts to greenbelt
+    // (re-claimable, including by them again under a fresh
+    // auto-provisioned builder profile) and every bidder just gets a
+    // "sorry, void" notification, with no way for anyone to undo the
+    // chilling effect those bids already had on other bidders. A
+    // zero-bid auction has no one to protect this way, so it stays
+    // cancelable via self-deletion exactly as before.
+    const sellingAuctionWithBids = await db.prepare(`
+      SELECT a.auction_id FROM auctions a
+      WHERE a.seller_builder_id = ? AND a.status = 'active'
+        AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+      LIMIT 1
+    `).bind(route[1]).first();
+    if (sellingAuctionWithBids) {
+      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+    }
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not
@@ -1302,48 +1324,14 @@ async function handleBuilders(request, db, route) {
 
     // Deleting this builder cascades (migrations/0045_auctions.sql,
     // seller_builder_id ON DELETE CASCADE) straight through any auction
-    // where they're the seller, taking every bidder's auction_bids row
-    // with it (auction_bids.auction_id ON DELETE CASCADE) — silently, with
-    // no notification, even for a live auction with real bids on it.
-    // Losing the row itself to the cascade is an accepted dev-mode
-    // simplification, same as pioneer ranks/claimed land above — there's
-    // no owner left for it to belong to, and docs/API.md's auctions
-    // section already treats "no cancelled state, always runs its full
-    // course" as describing the normal timed lifecycle, not this
-    // edge case. What's missing is just telling the bidders their bid
-    // is about to vanish instead of leaving that to an invisible FK
-    // cascade — so notify before the batch's final DELETE cascades it
-    // away. The land itself doesn't need separate handling here — it's
-    // still status='claimed'/owned by this builder throughout an active
-    // auction (see handleStartAuction), so it's already covered by the
-    // greenbelt release above.
-    const { results: sellingAuctions } = await db.prepare(`
-      SELECT * FROM auctions WHERE seller_builder_id = ? AND status = 'active'
-    `).bind(route[1]).all();
-    // One grouped query for every bidder across all of this builder's
-    // active auctions, instead of one query per auction (an N+1 —
-    // #33/#35/#46's same shape, just found in a mutation handler's cleanup
-    // logic instead of a GET list endpoint) — mirrors auctionsFromRowsBatch
-    // below.
-    if (sellingAuctions.length > 0) {
-      const auctionIds = sellingAuctions.map((auction) => auction.auction_id);
-      const placeholders = auctionIds.map(() => '?').join(', ');
-      const { results: bidderRows } = await db.prepare(`
-        SELECT DISTINCT auction_id, bidder_builder_id FROM auction_bids WHERE auction_id IN (${placeholders})
-      `).bind(...auctionIds).all();
-      const biddersByAuction = new Map();
-      for (const { auction_id: auctionId, bidder_builder_id: bidderBuilderId } of bidderRows) {
-        if (!biddersByAuction.has(auctionId)) biddersByAuction.set(auctionId, []);
-        biddersByAuction.get(auctionId).push(bidderBuilderId);
-      }
-      for (const auction of sellingAuctions) {
-        for (const bidderBuilderId of biddersByAuction.get(auction.auction_id) ?? []) {
-          statements.push(notificationStatement(db, bidderBuilderId,
-            `The auction for ${auction.landlet_id} was called off because the seller's account was deleted — your bid is void.`));
-        }
-      }
-    }
-
+    // where they're the seller. The #279 guard above guarantees any such
+    // auction still active at this point has zero bids — there's no one to
+    // notify, and nothing more to do beyond letting the cascade take it
+    // (and its now-nonexistent auction_bids rows) away. The land itself
+    // doesn't need separate handling here either — it's still
+    // status='claimed'/owned by this builder throughout an active auction
+    // (see handleStartAuction), so it's already covered by the greenbelt
+    // release above.
     statements.push(db.prepare('DELETE FROM builders WHERE builder_id = ?').bind(route[1]));
     await db.batch(statements);
     return json({ deleted: true, releasedLandletIds: landletIds });

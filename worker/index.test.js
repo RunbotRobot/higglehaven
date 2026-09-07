@@ -3018,7 +3018,11 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
-  it('notifies bidders before their bid vanishes when the seller deletes their account mid-auction', async () => {
+  // #279: the owner's stated policy is that once an auction has bids, the
+  // seller can no longer back out of it — including by deleting their own
+  // account. This used to succeed (cascading the auction+bids away and
+  // just notifying the bidder after the fact); it's blocked outright now.
+  it('rejects deleting a builder while their own active auction has bids', async () => {
     const seller = await signupBuilder('auction-seller-deleted');
     const bidder = await signupBuilder('auction-seller-deleted-bidder');
     await createGreenbeltLandlet('auction-seller-deleted-landlet');
@@ -3033,24 +3037,39 @@ describe('Builders', () => {
     expect(bid.response.status).toBe(201);
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-landlet']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    // The FK cascade on seller_builder_id still removes the auction (and
-    // its bids) outright, same as before this fix — that part is an
-    // accepted dev-mode simplification (see the handler's own comment).
-    // What's new is the bidder actually being told, instead of their bid
-    // just silently disappearing.
+    // Nothing was touched — the auction, its bid, and the seller's builder
+    // row all still exist.
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.response.status).toBe(200);
+    expect(auction.body.auction.status).toBe('active');
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(seller.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder whose own active auction has no bids yet', async () => {
+    const seller = await signupBuilder('zero-bid-auction-seller-deleted');
+    await createGreenbeltLandlet('zero-bid-auction-seller-deleted-landlet');
+    await api('/landlets/zero-bid-auction-seller-deleted-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/zero-bid-auction-seller-deleted-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['zero-bid-auction-seller-deleted-landlet']);
+
+    // No bids existed to protect — the auction cascades away same as before.
     const auction = await api(`/auctions/${auctionId}`);
     expect(auction.response.status).toBe(404);
 
-    const notices = await api('/notifications', bidder.session());
-    expect(notices.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('called off because the seller\'s account was deleted'),
-    }));
-
-    // The land itself still goes back to greenbelt for someone else to claim.
-    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    const landlet = await api('/landlets/zero-bid-auction-seller-deleted-landlet');
     expect(landlet.body.landlet.status).toBe('greenbelt');
   });
 
@@ -3150,19 +3169,20 @@ describe('Builders', () => {
     expect(deleted.response.status).toBe(200);
   });
 
-  it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
+  // #279's guard has to catch a bid on *any* of a seller's active auctions,
+  // not just a single one — this sets up two, with the bid on only the
+  // second, to prove the check isn't limited to "their one auction."
+  it('rejects deleting a builder when only one of their several active auctions has a bid', async () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
-    const bidderOne = await signupBuilder('multi-auction-bidder-one');
-    const bidderTwo = await signupBuilder('multi-auction-bidder-two');
+    const bidder = await signupBuilder('multi-auction-bidder');
 
     // A builder can only ever *claim* one greenbelt landlet directly, but
     // docs/SPEC.md §0/§5's auctions let them acquire additional
     // already-claimed land on top of that (see "resolves a winning
     // auction even when the bidder already owns a claimed landlet" above)
     // — so the seller ends up owning two landlets this way, the only way
-    // one builder can ever be running more than one active auction at
-    // once and actually exercise this batching.
+    // one builder can ever be running more than one active auction at once.
     await createGreenbeltLandlet('multi-auction-landlet-a');
     await api('/landlets/multi-auction-landlet-a/claim', seller.session({ method: 'POST' }));
     await createGreenbeltLandlet('multi-auction-landlet-b');
@@ -3185,40 +3205,22 @@ describe('Builders', () => {
     const startedB = await api('/landlets/multi-auction-landlet-b/auction', seller.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
     }));
-    const auctionIdA = startedA.body.auction.auctionId;
     const auctionIdB = startedB.body.auction.auctionId;
 
-    // Auction A gets two distinct bidders, auction B gets one — exercises
-    // the grouped-by-auction_id batching, not just a single auction/bidder.
-    await api(`/auctions/${auctionIdA}/bids`, bidderOne.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
-    }));
-    await api(`/auctions/${auctionIdA}/bids`, bidderTwo.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
-    }));
-    await api(`/auctions/${auctionIdB}/bids`, bidderOne.session({
+    // Only auction B gets a bid — auction A stays at zero.
+    await api(`/auctions/${auctionIdB}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 700 }),
     }));
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-auction-landlet-a', 'multi-auction-landlet-b']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    const noticesOne = await api('/notifications', bidderOne.session());
-    const messagesOne = noticesOne.body.notifications.map((n) => n.message);
-    expect(messagesOne).toEqual(expect.arrayContaining([
-      expect.stringContaining('multi-auction-landlet-a'),
-      expect.stringContaining('multi-auction-landlet-b'),
-    ]));
-
-    const noticesTwo = await api('/notifications', bidderTwo.session());
-    expect(noticesTwo.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('multi-auction-landlet-a'),
-    }));
-    // bidderTwo never bid on landlet-b's auction — shouldn't hear about it.
-    expect(noticesTwo.body.notifications.map((n) => n.message)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining('multi-auction-landlet-b')]),
-    );
+    // Nothing was touched, including auction A which never had a bid.
+    const auctionAAfter = await api(`/auctions/${startedA.body.auction.auctionId}`);
+    expect(auctionAAfter.body.auction.status).toBe('active');
+    const auctionBAfter = await api(`/auctions/${auctionIdB}`);
+    expect(auctionBAfter.body.auction.status).toBe('active');
   });
 
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
