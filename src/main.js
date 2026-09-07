@@ -514,7 +514,15 @@ function wireDraggingBehavior(transformControls) {
     controls.enabled = !event.value;
     if (event.value) {
       edgePanDragStartCameraPos = camera.position.clone();
-      pushUndoSnapshot();
+      // #402: pushUndoSnapshot captures productMeshes as it stands right
+      // now — skip it while another action (Undo/Redo, a trim commit,
+      // Paste, tap-to-place) is still mid-flight rebuilding that same
+      // array, so a bad-timing drag doesn't push a torn, partially-
+      // rebuilt snapshot onto the undo stack. The drag itself still
+      // proceeds either way — it only repositions the one mesh already
+      // being dragged, not the productMeshes array's own membership, so
+      // it isn't itself part of the race #402 is about.
+      if (!sceneMutationBusy) pushUndoSnapshot();
       return;
     }
     edgePanDragStartCameraPos = null;
@@ -1062,22 +1070,31 @@ trimControls.addEventListener('dragging-changed', (event) => {
   queueTrimEdit(async () => {
     const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
     if (!current) return; // deleted, or otherwise gone, since this drag ended
-    const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
-    if (!updated) return; // deleted while this crop's model was loading
-    const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-    updated.position.set(clamped.x, clamped.y, clamped.z);
-    updated.userData.safePosition = updated.position.clone();
-    // The await above is a real gap a builder can select a different item
-    // across — only re-attach the trim gizmo here if `updated` is still
-    // that selection (replaceMeshWithCrop itself already made that same
-    // call for selectedMeshes/its outline; this mirrors it for the
-    // gizmo). Otherwise whatever's actually selected now already has its
-    // own correct gizmo attached, and forcing this one back on would
-    // silently swap it out from under the builder mid-edit.
-    if (selectedMeshes.has(updated)) trimControls.attach(updated);
-    persistLayout();
-    syncUpdate(updated);
-    updateTrimLengthInput();
+    // #402: replaceMeshWithCrop's own await is exactly the gap Undo/Redo
+    // (or another mutating action) could interleave a productMeshes
+    // change across — hold the shared gate for it, same reasoning as the
+    // other call sites below.
+    if (!beginSceneMutation()) return;
+    try {
+      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      if (!updated) return; // deleted while this crop's model was loading
+      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+      updated.position.set(clamped.x, clamped.y, clamped.z);
+      updated.userData.safePosition = updated.position.clone();
+      // The await above is a real gap a builder can select a different item
+      // across — only re-attach the trim gizmo here if `updated` is still
+      // that selection (replaceMeshWithCrop itself already made that same
+      // call for selectedMeshes/its outline; this mirrors it for the
+      // gizmo). Otherwise whatever's actually selected now already has its
+      // own correct gizmo attached, and forcing this one back on would
+      // silently swap it out from under the builder mid-edit.
+      if (selectedMeshes.has(updated)) trimControls.attach(updated);
+      persistLayout();
+      syncUpdate(updated);
+      updateTrimLengthInput();
+    } finally {
+      endSceneMutation();
+    }
   });
 });
 
@@ -2484,6 +2501,13 @@ async function handleUploadDimensionsStep() {
     priceCents = Math.round(dollars * 100);
   }
 
+  // #423: same uploadFlowToken idiom as handleUploadFileStep above — this
+  // step's own await chain (rescale/upload/create) is just as cancelable
+  // via uploadCancelBtn (which stays enabled throughout, per its own
+  // comment) as the file step's, but without this it kept running to
+  // completion in the background after Cancel, silently creating the
+  // product anyway.
+  const myFlowToken = uploadFlowToken;
   uploadSubmitBtn.disabled = true;
   try {
     let finalModelUrl = uploadModelUrl;
@@ -2497,9 +2521,12 @@ async function handleUploadDimensionsStep() {
       setUploadStatus('Applying your size change…');
       const scaleFactor = dimensions.width / uploadOriginalDimensions.width;
       const originalBlob = await fetch(uploadModelUrl).then((res) => res.blob());
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while re-fetching the original
       const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while rescaling
       setUploadStatus('Uploading resized model…');
       finalModelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading the resized model
     }
 
     setUploadStatus('Creating product…');
@@ -2507,6 +2534,7 @@ async function handleUploadDimensionsStep() {
     // which already guaranteed a seller identity to open at all — this is
     // just a defensive fallback, not the primary path to one.
     const uploaderSellerId = await ensureSellerIdentity();
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while resolving the seller identity
     const metadata = {};
     if (uploadDigitalGoodCheckbox.checked) {
       metadata.digitalGoodDisclaimer = uploadDigitalGoodDisclaimerSelect.value;
@@ -2520,6 +2548,7 @@ async function handleUploadDimensionsStep() {
       priceCents,
       metadata,
     });
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — the template still exists server-side, but nothing here should act on it
 
     activeCatalog.push(template);
     buildCatalogPickerButtons();
@@ -2530,10 +2559,11 @@ async function handleUploadDimensionsStep() {
     // place onto at all) as easily as from Build.
     renderSellerList();
   } catch (err) {
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
     setUploadStatus(err.message || 'Something went wrong.', true);
   } finally {
-    uploadSubmitBtn.disabled = false;
+    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
 }
 
@@ -2756,6 +2786,23 @@ function renderSellerList() {
     const row = document.createElement('div');
     row.className = 'seller-row';
 
+    // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
+    // Extensibility, Flooring) independently does
+    // `{ ...template.metadata, someKey: ... }` then PATCHes the whole
+    // metadata object back — the server replaces metadata wholesale rather
+    // than merging it (see the Extensibility save handler's own comment
+    // below), so two of these panels saved in overlapping in-flight
+    // windows would otherwise race: whichever response lands last
+    // silently discards the other panel's change, since its own
+    // `nextMetadata` snapshot was taken before the first save's
+    // `Object.assign(template, updated)` landed. One shared busy flag
+    // serializes them, the same idiom as undoRedoBusy/levelActionBusy
+    // elsewhere in this file — every metadata-editing button on this row
+    // registers itself here and is disabled while any one save is in
+    // flight.
+    let metadataSaveBusy = false;
+    const metadataSaveButtons = [];
+
     // Dims/actions/preview/extensibility only show once this row is
     // actually tapped — mirrors the identity picker's own row redesign
     // (task #87), for the same reason: a product's full name matters more
@@ -2858,7 +2905,9 @@ function renderSellerList() {
     digitalGoodSaveBtn.className = 'seller-digital-good-save-btn';
     digitalGoodSaveBtn.type = 'button';
     digitalGoodSaveBtn.textContent = 'Save Digital Good';
+    metadataSaveButtons.push(digitalGoodSaveBtn);
     digitalGoodSaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       digitalGoodStatus.textContent = '';
       digitalGoodStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2867,7 +2916,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
-      digitalGoodSaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -2877,7 +2927,8 @@ function renderSellerList() {
         digitalGoodStatus.textContent = err.message || 'Could not save.';
         digitalGoodStatus.classList.add('error');
       } finally {
-        digitalGoodSaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     digitalGoodPanel.appendChild(digitalGoodSaveBtn);
@@ -2930,7 +2981,9 @@ function renderSellerList() {
     noReturnsSaveBtn.className = 'seller-no-returns-save-btn';
     noReturnsSaveBtn.type = 'button';
     noReturnsSaveBtn.textContent = 'Save Returns Policy';
+    metadataSaveButtons.push(noReturnsSaveBtn);
     noReturnsSaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       noReturnsStatus.textContent = '';
       noReturnsStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2939,7 +2992,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.noReturns;
       }
-      noReturnsSaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -2949,7 +3003,8 @@ function renderSellerList() {
         noReturnsStatus.textContent = err.message || 'Could not save.';
         noReturnsStatus.classList.add('error');
       } finally {
-        noReturnsSaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     noReturnsPanel.appendChild(noReturnsSaveBtn);
@@ -3001,7 +3056,9 @@ function renderSellerList() {
     domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn';
     domesticOnlySaveBtn.type = 'button';
     domesticOnlySaveBtn.textContent = 'Save Shipping';
+    metadataSaveButtons.push(domesticOnlySaveBtn);
     domesticOnlySaveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3010,7 +3067,8 @@ function renderSellerList() {
       } else {
         delete nextMetadata.domesticOnly;
       }
-      domesticOnlySaveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
@@ -3020,7 +3078,8 @@ function renderSellerList() {
         domesticOnlyStatus.textContent = err.message || 'Could not save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
-        domesticOnlySaveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
@@ -3375,10 +3434,13 @@ function renderSellerList() {
     flooringToggleBtn.type = 'button';
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
+    metadataSaveButtons.push(flooringToggleBtn);
     flooringToggleBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      flooringToggleBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
         if (!nextMetadata.flooring) delete nextMetadata.flooring;
@@ -3391,7 +3453,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not update.';
         rowStatus.classList.add('error');
       } finally {
-        flooringToggleBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
     actions.appendChild(flooringToggleBtn);
@@ -3468,8 +3531,10 @@ function renderSellerList() {
     saveBtn.className = 'seller-save-btn';
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
+    metadataSaveButtons.push(saveBtn);
 
     saveBtn.addEventListener('click', async () => {
+      if (metadataSaveBusy) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const nextExtensible = {};
@@ -3490,7 +3555,8 @@ function renderSellerList() {
         }
         nextExtensible[axis] = { minM };
       }
-      saveBtn.disabled = true;
+      metadataSaveBusy = true;
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         // A full replace, not a merge — validateTemplate on the worker
         // side takes whatever `metadata` is sent as the template's entire
@@ -3513,7 +3579,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
       } finally {
-        saveBtn.disabled = false;
+        metadataSaveBusy = false;
+        for (const btn of metadataSaveButtons) btn.disabled = false;
       }
     });
 
@@ -3548,18 +3615,28 @@ function renderSellerList() {
     reviewEmptyEl.textContent = 'No reviews yet.';
     reviewPanel.appendChild(reviewEmptyEl);
 
+    // #425: per-row, not module-level — signPostsLoadToken/
+    // calendarEventsLoadToken's own single shared counter works there
+    // because only one of those panels is ever open at a time, but every
+    // seller row here has its own independent Reviews panel, so a shared
+    // counter would have unrelated rows' toggles spuriously invalidate
+    // each other's still-in-flight loads.
+    let reviewLoadToken = 0;
     async function renderReviews() {
       reviewListEl.innerHTML = '';
       reviewSummaryEl.textContent = '';
+      const myLoadToken = ++reviewLoadToken;
       let reviews;
       let averageRating;
       try {
         ({ reviews, averageRating } = await fetchProductReviews(template.templateId));
       } catch (err) {
+        if (myLoadToken !== reviewLoadToken) return; // superseded while fetching
         reviewEmptyEl.textContent = err.message || 'Could not load reviews.';
         reviewEmptyEl.hidden = false;
         return;
       }
+      if (myLoadToken !== reviewLoadToken) return; // superseded — a newer call owns the list now
       reviewEmptyEl.hidden = reviews.length > 0;
       if (reviews.length > 0) {
         const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
@@ -3648,18 +3725,23 @@ function renderSellerList() {
     salesEmptyEl.textContent = 'No sales yet.';
     salesPanel.appendChild(salesEmptyEl);
 
+    // #425: same per-row reasoning as reviewLoadToken above.
+    let salesLoadToken = 0;
     async function renderSales() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
+      const myLoadToken = ++salesLoadToken;
       let purchases;
       let totalCount;
       try {
         ({ purchases, totalCount } = await fetchPurchases({ templateId: template.templateId }));
       } catch (err) {
+        if (myLoadToken !== salesLoadToken) return; // superseded while fetching
         salesEmptyEl.textContent = err.message || 'Could not load sales.';
         salesEmptyEl.hidden = false;
         return;
       }
+      if (myLoadToken !== salesLoadToken) return; // superseded — a newer call owns the list now
       salesEmptyEl.hidden = totalCount > 0;
       if (totalCount > 0) {
         salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
@@ -4449,6 +4531,18 @@ function setLevelStatus(message, { isError = false } = {}) {
 // discarding wherever the builder was actually looking.
 let lastAppliedLevelFloorZ = 0;
 
+// Shared across addLevel (Build Level Above / Dig Level Below) and the
+// Remove handler below — all three mutate currentLevelIndex/
+// currentLandletLevels from an async server round-trip, and each handler
+// used to disable only its own button while in flight, leaving the other
+// two clickable. Two concurrent requests (e.g. Build then Dig before the
+// first resolves) could each independently set currentLevelIndex from
+// their own response, with whichever resolves second winning regardless
+// of click order — UI-state confusion, not data corruption (the server's
+// own depth/footprint/extent-consistency checks still protect that). Same
+// single-flag-across-multiple-triggers idiom as undoRedoBusy below.
+let levelActionBusy = false;
+
 // Re-renders the nav/build/dig/remove controls from currentLevelIndex +
 // currentLandletLevels, and moves the ground mesh to visually sit at
 // whichever level's own floor is now being viewed — a plain vertical
@@ -4495,8 +4589,16 @@ function navigateToLevel(levelIndex) {
 levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex - 1));
 levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
 
-async function addLevel(direction, button, failureMessage) {
-  button.disabled = true;
+function setLevelButtonsDisabled(disabled) {
+  levelBuildBtn.disabled = disabled;
+  levelDigBtn.disabled = disabled;
+  levelRemoveBtn.disabled = disabled;
+}
+
+async function addLevel(direction, failureMessage) {
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     const level = await addLandletLevel(currentLandletId, direction);
     currentLandletLevels.push(level);
@@ -4510,14 +4612,17 @@ async function addLevel(direction, button, failureMessage) {
     // it, same as every other builder-facing action's error handling here.
     setLevelStatus(err.message || failureMessage, { isError: true });
   } finally {
-    button.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 }
-levelBuildBtn.addEventListener('click', () => addLevel('up', levelBuildBtn, 'Could not build a new level.'));
-levelDigBtn.addEventListener('click', () => addLevel('down', levelDigBtn, 'Could not dig a new level.'));
+levelBuildBtn.addEventListener('click', () => addLevel('up', 'Could not build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', 'Could not dig a new level.'));
 
 levelRemoveBtn.addEventListener('click', async () => {
-  levelRemoveBtn.disabled = true;
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     await deleteLandletLevel(currentLandletId, currentLevelIndex);
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
@@ -4527,7 +4632,8 @@ levelRemoveBtn.addEventListener('click', async () => {
   } catch (err) {
     setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
   } finally {
-    levelRemoveBtn.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 });
 
@@ -4546,18 +4652,42 @@ function captureSnapshot() {
   return productMeshes.map((mesh) => instanceFromMesh(mesh));
 }
 
-// Set for the duration of restoreSnapshot's own await (mesh rebuilding plus
-// the batch create/update/delete network calls) — without it, a second
-// rapid click (a trackpad double-click, or just an eager user) before the
-// first restoreSnapshot resolves would pop another snapshot and start a
-// second, concurrent restoreSnapshot mutating the same shared
-// productMeshes/selectedMeshes/undoStack/redoStack and firing overlapping
-// batch requests, potentially for the same instance IDs.
-let undoRedoBusy = false;
+// Set for the duration of any action with a real await gap that mutates
+// productMeshes in place — restoreSnapshot's own mesh rebuilding plus batch
+// create/update/delete calls, a trim commit's model reload, Paste, and
+// tap-to-place. Originally scoped to just Undo/Redo (hence the name), but
+// #402 found that restoreSnapshot racing any of Delete/Trim/Place/Paste —
+// not just another Undo/Redo click — could orphan a mesh from
+// productMeshes the same way #398's narrower Trim-vs-Delete fix did: any
+// of those can start their own async mutation while restoreSnapshot (or
+// another one of them) is still mid-flight, interleaving writes to the
+// same shared productMeshes/selectedMeshes/undoStack/redoStack and firing
+// overlapping batch requests, potentially for the same instance IDs.
+// beginSceneMutation()/endSceneMutation() below are the shared gate every
+// such entry point now goes through instead of touching this flag
+// directly — see their own comment.
+let sceneMutationBusy = false;
+
+// Claims the mutation gate for an action with an async body that mutates
+// productMeshes (a real await, not just a synchronous splice) — returns
+// false without side effects if another such action is already in
+// flight, so the caller can bail out exactly like Undo/Redo already did.
+// Callers must release the gate via endSceneMutation() in a `finally`.
+function beginSceneMutation() {
+  if (sceneMutationBusy) return false;
+  sceneMutationBusy = true;
+  updateUndoRedoButtons();
+  return true;
+}
+
+function endSceneMutation() {
+  sceneMutationBusy = false;
+  updateUndoRedoButtons();
+}
 
 function updateUndoRedoButtons() {
-  undoBtn.disabled = undoRedoBusy || undoStack.length === 0;
-  redoBtn.disabled = undoRedoBusy || redoStack.length === 0;
+  undoBtn.disabled = sceneMutationBusy || undoStack.length === 0;
+  redoBtn.disabled = sceneMutationBusy || redoStack.length === 0;
 }
 
 // Called right *before* any action that mutates the placed layout (place,
@@ -4636,30 +4766,24 @@ async function restoreSnapshot(snapshot) {
 }
 
 async function undo() {
-  if (undoStack.length === 0 || undoRedoBusy) return;
-  undoRedoBusy = true;
-  updateUndoRedoButtons();
+  if (undoStack.length === 0 || !beginSceneMutation()) return;
   try {
     const previous = undoStack.pop();
     redoStack.push(captureSnapshot());
     await restoreSnapshot(previous);
   } finally {
-    undoRedoBusy = false;
-    updateUndoRedoButtons();
+    endSceneMutation();
   }
 }
 
 async function redo() {
-  if (redoStack.length === 0 || undoRedoBusy) return;
-  undoRedoBusy = true;
-  updateUndoRedoButtons();
+  if (redoStack.length === 0 || !beginSceneMutation()) return;
   try {
     const next = redoStack.pop();
     undoStack.push(captureSnapshot());
     await restoreSnapshot(next);
   } finally {
-    undoRedoBusy = false;
-    updateUndoRedoButtons();
+    endSceneMutation();
   }
 }
 
@@ -5042,18 +5166,24 @@ for (const field of trimAxisFieldEls) {
     queueTrimEdit(async () => {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
-      const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
-      if (!updated) return; // deleted while this crop's model was loading
-      const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
-      updated.position.set(clamped.x, clamped.y, clamped.z);
-      updated.userData.safePosition = updated.position.clone();
-      // Same stale-selection guard as the drag-release handler above — see
-      // its own comment. The typed-value path awaits the same
-      // replaceMeshWithCrop model rebuild, so the same race applies here.
-      if (selectedMeshes.has(updated)) trimControls.attach(updated);
-      persistLayout();
-      syncUpdate(updated);
-      updateTrimLengthInput();
+      // #402: same shared-gate reasoning as the drag-release handler above.
+      if (!beginSceneMutation()) return;
+      try {
+        const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+        if (!updated) return; // deleted while this crop's model was loading
+        const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
+        updated.position.set(clamped.x, clamped.y, clamped.z);
+        updated.userData.safePosition = updated.position.clone();
+        // Same stale-selection guard as the drag-release handler above — see
+        // its own comment. The typed-value path awaits the same
+        // replaceMeshWithCrop model rebuild, so the same race applies here.
+        if (selectedMeshes.has(updated)) trimControls.attach(updated);
+        persistLayout();
+        syncUpdate(updated);
+        updateTrimLengthInput();
+      } finally {
+        endSceneMutation();
+      }
     });
   });
 }
@@ -5289,6 +5419,12 @@ measureBtn.addEventListener('click', () => {
   measureMode = !measureMode;
   measureBtn.classList.toggle('active', measureMode);
   if (measureMode) {
+    // Same swallowed-tap problem as enterPlacementMode's own exitMeasureMode
+    // call above, reached from the other direction (#422): a placement
+    // already pending (Add Item/Paste) when Measure turns on would
+    // otherwise sit there un-cancelable, since the canvas click handler
+    // always checks Measure first and swallows every tap into it.
+    if (pendingPlacement) cancelPlacementMode();
     updateSelectionUI(); // hides the gizmo panel; see its own measureMode branch
     updateMeasureInfo();
   } else {
@@ -5298,7 +5434,11 @@ measureBtn.addEventListener('click', () => {
 });
 
 deleteBtn.addEventListener('click', () => {
-  if (selectedMeshes.size === 0) return;
+  // #402: bail out (rather than mutate productMeshes) while another
+  // mutating action (Undo/Redo, a trim commit, Paste, tap-to-place) is
+  // still mid-flight — this handler is otherwise fully synchronous, so it
+  // never needs to *hold* the gate itself, only check it.
+  if (selectedMeshes.size === 0 || sceneMutationBusy) return;
   pushUndoSnapshot();
   const meshes = [...selectedMeshes];
   const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
@@ -5648,6 +5788,15 @@ function enterPlacementMode(pending, statusText) {
   // it on would just strand the builder without the ability to rotate the
   // view while lining up where to place/paste.
   exitMultiSelectMode();
+  // Measure repurposes a world tap into placing/moving a ruler point (see
+  // exitMeasureMode's own comment) instead of placing the pending item —
+  // nothing stops it from still being on when a placement flow starts, and
+  // when both are active the canvas click handler always checks Measure
+  // first, silently swallowing every placement tap until Measure is
+  // toggled off (#422). Exiting it here, the same way exitMultiSelectMode
+  // already is, keeps entering a placement flow a clean hand-off away from
+  // every other tap-driven tool.
+  exitMeasureMode();
   modeControlsEl.classList.remove('visible');
   translateControls.detach();
   rotateControls.detach();
@@ -5683,9 +5832,17 @@ pasteBtn.addEventListener('click', async () => {
   // what you just copied would work in any other editor.
   const anchor = selectionPlacementAnchor();
   if (anchor) {
-    exitMultiSelectMode();
-    pushUndoSnapshot();
-    await placeClipboardItems(clipboard, anchor.x, anchor.y, anchor.supportZ);
+    // #402: placeClipboardItems has a real await per item, so (unlike
+    // deleteBtn's fully-synchronous handler above) this needs to hold the
+    // gate for that whole span, not just check it once up front.
+    if (!beginSceneMutation()) return;
+    try {
+      exitMultiSelectMode();
+      pushUndoSnapshot();
+      await placeClipboardItems(clipboard, anchor.x, anchor.y, anchor.supportZ);
+    } finally {
+      endSceneMutation();
+    }
     return;
   }
   const count = clipboard.length;
@@ -5760,6 +5917,12 @@ async function placeClipboardItems(items, x, y, supportZ) {
 // product if that's what the raycast actually hit, so tapping a tabletop
 // rests the new item there instead of on the ground beneath it.
 async function handlePlacementClick() {
+  // #402: leave pendingPlacement untouched (rather than silently
+  // consuming the tap) while another mutating action is mid-flight, so
+  // the builder's pending placement survives for a retry tap once it
+  // clears — checked before claiming the gate below since spawnInstanceAt/
+  // placeClipboardItems both have a real await per item.
+  if (sceneMutationBusy) return;
   const productHits = raycaster.intersectObjects(productMeshes, true);
   const groundHits = raycaster.intersectObject(landlet);
 
@@ -5782,15 +5945,19 @@ async function handlePlacementClick() {
     : levelFloorZ(currentLevelIndex);
 
   const pending = pendingPlacement;
+  if (!beginSceneMutation()) return;
   pendingPlacement = null;
   addItemBtn.textContent = '+ Add Item';
   pushUndoSnapshot();
-
-  if (pending.type === 'template') {
-    const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
-    selectOnly(mesh);
-  } else {
-    await placeClipboardItems(pending.items, point.x, point.y, supportZ);
+  try {
+    if (pending.type === 'template') {
+      const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
+      selectOnly(mesh);
+    } else {
+      await placeClipboardItems(pending.items, point.x, point.y, supportZ);
+    }
+  } finally {
+    endSceneMutation();
   }
 }
 

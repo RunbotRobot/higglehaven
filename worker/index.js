@@ -580,11 +580,22 @@ async function handleModelCleanup(request, env) {
       `).bind(...modelUrls).all();
       for (const row of referenced.results) referencedUrls.add(row.model_url);
     }
-    for (const object of listing.objects) {
+    let examinedWholePage = true;
+    for (let i = 0; i < listing.objects.length; i++) {
+      const object = listing.objects[i];
       if (!referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
-      if (targets.length === maxDeletes) break;
+      if (targets.length === maxDeletes && i < listing.objects.length - 1) {
+        examinedWholePage = false;
+        break;
+      }
     }
-    completeScan = !listing.truncated;
+    // completeScan means "every object in the bucket was actually examined,"
+    // not just "R2 has no further pages" — listing.truncated alone doesn't
+    // capture the loop above stopping mid-page once maxDeletes is hit, which
+    // would otherwise report the scan as complete despite skipping whatever
+    // was left unexamined on this same (final, listing.truncated === false)
+    // page (#417).
+    completeScan = !listing.truncated && examinedWholePage;
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (!completeScan && targets.length < maxDeletes);
 
@@ -988,10 +999,16 @@ async function handleProductReviews(request, db, route) {
   if (request.method === 'GET' && route.length === 3) {
     const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
+    // #416: this was ORDER BY created_at with no DESC — ascending, so once a
+    // product passed 200 reviews, the LIMIT window was always the *oldest*
+    // 200, permanently hiding every review submitted after that point (the
+    // same #356 already fixed for sign_posts/calendar_events). DESC picks
+    // the right window (always the newest 200); .reverse() restores the
+    // response's own ascending (oldest-of-the-window-first) order.
     const { results } = await db.prepare(`
-      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(templateId).all();
-    const reviews = results.map(reviewFromRow);
+    const reviews = results.reverse().map(reviewFromRow);
     // averageRating/count are the product's real, all-time summary, not
     // derived from the LIMIT-200 page above (docs/API.md documents them as
     // authoritative — "no caller needs to re-derive it from the list
@@ -1166,7 +1183,21 @@ async function handleLandletVersions(request, db, route, url) {
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
 
-    await db.batch([
+    // #415: same guarded-write idiom as handleLandletDraft's PUT below —
+    // a leading no-op guard statement re-pinning owner_builder_id (its own
+    // meta.changes checked after the batch), plus the same condition
+    // folded into each real write's own WHERE/SELECT as a belt-and-
+    // suspenders guard, since D1's db.batch runs every statement
+    // regardless of an earlier one's row count within the same call.
+    // Without this, an auction resolving (transferring ownership) in the
+    // await gap between the ownership check above and this batch would
+    // still let this request attribute a version snapshot to the
+    // landlet's new owner using the old owner's placed_instances.
+    const results = await db.batch([
+      db.prepare(`
+        UPDATE landlets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND owner_builder_id IS ?
+      `).bind(landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
         SELECT ?, ?, next_version_number,
@@ -1175,14 +1206,19 @@ async function handleLandletVersions(request, db, route, url) {
           SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version_number
           FROM landlet_versions WHERE landlet_id = ?
         )
-      `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
+        WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+      `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
           (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
-      `).bind(versionId, landletId),
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+      `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
+    if (results[0].meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
 
     const version = await getVersion(db, landletId, versionId);
     return json({ version }, 201);
@@ -1203,10 +1239,18 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const version = await getVersion(db, landletId, route[3]);
     if (!version) return json({ error: 'Landlet version not found' }, 404);
-    await db.prepare(`
+    // #415: re-pins owner_builder_id, the same way the hardened /landlets/:id
+    // PUT/PATCH guard does — without it, an auction resolving (transferring
+    // ownership) in the await gap between the ownership check above and
+    // this write would still let this request set active_version_id on the
+    // landlet's new owner using a version that belonged to the old one.
+    const result = await db.prepare(`
       UPDATE landlets SET active_version_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
-    `).bind(route[3], landletId).run();
+      WHERE landlet_id = ? AND owner_builder_id IS ?
+    `).bind(route[3], landletId, landlet.owner_builder_id).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const updatedLandlet = await requireLandlet(db, landletId);
     return json({ landlet: landletFromRow(updatedLandlet), version });
   }
@@ -2083,14 +2127,23 @@ const LEVEL_HEIGHT_M = 10;
 // alone to imply it.
 const MIN_LEVEL_FOOTPRINT_M2 = 10;
 
-// A level's own cap cost, computed at the level's outer boundary from
-// ground (the strictest point within it, since the cone's cross-section
-// only shrinks/grows monotonically across one level's height) — level
-// 1's boundary sits at z = LEVEL_HEIGHT_M, level -1's at z = -LEVEL_HEIGHT_M,
-// and so on. footprintScaleAtHeight gives the linear cross-section ratio
-// at that height; squaring it converts to the area ratio docs/SPEC.md §1
-// actually describes ("cross-sectional area grows/shrinks"), then scales
-// the lándlet's own ground-level area by it.
+// A level's own cap cost, sampled at z = levelIndex * LEVEL_HEIGHT_M —
+// level 1 at z = LEVEL_HEIGHT_M, level -1 at z = -LEVEL_HEIGHT_M, and so
+// on. Found via backlog audit (#409): this is each level's boundary
+// *nearest ground*, not its outer one — for a below-ground level that's
+// also the strictest (deepest, smallest-cross-section) point within it,
+// matching the MIN_LEVEL_FOOTPRINT_M2 dig-limit check's own intent above,
+// but for an above-ground level it's the cheaper near edge shared with the
+// level below, not the pricier far edge the cone-widening formula would
+// give at that level's true outer boundary. The resulting undercharge is
+// negligible in practice (LEVEL_HEIGHT_M vs. DEFAULT_EARTH_RADIUS_M puts
+// it around 1e-6 relative), so this is left as-is rather than changed —
+// re-pricing live land-cap costs isn't a call to make unilaterally: flag
+// for the project owner if a real formula fix is ever wanted here.
+// footprintScaleAtHeight gives the linear cross-section ratio at that
+// height; squaring it converts to the area ratio docs/SPEC.md §1 actually
+// describes ("cross-sectional area grows/shrinks"), then scales the
+// lándlet's own ground-level area by it.
 function levelCapConsumedM2(landletAreaM2, levelIndex) {
   const z = levelIndex * LEVEL_HEIGHT_M;
   const scale = footprintScaleAtHeight(z, DEFAULT_EARTH_RADIUS_M);
@@ -3755,12 +3808,28 @@ async function handleLandletDraft(request, db, landletId) {
     // *looked* untouched in the UI. Genuinely-removed instances (not
     // present in the new set) still get a real DELETE below, which is the
     // one case where losing their posts/events to the cascade is correct.
-    await db.batch([
+    //
+    // #415: the leading guard statement (re-pinning owner_builder_id, its
+    // own meta.changes checked after the batch) plus the same condition
+    // folded into every real write's own WHERE/SELECT below is the same
+    // belt-and-suspenders idiom as handleLandletVersions' POST above —
+    // without it, an auction resolving (transferring ownership, wiping
+    // this landlet's placed_instances/landlet_versions) in the await gap
+    // between the ownership check above and this batch would still let
+    // this request repopulate the new owner's landlet with the old
+    // owner's stale content.
+    const ownerGuard = 'EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)';
+    const batchResults = await db.batch([
+      db.prepare(`
+        UPDATE landlets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND owner_builder_id IS ?
+      `).bind(landletId, landlet.owner_builder_id),
       db.prepare(`
         DELETE FROM placed_instances
         WHERE landlet_id = ?
           AND instance_id NOT IN (SELECT json_extract(value, '$.instanceId') FROM json_each(?))
-      `).bind(landletId, JSON.stringify(instances)),
+          AND ${ownerGuard}
+      `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO placed_instances
           (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
@@ -3771,12 +3840,13 @@ async function handleLandletDraft(request, db, landletId) {
           json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
           json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar')
         FROM json_each(?)
-        -- "WHERE true" is load-bearing, not decorative: SQLite's upsert
-        -- grammar treats a bare "ON" after "INSERT ... SELECT ... FROM"
-        -- as ambiguous with a join's ON clause unless the SELECT has a
-        -- WHERE (see sqlite.org/lang_upsert.html) -- confirmed by hand,
-        -- this statement 400s with "near DO: syntax error" without it.
-        WHERE true
+        -- Doubles as the ownership guard and as the non-trivial WHERE
+        -- SQLite's upsert grammar requires here (a bare "ON" after
+        -- "INSERT ... SELECT ... FROM" is otherwise ambiguous with a
+        -- join's ON clause — see sqlite.org/lang_upsert.html; confirmed
+        -- by hand, this statement 400s with "near DO: syntax error"
+        -- without some WHERE clause).
+        WHERE ${ownerGuard}
         ON CONFLICT(instance_id) DO UPDATE SET
           landlet_id = excluded.landlet_id, template_id = excluded.template_id,
           x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
@@ -3785,7 +3855,7 @@ async function handleLandletDraft(request, db, landletId) {
           scale = excluded.scale, is_community_sign = excluded.is_community_sign,
           is_community_calendar = excluded.is_community_calendar,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      `).bind(landletId, JSON.stringify(instances)),
+      `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
         SELECT ?, ?, next_version_number,
@@ -3794,14 +3864,19 @@ async function handleLandletDraft(request, db, landletId) {
           SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version_number
           FROM landlet_versions WHERE landlet_id = ?
         )
-      `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
+        WHERE ${ownerGuard}
+      `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
           (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
-      `).bind(versionId, landletId),
+          AND ${ownerGuard}
+      `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
+    if (batchResults[0].meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
 
     const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
     const version = await getVersion(db, landletId, versionId);

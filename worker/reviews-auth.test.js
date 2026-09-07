@@ -272,6 +272,12 @@ describe('Product reviews', () => {
     expect(listed.body.reviews).toHaveLength(200); // the list page itself does stay capped
     expect(listed.body.count).toBe(201);
     expect(listed.body.averageRating).toBeCloseTo((200 * 1 + 5) / 201);
+
+    // #416: the 200-row window has to be the *newest* 200, not the oldest —
+    // the just-submitted 201st (newest) review must actually be visible in
+    // the capped list, not just reflected in count/averageRating.
+    expect(listed.body.reviews.map((r) => r.reviewId)).toContain('review-beyond-cap-201st');
+    expect(listed.body.reviews.map((r) => r.reviewId)).not.toContain('review-beyond-cap-0');
   });
 
   it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
