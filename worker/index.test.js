@@ -4787,6 +4787,66 @@ describe('Extensibility (crop floor)', () => {
     expect(cleared.response.status).toBe(200);
     expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
+
+  // Found via backlog audit (#338): shrinking a template's width (or
+  // raising its extensible.x.minM) after an instance already has a valid
+  // crop set used to brick that instance -- any later PATCH re-validated
+  // the *carried-over* crop against the template's *current* bounds, even
+  // when the request itself never touched crop or templateId.
+  it('does not re-validate an unchanged crop against a template shrunk after the crop was set', async () => {
+    const builder = await signupBuilder('crop-revalidation-builder');
+    await createGreenbeltLandlet('crop-revalidation-landlet');
+    await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'crop-revalidation-instance',
+        landletId: 'crop-revalidation-landlet',
+        templateId: 'crop-revalidation-template',
+        x: 1, y: 1,
+        crop: { x: 2 },
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    // Seller shrinks the template — the now-stale crop.x=2 no longer fits
+    // (width 4 -> 1.5), but nothing re-validates existing instances yet.
+    const shrunk = await api('/catalog/crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // An unrelated PATCH (just moving it) must still succeed -- it never
+    // touched crop or templateId, so the stale crop isn't re-checked.
+    const moved = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ x: 5, y: 5 }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instance.crop).toEqual({ x: 2 });
+    expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
+
+    // But explicitly re-asserting that same crop value now correctly 400s
+    // -- the caller IS asking for this crop/template pairing to hold today.
+    const reassertedCrop = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ crop: { x: 2 } }),
+    }));
+    expect(reassertedCrop.response.status).toBe(400);
+  });
 });
 
 // Land cap (docs/SPEC.md §3) is deliberately TRACKING-ONLY here, not
