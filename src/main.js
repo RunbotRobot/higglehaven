@@ -38,6 +38,7 @@ import {
   fetchMySeller,
   fetchAllLandlets,
   fetchNotifications,
+  fetchUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
   fetchFriendships,
@@ -6347,9 +6348,13 @@ const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-
 async function refreshNotificationsBadge() {
   if (!builderId) return;
   try {
-    const unread = await fetchNotifications({ unreadOnly: true });
-    notificationsBadgeEl.textContent = String(unread.length);
-    notificationsBadgeEl.hidden = unread.length === 0;
+    // A real count query, not fetchNotifications({ unreadOnly: true })'s
+    // own .length — that list is capped at 100 rows server-side, which
+    // would silently undercount the badge past that (e.g. a popular
+    // auction's worth of bid notifications).
+    const count = await fetchUnreadNotificationCount();
+    notificationsBadgeEl.textContent = String(count);
+    notificationsBadgeEl.hidden = count === 0;
   } catch (err) {
     console.warn('Could not refresh notifications badge:', err);
   }

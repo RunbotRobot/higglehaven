@@ -1495,6 +1495,24 @@ async function handleSellers(request, db, route) {
 // and no DELETE since a read notification is still useful history for
 // "wait, when did that change?"
 async function handleNotifications(request, db, route, url) {
+  // Ahead of the generic list GET below (same "specific path before generic
+  // CRUD" ordering handleBuilders' own GET /me uses) — the list itself is
+  // capped at 100 rows (no pagination, matching this file's other
+  // uncapped-in-practice lists like bundles/purchases), so its own length
+  // can't answer "how many are unread" once a builder has more than that —
+  // found via backlog audit: a popular auction alone can generate 100+ bid
+  // notifications for its seller, at which point the unread badge
+  // (refreshNotificationsBadge in src/main.js) was silently undercounting
+  // by reading the capped list's own .length. A dedicated COUNT query has
+  // no such cap.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'unread-count') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const count = await db.prepare(`
+      SELECT COUNT(*) AS count FROM notifications WHERE builder_id = ? AND read_at IS NULL
+    `).bind(sessionBuilder.builder_id).first();
+    return json({ count: count.count });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderIdParam = url.searchParams.get('builderId');
@@ -1635,7 +1653,15 @@ async function handleFriendships(request, db, route, url) {
     assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
-    await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
+    // Found via backlog audit: without checking this UPDATE's own
+    // meta.changes, a concurrent DELETE (the requester cancelling, or
+    // either side unfriending) landing between the existence check above
+    // and this UPDATE would silently affect 0 rows — the follow-up SELECT
+    // below then returns undefined, and dereferencing
+    // updated.requester_builder_id throws an uncaught TypeError (a 500)
+    // instead of the clean 404 this should be.
+    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
+    if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);

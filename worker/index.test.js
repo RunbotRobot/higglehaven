@@ -3949,6 +3949,48 @@ describe('Notifications', () => {
     const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
     expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
   });
+
+  // Found via backlog audit: GET /notifications has no pagination, just a
+  // flat LIMIT 100 — fine for the history list, but the unread badge used
+  // to read straight off that capped list's own length
+  // (refreshNotificationsBadge in src/main.js), silently undercounting
+  // once a builder passed 100 unread (e.g. a popular auction's worth of
+  // bid notifications). unread-count is a dedicated COUNT query instead.
+  it('reports the true unread count past the notifications list\'s own 100-row cap', async () => {
+    const owner = await signupBuilder('notif-count-owner');
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare('INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)')
+        .bind(`notif-count-${i}`, owner.builderId, `Test notification ${i}`));
+    await env.DB.batch(statements);
+
+    const listed = await api('/notifications?unreadOnly=true', owner.session());
+    expect(listed.body.notifications).toHaveLength(100);
+
+    const count = await api('/notifications/unread-count', owner.session());
+    expect(count.response.status).toBe(200);
+    expect(count.body).toEqual({ count: 105 });
+
+    // Marking one read drops the true count but not below what the capped
+    // list alone could ever have shown.
+    await api(`/notifications/notif-count-0`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    const countAfter = await api('/notifications/unread-count', owner.session());
+    expect(countAfter.body).toEqual({ count: 104 });
+  });
+
+  it('requires a session for unread-count and never counts another builder\'s notifications', async () => {
+    const { owner } = await seedNotifications('unread-count-auth');
+    const unauthenticated = await api('/notifications/unread-count');
+    expect(unauthenticated.response.status).toBe(401);
+
+    const other = await signupBuilder('notif-count-other');
+    const otherCount = await api('/notifications/unread-count', other.session());
+    expect(otherCount.body).toEqual({ count: 0 });
+
+    const ownerCount = await api('/notifications/unread-count', owner.session());
+    expect(ownerCount.body.count).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe('Bundles', () => {
@@ -5033,7 +5075,12 @@ describe('Simulated purchases', () => {
     }
     const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
     expect(limited.response.status).toBe(429);
-  }, 20000);
+  }, 45000); // matches the sibling burst-race test below — 30 sequential
+  // round trips reliably finishes in under a second in isolation, but a
+  // long-running CI worker (this whole file, 300+ tests, one process) can
+  // occasionally push it past 20s on nothing but scheduling contention,
+  // not a real regression — this pre-existing flake has now blocked two
+  // separate unrelated PRs' CI runs this session for exactly that reason.
 
   it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
     // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;

@@ -2211,14 +2211,26 @@ stays meaningful without a live template to point back at.
 ### `GET /api/notifications`
 
 Requires a session. Lists the calling account's own notifications, newest
-first, capped at 100. `builderId` is an optional query parameter — omitted,
-it defaults to the session's own builder; if present, it must equal the
-session's own builder ID (`403` otherwise — this was a spoofable
-"whose notifications" field before session-based authorization, see
-"Authorization model" above). `unreadOnly=true` narrows the list to
-`readAt IS NULL` server-side — the same call backs both the unread badge
-count (`unreadOnly=true`) and the full history list (omitted) in the
-frontend's Notices panel.
+first, capped at 100 with no pagination past that (matching this API's
+other uncapped-in-practice lists, e.g. bundles/purchases). `builderId` is
+an optional query parameter — omitted, it defaults to the session's own
+builder; if present, it must equal the session's own builder ID (`403`
+otherwise — this was a spoofable "whose notifications" field before
+session-based authorization, see "Authorization model" above).
+`unreadOnly=true` narrows the list to `readAt IS NULL` server-side, for the
+frontend's full history list (the unread badge count uses
+`GET /api/notifications/unread-count` below instead, precisely because
+this list's own 100-row cap would undercount past that).
+
+### `GET /api/notifications/unread-count`
+
+Requires a session. Returns `{ "count": N }` — the calling account's own
+unread notification count via a plain `SELECT COUNT(*)`, with no cap.
+Exists because `GET /api/notifications?unreadOnly=true`'s own 100-row cap
+made its list length an inaccurate stand-in for "how many unread" once a
+builder had more than 100 (e.g. a popular auction generating one bid
+notification per bid) — the frontend's notification badge uses this
+endpoint, not that list's length.
 
 ### `PATCH /api/notifications/:notificationId`
 
