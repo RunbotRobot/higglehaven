@@ -3057,6 +3057,26 @@ describe('Product reviews', () => {
     expect(templateDeleted.response.status).toBe(200);
   });
 
+  // Found via backlog audit (#361): PATCH on a seller-less template requires
+  // no session (see the test above) and fires a real notification to every
+  // builder hosting it (notifyBuildersOfDimensionChange) on every dimension
+  // change, with no rate limit at all. Synthetic cf-connecting-ip per the
+  // sign-post rate-limit test's own approach.
+  it('rate-limits repeated unauthenticated PATCHes on a seller-less template', async () => {
+    const templateId = await createTemplate('catalog-patch-rate-limit');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/catalog/${templateId}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 } }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/catalog/${templateId}`, {
+      method: 'PATCH', headers, body: JSON.stringify({ dimensions: { width: 9, depth: 1, height: 1 } }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');

@@ -633,6 +633,11 @@ function formatBytes(bytes) {
   return `${bytes}B`;
 }
 
+// See the PATCH/PUT handler's own comment below (issue #361) — only gates
+// the unauthenticated (no owning seller) path, same shape as
+// SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
+const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
+
 async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
@@ -857,6 +862,16 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller to gate this PATCH behind a session (a system/
+      // placeholder template, or one whose seller has since deleted their
+      // account — see the sellerExists comment on the DELETE handler below),
+      // so anyone can hit this unauthenticated. Its side effect —
+      // notifyBuildersOfDimensionChange, below — fires a real notification
+      // to every builder hosting this template, so cap the request rate the
+      // same way handleSignPosts/handleInstancePurchase already do for their
+      // own unauthenticated-write endpoints.
+      await checkRateLimit(db, `catalog-patch:${clientIp(request)}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     }
     const input = await readJson(request);
     // sellerId is forced back to its existing value (it wins the spread since
