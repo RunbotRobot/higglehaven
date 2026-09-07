@@ -338,7 +338,7 @@ and still valid — resending never invalidates it) and returns the same
 
 ### Testing note
 
-`worker/index.test.js`'s "Authentication" describe block owns the full
+`worker/reviews-auth.test.js`'s "Authentication" describe block owns the full
 contract: signup/login/logout, session-cookie behavior (a fresh session
 per login, logging out one device leaving others intact), duplicate-email
 and malformed-input rejection, case-insensitive email matching, identical
@@ -565,7 +565,11 @@ Request body:
 }
 ```
 
-`label` is required. Returns `409` if `builderId` is already taken.
+`label` is required, capped at 100 characters like every other short
+free-text field in this API. Returns `409` if `builderId` is already
+taken. Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
+window) — unauthenticated and repeatable, the same abuse-cost reasoning as
+sign posts/purchases (#362, mirroring #337).
 
 ### `PUT /api/builders/:builderId`
 ### `PATCH /api/builders/:builderId`
@@ -708,7 +712,7 @@ that roster no longer drives anything.) Sellers have no such concept;
 Covered by `e2e/pioneer-badge.test.mjs`: the first two claims on a fresh
 world land ranks #1 and #2 (demonstrating the cohort, not a single
 winner). The cutoff itself — rank stops being granted past
-`PIONEER_COHORT_SIZE` — is covered by `worker/index.test.js` instead,
+`PIONEER_COHORT_SIZE` — is covered by `worker/profiles.test.js` instead,
 where filling 100 rows directly via the D1 binding is cheap; doing that
 through 100 real browser-driven claims would not be.
 
@@ -773,8 +777,10 @@ Request body:
 }
 ```
 
-`label` is required. Returns `409` if a caller-supplied `sellerId` is
-already taken.
+`label` is required, capped at 100 characters. Returns `409` if a
+caller-supplied `sellerId` is already taken. Rate-limited per client IP
+(`SELLER_CREATE_RATE_LIMIT_MAX`, 20 per window) — same reasoning as
+`POST /api/builders` (#362).
 
 ### `PUT /api/sellers/:sellerId`
 ### `PATCH /api/sellers/:sellerId`
@@ -961,7 +967,25 @@ must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
 same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
 value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `dallers_balance_cents` credit through a
-self-purchase or auction win.
+self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
+are each capped at 100 characters, same as `label` elsewhere in this API.
+
+Deliberately **not** rate-limited (#362 flagged the gap, same as
+builders/sellers below, but an IP-keyed limit isn't safe to add here at
+any size a real automated flood would actually need to trip on):
+unauthenticated catalog creation is this app's own primary way of seeding
+ordinary system/placeholder products, and legitimately happens dozens of
+times over in normal operation — the same "bootstrapping trap" shape of
+problem "Land cap" below documents for why a hard block there got
+reverted.
+
+`modelUrl`, when present, must start with `/uploads/` (a real reference
+returned by `POST /api/models`) — `400` otherwise. Found via backlog audit
+(#375): every placed instance's `modelUrl` is fetched directly by the
+browser of anyone who loads that lándlet (`src/main.js`'s model loader), so
+an unvalidated arbitrary external URL here let any seller turn every
+visitor's browser into an unwitting requester of a URL of their choosing.
+Omit the field entirely (or pass `null`) for a plain colored-box template.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
@@ -1839,6 +1863,12 @@ sends — otherwise an unauthenticated caller could flip a landlet to
 from the claimable pool with no way back. Claimed-state transitions only
 ever happen through claim or auction resolution too.
 
+The write itself is guarded on `status`/`ownerBuilderId` still matching what
+this request originally read, so a claim (or auction resolution) landing
+concurrently can't be silently clobbered back to the stale unowned values
+this request pinned them to — a lost race returns `409` instead of the `200`
+it would otherwise report despite having reverted the claim underneath it.
+
 ### `DELETE /api/landlets/:landletId`
 
 Once a landlet has an owner, this always fails with `409` — this raw delete
@@ -1846,7 +1876,9 @@ has no cascade cleanup for placed instances/version history (unlike
 `DELETE /api/builders/:builderId`'s careful release path), so even the true
 owner using it would corrupt data; release land via deleting the builder or
 losing an auction instead. Deletes an unowned landlet outright, with no
-session required (see the note on `PUT`/`PATCH` above for why).
+session required (see the note on `PUT`/`PATCH` above for why) — guarded the
+same way against a concurrent claim landing first, returning `409` instead
+of deleting land out from under its brand-new owner.
 
 Response:
 
@@ -2429,7 +2461,7 @@ anywhere else in this app either.
 
 ### Testing note
 
-`worker/index.test.js`'s "Friendships" describe block owns the full
+`worker/profiles.test.js`'s "Friendships" describe block owns the full
 contract: self-request rejection, unknown-builder rejection, the send/
 list/accept lifecycle with direction and `otherLandlet` verified from both
 sides, duplicate-request rejection in either direction, decline (`DELETE`
@@ -2709,7 +2741,7 @@ itself (row count/content, deleting a post through its own × button and
 confirming that persists server-side, and un-flagging via "Remove
 Community Sign"), and the full posts API
 (create/list/delete/cascade-on-instance-delete, plus the "can't post to a
-non-sign" 400 — that last one in `worker/index.test.js` instead, not the
+non-sign" 400 — that last one in `worker/land.test.js` instead, not the
 browser suite, since deliberately triggering a non-2xx `fetch` there logs
 a console error the suite's own errors-must-be-empty convention would
 misread as a real bug) end to end through the browser. The
@@ -2952,7 +2984,7 @@ text was left), stacked the same way sign posts/calendar events are.
 
 ### Testing note
 
-`worker/index.test.js`'s "Product reviews" describe block owns the full
+`worker/reviews-auth.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
 rating bounds, optional text, averaged summary, averageRating/count staying
 correct past the list's own 200-row cap, moderation delete (both an
@@ -3083,10 +3115,10 @@ Shop mode when it fires.
 ### Testing note
 
 The due→fires→one-shot lifecycle needs a timestamp forced into the past,
-which `worker/index.test.js` can do directly via `env.DB` (D1's own test
+which `worker/land.test.js` can do directly via `env.DB` (D1's own test
 binding) but `e2e/community-calendar.test.mjs` cannot — there is no public
 API for rewriting an event's `scheduled_at`, by design. The split this
-produces mirrors the auction lazy-resolution tests: `worker/index.test.js`'s
+produces mirrors the auction lazy-resolution tests: `worker/land.test.js`'s
 "Community calendar" describe block owns the full contract (accepting and
 validating `scheduledAt`, a future-scheduled event triggering as a no-op,
 forcing `scheduled_at` into the past via direct `env.DB.prepare(...)` and
@@ -3344,7 +3376,7 @@ just show up.
   greenbelt; on an unsold reserved auction, the seller that they keep the
   land.
 
-Covered by `worker/index.test.js` (a notification-content assertion added
+Covered by `worker/commerce.test.js` (a notification-content assertion added
 to each existing resolution-outcome test, plus a dedicated case for the
 new-bid/outbid pair) and `e2e/land-auctions.test.mjs` (the seller's real
 notification, read through the actual Notifications modal after the
@@ -3387,7 +3419,7 @@ sections:
 
 ### Testing note
 
-`worker/index.test.js`'s own `Auctions` describe block covers the full
+`worker/commerce.test.js`'s own `Auctions` describe block covers the full
 mechanism, including resolution in all three outcomes (win transfers
 land + build clears + seller paid; `$0` unsold releases to greenbelt;
 reserved unsold stays with the seller) and the lazy-resolution paths —
@@ -3496,7 +3528,7 @@ of sync with each other.
 
 ### Testing note
 
-`worker/index.test.js`'s "Land cap" describe block covers the default,
+`worker/land.test.js`'s "Land cap" describe block covers the default,
 the formula's own math, the ratchet surviving earnings aging out of the
 trailing window, the per-event ledger actually being credited on a real
 auction sale, the starter claim being unaffected, and — explicitly — that
@@ -3563,6 +3595,12 @@ floor always binds first for any lándlet with a positive area, so the
 center-of-Earth check exists mainly to satisfy the spec's literal "hard
 depth limit: Earth's radius" requirement as its own explicit guard.
 
+Found via backlog audit (#395): the `INSERT` is guarded atomically against
+the lándlet's *current* extent in this direction (not just a plain insert
+off the request-time read) — a second, genuinely concurrent add in the
+same direction gets a clean `409` ("This lándlet's levels changed —
+please retry") instead of a raw D1 constraint-violation `500`.
+
 ### `DELETE /api/landlets/:landletId/levels/:levelIndex`
 
 Requires the session-authenticated owner. Only the outermost existing
@@ -3570,6 +3608,10 @@ level (in whichever direction `levelIndex` is on) can be removed —
 `409` otherwise, or if `levelIndex` is `0` (never a real row) or the
 lándlet has no levels at all. Frees the level's `capConsumedM2`
 immediately by recomputing the owning builder's land cap afterward.
+Found via backlog audit (#395): "still the outermost" is re-checked as
+part of the `DELETE`'s own atomic guard, not just the initial read, so a
+concurrent add extending past this level between the read and the delete
+can't leave a gap in the level sequence.
 
 ### Ownership-change cleanup
 
@@ -3580,6 +3622,21 @@ deletion release-to-greenbelt path and both `resolveAuction` branches
 auction) — matching the existing "a new owner gets the land, not the
 previous owner's stuff on it" reasoning already applied to
 `placed_instances`/`landlet_versions` there.
+
+### Instance placement is bounded by purchased levels (#394)
+
+Every instance create/update path (`POST/PUT/PATCH /api/instances*`,
+including the batch and draft-save endpoints) rejects a `z` outside the
+lándlet's currently *purchased* vertical extent — `400` if `z` falls
+outside `[min(0, ...levelIndices) * LEVEL_HEIGHT_M - LEVEL_HEIGHT_M / 2,
+max(0, ...levelIndices) * LEVEL_HEIGHT_M + LEVEL_HEIGHT_M / 2]` (the half-
+level slack accounts for an instance's own thickness carrying it slightly
+past a level's exact boundary). A lándlet with no `landlet_levels` rows
+still has the implicit ground level at index `0`, so its instances must
+sit within one level's height of the ground. This closes a gap where
+placing an instance directly could build arbitrarily high or deep without
+ever calling `POST /api/landlets/:landletId/levels` — the only place land
+cap is actually charged for going vertical.
 
 ## Simulated purchases
 
@@ -3691,7 +3748,7 @@ money nature explicit in the copy itself) before calling `purchaseInstance`
 
 ### Testing note
 
-`worker/index.test.js`'s "Simulated purchases" describe block covers the
+`worker/commerce.test.js`'s "Simulated purchases" describe block covers the
 404s, the unpriced/unclaimed 400s, reading `quantity`/`buyerLabel` from the
 request body (including the anonymous-default-quantity-1 case for a missing
 body), the commission math (including the 0.5% floor edge case and
@@ -3762,7 +3819,7 @@ Policy" panel (a single `metadata.noReturns` boolean, same
 platform-controlled-key simplicity as digital goods' disclaimer) —
 `.seller-no-returns-toggle`/`.seller-no-returns-panel` in `src/main.js`.
 
-`worker/index.test.js`'s "Simulated purchases" describe block covers the
+`worker/commerce.test.js`'s "Simulated purchases" describe block covers the
 refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
 negative-balance case, the `templateId` listing filter, and — for a
 seller-less purchase specifically — that refunding it is rejected with no
@@ -4523,9 +4580,15 @@ the built-in catalog:
   page's catalog references in one D1 query. The response reports
   `targetModelUrls`, `targetCount`, `reclaimedBytes`, and whether the scan
   reached the end of the bucket. Objects are collected before the bulk delete
-  so deleting them cannot invalidate an in-progress R2 cursor. Set boolean
-  `dryRun` to `true` to return the same proposed targets and reclaimed-byte
-  total without deleting anything; the response echoes `dryRun`.
+  so deleting them cannot invalidate an in-progress R2 cursor. Immediately
+  before that delete (not only during the earlier per-page scan), the full
+  target set is re-checked against `catalog_templates` in one more query, and
+  any object referenced by a template created in the meantime is dropped
+  from the response and left alone — narrowing (not eliminating; R2 and D1
+  aren't a single transaction) the window for a template creation racing
+  this cleanup. Set boolean `dryRun` to `true` to return the same proposed
+  targets and reclaimed-byte total without deleting anything (including that
+  same final re-check); the response echoes `dryRun`.
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
@@ -4538,7 +4601,10 @@ the built-in catalog:
   upload from R2 so dev model iterations do not permanently consume the
   application storage allowance. Uploads still referenced by a catalog
   template return `409`; delete the catalog template first. Missing uploads
-  return `404`. `GET`/`HEAD` above stay unauthenticated — serving an
+  return `404`. The referenced-model check runs as the very last step before
+  the actual R2 delete (after confirming the object exists), narrowing the
+  window against a template referencing this model being created in
+  between. `GET`/`HEAD` above stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
@@ -4718,7 +4784,7 @@ in the wizard's own catch block) — no special-cased UI for it.
 
 ### Testing note
 
-`worker/index.test.js`'s "Prohibited categories and digital goods" describe
+`worker/commerce.test.js`'s "Prohibited categories and digital goods" describe
 block owns the full validation matrix: name/category/subcategory phrase
 matching, a same-session ordinary-furniture-name control case (proving the
 blocklist doesn't false-positive on normal products), rejection via both
@@ -4783,7 +4849,7 @@ codebase (see "Friend requests" above's own graphical-map deferral).
 
 #### Testing note
 
-`worker/index.test.js`'s "Shipping" describe block covers the non-boolean
+`worker/commerce.test.js`'s "Shipping" describe block covers the non-boolean
 rejection, a valid value round-tripping through `GET`, the absent-defaults-
 to-international case, and clearing one via a full `metadata` replace —
 the same matrix "Prohibited categories and digital goods" above covers for
