@@ -4033,16 +4033,20 @@ function renderBuildSettingsSection() {
   historyField.appendChild(historyList);
   settingsSectionEl.appendChild(historyField);
 
-  // Set Live/Restore/Publish can all trigger their own renderVersionHistory()
-  // call while a previous one is still awaiting its fetch (fast clicks
-  // across different rows, or a click landing mid-fetch from the initial
-  // render) — this token drops a stale call's result instead of letting it
-  // overwrite historyList with out-of-date data, same idiom as
-  // friendsLoadToken/entry.loadToken elsewhere in this file (found via
-  // backlog audit, #448).
+  // renderVersionHistory() is called from several places in quick
+  // succession — the initial render, and again after Publish or after
+  // either row's own Set Live resolves — each doing its own network
+  // round-trip before touching historyList. Only the button that was
+  // clicked gets disabled, so nothing stops a second call (e.g. clicking
+  // Set Live on a different row) from starting before an earlier one's
+  // response has come back; without a staleness guard, an earlier, slower
+  // call's response can land after a later one's and overwrite the DOM
+  // with out-of-date version/activeVersionId data. Same monotonic-token
+  // fix as friendsLoadToken (#448).
   let versionHistoryLoadToken = 0;
+
   async function renderVersionHistory() {
-    const myToken = ++versionHistoryLoadToken;
+    const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let versions;
     let activeVersionId;
@@ -4052,7 +4056,7 @@ function renderBuildSettingsSection() {
         fetchLandlet(landletId),
       ]);
     } catch (err) {
-      if (myToken !== versionHistoryLoadToken) return;
+      if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
       historyList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -4060,7 +4064,7 @@ function renderBuildSettingsSection() {
       historyList.appendChild(errNote);
       return;
     }
-    if (myToken !== versionHistoryLoadToken) return;
+    if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
     historyList.innerHTML = '';
     if (versions.length === 0) {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
