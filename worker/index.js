@@ -2008,9 +2008,19 @@ async function handleBundles(request, db, route, url) {
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
-    // also resend the current shared flag, and vice versa.
-    const name = input.name === undefined ? existing.name : labelValue(input.name, 'name');
-    const shared = input.shared === undefined ? Boolean(existing.shared) : input.shared === true;
+    // also resend the current shared flag, and vice versa. #468: this used
+    // to fill in whichever field the caller omitted from `existing` (read
+    // once at the top of this handler) and write BOTH fields back
+    // unconditionally — so two concurrent partial updates (a rename and a
+    // share-toggle landing close together) each recomputed the OTHER
+    // field from the same pre-race snapshot, and whichever UPDATE landed
+    // second silently clobbered the first with that stale value. Binding
+    // `null` for an omitted field and resolving it via COALESCE at the SQL
+    // level instead makes the merge atomic against whatever the row
+    // actually holds at UPDATE time, not a value read before this
+    // request's own await gap.
+    const name = input.name === undefined ? null : labelValue(input.name, 'name');
+    const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
     // existence check above and this UPDATE would silently affect 0 rows —
@@ -2018,8 +2028,8 @@ async function handleBundles(request, db, route, url) {
     // bundleFromRow(undefined) throws an uncaught TypeError (a 500) instead
     // of the clean 404 this should be. Same shape as #288's friendship fix.
     const result = await db.prepare(`
-      UPDATE bundles SET name = ?, shared = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, shared ? 1 : 0, route[1]).run();
+      UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, shared, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     return json({ bundle: bundleFromRow(updated) });
@@ -3307,22 +3317,43 @@ async function handleSellerStripeAccount(request, env, db) {
     }
 
     let account;
+    let createdNewAccount = false;
     if (sessionSeller.stripe_account_id) {
       // country can't be changed on an existing Stripe account.
       const { country, ...updateParams } = params;
       account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
     } else {
       account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+      createdNewAccount = true;
     }
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
     const nowIso = new Date().toISOString();
-    await db.prepare(`
+    // Found via backlog audit (#474): two concurrent first-time submissions
+    // (double-click, a retried request) both read stripe_account_id as
+    // null above and both create their own real, distinct Stripe account —
+    // an unconditional write here would let the loser's account id get
+    // silently discarded, leaving a live Stripe account holding real KYC
+    // PII that nothing in this app ever references again. Only matters
+    // for first-time creation — two concurrent updates to an *existing*
+    // account both target the same id, so there's no orphaning risk there.
+    const result = await db.prepare(`
       UPDATE sellers
       SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-      WHERE seller_id = ?
+      WHERE seller_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
     `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionSeller.seller_id).run();
+
+    if (createdNewAccount && result.meta.changes === 0) {
+      // Lost the race — another request's account already won. Don't leave
+      // the account this request just created live and unreferenced:
+      // best-effort delete it (a Custom account with no completed
+      // onboarding can be deleted), then hand back the winning
+      // submission's own state instead of this one's.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      return json(stripeAccountStatusJson(env, winner));
+    }
 
     return json(stripeAccountStatusJson(env, {
       stripe_account_id: account.id,
@@ -5626,7 +5657,7 @@ async function handlePurchases(request, env, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
-    return handlePurchaseRefund(request, db, route[1]);
+    return handlePurchaseRefund(request, env, route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5640,7 +5671,8 @@ async function handlePurchases(request, env, route, url) {
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
 // self-service, since shoppers have no account here to authenticate a
 // "my purchases" view against in the first place.
-async function handlePurchaseRefund(request, db, purchaseId) {
+async function handlePurchaseRefund(request, env, purchaseId) {
+  const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
   // A purchase's seller_id can genuinely be null — catalog templates don't
@@ -5684,6 +5716,33 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   ).bind(purchaseId).run();
   if (guard.meta.changes === 0) {
     throw new HttpError('This purchase has already been refunded', 400);
+  }
+
+  // #348: a real-money purchase (payment_intent_id set — see #453) needs
+  // its Stripe charge actually reversed, not just the local row flagged.
+  // reverse_transfer pulls the ~98% share back out of the seller's
+  // connected-account balance (the same way the block below claws back
+  // the builder's dáller share); refund_application_fee reverses
+  // higglehaven's own cut too, so nobody keeps money on a refunded sale.
+  // If Stripe's call fails, the guard above is released (refunded_at reset
+  // to NULL) and the error propagates before the builder's dáller balance
+  // is ever touched — a failed real-money reversal should never look like
+  // a successful refund, and should stay retryable.
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    }
+    try {
+      await stripeRequest(env, 'POST', 'refunds', {
+        payment_intent: purchase.payment_intent_id,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      });
+    } catch (err) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      throw err;
+    }
   }
 
   // builder_id can be null (migrations/0062 — SET NULL on the host

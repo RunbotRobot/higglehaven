@@ -3973,6 +3973,24 @@ has opted into "no returns" (`metadata.noReturns === true`, docs/SPEC.md
 §5's "No-returns-policy respected as seller-set default" — absent/false is
 the spec's own default of accepting returns).
 
+#### Real-money refunds (#348)
+
+A purchase with a `paymentIntentId` (see "Real-money checkout" above —
+#453) went through Stripe, not just the dev-mode simulation, so refunding
+it needs to actually reverse the Stripe charge, not just flag the local
+row. Alongside the dáller-commission clawback above, this issues a Stripe
+refund against the original PaymentIntent with `reverse_transfer: true`
+(pulls the seller's ~98% share back out of their connected account's
+balance — the real-money mirror of clawing back the builder's dáller
+share) and `refund_application_fee: true` (reverses higglehaven's own cut
+too, so nobody keeps money on a refunded sale). `503` if
+`STRIPE_SECRET_KEY` isn't configured. If Stripe's refund call fails for
+any reason, the purchase is left exactly as it was before this
+request — not marked refunded, builder's dáller balance untouched — so a
+failed real-money reversal never looks like a successful refund and stays
+retryable; only once Stripe confirms the refund does the dáller clawback
+above happen at all.
+
 A purchase's `builderId` can itself be null (migrations/0062 — the host
 builder's account was later deleted; `SET NULL`, not `CASCADE`, keeps the
 purchase record itself alive, matching this table's "permanent historical
