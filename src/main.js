@@ -36,6 +36,8 @@ import {
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
+  fetchSellerStripeAccount,
+  submitSellerStripeAccount,
   fetchAllLandlets,
   fetchNotifications,
   fetchUnreadNotificationCount,
@@ -71,6 +73,7 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  finalizePurchase,
   fetchPurchases,
   refundPurchase,
 } from './api.js';
@@ -2776,6 +2779,31 @@ async function showAxisPreview(template, container, highlightAxes) {
       : 'Arrows show X (red) / Y (green) / Z (blue). Check axes below to make them extensible. Drag to look around.';
 }
 
+// #457: metadataSaveBusy used to live entirely inside renderSellerList()'s
+// per-template closure, so a save left in flight when the Seller modal is
+// closed and reopened (renderSellerList() runs fresh each open, per
+// openSellerModal() below) got a brand-new `metadataSaveBusy = false` with
+// no memory of the still-in-flight PATCH — re-enabling the exact overlap
+// #424 was added to prevent. Keyed by templateId (not a single flag) since
+// a save against one product must never block a save against another.
+const metadataSaveBusyByTemplateId = new Map();
+
+// A row's own metadataSaveButtons closure array (see inside the loop below)
+// only ever points at whichever DOM nodes existed at the moment it was
+// captured — stale once a modal close/reopen rebuilds the row (#457), so a
+// save's completion couldn't re-enable a NEW row's buttons through it.
+// Looking the row up fresh by data-template-id instead always finds
+// whichever row is actually in the DOM right now, in this render or a
+// later one, and every metadata-save button carries the shared
+// .metadata-save-btn hook class (alongside its own specific class) so they
+// can all be found here in one query regardless of which panel they save.
+function syncMetadataSaveButtonsDisabled(templateId) {
+  const busy = metadataSaveBusyByTemplateId.get(templateId) === true;
+  const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(templateId))}"]`);
+  if (!row) return;
+  for (const btn of row.querySelectorAll('.metadata-save-btn')) btn.disabled = busy;
+}
+
 function renderSellerList() {
   // Row DOM is about to be thrown away — an open preview would be left
   // pointing at a detached container, and any per-row event handler
@@ -2793,6 +2821,10 @@ function renderSellerList() {
   for (const template of templates) {
     const row = document.createElement('div');
     row.className = 'seller-row';
+    // Lets syncMetadataSaveButtonsDisabled (#457, see its own comment
+    // above) find this row again from outside this closure, even after a
+    // modal close/reopen has replaced it with a different row instance.
+    row.dataset.templateId = String(template.templateId);
 
     // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
     // Extensibility, Flooring) independently does
@@ -2807,8 +2839,15 @@ function renderSellerList() {
     // serializes them, the same idiom as undoRedoBusy/levelActionBusy
     // elsewhere in this file — every metadata-editing button on this row
     // registers itself here and is disabled while any one save is in
-    // flight.
-    let metadataSaveBusy = false;
+    // flight. Backed by the module-level metadataSaveBusyByTemplateId map
+    // (see its own comment above) rather than a local variable, so the
+    // flag survives this row's own DOM/closures being thrown away by a
+    // modal close/reopen (#457) while an earlier save is still pending.
+    const isMetadataSaveBusy = () => metadataSaveBusyByTemplateId.get(template.templateId) === true;
+    const setMetadataSaveBusy = (busy) => {
+      if (busy) metadataSaveBusyByTemplateId.set(template.templateId, true);
+      else metadataSaveBusyByTemplateId.delete(template.templateId);
+    };
     const metadataSaveButtons = [];
 
     // Dims/actions/preview/extensibility only show once this row is
@@ -2910,12 +2949,12 @@ function renderSellerList() {
     digitalGoodStatus.className = 'seller-digital-good-status';
 
     const digitalGoodSaveBtn = document.createElement('button');
-    digitalGoodSaveBtn.className = 'seller-digital-good-save-btn';
+    digitalGoodSaveBtn.className = 'seller-digital-good-save-btn metadata-save-btn';
     digitalGoodSaveBtn.type = 'button';
     digitalGoodSaveBtn.textContent = 'Save Digital Good';
     metadataSaveButtons.push(digitalGoodSaveBtn);
     digitalGoodSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       digitalGoodStatus.textContent = '';
       digitalGoodStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -2924,7 +2963,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.digitalGoodDisclaimer;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -2935,8 +2974,13 @@ function renderSellerList() {
         digitalGoodStatus.textContent = err.message || 'Could not save.';
         digitalGoodStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        // Re-enable via a fresh DOM lookup (#457), not metadataSaveButtons
+        // directly -- if the modal was closed and reopened while this save
+        // was in flight, that array points at now-detached buttons from a
+        // row that no longer exists, and the CURRENT row (same templateId,
+        // freshly rendered) would otherwise stay disabled forever.
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     digitalGoodPanel.appendChild(digitalGoodSaveBtn);
@@ -2986,12 +3030,12 @@ function renderSellerList() {
     noReturnsStatus.className = 'seller-no-returns-status';
 
     const noReturnsSaveBtn = document.createElement('button');
-    noReturnsSaveBtn.className = 'seller-no-returns-save-btn';
+    noReturnsSaveBtn.className = 'seller-no-returns-save-btn metadata-save-btn';
     noReturnsSaveBtn.type = 'button';
     noReturnsSaveBtn.textContent = 'Save Returns Policy';
     metadataSaveButtons.push(noReturnsSaveBtn);
     noReturnsSaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       noReturnsStatus.textContent = '';
       noReturnsStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3000,7 +3044,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.noReturns;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -3011,8 +3055,8 @@ function renderSellerList() {
         noReturnsStatus.textContent = err.message || 'Could not save.';
         noReturnsStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     noReturnsPanel.appendChild(noReturnsSaveBtn);
@@ -3061,12 +3105,12 @@ function renderSellerList() {
     domesticOnlyStatus.className = 'seller-domestic-only-status';
 
     const domesticOnlySaveBtn = document.createElement('button');
-    domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn';
+    domesticOnlySaveBtn.className = 'seller-domestic-only-save-btn metadata-save-btn';
     domesticOnlySaveBtn.type = 'button';
     domesticOnlySaveBtn.textContent = 'Save Shipping';
     metadataSaveButtons.push(domesticOnlySaveBtn);
     domesticOnlySaveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       domesticOnlyStatus.textContent = '';
       domesticOnlyStatus.classList.remove('error');
       const nextMetadata = { ...template.metadata };
@@ -3075,7 +3119,7 @@ function renderSellerList() {
       } else {
         delete nextMetadata.domesticOnly;
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
@@ -3086,8 +3130,8 @@ function renderSellerList() {
         domesticOnlyStatus.textContent = err.message || 'Could not save.';
         domesticOnlyStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     domesticOnlyPanel.appendChild(domesticOnlySaveBtn);
@@ -3438,16 +3482,16 @@ function renderSellerList() {
     // or Edit Size, so a plain immediate-PATCH toggle button fits better
     // than a collapsed panel with its own Save step.
     const flooringToggleBtn = document.createElement('button');
-    flooringToggleBtn.className = 'seller-row-action-btn';
+    flooringToggleBtn.className = 'seller-row-action-btn metadata-save-btn';
     flooringToggleBtn.type = 'button';
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
     metadataSaveButtons.push(flooringToggleBtn);
     flooringToggleBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const nextMetadata = { ...template.metadata, flooring: !isFlooringTemplate(template) };
@@ -3461,8 +3505,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not update.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
     actions.appendChild(flooringToggleBtn);
@@ -3536,13 +3580,13 @@ function renderSellerList() {
     }
 
     const saveBtn = document.createElement('button');
-    saveBtn.className = 'seller-save-btn';
+    saveBtn.className = 'seller-save-btn metadata-save-btn';
     saveBtn.type = 'button';
     saveBtn.textContent = 'Save';
     metadataSaveButtons.push(saveBtn);
 
     saveBtn.addEventListener('click', async () => {
-      if (metadataSaveBusy) return;
+      if (isMetadataSaveBusy()) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       const nextExtensible = {};
@@ -3563,7 +3607,7 @@ function renderSellerList() {
         }
         nextExtensible[axis] = { minM };
       }
-      metadataSaveBusy = true;
+      setMetadataSaveBusy(true);
       for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         // A full replace, not a merge — validateTemplate on the worker
@@ -3587,8 +3631,8 @@ function renderSellerList() {
         rowStatus.textContent = err.message || 'Could not save.';
         rowStatus.classList.add('error');
       } finally {
-        metadataSaveBusy = false;
-        for (const btn of metadataSaveButtons) btn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
       }
     });
 
@@ -3807,6 +3851,15 @@ function renderSellerList() {
     });
 
     details.appendChild(rowStatus);
+    // #457: a save begun before the modal was closed can still be in
+    // flight against this templateId when it's reopened and this row is
+    // rebuilt from scratch — disable this row's own freshly-created
+    // buttons up front in that case, rather than leaving them clickable
+    // and relying solely on isMetadataSaveBusy()'s silent no-op inside
+    // each handler (correct, but reads as unresponsive buttons).
+    if (isMetadataSaveBusy()) {
+      for (const btn of metadataSaveButtons) btn.disabled = true;
+    }
     sellerListEl.appendChild(row);
   }
 }
@@ -3900,6 +3953,10 @@ function renderSettingsSection() {
   }
   if (activeSettingsTab === 'build') {
     renderBuildSettingsSection();
+    return;
+  }
+  if (activeSettingsTab === 'sell') {
+    renderSellSettingsSection();
     return;
   }
 
@@ -4161,6 +4218,131 @@ function renderBuildSettingsSection() {
   });
 
   renderVersionHistory();
+}
+
+// Seller-facing Stripe Connect Custom account onboarding (#452, first leaf
+// under #347/#324's real-money payment processing — owner-confirmed
+// account type: Custom, meaning Stripe stays entirely invisible to the
+// seller and higglehaven builds this form itself, rather than redirecting
+// to a Stripe-hosted page). Lives under the Sell settings tab since it's a
+// seller-identity concern, not tied to any one landlet the way Build's
+// Publish/Auction sections are.
+async function renderSellSettingsSection() {
+  const statusField = document.createElement('div');
+  statusField.className = 'settings-field';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Payout Account';
+  statusField.appendChild(statusLabel);
+  const statusNote = document.createElement('div');
+  statusNote.className = 'settings-empty-note';
+  statusNote.textContent = 'Loading…';
+  statusField.appendChild(statusNote);
+  settingsSectionEl.appendChild(statusField);
+
+  const formField = document.createElement('div');
+  formField.className = 'settings-field';
+  settingsSectionEl.appendChild(formField);
+
+  let account;
+  try {
+    account = await fetchSellerStripeAccount();
+  } catch (err) {
+    statusNote.textContent = err.message || 'Could not load your payout account status.';
+    statusNote.classList.add('error');
+    return;
+  }
+
+  function describeStatus() {
+    if (!account.configured) {
+      return "Stripe payouts aren't set up on this server yet — check back later.";
+    }
+    if (account.status === 'complete') return 'Your payout account is fully set up.';
+    if (account.status === 'requirements_due') {
+      return `Stripe needs more information: ${account.requirementsCurrentlyDue.join(', ')}`;
+    }
+    if (account.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
+    if (account.connected) return 'Your account was created — verification is pending.';
+    return 'Not set up yet. Real-money sales are held until this is complete.';
+  }
+
+  statusNote.textContent = describeStatus();
+  statusNote.classList.remove('error');
+
+  const fields = [
+    ['firstName', 'First name', 'text'],
+    ['lastName', 'Last name', 'text'],
+    ['dobDay', 'Birth day', 'number'],
+    ['dobMonth', 'Birth month', 'number'],
+    ['dobYear', 'Birth year', 'number'],
+    ['ssnLast4', 'SSN (last 4 digits)', 'text'],
+    ['addressLine1', 'Street address', 'text'],
+    ['addressCity', 'City', 'text'],
+    ['addressState', 'State', 'text'],
+    ['addressPostalCode', 'ZIP code', 'text'],
+    ['addressCountry', 'Country (2-letter code)', 'text'],
+    ['routingNumber', 'Bank routing number', 'text'],
+    ['accountNumber', 'Bank account number', 'text'],
+  ];
+  const inputs = {};
+  const form = document.createElement('div');
+  form.className = 'stripe-onboarding-form';
+  for (const [key, fieldLabel, type] of fields) {
+    const label = document.createElement('label');
+    label.textContent = fieldLabel;
+    const input = document.createElement('input');
+    input.type = type;
+    if (key === 'addressCountry') input.value = 'US';
+    if (key === 'dobMonth') { input.min = '1'; input.max = '12'; }
+    if (key === 'dobDay') { input.min = '1'; input.max = '31'; }
+    label.appendChild(input);
+    form.appendChild(label);
+    inputs[key] = input;
+  }
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'version-action-btn';
+  submitBtn.textContent = account.connected ? 'Update payout account' : 'Set up payout account';
+  form.appendChild(submitBtn);
+  const formStatus = document.createElement('div');
+  formStatus.className = 'settings-empty-note';
+  form.appendChild(formStatus);
+
+  submitBtn.addEventListener('click', async () => {
+    formStatus.textContent = '';
+    formStatus.classList.remove('error');
+    submitBtn.disabled = true;
+    try {
+      account = await submitSellerStripeAccount({
+        individual: {
+          firstName: inputs.firstName.value,
+          lastName: inputs.lastName.value,
+          dobDay: Number(inputs.dobDay.value),
+          dobMonth: Number(inputs.dobMonth.value),
+          dobYear: Number(inputs.dobYear.value),
+          ssnLast4: inputs.ssnLast4.value,
+          addressLine1: inputs.addressLine1.value,
+          addressCity: inputs.addressCity.value,
+          addressState: inputs.addressState.value,
+          addressPostalCode: inputs.addressPostalCode.value,
+          addressCountry: inputs.addressCountry.value,
+        },
+        externalAccount: {
+          routingNumber: inputs.routingNumber.value,
+          accountNumber: inputs.accountNumber.value,
+          currency: 'usd',
+        },
+      });
+      statusNote.textContent = describeStatus();
+      formStatus.textContent = 'Submitted.';
+    } catch (err) {
+      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.classList.add('error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  formField.appendChild(form);
 }
 
 function formatDallers(cents) {
@@ -7460,6 +7642,12 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
 const shopLandletInfoEl = document.getElementById('shop-landlet-info');
+const checkoutModalEl = document.getElementById('checkout-modal');
+const checkoutSummaryEl = document.getElementById('checkout-summary');
+const checkoutCardElementEl = document.getElementById('checkout-card-element');
+const checkoutStatusEl = document.getElementById('checkout-status');
+const checkoutPayBtn = document.getElementById('checkout-pay-btn');
+const checkoutCancelBtn = document.getElementById('checkout-cancel-btn');
 
 // A flat, neutral gray for "claimed" reads as concrete/asphalt — a jarring,
 // cold clash against this world's warm cream-and-green palette (see
@@ -9407,21 +9595,105 @@ shopReviewHintEl.addEventListener('click', async () => {
   }
 });
 
+// #453: Stripe.js is loaded lazily, only the first time a real-money
+// checkout is actually needed — the overwhelming majority of purchases in
+// this dev-mode-heavy app never reach this path (see purchaseInstance's
+// own comment in src/api.js), so there's no reason to pull in a
+// third-party script on every page load.
+let stripeJsPromise = null;
+function loadStripeJs() {
+  if (stripeJsPromise) return stripeJsPromise;
+  stripeJsPromise = new Promise((resolve, reject) => {
+    if (window.Stripe) { resolve(window.Stripe); return; }
+    const script = document.createElement('script');
+    script.src = 'https://js.stripe.com/v3/';
+    script.onload = () => resolve(window.Stripe);
+    script.onerror = () => { stripeJsPromise = null; reject(new Error('Could not load Stripe.')); };
+    document.head.appendChild(script);
+  });
+  return stripeJsPromise;
+}
+
+let checkoutCardElement = null;
+
+function closeCheckoutModal() {
+  checkoutModalEl.classList.remove('visible');
+  if (checkoutCardElement) {
+    checkoutCardElement.unmount();
+    checkoutCardElement = null;
+  }
+}
+
+// Collects real payment for a connected seller's product, once
+// purchaseInstance's response comes back as `requiresPayment` instead of
+// an already-completed `purchase` (#453). The returned promise resolves
+// once the purchase has genuinely been finalized (Stripe confirmed the
+// charge AND the server has recorded it) or rejects if the buyer cancels
+// — it deliberately does NOT resolve just because the modal was shown, so
+// a caller's own `finally` (e.g. re-enabling the button that opened this)
+// covers the whole checkout, not just the initial setup.
+function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { name, totalCents }) {
+  return new Promise((resolve, reject) => {
+    checkoutSummaryEl.textContent = `${name} — ${formatPriceCents(totalCents)}`;
+    checkoutStatusEl.textContent = 'Loading payment form…';
+    checkoutStatusEl.classList.remove('error');
+    checkoutPayBtn.disabled = true;
+    checkoutModalEl.classList.add('visible');
+
+    checkoutCancelBtn.onclick = () => {
+      closeCheckoutModal();
+      reject(new Error('Checkout cancelled.'));
+    };
+
+    loadStripeJs().then((Stripe) => {
+      const stripe = Stripe(publishableKey);
+      const elements = stripe.elements();
+      checkoutCardElement = elements.create('card');
+      checkoutCardElement.mount(checkoutCardElementEl);
+      checkoutStatusEl.textContent = '';
+      checkoutPayBtn.disabled = false;
+
+      checkoutPayBtn.onclick = async () => {
+        checkoutPayBtn.disabled = true;
+        checkoutStatusEl.textContent = 'Processing…';
+        checkoutStatusEl.classList.remove('error');
+        try {
+          const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
+          if (result.error) throw new Error(result.error.message || 'Payment failed.');
+          const purchase = await finalizePurchase(paymentIntentId);
+          closeCheckoutModal();
+          resolve(purchase);
+        } catch (err) {
+          checkoutStatusEl.textContent = err.message || 'Payment failed.';
+          checkoutStatusEl.classList.add('error');
+          checkoutPayBtn.disabled = false;
+        }
+      };
+    }).catch((err) => {
+      checkoutStatusEl.textContent = err.message || 'Could not load Stripe.';
+      checkoutStatusEl.classList.add('error');
+    });
+  });
+}
+
 shopBuyHintEl.addEventListener('click', async () => {
   const review = nearestActiveReview;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
-  const confirmed = confirm(
-    `Simulate buying "${name}" for ${formatPriceCents(priceCents)}? This is a dev-mode simulation — no real money is ever charged, but the seller's dállers balance is credited for real.`,
-  );
+  const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}?`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
   try {
-    await purchaseInstance(review.mesh.userData.instanceId);
-    alert('Purchase simulated — the seller has been credited.');
+    const result = await purchaseInstance(review.mesh.userData.instanceId);
+    if (result.requiresPayment) {
+      await runCheckoutFlow(result, { name, totalCents: priceCents });
+      alert('Purchase complete — thank you!');
+    } else {
+      alert('Purchase simulated — the seller has been credited.');
+    }
   } catch (err) {
-    alert(err.message || 'Could not simulate this purchase.');
+    if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {
     shopBuyHintEl.disabled = false;
   }
