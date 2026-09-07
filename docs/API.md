@@ -2385,7 +2385,11 @@ already exists between the two builders **in either direction** — sending
 B→A when A→B is already pending doesn't create a second row; the existing
 one has to be accepted or declined first. Returns `201` with the new
 `pending` friendship. Notifies `recipientBuilderId` (the generic
-notification system below, not a dedicated channel).
+notification system below, not a dedicated channel). `429` after 20
+requests per 15 minutes from the same calling builder (see "Rate limiting"
+above) — the 409 above only guards a repeat against the same recipient, so
+this is what stops one account cycling through fresh recipients to spam
+notifications.
 
 ### `PATCH /api/friendships/:friendshipId`
 
