@@ -580,11 +580,22 @@ async function handleModelCleanup(request, env) {
       `).bind(...modelUrls).all();
       for (const row of referenced.results) referencedUrls.add(row.model_url);
     }
-    for (const object of listing.objects) {
+    let examinedWholePage = true;
+    for (let i = 0; i < listing.objects.length; i++) {
+      const object = listing.objects[i];
       if (!referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
-      if (targets.length === maxDeletes) break;
+      if (targets.length === maxDeletes && i < listing.objects.length - 1) {
+        examinedWholePage = false;
+        break;
+      }
     }
-    completeScan = !listing.truncated;
+    // completeScan means "every object in the bucket was actually examined,"
+    // not just "R2 has no further pages" — listing.truncated alone doesn't
+    // capture the loop above stopping mid-page once maxDeletes is hit, which
+    // would otherwise report the scan as complete despite skipping whatever
+    // was left unexamined on this same (final, listing.truncated === false)
+    // page (#417).
+    completeScan = !listing.truncated && examinedWholePage;
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (!completeScan && targets.length < maxDeletes);
 
