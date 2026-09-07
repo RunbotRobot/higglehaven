@@ -9251,6 +9251,10 @@ shopSignHintEl.addEventListener('click', async () => {
   shopSignHintEl.disabled = true;
   try {
     const post = await createSignPost(sign.instanceId, { authorLabel, text: text.trim() });
+    // The landlet (and this sign) can unload while the request above is in
+    // flight — same guard registerShopSign's own fade loop already applies
+    // before touching a possibly-stale entry (#426).
+    if (!shopSigns.includes(sign)) return;
     sign.posts.push(post);
     rebuildSignSprites(sign);
   } catch (err) {
@@ -9291,6 +9295,15 @@ shopCalendarHintEl.addEventListener('click', async () => {
   shopCalendarHintEl.disabled = true;
   try {
     const event = await createCalendarEvent(calendar.instanceId, { text: text.trim(), scheduledAt });
+    // The landlet (and this calendar) can unload while the request above is
+    // in flight — a real risk here specifically, since the await chain
+    // above includes ensureBuilderIdentity()'s unbounded auth-modal wait,
+    // not just a network round-trip. Same guard registerShopCalendar's own
+    // fade loop already applies before touching a possibly-stale entry
+    // (#426) — without it, rebuildCalendarSprites would add a fresh sprite
+    // into a group no longer tracked by shopCalendars, permanently
+    // undisposed and never faded.
+    if (!shopCalendars.includes(calendar)) return;
     calendar.events.push(event);
     rebuildCalendarSprites(calendar);
   } catch (err) {
@@ -9319,6 +9332,10 @@ shopReviewHintEl.addEventListener('click', async () => {
   shopReviewHintEl.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { authorLabel, rating, text: text?.trim() || undefined });
+    // The landlet (and this review target) can unload while the request
+    // above is in flight — same guard registerShopReview's own fade loop
+    // already applies before touching a possibly-stale entry (#426).
+    if (!shopReviews.includes(review)) return;
     review.reviews.push(posted);
     rebuildReviewSprites(review);
   } catch (err) {
