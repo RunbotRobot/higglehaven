@@ -979,6 +979,14 @@ If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.
 
+When the existing template has a null `sellerId` (or a dangling one — see
+"unlocks review moderation" above), this endpoint requires no session at
+all, and its dimension-change notification fan-out makes it worth throttling
+even so: `429` after 20 PATCHes per 15 minutes from one client IP (see
+"Rate limiting" above), same shape as sign-post/community-calendar posting.
+A seller-owned template's PATCH is not rate-limited — the session
+requirement already bounds it.
+
 ### `DELETE /api/catalog/:templateId`
 
 If the template has a non-null `sellerId`, requires a session logged in as
