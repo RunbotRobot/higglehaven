@@ -3310,14 +3310,22 @@ async function handleVerifyEmail(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
 
-  await db.batch([
-    db.prepare("UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
-    db.prepare(`
-      UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(row.user_id),
-  ]);
+  // #377: the WHERE ... consumed_at IS NULL guard on this UPDATE (run
+  // standalone before the follow-up write, not batched with it) is what
+  // makes this safe against a concurrent double-use of the same token —
+  // only whichever call's UPDATE actually lands first changes any rows,
+  // same idiom as handleCalendarEventTrigger's own triggered_at guard.
+  const result = await db.prepare(`
+    UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE token_hash = ? AND consumed_at IS NULL
+  `).bind(tokenHash).run();
+  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400);
+
+  await db.prepare(`
+    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(row.user_id).run();
   return json({ verified: true });
 }
 
@@ -3364,9 +3372,17 @@ async function handleResetPassword(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
 
+  // #377: same atomic-guard idiom as handleVerifyEmail above — checked
+  // before hashing the new password or touching users/sessions at all, so
+  // a lost race short-circuits before any of that work.
+  const result = await db.prepare(`
+    UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE token_hash = ? AND consumed_at IS NULL
+  `).bind(tokenHash).run();
+  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400);
+
   const passwordHash = await hashPassword(newPassword);
   await db.batch([
-    db.prepare("UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
     db.prepare(`
       UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
