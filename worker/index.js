@@ -4547,17 +4547,25 @@ async function handleInstances(request, db, route, url) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
     // Found via backlog audit (#338): re-validating crop unconditionally
-    // here, even when neither crop nor templateId is actually part of this
-    // request, meant a template shrunk (or its extensible.minM raised)
-    // after an instance's crop was already set could brick that instance —
-    // any later PATCH for something wholly unrelated (moving it, renaming
-    // its label) would re-check the *carried-over* stale crop against the
-    // template's *current* bounds and 400, even though the caller never
-    // touched crop. Only re-validate when this request is actually
-    // asserting a crop/templateId pairing that didn't already exist —
-    // an unchanged crop against an unchanged template isn't a new fact
-    // this request is introducing, so it isn't this request's to reject.
-    if (input.crop !== undefined || input.templateId !== undefined) {
+    // here, even when neither crop nor templateId actually changed, meant a
+    // template shrunk (or its extensible.minM raised) after an instance's
+    // crop was already set could brick that instance — any later PATCH for
+    // something wholly unrelated (moving it, renaming its label) would
+    // re-check the *carried-over* stale crop against the template's
+    // *current* bounds and 400, even though the caller never meant to
+    // touch crop. A first attempt at this fix checked only whether `crop`/
+    // `templateId` were *present* in the request body — but src/main.js's
+    // syncUpdate always resends the mesh's full current state (crop
+    // included) on every edit via instanceFromMesh, so that check was
+    // always true for real frontend traffic and never actually skipped
+    // anything. Comparing actual values against the stored row (via
+    // cropsEqual) is what correctly distinguishes "this request resent the
+    // same crop unchanged" from "this request is asserting a new crop/
+    // template pairing that didn't already exist" — only the latter needs
+    // re-validating.
+    const cropOrTemplateChanged = instance.templateId !== existing.template_id
+      || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
+    if (cropOrTemplateChanged) {
       await assertCropWithinTemplateBounds(db, [instance]);
     }
     await db.prepare(`
@@ -5091,6 +5099,19 @@ async function assertReferencesExist(db, table, column, values, field) {
 // AXIS_DIMENSION_KEY uses, so a template's extensible axes and its crop
 // bounds are always checked against the same dimension.
 const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' };
+
+// #338: whether two crop objects describe the same override, regardless of
+// key order — used by the single-instance PATCH/PUT handler to tell "this
+// request actually changed the crop" apart from "this request just resent
+// the instance's existing crop unchanged" (which src/main.js's syncUpdate
+// always does, since it round-trips the mesh's full state on every edit).
+function cropsEqual(a, b) {
+  const axes = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const axis of axes) {
+    if (a[axis] !== b[axis]) return false;
+  }
+  return true;
+}
 
 // Confirms every instance's crop overrides actually reference an axis the
 // instance's template declared extensible (via metadata.extensible, see
