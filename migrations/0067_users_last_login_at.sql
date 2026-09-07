@@ -1,0 +1,18 @@
+-- Inactivity-triggered auctions (#325, docs/SPEC.md §5's "greenbelt via
+-- inactivity" path, never actually wired up before now). The project owner
+-- picked the simplest possible activity signal: any login counts, however
+-- it was used (shopping, selling, or building) -- so this tracks logins
+-- specifically, not general account mutation. users.updated_at already gets
+-- touched by login (failed-attempt reset), password reset, and potentially
+-- future unrelated account edits, which would make it a drifting, ambiguous
+-- proxy for "logged in" over time -- a dedicated column stays correct no
+-- matter what else touches the row.
+--
+-- Nullable, not backfilled: NULL means "no real login recorded since this
+-- column existed," which the inactivity sweep (autoStartInactivityAuctions
+-- in worker/index.js) treats as "unknown, not swept" rather than "ancient" --
+-- exactly the "don't instantly flag every existing user as inactive on
+-- rollout" concern flagged on this issue before the owner's answer landed.
+-- A user is only ever swept after they've actually logged in at least once
+-- post-migration and then gone quiet for the full threshold.
+ALTER TABLE users ADD COLUMN last_login_at TEXT;

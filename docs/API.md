@@ -3092,7 +3092,9 @@ plus a `builders.dallers_balance_cents` ledger.
 ### Deliberate scope boundary
 
 Two things the spec ties to auctions are **not** implemented, because
-neither has anywhere to attach to in this dev-mode backend yet:
+neither has anywhere to attach to in this dev-mode backend yet (a third,
+inactivity-triggered auto-listing, *is* now implemented — see "Inactivity-
+triggered auctions" below):
 
 - **Land cap** (a per-builder max-total-area limit that grows only via
   demonstrated commission earnings) is real and live — see "Land cap"
@@ -3112,12 +3114,6 @@ neither has anywhere to attach to in this dev-mode backend yet:
   ledger (not a UI-only number) so a winning seller's proceeds land
   somewhere meaningful, ready for balance-gating to be added later without
   a schema change.
-- **Inactivity-triggered auto-listing.** Every auction reachable today is
-  builder-initiated (`POST /api/landlets/:id/auction`) — there's no
-  inactivity-detection job in this dev-mode backend to trigger one
-  automatically, so the spec's "default 24-hour duration for inactivity-
-  triggered listings" just applies as the uniform default for every
-  auction, voluntary or not.
 - **No scheduled resolution job.** There's no Cloudflare Cron Trigger
   wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
   resolves due auctions before returning results (`resolveDueAuctions` in
@@ -3129,6 +3125,46 @@ neither has anywhere to attach to in this dev-mode backend yet:
   (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists for a
   frontend "time's up, finalize it" action without waiting for a future
   read to trigger it as a side effect.
+
+### Inactivity-triggered auctions
+
+docs/SPEC.md §5's "greenbelt via inactivity" path (#325) — every auction
+used to be builder-initiated; this is the auto-listing half, wired up as
+part of the every-10-minutes Cron Trigger already covered above
+(`autoStartInactivityAuctions` in `worker/index.js`, run from `scheduled()`
+alongside `autoGrowWorldIfNeeded`/`pruneExpiredAuthState`).
+
+Per the project owner's own decision: **30 days with no login** is the
+threshold, and **any login counts** — regardless of which mode (shopping,
+selling, or building) it was for. `users.last_login_at`
+(`migrations/0067_users_last_login_at.sql`) is stamped on both signup
+(which immediately establishes a session — itself a login) and `POST
+/api/auth/login`; nothing else touches it, so it can't drift the way a
+shared bookkeeping field like `updated_at` could.
+
+Every 10-minute tick, up to `INACTIVITY_AUCTION_SWEEP_LIMIT` (25,
+oldest-eligible-first — same "don't let one run take unbounded work"
+reasoning as `AUCTION_SWEEP_LIMIT`) claimed landlets whose owner has
+crossed the threshold get a `$0`-starting, 24-hour auction auto-started on
+their behalf (the spec's own inactivity-listing default), plus a
+notification explaining what happened. Excluded from the sweep, rather
+than guessed at:
+
+- **A landlet with an already-active auction** — the same atomic
+  insert-with-guard `POST .../auction` itself uses (`startAuctionRow`,
+  shared by both paths) means a race between the sweep and the owner
+  starting their own auction at the same moment can't double-list it.
+- **A builder with no linked real account** (`builders.user_id IS NULL` —
+  a legacy dev-mode identity from before real accounts existed,
+  `migrations/0054`) — there's no login signal to judge inactivity
+  against at all.
+- **A builder whose linked account has never logged in since
+  `last_login_at` started being tracked** (`NULL`) — treated as
+  "unknown," not "ancient." This is what keeps rollout safe: every
+  existing account starts at `NULL` and only ever becomes sweep-eligible
+  after actually logging in at least once post-migration and then going
+  quiet for the full 30 days, rather than every pre-existing account
+  being treated as having always been inactive.
 
 ### Auction object
 

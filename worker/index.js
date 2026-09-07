@@ -236,6 +236,9 @@ export default {
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
+    ctx.waitUntil(autoStartInactivityAuctions(env.DB).catch((error) => {
+      console.error('autoStartInactivityAuctions failed', error);
+    }));
   },
 };
 
@@ -1933,27 +1936,81 @@ async function handleStartAuction(request, db, landletId) {
   const durationHours = input.durationHours === undefined ? 24 : positiveInteger(input.durationHours, 'durationHours');
   if (durationHours > 8760) throw new HttpError('durationHours must be 8760 (one year) or fewer', 400);
 
+  const row = await startAuctionRow(db, { landletId, sellerBuilderId: builderId, startingBidCents, durationHours });
+  if (!row) throw new HttpError('This landlet already has an active auction', 409);
+  return json({ auction: await auctionFromRow(db, row) }, 201);
+}
+
+// Shared by handleStartAuction (builder-initiated) and
+// autoStartInactivityAuctions (system-initiated, #325) — same atomic
+// insert-with-guard either way. Folding the "no active auction yet" check
+// into the INSERT's own WHERE NOT EXISTS makes the check-and-insert one
+// atomic statement — a separate SELECT-then-INSERT would let two
+// concurrent starts for the same landlet (e.g. a builder logging in and
+// starting their own auction at the same moment the inactivity sweep
+// picks up that same landlet) both pass the check before either INSERT
+// commits, leaving two simultaneously-active auctions that would later
+// both independently resolve and double-transfer the same land (#265).
+// Same idiom already used for product_reviews/auction_bids/friendships.
+// Returns the new auction row, or null if one was already active.
+async function startAuctionRow(db, { landletId, sellerBuilderId, startingBidCents, durationHours }) {
   const auctionId = `auction-${crypto.randomUUID()}`;
   const endsAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
-  // Folding the "no active auction yet" check into the INSERT's own WHERE
-  // NOT EXISTS makes the check-and-insert one atomic statement — a
-  // separate SELECT-then-INSERT would let two concurrent starts for the
-  // same landlet both pass the check before either INSERT commits,
-  // leaving two simultaneously-active auctions that would later both
-  // independently resolve and double-transfer the same land (#265). Same
-  // idiom already used for product_reviews/auction_bids/friendships.
   const inserted = await db.prepare(`
     INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
     SELECT ?, ?, ?, ?, ?
     WHERE NOT EXISTS (
       SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
     )
-  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt, landletId).run();
-  if (inserted.meta.changes === 0) {
-    throw new HttpError('This landlet already has an active auction', 409);
+  `).bind(auctionId, landletId, sellerBuilderId, startingBidCents, endsAt, landletId).run();
+  if (inserted.meta.changes === 0) return null;
+  return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+}
+
+// docs/SPEC.md §5's "greenbelt via inactivity" path (#325) — until now,
+// every auction was builder-initiated; this is the auto-listing half that
+// was never wired up. Per the project owner's own decision: 30 days with
+// no login (any login counts, regardless of which mode — shopping,
+// selling, or building — it was for) is the threshold, auto-listed with
+// the spec's own $0/24h inactivity-listing default (same immediate
+// land-cap release as any other $0 auction, #199).
+//
+// Only swept if the owner has a real linked account
+// (`builders.user_id`) that has actually logged in at least once since
+// `last_login_at` started being tracked (migrations/0067) — a builder
+// with no linked account (a legacy dev-mode identity, migrations/0054) or
+// one who's simply never logged in post-migration has no trustworthy
+// activity signal at all, so they're excluded rather than guessed at
+// (this issue's own earlier discussion flagged the real hazard of
+// auto-auctioning an *active* builder's land off a wrong signal).
+const INACTIVITY_AUCTION_THRESHOLD_DAYS = 30;
+// Same "don't let one run take unbounded work" reasoning as
+// AUCTION_SWEEP_LIMIT above — a large backlog of newly-eligible landlets
+// (e.g. right after this feature ships) clears over a few 10-minute cron
+// ticks instead of blocking any single one.
+const INACTIVITY_AUCTION_SWEEP_LIMIT = 25;
+
+async function autoStartInactivityAuctions(db) {
+  const cutoff = new Date(Date.now() - INACTIVITY_AUCTION_THRESHOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { results } = await db.prepare(`
+    SELECT l.landlet_id, l.owner_builder_id
+    FROM landlets l
+    JOIN builders b ON b.builder_id = l.owner_builder_id
+    JOIN users u ON u.user_id = b.user_id
+    WHERE l.status = 'claimed'
+      AND u.last_login_at IS NOT NULL AND u.last_login_at <= ?
+      AND NOT EXISTS (SELECT 1 FROM auctions a WHERE a.landlet_id = l.landlet_id AND a.status = 'active')
+    LIMIT ?
+  `).bind(cutoff, INACTIVITY_AUCTION_SWEEP_LIMIT).all();
+
+  for (const { landlet_id: landletId, owner_builder_id: builderId } of results) {
+    const auction = await startAuctionRow(db, { landletId, sellerBuilderId: builderId, startingBidCents: 0, durationHours: 24 });
+    if (!auction) continue; // lost a race to a concurrent start (e.g. the owner logging in and starting their own) — nothing to do
+    await notificationStatement(
+      db, builderId,
+      `Your landlet ${landletId} was auto-listed for auction with a $0 starting bid after 30 days of inactivity — it goes to the highest bidder, or releases to greenbelt if unsold.`,
+    ).run();
   }
-  const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
-  return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
 // docs/SPEC.md §1's vertical construction (issue #167/#168): matches
@@ -3003,9 +3060,13 @@ async function handleSignup(request, env, db, url) {
   // specifically meant to prevent.
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
+  // last_login_at is stamped here too, not just in handleLogin — signup
+  // itself immediately establishes a session below (auto-login), which is
+  // just as much "a login" for #325's inactivity-sweep purposes as an
+  // explicit later login is.
   const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical)
-    SELECT ?, ?, ?, ?, ?
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical, last_login_at)
+    SELECT ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
   `).bind(
     userId, email, passwordHash, username, emailCanonical,
@@ -3107,6 +3168,7 @@ async function handleLogin(request, db, url) {
 
   await db.prepare(`
     UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
+      last_login_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE user_id = ?
   `).bind(row.user_id).run();

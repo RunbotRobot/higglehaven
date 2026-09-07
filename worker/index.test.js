@@ -3991,6 +3991,109 @@ describe('Auctions', () => {
   });
 });
 
+describe('Inactivity-triggered auctions', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function setLastLoginDaysAgo(email, days) {
+    const past = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE email = ?').bind(past, email).run();
+  }
+
+  async function runScheduled() {
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+  }
+
+  it('auto-starts a $0/24h auction on a claimed landlet once its owner has been inactive 30+ days, and notifies them', async () => {
+    const owner = await signupBuilder('inactive-sweep-owner');
+    await createGreenbeltLandlet('inactive-sweep-landlet');
+    await claim('inactive-sweep-landlet', owner);
+    await setLastLoginDaysAgo(owner.email, 31);
+
+    await runScheduled();
+
+    const auctions = await api('/auctions?landletId=inactive-sweep-landlet&status=active');
+    expect(auctions.body.auctions).toHaveLength(1);
+    expect(auctions.body.auctions[0]).toMatchObject({
+      sellerBuilderId: owner.builderId,
+      startingBidCents: 0,
+      status: 'active',
+    });
+    const endsAt = new Date(auctions.body.auctions[0].endsAt).getTime();
+    const createdAt = new Date(auctions.body.auctions[0].createdAt).getTime();
+    expect(endsAt - createdAt).toBeGreaterThan(23 * 60 * 60 * 1000);
+    expect(endsAt - createdAt).toBeLessThan(25 * 60 * 60 * 1000);
+
+    const notices = await api('/notifications', owner.session());
+    expect(notices.body.notifications.some(
+      (n) => n.message.includes('auto-listed for auction') && n.message.includes('inactive-sweep-landlet'),
+    )).toBe(true);
+  });
+
+  it('does not sweep a landlet whose owner logged in within the last 30 days', async () => {
+    const owner = await signupBuilder('active-owner-no-sweep');
+    await createGreenbeltLandlet('active-owner-landlet');
+    await claim('active-owner-landlet', owner);
+    await setLastLoginDaysAgo(owner.email, 10);
+
+    await runScheduled();
+
+    const auctions = await api('/auctions?landletId=active-owner-landlet&status=active');
+    expect(auctions.body.auctions).toHaveLength(0);
+  });
+
+  it('does not sweep a landlet whose owner has never logged in (last_login_at is NULL)', async () => {
+    const owner = await signupBuilder('never-logged-in-owner');
+    await createGreenbeltLandlet('never-logged-in-landlet');
+    await claim('never-logged-in-landlet', owner);
+    // signup itself stamps last_login_at (it auto-establishes a session) —
+    // clear it back to NULL to simulate a row from before that existed,
+    // or any other way last_login_at could be unset.
+    await env.DB.prepare('UPDATE users SET last_login_at = NULL WHERE email = ?').bind(owner.email).run();
+
+    await runScheduled();
+
+    const auctions = await api('/auctions?landletId=never-logged-in-landlet&status=active');
+    expect(auctions.body.auctions).toHaveLength(0);
+  });
+
+  it('does not sweep a landlet owned by a builder with no linked real account', async () => {
+    // A legacy dev-mode identity (migrations/0054) — no user_id at all, so
+    // there's no login signal to judge inactivity against.
+    const builderId = `builder-${crypto.randomUUID()}`;
+    await env.DB.prepare('INSERT INTO builders (builder_id, label) VALUES (?, ?)').bind(builderId, 'Legacy Builder').run();
+    await createGreenbeltLandlet('legacy-builder-landlet');
+    await env.DB.prepare(
+      `UPDATE landlets SET status = 'claimed', owner_builder_id = ? WHERE landlet_id = ?`,
+    ).bind(builderId, 'legacy-builder-landlet').run();
+
+    await runScheduled();
+
+    const auctions = await api('/auctions?landletId=legacy-builder-landlet&status=active');
+    expect(auctions.body.auctions).toHaveLength(0);
+  });
+
+  it('does not start a second auction on a landlet that already has one active', async () => {
+    const owner = await signupBuilder('already-auctioning-owner');
+    await createGreenbeltLandlet('already-auctioning-landlet');
+    await claim('already-auctioning-landlet', owner);
+    await setLastLoginDaysAgo(owner.email, 40);
+    await api('/landlets/already-auctioning-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 1000 }),
+    }));
+
+    await runScheduled();
+
+    const auctions = await api('/auctions?landletId=already-auctioning-landlet&status=active');
+    expect(auctions.body.auctions).toHaveLength(1);
+    expect(auctions.body.auctions[0].startingBidCents).toBe(1000); // the builder's own auction, untouched
+  });
+});
+
 // The Auctions tests above exercise notification creation as a side effect
 // (a bid triggers one); these exercise the endpoints themselves — GET's
 // unreadOnly filter and builderId spoof guard, PATCH's mark-read and its
