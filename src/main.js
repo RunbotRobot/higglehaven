@@ -8927,18 +8927,29 @@ renderer.domElement.addEventListener('click', (event) => {
 // anything's actually due.
 const SCHEDULED_EVENT_CHECK_INTERVAL_MS = 10000;
 let lastScheduledEventCheck = 0;
+// event.triggeredAt is only ever set once a trigger request's own .then()
+// resolves — with nothing tracking a request already in flight, a call
+// slower than one 10s check interval (slow network, a throttled
+// backgrounded tab, or many due events firing in the same tick) let the
+// next tick re-issue a request for that same still-untriggered event.
+// pendingCalendarEventTriggers closes that gap; eventId is unique enough
+// on its own (no instanceId needed) since it's never reused across events.
+const pendingCalendarEventTriggers = new Set();
 function checkScheduledCalendarEvents() {
   const nowIso = new Date().toISOString();
   for (const calendar of shopCalendars) {
     for (const event of calendar.events) {
       if (!event.scheduledAt || event.triggeredAt || event.scheduledAt > nowIso) continue;
+      if (pendingCalendarEventTriggers.has(event.eventId)) continue;
+      pendingCalendarEventTriggers.add(event.eventId);
       triggerCalendarEvent(calendar.instanceId, event.eventId).then(({ event: updated, triggered }) => {
         // Cache the server's own triggeredAt locally regardless of who
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
         if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
-      }).catch(() => {});
+        pendingCalendarEventTriggers.delete(event.eventId);
+      }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
   }
 }
