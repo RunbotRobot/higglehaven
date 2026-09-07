@@ -4909,6 +4909,28 @@ describe('Landlet levels', () => {
     expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
   });
 
+  it('exposes ownedAreaM2 on the builder object, including level area (#312)', async () => {
+    const owner = await signupBuilder('levels-owned-area-owner');
+    await createGreenbeltLandletWithArea('levels-owned-area-landlet', 1000);
+    await claim('levels-owned-area-landlet', owner);
+    await api('/landlets/levels-owned-area-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    const expectedOwnedAreaM2 = 1000 + levelCapM2;
+
+    const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
+    expect(listed.ownedAreaM2).toBe(expectedOwnedAreaM2);
+
+    const me = await api('/builders/me', owner.session());
+    expect(me.body.builder.ownedAreaM2).toBe(expectedOwnedAreaM2);
+  });
+
+  it('leaves ownedAreaM2 null on a builder response that never recomputed it (plain create)', async () => {
+    const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Owned Area Null Builder' }) });
+    expect(created.body.builder.ownedAreaM2).toBeNull();
+  });
+
   it('cascades landlet_levels cleanup on builder deletion, same as placed_instances/landlet_versions', async () => {
     const owner = await signupBuilder('levels-delete-owner');
     await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);

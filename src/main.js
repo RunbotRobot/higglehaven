@@ -3848,17 +3848,16 @@ async function renderLandCapField() {
   field.appendChild(status);
   settingsSectionEl.appendChild(field);
   try {
-    // fetchAllLandlets pages through every one of this builder's owned
-    // landlets, not just fetchLandlets's own first 100 — auctions place no
-    // hard ceiling on how many a builder can accumulate, and the backend's
-    // own land-cap formula sums all of them, so a single-page read here
-    // would silently undercount past that point (#186).
-    const [builders, ownedLandlets] = await Promise.all([
-      fetchBuilders(),
-      fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId }),
-    ]);
+    // ownedAreaM2 comes straight from the builder object now (#312) —
+    // the backend's own recomputeLandCapsBatch already sums every owned
+    // landlet's ground area *and* every level's own cap_consumed_m2
+    // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
+    // so reading it back here is both more accurate (a frontend-side sum
+    // over fetchAllLandlets alone silently ignored level area) and
+    // cheaper (no second paginated fetch needed at all).
+    const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
-    const ownedAreaM2 = ownedLandlets.reduce((sum, l) => sum + l.areaM2, 0);
+    const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
       'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
   } catch (err) {

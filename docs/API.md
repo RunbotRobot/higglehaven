@@ -496,7 +496,7 @@ profile, auto-provisioning one if somehow missing (a defensive fallback —
 signup already creates it, so this should never actually need to):
 
 ```json
-{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "createdAt": "...", "updatedAt": "..." } }
+{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
 ```
 
 Idempotent — the same profile every call, never a new one.
@@ -510,6 +510,8 @@ Idempotent — the same profile every call, never a new one.
   "isPioneer": false,
   "pioneerRank": null,
   "dallersBalanceCents": 0,
+  "landCapM2": 1000,
+  "ownedAreaM2": 1000,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
@@ -519,6 +521,10 @@ Idempotent — the same profile every call, never a new one.
 recognition — see "Founding/pioneer recognition" below. `dallersBalanceCents`
 is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
 acquisition auctions" below for what can (and can't yet) change it.
+`landCapM2`/`ownedAreaM2` are "Land cap" below's cap itself and the real
+ground-plus-levels total counted against it — `ownedAreaM2` is `null`
+instead of a number on a response that didn't just recompute both (a
+plain create/rename), never a stale or silently-wrong figure.
 
 ### `GET /api/builders`
 
@@ -3394,9 +3400,16 @@ Settings' Build tab shows a "Land Cap" field (`renderLandCapField` in
 `src/main.js`) above Publish/Version History — a builder-account fact, not
 tied to the currently-active landlet, so it renders whenever a builder
 identity is active regardless of `currentMode`/`currentLandletId` (unlike
-Publish, which needs an active Build-mode landlet). It shows current owned
-area (summed from `GET /api/landlets?status=claimed&ownerBuilderId=...`)
-against `landCapM2` from `GET /api/builders`.
+Publish, which needs an active Build-mode landlet). It shows `ownedAreaM2`
+against `landCapM2`, both read straight off the builder object from
+`GET /api/builders` — not, as an earlier version of this panel did, a
+frontend-side sum over `GET /api/landlets?status=claimed&...` alone, which
+silently missed every level's own `cap_consumed_m2` once vertical
+construction shipped (#312). `ownedAreaM2` is the exact same
+ground-plus-levels total `recomputeLandCapsBatch` already computes
+server-side to grow `landCapM2` itself (see "The formula" above) — read
+back here rather than re-derived, so the two numbers can never drift out
+of sync with each other.
 
 ### Testing note
 
