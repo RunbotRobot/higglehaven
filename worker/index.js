@@ -3199,14 +3199,24 @@ async function handleVerifyEmail(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
 
-  await db.batch([
-    db.prepare("UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
-    db.prepare(`
-      UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(row.user_id),
-  ]);
+  // Folds the "not already consumed" check into the UPDATE's own WHERE
+  // clause, mirroring handleCalendarEventTrigger's WHERE triggered_at IS
+  // NULL guard — the SELECT above and this UPDATE were otherwise a plain
+  // check-then-act race (#377), the one shape this file otherwise
+  // eliminates everywhere else. Run standalone (not batched with the users
+  // UPDATE below) so its own meta.changes can gate whether that second
+  // write happens at all, rather than both always running regardless of
+  // who actually won the race.
+  const consumed = await db.prepare(
+    "UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ? AND consumed_at IS NULL",
+  ).bind(tokenHash).run();
+  if (consumed.meta.changes === 0) throw new HttpError('Verification link is invalid or has expired', 400);
+
+  await db.prepare(`
+    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(row.user_id).run();
   return json({ verified: true });
 }
 
@@ -3253,9 +3263,17 @@ async function handleResetPassword(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
 
+  // Same fix shape as handleVerifyEmail's own comment above (#377): folds
+  // the "not already consumed" check into the UPDATE's own WHERE clause,
+  // run standalone before hashing the new password or touching the users/
+  // sessions tables, so a lost race does neither.
+  const consumed = await db.prepare(
+    "UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ? AND consumed_at IS NULL",
+  ).bind(tokenHash).run();
+  if (consumed.meta.changes === 0) throw new HttpError('Reset link is invalid or has expired', 400);
+
   const passwordHash = await hashPassword(newPassword);
   await db.batch([
-    db.prepare("UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
     db.prepare(`
       UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')

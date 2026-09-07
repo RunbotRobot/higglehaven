@@ -6367,6 +6367,23 @@ describe('Authentication', () => {
     expect(reused.response.status).toBe(400);
   });
 
+  // Found during a broader backlog-exploration pass (#377): the consumed-
+  // check and the consuming UPDATE used to be separate statements (a plain
+  // check-then-act race), unlike every other settle-style handler in this
+  // file. Same concurrent-race shape as the calendar-trigger test above.
+  it('lets exactly one concurrent verify-email call for the same token succeed', async () => {
+    const email = `auth-verify-race-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password');
+    const token = new URL(signedUp.body.devVerifyUrl, 'https://higglehaven.test').searchParams.get('verifyEmail');
+
+    const [first, second] = await Promise.all([
+      api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+      api('/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
+    ]);
+    const statuses = [first.response.status, second.response.status].sort();
+    expect(statuses).toEqual([200, 400]);
+  });
+
   it('resets a forgotten password via a real token, and signs out every existing session', async () => {
     const email = `auth-reset-${crypto.randomUUID()}@example.com`;
     const oldPassword = 'the original password';
@@ -6404,6 +6421,21 @@ describe('Authentication', () => {
     // The token itself is single-use.
     const reusedToken = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'yet another password' }) });
     expect(reusedToken.response.status).toBe(400);
+  });
+
+  // Same concurrent-race shape as verify-email's own race test above (#377).
+  it('lets exactly one concurrent reset-password call for the same token succeed', async () => {
+    const email = `auth-reset-race-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'the original password');
+    const requested = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    const token = new URL(requested.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+
+    const [first, second] = await Promise.all([
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'a brand new password' }) }),
+      api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword: 'a different new password' }) }),
+    ]);
+    const statuses = [first.response.status, second.response.status].sort();
+    expect(statuses).toEqual([200, 400]);
   });
 
   it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {
