@@ -552,6 +552,52 @@ describe('Worker API', () => {
     })).response.status).toBe(400);
   });
 
+  // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
+  // (and review moderation, refunds) already treat a dangling seller_id —
+  // left behind by DELETE /api/sellers/:sellerId, per that handler's own
+  // comment — as unowned, same as docs/API.md's "same as null seller_id"
+  // promise (see sellerExists' own comment in worker/index.js). The batch
+  // catalog endpoints did a plain `if (row.seller_id)` truthiness check
+  // instead, so a template a self-deleted seller once owned became
+  // permanently un-deletable/un-upsertable via these routes for everyone,
+  // since no live session's seller_id can ever match one that no longer
+  // exists.
+  it('treats a batch template\'s dangling seller_id as unowned once its seller has self-deleted', async () => {
+    const seller = await signupSeller('catalog-batch-deleted-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-batch-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    expect((await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }))).response.status).toBe(200);
+
+    // No session on either call below — a dangling seller_id now falls
+    // through to the same unrestricted path a genuinely null one already
+    // takes, matching the single-item PATCH/DELETE endpoints.
+    const upserted = await api('/catalog/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        { templateId: 'catalog-batch-deleted-seller-template', name: 'Renamed after seller deletion', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+      ] }),
+    });
+    expect(upserted.response.status).toBe(200);
+    expect(upserted.body.templates[0].name).toBe('Renamed after seller deletion');
+
+    const deleted = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ templateIds: ['catalog-batch-deleted-seller-template'] }),
+    });
+    expect(deleted.response.status).toBe(200);
+    expect((await api('/catalog/catalog-batch-deleted-seller-template')).response.status).toBe(404);
+  });
+
   it('cursor-paginates placed instances within one landlet', async () => {
     // Owned directly at creation (POST /landlets allows creating a landlet
     // already claimed by yourself — see that route's own comment) rather
