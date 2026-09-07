@@ -4449,6 +4449,18 @@ function setLevelStatus(message, { isError = false } = {}) {
 // discarding wherever the builder was actually looking.
 let lastAppliedLevelFloorZ = 0;
 
+// Shared across addLevel (Build Level Above / Dig Level Below) and the
+// Remove handler below — all three mutate currentLevelIndex/
+// currentLandletLevels from an async server round-trip, and each handler
+// used to disable only its own button while in flight, leaving the other
+// two clickable. Two concurrent requests (e.g. Build then Dig before the
+// first resolves) could each independently set currentLevelIndex from
+// their own response, with whichever resolves second winning regardless
+// of click order — UI-state confusion, not data corruption (the server's
+// own depth/footprint/extent-consistency checks still protect that). Same
+// single-flag-across-multiple-triggers idiom as undoRedoBusy below.
+let levelActionBusy = false;
+
 // Re-renders the nav/build/dig/remove controls from currentLevelIndex +
 // currentLandletLevels, and moves the ground mesh to visually sit at
 // whichever level's own floor is now being viewed — a plain vertical
@@ -4495,8 +4507,16 @@ function navigateToLevel(levelIndex) {
 levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex - 1));
 levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
 
-async function addLevel(direction, button, failureMessage) {
-  button.disabled = true;
+function setLevelButtonsDisabled(disabled) {
+  levelBuildBtn.disabled = disabled;
+  levelDigBtn.disabled = disabled;
+  levelRemoveBtn.disabled = disabled;
+}
+
+async function addLevel(direction, failureMessage) {
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     const level = await addLandletLevel(currentLandletId, direction);
     currentLandletLevels.push(level);
@@ -4510,14 +4530,17 @@ async function addLevel(direction, button, failureMessage) {
     // it, same as every other builder-facing action's error handling here.
     setLevelStatus(err.message || failureMessage, { isError: true });
   } finally {
-    button.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 }
-levelBuildBtn.addEventListener('click', () => addLevel('up', levelBuildBtn, 'Could not build a new level.'));
-levelDigBtn.addEventListener('click', () => addLevel('down', levelDigBtn, 'Could not dig a new level.'));
+levelBuildBtn.addEventListener('click', () => addLevel('up', 'Could not build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', 'Could not dig a new level.'));
 
 levelRemoveBtn.addEventListener('click', async () => {
-  levelRemoveBtn.disabled = true;
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     await deleteLandletLevel(currentLandletId, currentLevelIndex);
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
@@ -4527,7 +4550,8 @@ levelRemoveBtn.addEventListener('click', async () => {
   } catch (err) {
     setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
   } finally {
-    levelRemoveBtn.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 });
 
