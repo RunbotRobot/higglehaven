@@ -2522,7 +2522,9 @@ function auctionBidFromRow(row) {
 
 function nonnegativeInteger(value, field) {
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
+    throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
   return number;
 }
 
@@ -4699,6 +4701,17 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
 // these" simulation while ruling out that abuse.
 const PURCHASE_MAX_QUANTITY = 1000;
+// Same "growth is earned, never purchased" reasoning as
+// PURCHASE_MAX_QUANTITY just above, applied to priceCents/startingBidCents/
+// a bid's amountCents (nonnegativeInteger/optionalInteger below): with no
+// upper bound, a seller could set an astronomical priceCents on their own
+// catalog template and self-purchase it once to mint an arbitrary
+// dallers_balance_cents/daller_earnings_events credit, and the same hole
+// exists on auction bids. $1,000,000 (in cents) stays generous for this
+// dev-mode play economy while ruling out that abuse and, just as
+// importantly, keeping every stored value within Number.isSafeInteger
+// range so it can never silently lose precision once persisted.
+const MAX_MONEY_CENTS = 100_000_000;
 // Same per-IP-throttle mitigation as signup/password-reset/model-upload
 // (checkRateLimit) — this is the one other public, repeatable,
 // balance-crediting endpoint that had no throttle at all, unlike every
@@ -5535,7 +5548,9 @@ function finiteNumber(value, field) {
 function optionalInteger(value, field) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) throw new HttpError(`${field} must be a non-negative integer`, 400);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
+    throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
   return number;
 }
 
