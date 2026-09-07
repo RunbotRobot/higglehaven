@@ -1063,6 +1063,7 @@ trimControls.addEventListener('dragging-changed', (event) => {
     const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
     if (!current) return; // deleted, or otherwise gone, since this drag ended
     const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+    if (!updated) return; // deleted while this crop's model was loading
     const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
     updated.position.set(clamped.x, clamped.y, clamped.z);
     updated.userData.safePosition = updated.position.clone();
@@ -1318,8 +1319,23 @@ async function replaceMeshWithCrop(mesh, crop) {
   const newMesh = await createMeshForInstance(instanceLike);
   if (!newMesh) return mesh;
 
+  // The await above is a real gap the original instance can be deleted
+  // across (e.g. a Delete press while this crop's model is still
+  // loading) — `mesh` itself already got spliced out of productMeshes,
+  // removed from the scene, and disposed by deleteInstance in that case.
+  // Discard the now-orphaned newMesh instead of unconditionally adding it
+  // to the scene: without this check it would still land in `scene`
+  // despite never being registered in productMeshes, becoming a
+  // permanently unselectable "ghost" (every raycast targets
+  // productMeshes, never the raw scene graph) until reload. Returning
+  // null lets every caller bail out the same way they already do for a
+  // deletion caught *before* this function was even called.
   const index = productMeshes.indexOf(mesh);
-  if (index !== -1) productMeshes[index] = newMesh;
+  if (index === -1) {
+    disposeObject(newMesh);
+    return null;
+  }
+  productMeshes[index] = newMesh;
   scene.remove(mesh);
   disposeObject(mesh);
   scene.add(newMesh);
@@ -4433,6 +4449,18 @@ function setLevelStatus(message, { isError = false } = {}) {
 // discarding wherever the builder was actually looking.
 let lastAppliedLevelFloorZ = 0;
 
+// Shared across addLevel (Build Level Above / Dig Level Below) and the
+// Remove handler below — all three mutate currentLevelIndex/
+// currentLandletLevels from an async server round-trip, and each handler
+// used to disable only its own button while in flight, leaving the other
+// two clickable. Two concurrent requests (e.g. Build then Dig before the
+// first resolves) could each independently set currentLevelIndex from
+// their own response, with whichever resolves second winning regardless
+// of click order — UI-state confusion, not data corruption (the server's
+// own depth/footprint/extent-consistency checks still protect that). Same
+// single-flag-across-multiple-triggers idiom as undoRedoBusy below.
+let levelActionBusy = false;
+
 // Re-renders the nav/build/dig/remove controls from currentLevelIndex +
 // currentLandletLevels, and moves the ground mesh to visually sit at
 // whichever level's own floor is now being viewed — a plain vertical
@@ -4479,8 +4507,16 @@ function navigateToLevel(levelIndex) {
 levelDownBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex - 1));
 levelUpBtn.addEventListener('click', () => navigateToLevel(currentLevelIndex + 1));
 
-async function addLevel(direction, button, failureMessage) {
-  button.disabled = true;
+function setLevelButtonsDisabled(disabled) {
+  levelBuildBtn.disabled = disabled;
+  levelDigBtn.disabled = disabled;
+  levelRemoveBtn.disabled = disabled;
+}
+
+async function addLevel(direction, failureMessage) {
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     const level = await addLandletLevel(currentLandletId, direction);
     currentLandletLevels.push(level);
@@ -4494,14 +4530,17 @@ async function addLevel(direction, button, failureMessage) {
     // it, same as every other builder-facing action's error handling here.
     setLevelStatus(err.message || failureMessage, { isError: true });
   } finally {
-    button.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 }
-levelBuildBtn.addEventListener('click', () => addLevel('up', levelBuildBtn, 'Could not build a new level.'));
-levelDigBtn.addEventListener('click', () => addLevel('down', levelDigBtn, 'Could not dig a new level.'));
+levelBuildBtn.addEventListener('click', () => addLevel('up', 'Could not build a new level.'));
+levelDigBtn.addEventListener('click', () => addLevel('down', 'Could not dig a new level.'));
 
 levelRemoveBtn.addEventListener('click', async () => {
-  levelRemoveBtn.disabled = true;
+  if (levelActionBusy) return;
+  levelActionBusy = true;
+  setLevelButtonsDisabled(true);
   try {
     await deleteLandletLevel(currentLandletId, currentLevelIndex);
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
@@ -4511,7 +4550,8 @@ levelRemoveBtn.addEventListener('click', async () => {
   } catch (err) {
     setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
   } finally {
-    levelRemoveBtn.disabled = false;
+    levelActionBusy = false;
+    setLevelButtonsDisabled(false);
   }
 });
 
@@ -4584,6 +4624,11 @@ async function restoreSnapshot(snapshot) {
       mesh.position.set(inst.x, inst.y, inst.z);
       mesh.rotation.set(inst.rotationX, inst.rotationY, inst.rotationZ);
       mesh = await replaceMeshWithCrop(mesh, inst.crop);
+      // A null here means `mesh` was deleted by some other in-flight
+      // action (e.g. a concurrent Delete) while this crop's model was
+      // still loading — nothing left to restore state onto for this
+      // instance, so skip it rather than crash on the null below.
+      if (!mesh) continue;
       // replaceMeshWithCrop only reconciles crop — a Resize scale change
       // (with no crop change alongside it, the common case for an undo/redo
       // jump across just a resize) would otherwise never get restored on a
@@ -5022,6 +5067,7 @@ for (const field of trimAxisFieldEls) {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
       const updated = await replaceMeshWithCrop(current, { ...current.userData.crop, [axis]: clampedLength });
+      if (!updated) return; // deleted while this crop's model was loading
       const clamped = clampToLandlet(updated, updated.position.x, updated.position.y, updated.position.z);
       updated.position.set(clamped.x, clamped.y, clamped.z);
       updated.userData.safePosition = updated.position.clone();
