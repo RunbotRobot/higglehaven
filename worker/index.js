@@ -851,7 +851,7 @@ async function handleCatalog(request, db, route, url, models) {
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
-    if (existing.seller_id) {
+    if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -859,9 +859,14 @@ async function handleCatalog(request, db, route, url, models) {
     // sellerId is forced back to its existing value (it wins the spread since
     // it's listed last) — reassigning a template's seller isn't a feature
     // this endpoint supports, same as landlets never letting PUT change
-    // ownerBuilderId.
+    // ownerBuilderId. Because of that, there's no fresh sellerId here to
+    // validate — it's always exactly whatever the row already had, dangling
+    // or not, so re-running assertReferenceExists on every update would
+    // just re-validate unchanged data and (per the sellerExists comment
+    // above) permanently block updates on a template whose seller has
+    // since deleted their account, contradicting docs/API.md's "same as
+    // null seller_id" promise for that case.
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
-    if (template.sellerId) await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       UPDATE catalog_templates
@@ -880,7 +885,7 @@ async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
-    if (existing.seller_id) {
+    if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -991,7 +996,7 @@ async function handleProductReviews(request, db, route) {
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
     const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (template?.seller_id) {
+    if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
     }
@@ -1248,32 +1253,7 @@ async function handleBuilders(request, db, route) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
-    // #263: without this, deleting the builder cascades straight through
-    // auction_bids.bidder_builder_id (ON DELETE CASCADE) and silently
-    // erases whichever bid this builder currently holds — including one
-    // that's the *current highest* on someone else's still-active auction.
-    // A new bid must strictly exceed the current highest (see
-    // handleAuctionBids' own comment), so a leading bid actively deters
-    // every other bidder for as long as it stands; deleting it right
-    // before the auction resolves lets a real bidder walk back a
-    // commitment that shaped how others bid, at zero cost (a fresh,
-    // unrestricted builder profile is auto-provisioned for the same
-    // logged-in user on their very next request). There's no bid-
-    // withdrawal feature in this app, so a placed bid should be exactly as
-    // binding as it already implicitly is for a builder who doesn't
-    // delete their account — block the deletion instead of notifying
-    // after the fact, since nothing can undo the chilling effect the
-    // now-vanished bid already had on other bidders.
-    const leadingBid = await db.prepare(`
-      SELECT a.auction_id FROM auctions a
-      JOIN auction_bids b ON b.auction_id = a.auction_id
-      WHERE a.status = 'active' AND b.bidder_builder_id = ?
-        AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
-      LIMIT 1
-    `).bind(route[1]).first();
-    if (leadingBid) {
-      throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
-    }
+
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
     // exists — its placed content and version history are cleared, not
@@ -1287,65 +1267,75 @@ async function handleBuilders(request, db, route) {
     `).bind(route[1]).all();
     const landletIds = owned.results.map((row) => row.landlet_id);
 
-    const statements = landletIds.flatMap((landletId) => [
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(landletId),
-      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(landletId),
-      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(landletId),
+    // #263/#279 guard the leading-bidder and with-bids-selling cases below,
+    // but doing so as separate SELECTs checked *before* this batch (as an
+    // earlier version of this handler did) leaves a window where a bid
+    // placed in between could slip through uncaught — found via backlog
+    // audit. Folded into the DELETE's own WHERE clause instead (the same
+    // atomic conditional-write pattern used elsewhere in this file, e.g.
+    // handlePurchaseRefund/the #270 calendar-trigger fix), and every other
+    // statement in this same D1 batch (one atomic transaction) is gated on
+    // this builder row having actually been removed by it — so if either
+    // guard blocks the delete, none of the land-release side effects below
+    // take hold either, exactly as if the whole request had been rejected
+    // up front instead of partially applied.
+    const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
+    const statements = [
       db.prepare(`
-        UPDATE landlets
-        SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
-            claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ?
-      `).bind(landletId),
-    ]);
+        DELETE FROM builders
+        WHERE builder_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            JOIN auction_bids b ON b.auction_id = a.auction_id
+            WHERE a.status = 'active' AND b.bidder_builder_id = ?
+              AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            WHERE a.seller_builder_id = ? AND a.status = 'active'
+              AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+          )
+      `).bind(route[1], route[1], route[1]),
+      ...landletIds.flatMap((landletId) => [
+        db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`DELETE FROM landlet_levels WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
+        db.prepare(`
+          UPDATE landlets
+          SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+              claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE landlet_id = ? AND ${builderGone}
+        `).bind(landletId, route[1]),
+      ]),
+    ];
 
     // Deleting this builder cascades (migrations/0045_auctions.sql,
     // seller_builder_id ON DELETE CASCADE) straight through any auction
-    // where they're the seller, taking every bidder's auction_bids row
-    // with it (auction_bids.auction_id ON DELETE CASCADE) — silently, with
-    // no notification, even for a live auction with real bids on it.
-    // Losing the row itself to the cascade is an accepted dev-mode
-    // simplification, same as pioneer ranks/claimed land above — there's
-    // no owner left for it to belong to, and docs/API.md's auctions
-    // section already treats "no cancelled state, always runs its full
-    // course" as describing the normal timed lifecycle, not this
-    // edge case. What's missing is just telling the bidders their bid
-    // is about to vanish instead of leaving that to an invisible FK
-    // cascade — so notify before the batch's final DELETE cascades it
-    // away. The land itself doesn't need separate handling here — it's
-    // still status='claimed'/owned by this builder throughout an active
-    // auction (see handleStartAuction), so it's already covered by the
-    // greenbelt release above.
-    const { results: sellingAuctions } = await db.prepare(`
-      SELECT * FROM auctions WHERE seller_builder_id = ? AND status = 'active'
-    `).bind(route[1]).all();
-    // One grouped query for every bidder across all of this builder's
-    // active auctions, instead of one query per auction (an N+1 —
-    // #33/#35/#46's same shape, just found in a mutation handler's cleanup
-    // logic instead of a GET list endpoint) — mirrors auctionsFromRowsBatch
-    // below.
-    if (sellingAuctions.length > 0) {
-      const auctionIds = sellingAuctions.map((auction) => auction.auction_id);
-      const placeholders = auctionIds.map(() => '?').join(', ');
-      const { results: bidderRows } = await db.prepare(`
-        SELECT DISTINCT auction_id, bidder_builder_id FROM auction_bids WHERE auction_id IN (${placeholders})
-      `).bind(...auctionIds).all();
-      const biddersByAuction = new Map();
-      for (const { auction_id: auctionId, bidder_builder_id: bidderBuilderId } of bidderRows) {
-        if (!biddersByAuction.has(auctionId)) biddersByAuction.set(auctionId, []);
-        biddersByAuction.get(auctionId).push(bidderBuilderId);
+    // where they're the seller. The #279 guard above guarantees any such
+    // auction still active at delete time has zero bids — there's no one
+    // to notify, and nothing more to do beyond letting the cascade take it
+    // (and its now-nonexistent auction_bids rows) away.
+    const [deleted] = await db.batch(statements);
+    if (deleted.meta.changes === 0) {
+      // One of the two guards blocked it, or (far narrower window) a
+      // concurrent request already deleted this builder out from under
+      // us — re-check purely to pick the right error message; every
+      // statement above already left everything else untouched either way.
+      const stillExists = await db.prepare('SELECT builder_id FROM builders WHERE builder_id = ?').bind(route[1]).first();
+      if (!stillExists) throw new HttpError('Builder not found', 404);
+      const leadingBid = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        JOIN auction_bids b ON b.auction_id = a.auction_id
+        WHERE a.status = 'active' AND b.bidder_builder_id = ?
+          AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+        LIMIT 1
+      `).bind(route[1]).first();
+      if (leadingBid) {
+        throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
       }
-      for (const auction of sellingAuctions) {
-        for (const bidderBuilderId of biddersByAuction.get(auction.auction_id) ?? []) {
-          statements.push(notificationStatement(db, bidderBuilderId,
-            `The auction for ${auction.landlet_id} was called off because the seller's account was deleted — your bid is void.`));
-        }
-      }
+      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
     }
-
-    statements.push(db.prepare('DELETE FROM builders WHERE builder_id = ?').bind(route[1]));
-    await db.batch(statements);
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
 
@@ -1427,6 +1417,24 @@ function assertOwner(actualOwnerId, sessionOwnerId, message) {
   if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
 }
 
+// A row's own seller_id column can be non-null yet dangling — pointing at
+// a seller that DELETE /api/sellers/:sellerId already removed (see that
+// handler's own comment: intentionally left as-is, "the same way a
+// template can already have a null seller_id"). A plain truthiness check
+// on seller_id treats that dangling reference as still-owned instead,
+// since no live session can ever match a seller_id that no longer exists
+// — permanently locking the row out of every ownership-gated mutation
+// (catalog template PATCH/DELETE, review moderation, refunds), which
+// contradicts docs/API.md's explicit "same as null" promise. Callers
+// that currently do `if (row.seller_id)` before an ownership check should
+// do `if (row.seller_id && await sellerExists(db, row.seller_id))`
+// instead, so a dangling id falls through to whatever that call site
+// already does for a genuinely null one.
+async function sellerExists(db, sellerId) {
+  const row = await db.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  return !!row;
+}
+
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
 // catalog_templates.seller_id references this table's IDs now, not a
 // builder's. Simpler than handleBuilders: a seller owns no land, so
@@ -1487,6 +1495,24 @@ async function handleSellers(request, db, route) {
 // and no DELETE since a read notification is still useful history for
 // "wait, when did that change?"
 async function handleNotifications(request, db, route, url) {
+  // Ahead of the generic list GET below (same "specific path before generic
+  // CRUD" ordering handleBuilders' own GET /me uses) — the list itself is
+  // capped at 100 rows (no pagination, matching this file's other
+  // uncapped-in-practice lists like bundles/purchases), so its own length
+  // can't answer "how many are unread" once a builder has more than that —
+  // found via backlog audit: a popular auction alone can generate 100+ bid
+  // notifications for its seller, at which point the unread badge
+  // (refreshNotificationsBadge in src/main.js) was silently undercounting
+  // by reading the capped list's own .length. A dedicated COUNT query has
+  // no such cap.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'unread-count') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const count = await db.prepare(`
+      SELECT COUNT(*) AS count FROM notifications WHERE builder_id = ? AND read_at IS NULL
+    `).bind(sessionBuilder.builder_id).first();
+    return json({ count: count.count });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderIdParam = url.searchParams.get('builderId');
@@ -1627,7 +1653,15 @@ async function handleFriendships(request, db, route, url) {
     assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
-    await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
+    // Found via backlog audit: without checking this UPDATE's own
+    // meta.changes, a concurrent DELETE (the requester cancelling, or
+    // either side unfriending) landing between the existence check above
+    // and this UPDATE would silently affect 0 rows — the follow-up SELECT
+    // below then returns undefined, and dereferencing
+    // updated.requester_builder_id throws an uncaught TypeError (a 500)
+    // instead of the clean 404 this should be.
+    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
+    if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
@@ -4494,12 +4528,16 @@ function signPostFromRow(row) {
 }
 
 // Events on a "community calendar" instance (docs/SPEC.md §6,
-// migrations/0042) — structurally identical to handleSignPosts above
-// (nested under /instances/:id/events for the same "never exists
-// independent of its instance" reasoning, same moderation-gated-to-the-
-// hosting-landlet's-owner DELETE), deliberately kept as its own separate
-// function and table rather than a shared "board" abstraction over both —
-// see migrations/0042's own comment on why.
+// migrations/0042) — nested under /instances/:id/events for the same
+// "never exists independent of its instance" reasoning handleSignPosts
+// above uses, and the same moderation-gated-to-the-hosting-landlet's-owner
+// DELETE — but POST is deliberately NOT structurally identical to
+// handleSignPosts: docs/SPEC.md §6 explicitly calls calendar events
+// "builder-authored," unlike sign posts' "shopper-authored" free-text
+// authorLabel. Only the hosting landlet's own owner may post one, and
+// authorLabel comes from their real builder profile, not client input —
+// otherwise anyone could post a "confetti-cannon" trigger (or any other
+// event) on someone else's shop under that builder's own name.
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -4513,13 +4551,14 @@ async function handleCalendarEvents(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id, is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    const instance = await db.prepare('SELECT instance_id, is_community_calendar, landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     if (!instance.is_community_calendar) {
       throw new HttpError('This placed instance is not marked as a community calendar', 400);
     }
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     const input = await readJson(request);
-    const authorLabel = stringValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // scheduledAt is optional — most events are just a plain announcement
@@ -4532,7 +4571,7 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = `event-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at) VALUES (?, ?, ?, ?, ?)
-    `).bind(eventId, instanceId, authorLabel, text, scheduledAt).run();
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt).run();
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
   }
@@ -4781,7 +4820,11 @@ async function handlePurchaseRefund(request, db, purchaseId) {
   // read-only/creation paths on ownerless resources do elsewhere — it
   // needs admin instead, the same fallback used for the other genuinely
   // ownerless-but-sensitive mutations (see requireAdmin's other callers).
-  if (purchase.seller_id) {
+  // sellerExists also catches a *dangling* (non-null but deleted) seller_id
+  // the same way — otherwise a refund on a purchase whose seller has since
+  // deleted their account would 403 forever, since no live session can
+  // ever match an id that no longer exists in `sellers`.
+  if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
   } else {

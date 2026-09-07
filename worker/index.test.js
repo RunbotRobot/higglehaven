@@ -2425,10 +2425,10 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const rejected = await api('/instances/not-a-calendar-instance/events', {
+    const rejected = await api('/instances/not-a-calendar-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/not marked as a community calendar/);
   });
@@ -2450,26 +2450,45 @@ describe('Community calendar', () => {
     expect(emptyList.response.status).toBe(200);
     expect(emptyList.body.events).toEqual([]);
 
-    const missingText = await api('/instances/calendar-with-events/events', {
+    // docs/SPEC.md §6: calendar events are builder-authored, unlike sign
+    // posts — POST requires a session logged in as the hosting landlet's
+    // own owner, unlike GET/the sign-posts POST above.
+    const unauthenticated = await api('/instances/calendar-with-events/events', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder' }),
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
     });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const otherBuilder = await signupBuilder('community-calendar-other-builder');
+    const wrongBuilder = await api('/instances/calendar-with-events/events', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!' }),
+    }));
+    expect(wrongBuilder.response.status).toBe(403);
+
+    const missingText = await api('/instances/calendar-with-events/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
     expect(missingText.response.status).toBe(400);
 
-    const tooLong = await api('/instances/calendar-with-events/events', {
+    const tooLong = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'x'.repeat(281) }),
-    });
+      body: JSON.stringify({ text: 'x'.repeat(281) }),
+    }));
     expect(tooLong.response.status).toBe(400);
 
-    const posted = await api('/instances/calendar-with-events/events', {
+    // authorLabel is not client-supplied — it's derived from the session
+    // builder's own label, even if a client tries to send a different one
+    // (impersonation is exactly the bug this gate closes).
+    const posted = await api('/instances/calendar-with-events/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire night, Friday 8pm!' }),
-    });
+      body: JSON.stringify({ authorLabel: 'Someone Else Entirely', text: 'Bonfire night, Friday 8pm!' }),
+    }));
     expect(posted.response.status).toBe(201);
     expect(posted.body.event).toMatchObject({
       instanceId: 'calendar-with-events',
-      authorLabel: 'A Builder',
+      authorLabel: calendarBuilder.builder.label,
       text: 'Bonfire night, Friday 8pm!',
     });
     expect(posted.body.event.eventId).toMatch(/^event-/);
@@ -2505,10 +2524,10 @@ describe('Community calendar', () => {
         isCommunityCalendar: true,
       }),
     }));
-    await api('/instances/calendar-to-delete/events', {
+    await api('/instances/calendar-to-delete/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Market day' }),
-    });
+      body: JSON.stringify({ text: 'Market day' }),
+    }));
     await api('/instances/calendar-to-delete', calendarBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/calendar-to-delete/events');
@@ -2528,23 +2547,23 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const plain = await api('/instances/calendar-scheduled-instance/events', {
+    const plain = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     expect(plain.body.event.scheduledAt).toBeNull();
     expect(plain.body.event.triggeredAt).toBeNull();
 
-    const invalid = await api('/instances/calendar-scheduled-instance/events', {
+    const invalid = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bad date', scheduledAt: 'not a date' }),
-    });
+      body: JSON.stringify({ text: 'Bad date', scheduledAt: 'not a date' }),
+    }));
     expect(invalid.response.status).toBe(400);
 
-    const scheduled = await api('/instances/calendar-scheduled-instance/events', {
+    const scheduled = await api('/instances/calendar-scheduled-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Bonfire!', scheduledAt: '2026-08-26T20:00:00.000Z' }),
+    }));
     expect(scheduled.response.status).toBe(201);
     expect(scheduled.body.event.scheduledAt).toBe('2026-08-26T20:00:00.000Z');
     expect(scheduled.body.event.triggeredAt).toBeNull();
@@ -2563,20 +2582,20 @@ describe('Community calendar', () => {
       }),
     }));
 
-    const future = await api('/instances/calendar-trigger-instance/events', {
+    const future = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Future event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
     const futureEventId = future.body.event.eventId;
     const notDueYet = await api(`/instances/calendar-trigger-instance/events/${futureEventId}/trigger`, { method: 'POST' });
     expect(notDueYet.response.status).toBe(200);
     expect(notDueYet.body.triggered).toBe(false);
     expect(notDueYet.body.event.triggeredAt).toBeNull();
 
-    const noSchedule = await api('/instances/calendar-trigger-instance/events', {
+    const noSchedule = await api('/instances/calendar-trigger-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Just a note' }),
-    });
+      body: JSON.stringify({ text: 'Just a note' }),
+    }));
     const noScheduleTrigger = await api(`/instances/calendar-trigger-instance/events/${noSchedule.body.event.eventId}/trigger`, { method: 'POST' });
     expect(noScheduleTrigger.body.triggered).toBe(false);
 
@@ -2620,10 +2639,10 @@ describe('Community calendar', () => {
         isCommunityCalendar: true,
       }),
     }));
-    const created = await api('/instances/calendar-race-instance/events', {
+    const created = await api('/instances/calendar-race-instance/events', calendarBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Builder', text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
-    });
+      body: JSON.stringify({ text: 'Race event', scheduledAt: '2099-01-01T00:00:00.000Z' }),
+    }));
     const eventId = created.body.event.eventId;
     await env.DB.prepare(`UPDATE calendar_events SET scheduled_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?`).bind(eventId).run();
 
@@ -2897,6 +2916,55 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // DELETE /api/sellers/:sellerId deliberately leaves a template's
+  // seller_id dangling rather than cleaning it up — docs/API.md says
+  // that's "the same as" a template with a null seller_id, which review
+  // moderation and catalog PATCH/DELETE both already leave unrestricted.
+  // Before this test's fix, the plain `if (template.seller_id)` truthiness
+  // check treated that dangling id as still-owned, and since no live
+  // session can ever match an id that no longer exists, moderation became
+  // permanently blocked for everyone, including admins.
+  it('unlocks review moderation, and catalog PATCH/DELETE, once the template\'s seller has since deleted their account', async () => {
+    const seller = await signupSeller('review-moderation-deleted-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-moderation-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+    expect(sellerDeleted.response.status).toBe(200);
+
+    // A dangling seller_id now falls through to the same unrestricted path
+    // a genuinely null seller_id already takes — no session required.
+    const patched = await api(`/catalog/${templateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed after seller deletion' }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.name).toBe('Renamed after seller deletion');
+
+    const reviewDeleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    expect(reviewDeleted.response.status).toBe(200);
+
+    const templateDeleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+    expect(templateDeleted.response.status).toBe(200);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
@@ -3018,7 +3086,11 @@ describe('Builders', () => {
     expect(deleted.body.releasedLandletIds).toEqual([]);
   });
 
-  it('notifies bidders before their bid vanishes when the seller deletes their account mid-auction', async () => {
+  // #279: the owner's stated policy is that once an auction has bids, the
+  // seller can no longer back out of it — including by deleting their own
+  // account. This used to succeed (cascading the auction+bids away and
+  // just notifying the bidder after the fact); it's blocked outright now.
+  it('rejects deleting a builder while their own active auction has bids', async () => {
     const seller = await signupBuilder('auction-seller-deleted');
     const bidder = await signupBuilder('auction-seller-deleted-bidder');
     await createGreenbeltLandlet('auction-seller-deleted-landlet');
@@ -3033,24 +3105,39 @@ describe('Builders', () => {
     expect(bid.response.status).toBe(201);
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds).toEqual(['auction-seller-deleted-landlet']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    // The FK cascade on seller_builder_id still removes the auction (and
-    // its bids) outright, same as before this fix — that part is an
-    // accepted dev-mode simplification (see the handler's own comment).
-    // What's new is the bidder actually being told, instead of their bid
-    // just silently disappearing.
+    // Nothing was touched — the auction, its bid, and the seller's builder
+    // row all still exist.
+    const auction = await api(`/auctions/${auctionId}`);
+    expect(auction.response.status).toBe(200);
+    expect(auction.body.auction.status).toBe('active');
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(1);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(seller.builderId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('allows deleting a builder whose own active auction has no bids yet', async () => {
+    const seller = await signupBuilder('zero-bid-auction-seller-deleted');
+    await createGreenbeltLandlet('zero-bid-auction-seller-deleted-landlet');
+    await api('/landlets/zero-bid-auction-seller-deleted-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/zero-bid-auction-seller-deleted-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['zero-bid-auction-seller-deleted-landlet']);
+
+    // No bids existed to protect — the auction cascades away same as before.
     const auction = await api(`/auctions/${auctionId}`);
     expect(auction.response.status).toBe(404);
 
-    const notices = await api('/notifications', bidder.session());
-    expect(notices.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('called off because the seller\'s account was deleted'),
-    }));
-
-    // The land itself still goes back to greenbelt for someone else to claim.
-    const landlet = await api('/landlets/auction-seller-deleted-landlet');
+    const landlet = await api('/landlets/zero-bid-auction-seller-deleted-landlet');
     expect(landlet.body.landlet.status).toBe('greenbelt');
   });
 
@@ -3150,19 +3237,20 @@ describe('Builders', () => {
     expect(deleted.response.status).toBe(200);
   });
 
-  it('notifies every bidder across multiple active auctions when the seller deletes their account (batched, not one query per auction)', async () => {
+  // #279's guard has to catch a bid on *any* of a seller's active auctions,
+  // not just a single one — this sets up two, with the bid on only the
+  // second, to prove the check isn't limited to "their one auction."
+  it('rejects deleting a builder when only one of their several active auctions has a bid', async () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
-    const bidderOne = await signupBuilder('multi-auction-bidder-one');
-    const bidderTwo = await signupBuilder('multi-auction-bidder-two');
+    const bidder = await signupBuilder('multi-auction-bidder');
 
     // A builder can only ever *claim* one greenbelt landlet directly, but
     // docs/SPEC.md §0/§5's auctions let them acquire additional
     // already-claimed land on top of that (see "resolves a winning
     // auction even when the bidder already owns a claimed landlet" above)
     // — so the seller ends up owning two landlets this way, the only way
-    // one builder can ever be running more than one active auction at
-    // once and actually exercise this batching.
+    // one builder can ever be running more than one active auction at once.
     await createGreenbeltLandlet('multi-auction-landlet-a');
     await api('/landlets/multi-auction-landlet-a/claim', seller.session({ method: 'POST' }));
     await createGreenbeltLandlet('multi-auction-landlet-b');
@@ -3185,40 +3273,22 @@ describe('Builders', () => {
     const startedB = await api('/landlets/multi-auction-landlet-b/auction', seller.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
     }));
-    const auctionIdA = startedA.body.auction.auctionId;
     const auctionIdB = startedB.body.auction.auctionId;
 
-    // Auction A gets two distinct bidders, auction B gets one — exercises
-    // the grouped-by-auction_id batching, not just a single auction/bidder.
-    await api(`/auctions/${auctionIdA}/bids`, bidderOne.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
-    }));
-    await api(`/auctions/${auctionIdA}/bids`, bidderTwo.session({
-      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
-    }));
-    await api(`/auctions/${auctionIdB}/bids`, bidderOne.session({
+    // Only auction B gets a bid — auction A stays at zero.
+    await api(`/auctions/${auctionIdB}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 700 }),
     }));
 
     const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
-    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-auction-landlet-a', 'multi-auction-landlet-b']);
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({ error: 'Cannot delete this builder while their own auction has bids' });
 
-    const noticesOne = await api('/notifications', bidderOne.session());
-    const messagesOne = noticesOne.body.notifications.map((n) => n.message);
-    expect(messagesOne).toEqual(expect.arrayContaining([
-      expect.stringContaining('multi-auction-landlet-a'),
-      expect.stringContaining('multi-auction-landlet-b'),
-    ]));
-
-    const noticesTwo = await api('/notifications', bidderTwo.session());
-    expect(noticesTwo.body.notifications).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('multi-auction-landlet-a'),
-    }));
-    // bidderTwo never bid on landlet-b's auction — shouldn't hear about it.
-    expect(noticesTwo.body.notifications.map((n) => n.message)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining('multi-auction-landlet-b')]),
-    );
+    // Nothing was touched, including auction A which never had a bid.
+    const auctionAAfter = await api(`/auctions/${startedA.body.auction.auctionId}`);
+    expect(auctionAAfter.body.auction.status).toBe('active');
+    const auctionBAfter = await api(`/auctions/${auctionIdB}`);
+    expect(auctionBAfter.body.auction.status).toBe('active');
   });
 
   it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
@@ -3878,6 +3948,48 @@ describe('Notifications', () => {
     }));
     const ownerAfterNewBid = await api('/notifications?unreadOnly=true', owner.session());
     expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
+  });
+
+  // Found via backlog audit: GET /notifications has no pagination, just a
+  // flat LIMIT 100 — fine for the history list, but the unread badge used
+  // to read straight off that capped list's own length
+  // (refreshNotificationsBadge in src/main.js), silently undercounting
+  // once a builder passed 100 unread (e.g. a popular auction's worth of
+  // bid notifications). unread-count is a dedicated COUNT query instead.
+  it('reports the true unread count past the notifications list\'s own 100-row cap', async () => {
+    const owner = await signupBuilder('notif-count-owner');
+    const statements = Array.from({ length: 105 }, (_, i) =>
+      env.DB.prepare('INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)')
+        .bind(`notif-count-${i}`, owner.builderId, `Test notification ${i}`));
+    await env.DB.batch(statements);
+
+    const listed = await api('/notifications?unreadOnly=true', owner.session());
+    expect(listed.body.notifications).toHaveLength(100);
+
+    const count = await api('/notifications/unread-count', owner.session());
+    expect(count.response.status).toBe(200);
+    expect(count.body).toEqual({ count: 105 });
+
+    // Marking one read drops the true count but not below what the capped
+    // list alone could ever have shown.
+    await api(`/notifications/notif-count-0`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    const countAfter = await api('/notifications/unread-count', owner.session());
+    expect(countAfter.body).toEqual({ count: 104 });
+  });
+
+  it('requires a session for unread-count and never counts another builder\'s notifications', async () => {
+    const { owner } = await seedNotifications('unread-count-auth');
+    const unauthenticated = await api('/notifications/unread-count');
+    expect(unauthenticated.response.status).toBe(401);
+
+    const other = await signupBuilder('notif-count-other');
+    const otherCount = await api('/notifications/unread-count', other.session());
+    expect(otherCount.body).toEqual({ count: 0 });
+
+    const ownerCount = await api('/notifications/unread-count', owner.session());
+    expect(ownerCount.body.count).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -4963,7 +5075,12 @@ describe('Simulated purchases', () => {
     }
     const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
     expect(limited.response.status).toBe(429);
-  }, 20000);
+  }, 45000); // matches the sibling burst-race test below — 30 sequential
+  // round trips reliably finishes in under a second in isolation, but a
+  // long-running CI worker (this whole file, 300+ tests, one process) can
+  // occasionally push it past 20s on nothing but scheduling contention,
+  // not a real regression — this pre-existing flake has now blocked two
+  // separate unrelated PRs' CI runs this session for exactly that reason.
 
   it('rate-limits a concurrent burst to exactly the max, not more — regression test for checkRateLimit\'s check-then-act race', async () => {
     // checkRateLimit used to run a separate SELECT COUNT(*) then INSERT;
@@ -5197,6 +5314,47 @@ describe('Simulated purchases', () => {
     const refunded = await api(`/purchases/${purchaseId}/refund`, owningSeller.session({ method: 'POST' }));
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
+  });
+
+  // DELETE /api/sellers/:sellerId deliberately leaves catalog_templates
+  // (and therefore purchases) pointing at the now-deleted seller_id rather
+  // than cleaning it up — docs/API.md says that's "the same as" a template
+  // that already has a null seller_id. Before this test's fix, the refund
+  // gate's plain `if (purchase.seller_id)` truthiness check treated that
+  // dangling id as still-owned, so no session (not even admin) could ever
+  // match it — the purchase became permanently un-refundable.
+  it('falls back to admin refunding a purchase once the product\'s seller has since deleted their account', async () => {
+    const seller = await signupSeller('purchase-refund-deleted-seller');
+    const builder = await signupBuilder('purchase-refund-deleted-seller-builder');
+    await createGreenbeltLandletWithArea('purchase-refund-deleted-seller-landlet', 1000);
+    await claim('purchase-refund-deleted-seller-landlet', builder);
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-refund-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 2500,
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-refund-deleted-seller-instance', 'purchase-refund-deleted-seller-landlet', 'purchase-refund-deleted-seller-template', builder);
+
+    const purchased = await api('/instances/purchase-refund-deleted-seller-instance/purchase', { method: 'POST' });
+    const { purchaseId } = purchased.body.purchase;
+
+    const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+    expect(sellerDeleted.response.status).toBe(200);
+
+    const nonAdmin = await signupBuilder('purchase-refund-deleted-seller-nonadmin');
+    const wrongSession = await api(`/purchases/${purchaseId}/refund`, nonAdmin.session({ method: 'POST' }));
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchase.refundedAt).not.toBeNull();
   });
 
   it('lets the product\'s own seller list its sales via GET /purchases?templateId=, and rejects a different seller', async () => {
