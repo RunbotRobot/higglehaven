@@ -489,14 +489,19 @@ placed content stay intact) — an acceptable one-time cost specifically
 because this app has no real users yet; see the migration's own comment.
 
 `builders.last_active_at` (migrations/0067) is an internal-only column,
-never returned in any Builder object below — `requireSessionBuilder` in
-`worker/index.js` bumps it on every real builder-owned mutation (claiming,
-placing, bidding, publishing, ...), not on a mere signup or `GET
-/api/builders/me` session check. It's prerequisite infrastructure for a
-future inactivity-triggered auction job (docs/SPEC.md §5's "greenbelt via
-inactivity"), which doesn't exist yet — see the tracking issue for that.
-`NULL` for any builder who hasn't triggered a real mutation since this
-column was added, deliberately not backfilled to any guessed value.
+never returned in any Builder object below. Bumped in three places:
+`requireSessionBuilder` in `worker/index.js` on every real builder-owned
+mutation (claiming, placing, bidding, publishing, ...); `handleLogin`, on
+every successful login; and `handleSignup`, at account creation. Login and
+signup deliberately bump it too, not just a mutation — owner decision
+(#325, Control Room, 2026-09-07): "any login... even if only logging in
+for shopping or selling" counts as activity, so a builder who only browses
+isn't wrongly treated as inactive. It's the activity signal
+`runInactivityAuctions` (see "Inactivity-triggered auto-listing" below)
+reads to find abandoned land. `NULL` for any builder who hasn't logged in
+or triggered a real mutation since this column was added, deliberately not
+backfilled to any guessed value — see that migration's own comment for why
+(and `runInactivityAuctions`'s own comment for how it treats that case).
 
 ### `GET /api/builders/me`
 
@@ -577,11 +582,17 @@ claimed by a builder that no longer exists. The landlet's own shape
 (`polygon`/`center`) is untouched, so it's immediately claimable again,
 not regenerated.
 
-This is deliberately more destructive than a hypothetical future
-inactivity-based reclaim should be: that case should clear the *active*
-build but keep the builder's own version history, in case they come back
-and want to recreate it on a new landlet. Deleting the builder removes the
-only place that history could live, so there's nothing left to preserve.
+Inactivity-based reclaim (#325, "Inactivity-triggered auto-listing" under
+"Land acquisition auctions" below) turned out to be exactly this
+destructive too, not gentler as an earlier draft of this note assumed: it
+reuses the standard `startingBidCents: 0` auction path verbatim (#199), and
+that path already clears placed instances and version history on release
+to greenbelt, regardless of what triggered it. The difference from
+deleting the builder outright is narrower than this note used to suggest —
+the builder's account, dállers balance, and any *other* landlets they own
+all survive; only this one abandoned landlet's build is cleared, and only
+after a real auction (with the usual claim-lock/bidding window) rather than
+instantly.
 
 Any `purchases` row where this builder was the hosting/earning party has
 its `builderId` set to `null` rather than being deleted along with the
@@ -3106,14 +3117,8 @@ neither has anywhere to attach to in this dev-mode backend yet:
   ledger (not a UI-only number) so a winning seller's proceeds land
   somewhere meaningful, ready for balance-gating to be added later without
   a schema change.
-- **Inactivity-triggered auto-listing.** Every auction reachable today is
-  builder-initiated (`POST /api/landlets/:id/auction`) — there's no
-  inactivity-detection job in this dev-mode backend to trigger one
-  automatically, so the spec's "default 24-hour duration for inactivity-
-  triggered listings" just applies as the uniform default for every
-  auction, voluntary or not.
-- **No scheduled resolution job.** There's no Cloudflare Cron Trigger
-  wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
+- **No scheduled resolution job.** There's no Cloudflare Cron Trigger that
+  resolves auctions directly. Resolution is purely lazy: `GET /api/auctions` sweeps and
   resolves due auctions before returning results (`resolveDueAuctions` in
   `worker/index.js`), capped at `AUCTION_SWEEP_LIMIT` (25) oldest-due-first
   per call so one request can't be forced into unbounded sequential
@@ -3280,6 +3285,32 @@ cap" below) is the intended long-run check on this kind of accumulation,
 but per its own "Deliberate scope boundary" note it's deliberately
 tracking-only and not enforced yet — not something this issue's scope
 extended to changing.
+
+### Inactivity-triggered auto-listing
+
+docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation mechanic
+(#325). Runs from a Cloudflare Cron Trigger (`runInactivityAuctions` in
+`worker/index.js`, the same schedule as `autoGrowWorldIfNeeded`/
+`pruneExpiredAuthState` — `wrangler.jsonc`'s `triggers.crons`), not from
+any request.
+
+Every 10 minutes (the cron's own interval), it finds up to 25 claimed
+landlets whose owner's `builders.last_active_at` is more than **30 days**
+old (#325, owner decision — see `builders.last_active_at` above for what
+counts as activity) and that don't already have an active auction, and
+starts one on each — exactly `POST /api/landlets/:id/auction`'s own
+`startingBidCents: 0` path (#199: an explicit, unconditional willingness to
+relinquish, freeing the claim-lock immediately — see "Claim-lock release
+timing" above) and its own default 24-hour duration, just triggered by the
+job instead of the builder's own request. The seller gets a notification
+either way, same as any other builder-facing event in this API.
+
+A builder whose `last_active_at` is still `NULL` (never logged in or
+mutated anything since migrations/0067 added the column) is left alone —
+not swept up as "inactive by default." See that migration's and
+`runInactivityAuctions`'s own comments for why: there's no real signal to
+judge them by yet, and guessing would risk auto-auctioning a genuinely
+active builder's land.
 
 ### Notifications
 

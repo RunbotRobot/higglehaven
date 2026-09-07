@@ -195,6 +195,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 
 **Land acquisition — simplified auction system (supersedes earlier multi-phase English+Dutch design):**
 - Default **24-hour duration** for inactivity-triggered listings; builder-initiated voluntary auctions may set custom duration.
+- **Inactivity threshold (#325, owner decision):** a builder is considered inactive after **30 days**. Activity is any login — shopping, selling, or building all count, not only a write/mutation — so a builder who only browses stays "active" the same as one who's actively building.
 - **Starting bid defaults to $0** (no calculated-value formula, no reserve price) — reserve prices are "functionally dishonest."
 - **A $0 starting bid = explicit willingness to relinquish for free if no bids arrive.** A ≥$0.01 starting bid = builder wants to retain if unsold; that lánd is NOT greenbelt and land cap is not freed. **Land cap frees once a bid occurs** (any bid guarantees eventual transfer) **— or immediately if the builder set $0 and committed to unconditional relinquishment**, resolving the "free capacity before a slow auction resolves" problem.
 - Dállers raised in a successful auction go to the previously-inactive builder's account, in case they return.

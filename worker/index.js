@@ -236,6 +236,9 @@ export default {
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
+    ctx.waitUntil(runInactivityAuctions(env.DB).catch((error) => {
+      console.error('runInactivityAuctions failed', error);
+    }));
   },
 };
 
@@ -1422,11 +1425,17 @@ async function requireSessionBuilder(request, db) {
   // see migrations/0067's own comment for why neither of this table's
   // existing timestamps works for that. Bumped here rather than at each
   // of this function's own many call sites, since every one of them is
-  // already a builder-owned mutation by definition.
+  // already a builder-owned mutation by definition. handleLogin (#325)
+  // separately bumps the same column right at login — see its own comment
+  // for why a mutation alone is too narrow a definition of "active."
+  await touchBuilderActivity(db, builder.builder_id);
+  return builder;
+}
+
+async function touchBuilderActivity(db, builderId) {
   await db.prepare(
     `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
-  ).bind(builder.builder_id).run();
-  return builder;
+  ).bind(builderId).run();
 }
 
 // Thrown wherever an existing row's own owner column doesn't match the
@@ -2364,18 +2373,89 @@ async function recomputeLandCapsBatch(db, rows) {
 const AUCTION_SWEEP_LIMIT = 25;
 
 // Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
-// each in turn — the closest this dev-mode backend gets to a real scheduled
-// job (see docs/API.md's own note on why: no Cron Trigger is wired up, so
-// resolution is purely lazy, triggered by whatever request happens to
-// touch auctions next). Called at the top of the list endpoint so a
-// shopper browsing auctions always sees current state without needing to
-// separately poll or trigger resolution themselves.
+// each in turn — no Cron Trigger resolves auctions directly (see docs/
+// API.md's own note on why), so resolution is purely lazy, triggered by
+// whatever request happens to touch auctions next. Called at the top of
+// the list endpoint so a shopper browsing auctions always sees current
+// state without needing to separately poll or trigger resolution
+// themselves.
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
     SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ORDER BY ends_at LIMIT ?
   `).bind(AUCTION_SWEEP_LIMIT).all();
   for (const row of results) await resolveAuction(db, row);
+}
+
+// #325: docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation
+// mechanic, run from the default export's scheduled() below (same Cron
+// Trigger as autoGrowWorldIfNeeded/pruneExpiredAuthState). Owner decision
+// (Control Room, 2026-09-07): 30-day inactivity threshold; "any login...
+// even if only logging in for shopping or selling" counts as activity —
+// see touchBuilderActivity's call sites (handleLogin, handleSignup,
+// requireSessionBuilder) for where last_active_at actually gets bumped.
+//
+// Builders whose last_active_at is still NULL are deliberately left alone
+// here — migrations/0067's own comment explains why: NULL means "never
+// tracked since this column existed," not "definitely inactive," and
+// treating every pre-existing builder as equally ancient the moment this
+// job first runs would auto-auction real, active builders' land on day
+// one purely for lack of a signal, exactly the hazard #325's own
+// investigation flagged before last_active_at existed at all.
+const INACTIVITY_AUCTION_THRESHOLD_DAYS = 30;
+// Same reasoning as AUCTION_SWEEP_LIMIT just above: caps how much work one
+// scheduled invocation takes on, so a large backlog clears over a few runs
+// (this cron fires every 10 minutes per wrangler.jsonc) instead of one run
+// trying to auction off everything at once.
+const INACTIVITY_AUCTION_SWEEP_LIMIT = 25;
+
+async function runInactivityAuctions(db) {
+  const cutoff = new Date(Date.now() - INACTIVITY_AUCTION_THRESHOLD_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // Only a builder's currently-claimed land is eligible, and only if it
+  // doesn't already have an active auction (voluntary or a previous run of
+  // this same job) — the same "no double-auction" guard handleStartAuction
+  // enforces, checked here too since two callers can't otherwise be relied
+  // on to agree.
+  const { results } = await db.prepare(`
+    SELECT l.landlet_id AS landlet_id, l.owner_builder_id AS builder_id
+    FROM landlets l
+    JOIN builders b ON b.builder_id = l.owner_builder_id
+    WHERE l.status = 'claimed'
+      AND b.last_active_at IS NOT NULL
+      AND b.last_active_at < ?
+      AND NOT EXISTS (SELECT 1 FROM auctions a WHERE a.landlet_id = l.landlet_id AND a.status = 'active')
+    LIMIT ?
+  `).bind(cutoff, INACTIVITY_AUCTION_SWEEP_LIMIT).all();
+
+  let listed = 0;
+  for (const row of results) {
+    // Exactly handleStartAuction's own $0-starting-bid path (#199: "$0 =
+    // explicit willingness to relinquish for free," and its land is freed
+    // for others to claim the instant this auction starts, not only once
+    // it resolves — see "Claim-lock release timing" in docs/API.md) and
+    // its own default 24-hour duration ("default 24-hour duration for
+    // inactivity-triggered listings," docs/SPEC.md §5) — this job simply
+    // reaches the same starting point a voluntary auction would, on the
+    // inactive builder's behalf instead of by their own action. Same
+    // atomic INSERT-with-NOT-EXISTS idiom, guarding against a voluntary
+    // auction starting on this exact landlet between the SELECT above and
+    // this INSERT.
+    const auctionId = `auction-${crypto.randomUUID()}`;
+    const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const inserted = await db.prepare(`
+      INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
+      SELECT ?, ?, ?, 0, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
+      )
+    `).bind(auctionId, row.landlet_id, row.builder_id, endsAt, row.landlet_id).run();
+    if (inserted.meta.changes === 0) continue;
+    await notificationStatement(db, row.builder_id,
+      `Your landlet ${row.landlet_id} was auto-listed with a $0 starting bid after ${INACTIVITY_AUCTION_THRESHOLD_DAYS} days of inactivity — log back in and start building to keep future land from being auto-listed.`,
+    ).run();
+    listed++;
+  }
+  return { listed };
 }
 
 // Single-auction version of the same check, used wherever one specific
@@ -3025,8 +3105,15 @@ async function handleSignup(request, env, db, url) {
   // handleMySeller below) — selling is the more opt-in of the two per that
   // same section ("uploading a product needs a seller identity chosen,
   // quite apart from whichever builder identity is active").
+  const newBuilderId = `builder-${crypto.randomUUID()}`;
   await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(`builder-${crypto.randomUUID()}`, username, userId).run();
+    .bind(newBuilderId, username, userId).run();
+  // #325: a brand-new signup is obviously "active" right now — same "any
+  // login counts" reasoning as handleLogin's own touchBuilderActivity call
+  // below, just at account-creation time instead of a returning login, so
+  // this builder doesn't sit at last_active_at: NULL (migrations/0067's
+  // "genuinely never tracked yet" state) until their first real mutation.
+  await touchBuilderActivity(db, newBuilderId);
 
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
   const sessionToken = await createSession(db, userId);
@@ -3112,6 +3199,15 @@ async function handleLogin(request, db, url) {
   `).bind(row.user_id).run();
 
   const sessionToken = await createSession(db, row.user_id);
+  // #325's owner decision (Control Room, 2026-09-07): "any login" counts as
+  // activity for the inactivity-auction threshold, "even if only logging in
+  // for shopping or selling" — deliberately broader than requireSessionBuilder's
+  // existing per-mutation bump above, which only fires on an actual write and
+  // would otherwise treat a session spent purely browsing/shopping as
+  // inactive. getOrCreateBuilderForUser mirrors requireSessionBuilder's own
+  // lazy-provisioning, since a brand-new account has no builder row yet.
+  const builder = await getOrCreateBuilderForUser(db, row);
+  await touchBuilderActivity(db, builder.builder_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
   return json(
     { user: userFromRow(updated) },
