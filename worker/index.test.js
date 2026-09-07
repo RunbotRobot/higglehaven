@@ -3148,29 +3148,27 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
-  // #336: prerequisite infrastructure for #325's inactivity-triggered
-  // auctions — requireSessionBuilder bumps last_active_at on every real
-  // builder-owned mutation, but not on mere signup/session-check reads
-  // (GET /builders/me goes through getOrCreateBuilderForUser directly,
-  // not requireSessionBuilder), matching the column's own migration
-  // comment on why every pre-existing/never-yet-mutating builder should
-  // read as NULL rather than some backdated guess.
-  it('bumps last_active_at on a real mutation but not on signup/session checks alone', async () => {
-    const builder = await signupBuilder('activity-test-builder');
-    const beforeMutation = await env.DB.prepare(
+  // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
+  // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
+  // session resolves *your* builder profile, mutation or not (per the
+  // owner's #325 decision: "any login... even if only logging in for
+  // shopping or selling" counts as activity). A builder created directly
+  // via the DB (never through a real session, the way a pre-existing
+  // dev-mode row or the pioneer-cohort filler rows above come to exist)
+  // still reads as NULL — matching migrations/0067's own comment on why
+  // that should never be backdated to a guess.
+  it('bumps last_active_at on any resolved session (including a mere GET /builders/me), not on a DB-only row', async () => {
+    const direct = await env.DB.prepare(
+      "INSERT INTO builders (builder_id, label) VALUES ('builder-activity-test-direct', 'Direct row') RETURNING last_active_at",
+    ).first();
+    expect(direct.last_active_at).toBeNull();
+
+    const builder = await signupBuilder('activity-test-builder'); // itself resolves /builders/me
+    const afterSignup = await env.DB.prepare(
       'SELECT last_active_at FROM builders WHERE builder_id = ?',
     ).bind(builder.builderId).first();
-    expect(beforeMutation.last_active_at).toBeNull();
-
-    await createGreenbeltLandlet('activity-test-landlet');
-    const claimed = await api('/landlets/activity-test-landlet/claim', builder.session({ method: 'POST' }));
-    expect(claimed.response.status).toBe(200);
-
-    const afterMutation = await env.DB.prepare(
-      'SELECT last_active_at FROM builders WHERE builder_id = ?',
-    ).bind(builder.builderId).first();
-    expect(afterMutation.last_active_at).not.toBeNull();
-    expect(new Date(afterMutation.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
+    expect(afterSignup.last_active_at).not.toBeNull();
+    expect(new Date(afterSignup.last_active_at).getTime()).toBeGreaterThan(Date.now() - 10000);
   });
 
   it('deleting a builder releases their claimed landlet and clears its build, keeping the shape', async () => {
@@ -4004,6 +4002,93 @@ describe('Auctions', () => {
     // frees now, not at resolution.
     const afterBid = await claim('release-bid-landlet-b', seller);
     expect(afterBid.response.status).toBe(200);
+  });
+});
+
+// #325: land held by a genuinely abandoned builder auto-auctions itself
+// (SPEC §5's "greenbelt via inactivity") via the same scheduled() cron
+// world growth already uses — see autoAuctionInactiveLandlets in
+// worker/index.js. Backdating last_active_at directly via env.DB rather
+// than actually waiting 30 days, same "cheap and exact" precedent the
+// pioneer-rank tests above already use for bulk DB setup.
+describe('Inactivity-triggered auctions', () => {
+  async function claim(landletId, builder) {
+    return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function backdateLastActive(builderId, daysAgo) {
+    const timestamp = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+    await env.DB.prepare('UPDATE builders SET last_active_at = ? WHERE builder_id = ?')
+      .bind(timestamp, builderId).run();
+  }
+
+  async function runScheduled() {
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+  }
+
+  async function activeAuctionFor(landletId) {
+    return env.DB.prepare(
+      "SELECT * FROM auctions WHERE landlet_id = ? AND status = 'active'",
+    ).bind(landletId).first();
+  }
+
+  it('auto-starts a $0 auction on a claimed landlet whose owner has been inactive past 30 days', async () => {
+    const owner = await signupBuilder('inactive-owner');
+    await createGreenbeltLandlet('inactivity-landlet-a');
+    await claim('inactivity-landlet-a', owner);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-a');
+    expect(auction).toBeTruthy();
+    expect(auction.seller_builder_id).toBe(owner.builderId);
+    expect(auction.starting_bid_cents).toBe(0);
+  });
+
+  it('does not auction a landlet whose owner has been active within 30 days', async () => {
+    const owner = await signupBuilder('active-owner');
+    await createGreenbeltLandlet('inactivity-landlet-b');
+    await claim('inactivity-landlet-b', owner); // last_active_at bumped to "now" by the claim itself
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-b')).toBeNull();
+  });
+
+  it('does not auction a landlet whose owner has never had last_active_at tracked (NULL, not "long inactive")', async () => {
+    const owner = await signupBuilder('never-tracked-owner');
+    await createGreenbeltLandlet('inactivity-landlet-c');
+    await claim('inactivity-landlet-c', owner);
+    // Simulates a builder who existed before migrations/0067, or whose
+    // profile has genuinely never been resolved since — NULL is supposed
+    // to mean "not yet tracked," never "definitely inactive."
+    await env.DB.prepare('UPDATE builders SET last_active_at = NULL WHERE builder_id = ?')
+      .bind(owner.builderId).run();
+
+    await runScheduled();
+
+    expect(await activeAuctionFor('inactivity-landlet-c')).toBeNull();
+  });
+
+  it('does not start a second active auction on a landlet an inactive owner already voluntarily listed', async () => {
+    const owner = await signupBuilder('already-listed-owner');
+    await createGreenbeltLandlet('inactivity-landlet-d');
+    await claim('inactivity-landlet-d', owner);
+    const started = await api('/landlets/inactivity-landlet-d/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+    }));
+    expect(started.response.status).toBe(201);
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+
+    const auction = await activeAuctionFor('inactivity-landlet-d');
+    expect(auction.auction_id).toBe(started.body.auction.auctionId);
+    expect(auction.starting_bid_cents).toBe(500); // untouched — not replaced by the cron's own $0 listing
   });
 });
 
@@ -4876,7 +4961,7 @@ describe('Extensibility (crop floor)', () => {
   // crop set used to brick that instance -- any later PATCH re-validated
   // the *carried-over* crop against the template's *current* bounds, even
   // when the request itself never touched crop or templateId.
-  it('does not re-validate an unchanged crop against a template shrunk after the crop was set', async () => {
+  it('does not re-validate an unchanged crop value against a template shrunk after the crop was set', async () => {
     const builder = await signupBuilder('crop-revalidation-builder');
     await createGreenbeltLandlet('crop-revalidation-landlet');
     await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
@@ -4912,23 +4997,46 @@ describe('Extensibility (crop floor)', () => {
     });
     expect(shrunk.response.status).toBe(200);
 
-    // An unrelated PATCH (just moving it) must still succeed -- it never
-    // touched crop or templateId, so the stale crop isn't re-checked.
+    // An unrelated PATCH (just moving it) must still succeed even though it
+    // resends the same unchanged crop.x=2 -- matching src/main.js's
+    // syncUpdate, which always round-trips the mesh's full current state
+    // (crop included) on every edit, not just a sparse diff. A presence-only
+    // check ("did the body include crop?") would wrongly re-reject this.
     const moved = await api('/instances/crop-revalidation-instance', builder.session({
       method: 'PATCH',
-      body: JSON.stringify({ x: 5, y: 5 }),
+      body: JSON.stringify({ x: 5, y: 5, crop: { x: 2 } }),
     }));
     expect(moved.response.status).toBe(200);
     expect(moved.body.instance.crop).toEqual({ x: 2 });
     expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
 
-    // But explicitly re-asserting that same crop value now correctly 400s
-    // -- the caller IS asking for this crop/template pairing to hold today.
-    const reassertedCrop = await api('/instances/crop-revalidation-instance', builder.session({
+    // But actually changing the crop value now correctly 400s -- the caller
+    // IS asserting a new crop/template pairing that must hold today. 1.6 is
+    // above the shrunk template's own width (1.5), so it's out of bounds
+    // regardless of this fix.
+    const realCropChange = await api('/instances/crop-revalidation-instance', builder.session({
       method: 'PATCH',
-      body: JSON.stringify({ crop: { x: 2 } }),
+      body: JSON.stringify({ crop: { x: 1.6 } }),
     }));
-    expect(reassertedCrop.response.status).toBe(400);
+    expect(realCropChange.response.status).toBe(400);
+
+    // Switching templateId is re-validated even with the same crop value,
+    // since it's now measured against a different template's bounds.
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-other-template',
+        name: 'Another extensible product',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 0.5 } } },
+      }),
+    });
+    const templateSwap = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ templateId: 'crop-revalidation-other-template', crop: { x: 2 } }),
+    }));
+    expect(templateSwap.response.status).toBe(400);
   });
 });
 

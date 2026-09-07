@@ -233,6 +233,9 @@ export default {
     ctx.waitUntil(autoGrowWorldIfNeeded(env.DB).catch((error) => {
       console.error('autoGrowWorldIfNeeded failed', error);
     }));
+    ctx.waitUntil(autoAuctionInactiveLandlets(env.DB).catch((error) => {
+      console.error('autoAuctionInactiveLandlets failed', error);
+    }));
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
@@ -1398,6 +1401,19 @@ async function getOrCreateBuilderForUser(db, user) {
       .bind(builderId, user.username, user.user_id).run();
     row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   }
+  // #336/#325: keeps a real "was this builder recently active" signal
+  // fresh — see migrations/0067's own comment for why neither of this
+  // table's existing timestamps works for that. Bumped here (every
+  // caller resolves "my builder profile," whether that's to mutate
+  // something or just to load it on entering a mode) rather than only in
+  // requireSessionBuilder, per the owner's #325 decision: "I'm inclined
+  // to count any login as activity — even if only logging in for
+  // shopping or selling." Every one of this function's own callers is
+  // already an authenticated request by definition (requireCurrentUser
+  // already ran), so there's nothing further to gate this on.
+  await db.prepare(
+    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
+  ).bind(row.builder_id).run();
   return row;
 }
 
@@ -1417,16 +1433,9 @@ async function handleMyBuilder(request, db) {
 // handler can compare it against whatever it's about to modify.
 async function requireSessionBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  // #336: keeps a real "was this builder recently active" signal fresh —
-  // see migrations/0067's own comment for why neither of this table's
-  // existing timestamps works for that. Bumped here rather than at each
-  // of this function's own many call sites, since every one of them is
-  // already a builder-owned mutation by definition.
-  await db.prepare(
-    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
-  ).bind(builder.builder_id).run();
-  return builder;
+  // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
+  // now, not here — see that function's own comment.
+  return getOrCreateBuilderForUser(db, user);
 }
 
 // Thrown wherever an existing row's own owner column doesn't match the
@@ -4275,6 +4284,48 @@ async function autoGrowWorldIfNeeded(db) {
   return { grew: true };
 }
 
+// docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation mechanic
+// (#325) — land held by a genuinely abandoned builder cycles back toward
+// greenbelt via the same $0-reserve-auction path #199 already established
+// for a voluntary $0 start ("$0 minimum bid = immediate land-cap release
+// once bid on/resolved"), rather than sitting untouched forever. The
+// owner's own decision on both open questions #325 flagged: 30 days, and
+// "any login counts as activity — even if only logging in for shopping or
+// selling" (hence bumping last_active_at from every resolved builder
+// profile, not just mutations — see getOrCreateBuilderForUser).
+const INACTIVITY_AUCTION_DAYS = 30;
+
+// A single atomic bulk INSERT rather than a per-landlet read-then-insert
+// loop: each row's own correlated NOT EXISTS subquery is evaluated
+// against the same in-progress statement, so this is race-safe against a
+// builder starting their own voluntary auction (or another scheduled run
+// overlapping) the same way the single-row version in handleStartAuction
+// already is (#265) — just extended to cover however many landlets
+// qualify in one pass instead of one. last_active_at IS NOT NULL
+// deliberately excludes any builder who simply hasn't acted since
+// migrations/0067 landed yet (see that migration's own comment) — NULL
+// means "not yet tracked," not "long inactive," and treating it as the
+// latter would auto-auction every pre-existing builder's land the moment
+// this cron first runs. auction_id is generated in SQL (not
+// crypto.randomUUID(), unavailable per-row in a single bulk statement)
+// but is unique and namespaced the same way every other auction_id is.
+async function autoAuctionInactiveLandlets(db) {
+  const cutoff = new Date(Date.now() - INACTIVITY_AUCTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // matches handleStartAuction's own default duration
+  await db.prepare(`
+    INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
+    SELECT 'auction-' || lower(hex(randomblob(16))), landlets.landlet_id, landlets.owner_builder_id, 0, ?
+    FROM landlets
+    JOIN builders ON builders.builder_id = landlets.owner_builder_id
+    WHERE landlets.status = 'claimed'
+      AND builders.last_active_at IS NOT NULL
+      AND builders.last_active_at < ?
+      AND NOT EXISTS (
+        SELECT 1 FROM auctions WHERE auctions.landlet_id = landlets.landlet_id AND auctions.status = 'active'
+      )
+  `).bind(endsAt, cutoff).run();
+}
+
 async function generateRingAtWorldBoundary(db) {
   let settings = await getWorldSettings(db);
   let innerRadiusM = settings.radius_m;
@@ -4496,17 +4547,25 @@ async function handleInstances(request, db, route, url) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
     // Found via backlog audit (#338): re-validating crop unconditionally
-    // here, even when neither crop nor templateId is actually part of this
-    // request, meant a template shrunk (or its extensible.minM raised)
-    // after an instance's crop was already set could brick that instance —
-    // any later PATCH for something wholly unrelated (moving it, renaming
-    // its label) would re-check the *carried-over* stale crop against the
-    // template's *current* bounds and 400, even though the caller never
-    // touched crop. Only re-validate when this request is actually
-    // asserting a crop/templateId pairing that didn't already exist —
-    // an unchanged crop against an unchanged template isn't a new fact
-    // this request is introducing, so it isn't this request's to reject.
-    if (input.crop !== undefined || input.templateId !== undefined) {
+    // here, even when neither crop nor templateId actually changed, meant a
+    // template shrunk (or its extensible.minM raised) after an instance's
+    // crop was already set could brick that instance — any later PATCH for
+    // something wholly unrelated (moving it, renaming its label) would
+    // re-check the *carried-over* stale crop against the template's
+    // *current* bounds and 400, even though the caller never meant to
+    // touch crop. A first attempt at this fix checked only whether `crop`/
+    // `templateId` were *present* in the request body — but src/main.js's
+    // syncUpdate always resends the mesh's full current state (crop
+    // included) on every edit via instanceFromMesh, so that check was
+    // always true for real frontend traffic and never actually skipped
+    // anything. Comparing actual values against the stored row (via
+    // cropsEqual) is what correctly distinguishes "this request resent the
+    // same crop unchanged" from "this request is asserting a new crop/
+    // template pairing that didn't already exist" — only the latter needs
+    // re-validating.
+    const cropOrTemplateChanged = instance.templateId !== existing.template_id
+      || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
+    if (cropOrTemplateChanged) {
       await assertCropWithinTemplateBounds(db, [instance]);
     }
     await db.prepare(`
@@ -5040,6 +5099,19 @@ async function assertReferencesExist(db, table, column, values, field) {
 // AXIS_DIMENSION_KEY uses, so a template's extensible axes and its crop
 // bounds are always checked against the same dimension.
 const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' };
+
+// #338: whether two crop objects describe the same override, regardless of
+// key order — used by the single-instance PATCH/PUT handler to tell "this
+// request actually changed the crop" apart from "this request just resent
+// the instance's existing crop unchanged" (which src/main.js's syncUpdate
+// always does, since it round-trips the mesh's full state on every edit).
+function cropsEqual(a, b) {
+  const axes = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const axis of axes) {
+    if (a[axis] !== b[axis]) return false;
+  }
+  return true;
+}
 
 // Confirms every instance's crop overrides actually reference an axis the
 // instance's template declared extensible (via metadata.extensible, see
