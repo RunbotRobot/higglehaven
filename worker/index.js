@@ -3310,14 +3310,21 @@ async function handleVerifyEmail(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
 
-  await db.batch([
-    db.prepare("UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
-    db.prepare(`
-      UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(row.user_id),
-  ]);
+  // #377: the SELECT above and this UPDATE are two separate round trips —
+  // folding "not already consumed" into the UPDATE's own WHERE clause (the
+  // same guard idiom `handleCalendarEventTrigger`'s `WHERE triggered_at IS
+  // NULL` already uses) closes the gap where two concurrent requests could
+  // both pass the SELECT check and both consume the same token.
+  const result = await db.prepare(
+    "UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ? AND consumed_at IS NULL",
+  ).bind(tokenHash).run();
+  if (result.meta.changes === 0) throw new HttpError('Verification link is invalid or has expired', 400);
+
+  await db.prepare(`
+    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(row.user_id).run();
   return json({ verified: true });
 }
 
@@ -3364,9 +3371,18 @@ async function handleResetPassword(request, db) {
   `).bind(tokenHash).first();
   if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
 
+  // #377: same atomic-guard fix as handleVerifyEmail above — folds "not
+  // already consumed" into this UPDATE's own WHERE clause instead of
+  // trusting the separate SELECT above, which a concurrent request could
+  // race. Checked (and short-circuited) before the expensive `hashPassword`
+  // call below, so a lost race doesn't pay for a PBKDF2 hash it'll discard.
+  const result = await db.prepare(
+    "UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ? AND consumed_at IS NULL",
+  ).bind(tokenHash).run();
+  if (result.meta.changes === 0) throw new HttpError('Reset link is invalid or has expired', 400);
+
   const passwordHash = await hashPassword(newPassword);
   await db.batch([
-    db.prepare("UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE token_hash = ?").bind(tokenHash),
     db.prepare(`
       UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
