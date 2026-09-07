@@ -293,9 +293,14 @@ describe('Auctions', () => {
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
     // Whichever ran first, both landing 200 is impossible — the loser's
-    // write is guarded out with a 409 (the draft) or was simply too late
-    // to matter for the caller to notice (resolve, already idempotent).
-    expect([200, 409]).toContain(drafted.response.status);
+    // write is guarded out with a 409 (the draft's own atomic write-time
+    // guard), or, if the transfer commits before this PUT's own
+    // requireLandlet() read even resolves, a 403 (its assertOwner check,
+    // using that now-already-stale-relative-to-the-transfer read, correctly
+    // sees the new owner and rejects — same root cause #455 already fixed
+    // for the sibling "concurrent version save" race just below this one,
+    // just never ported to this test's own accepted-outcomes list).
+    expect([200, 403, 409]).toContain(drafted.response.status);
 
     const landlet = await api('/landlets/draft-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -376,7 +381,13 @@ describe('Auctions', () => {
     // itself: activate's own getVersion existence check can race against
     // resolveAuction's DELETE FROM landlet_versions and lose, the version
     // it was about to activate having genuinely ceased to exist by then.
-    expect([200, 409, 404]).toContain(activated.response.status);
+    // 403 is legitimate too (same root cause #455 already fixed for the
+    // sibling "concurrent version save" test above, just never ported
+    // here): if the transfer commits before this endpoint's own
+    // requireLandlet() read resolves, its assertOwner check correctly
+    // sees the new owner and rejects, ahead of ever reaching the
+    // write-time guard that would otherwise produce 409.
+    expect([200, 403, 404, 409]).toContain(activated.response.status);
 
     const landlet = await api('/landlets/activate-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
