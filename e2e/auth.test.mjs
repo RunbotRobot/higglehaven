@@ -9,7 +9,7 @@
 // every verify/reset link is read back from the UI's own dev-mode status
 // text (`devVerifyUrl`/`devResetUrl`) rather than a real inbox. The old
 // password being rejected after a reset is intentionally NOT re-checked
-// here — worker/index.test.js's own "Authentication" describe block
+// here — worker/reviews-auth.test.js's own "Authentication" describe block
 // already covers it, and deliberately triggering a real 401 through the
 // UI would trip this file's own errors.length === 0 check (Chrome logs
 // "Failed to load resource" for any non-2xx fetch response, regardless of
@@ -95,7 +95,7 @@ await page.click('#auth-reset-form button[type="submit"]');
 const resetStatus = await waitForText(page, '#auth-status', 'Password reset!');
 console.log('status after resetting (should say Password reset!):', resetStatus);
 
-// The old password now being rejected is covered by worker/index.test.js's
+// The old password now being rejected is covered by worker/reviews-auth.test.js's
 // own "Authentication" describe block instead of here — a real 401 from a
 // deliberately-wrong login attempt would trip this suite's shared
 // errors.length === 0 check (Chrome logs "Failed to load resource" for any

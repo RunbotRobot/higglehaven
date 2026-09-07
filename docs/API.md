@@ -338,7 +338,7 @@ and still valid — resending never invalidates it) and returns the same
 
 ### Testing note
 
-`worker/index.test.js`'s "Authentication" describe block owns the full
+`worker/reviews-auth.test.js`'s "Authentication" describe block owns the full
 contract: signup/login/logout, session-cookie behavior (a fresh session
 per login, logging out one device leaving others intact), duplicate-email
 and malformed-input rejection, case-insensitive email matching, identical
@@ -712,7 +712,7 @@ that roster no longer drives anything.) Sellers have no such concept;
 Covered by `e2e/pioneer-badge.test.mjs`: the first two claims on a fresh
 world land ranks #1 and #2 (demonstrating the cohort, not a single
 winner). The cutoff itself — rank stops being granted past
-`PIONEER_COHORT_SIZE` — is covered by `worker/index.test.js` instead,
+`PIONEER_COHORT_SIZE` — is covered by `worker/profiles.test.js` instead,
 where filling 100 rows directly via the D1 binding is cheap; doing that
 through 100 real browser-driven claims would not be.
 
@@ -2453,7 +2453,7 @@ anywhere else in this app either.
 
 ### Testing note
 
-`worker/index.test.js`'s "Friendships" describe block owns the full
+`worker/profiles.test.js`'s "Friendships" describe block owns the full
 contract: self-request rejection, unknown-builder rejection, the send/
 list/accept lifecycle with direction and `otherLandlet` verified from both
 sides, duplicate-request rejection in either direction, decline (`DELETE`
@@ -2733,7 +2733,7 @@ itself (row count/content, deleting a post through its own × button and
 confirming that persists server-side, and un-flagging via "Remove
 Community Sign"), and the full posts API
 (create/list/delete/cascade-on-instance-delete, plus the "can't post to a
-non-sign" 400 — that last one in `worker/index.test.js` instead, not the
+non-sign" 400 — that last one in `worker/land.test.js` instead, not the
 browser suite, since deliberately triggering a non-2xx `fetch` there logs
 a console error the suite's own errors-must-be-empty convention would
 misread as a real bug) end to end through the browser. The
@@ -2976,7 +2976,7 @@ text was left), stacked the same way sign posts/calendar events are.
 
 ### Testing note
 
-`worker/index.test.js`'s "Product reviews" describe block owns the full
+`worker/reviews-auth.test.js`'s "Product reviews" describe block owns the full
 contract against freshly-created catalog templates (empty list, validation,
 rating bounds, optional text, averaged summary, averageRating/count staying
 correct past the list's own 200-row cap, moderation delete (both an
@@ -3107,10 +3107,10 @@ Shop mode when it fires.
 ### Testing note
 
 The due→fires→one-shot lifecycle needs a timestamp forced into the past,
-which `worker/index.test.js` can do directly via `env.DB` (D1's own test
+which `worker/land.test.js` can do directly via `env.DB` (D1's own test
 binding) but `e2e/community-calendar.test.mjs` cannot — there is no public
 API for rewriting an event's `scheduled_at`, by design. The split this
-produces mirrors the auction lazy-resolution tests: `worker/index.test.js`'s
+produces mirrors the auction lazy-resolution tests: `worker/land.test.js`'s
 "Community calendar" describe block owns the full contract (accepting and
 validating `scheduledAt`, a future-scheduled event triggering as a no-op,
 forcing `scheduled_at` into the past via direct `env.DB.prepare(...)` and
@@ -3368,7 +3368,7 @@ just show up.
   greenbelt; on an unsold reserved auction, the seller that they keep the
   land.
 
-Covered by `worker/index.test.js` (a notification-content assertion added
+Covered by `worker/commerce.test.js` (a notification-content assertion added
 to each existing resolution-outcome test, plus a dedicated case for the
 new-bid/outbid pair) and `e2e/land-auctions.test.mjs` (the seller's real
 notification, read through the actual Notifications modal after the
@@ -3411,7 +3411,7 @@ sections:
 
 ### Testing note
 
-`worker/index.test.js`'s own `Auctions` describe block covers the full
+`worker/commerce.test.js`'s own `Auctions` describe block covers the full
 mechanism, including resolution in all three outcomes (win transfers
 land + build clears + seller paid; `$0` unsold releases to greenbelt;
 reserved unsold stays with the seller) and the lazy-resolution paths —
@@ -3520,7 +3520,7 @@ of sync with each other.
 
 ### Testing note
 
-`worker/index.test.js`'s "Land cap" describe block covers the default,
+`worker/land.test.js`'s "Land cap" describe block covers the default,
 the formula's own math, the ratchet surviving earnings aging out of the
 trailing window, the per-event ledger actually being credited on a real
 auction sale, the starter claim being unaffected, and — explicitly — that
@@ -3715,7 +3715,7 @@ money nature explicit in the copy itself) before calling `purchaseInstance`
 
 ### Testing note
 
-`worker/index.test.js`'s "Simulated purchases" describe block covers the
+`worker/commerce.test.js`'s "Simulated purchases" describe block covers the
 404s, the unpriced/unclaimed 400s, reading `quantity`/`buyerLabel` from the
 request body (including the anonymous-default-quantity-1 case for a missing
 body), the commission math (including the 0.5% floor edge case and
@@ -3786,7 +3786,7 @@ Policy" panel (a single `metadata.noReturns` boolean, same
 platform-controlled-key simplicity as digital goods' disclaimer) —
 `.seller-no-returns-toggle`/`.seller-no-returns-panel` in `src/main.js`.
 
-`worker/index.test.js`'s "Simulated purchases" describe block covers the
+`worker/commerce.test.js`'s "Simulated purchases" describe block covers the
 refund 404/already-refunded/no-returns 400s, the exact clawback amount, the
 negative-balance case, the `templateId` listing filter, and — for a
 seller-less purchase specifically — that refunding it is rejected with no
@@ -4742,7 +4742,7 @@ in the wizard's own catch block) — no special-cased UI for it.
 
 ### Testing note
 
-`worker/index.test.js`'s "Prohibited categories and digital goods" describe
+`worker/commerce.test.js`'s "Prohibited categories and digital goods" describe
 block owns the full validation matrix: name/category/subcategory phrase
 matching, a same-session ordinary-furniture-name control case (proving the
 blocklist doesn't false-positive on normal products), rejection via both
@@ -4807,7 +4807,7 @@ codebase (see "Friend requests" above's own graphical-map deferral).
 
 #### Testing note
 
-`worker/index.test.js`'s "Shipping" describe block covers the non-boolean
+`worker/commerce.test.js`'s "Shipping" describe block covers the non-boolean
 rejection, a valid value round-tripping through `GET`, the absent-defaults-
 to-international case, and clearing one via a full `metadata` replace —
 the same matrix "Prohibited categories and digital goods" above covers for
