@@ -1183,7 +1183,21 @@ async function handleLandletVersions(request, db, route, url) {
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
 
-    await db.batch([
+    // #415: same guarded-write idiom as handleLandletDraft's PUT below —
+    // a leading no-op guard statement re-pinning owner_builder_id (its own
+    // meta.changes checked after the batch), plus the same condition
+    // folded into each real write's own WHERE/SELECT as a belt-and-
+    // suspenders guard, since D1's db.batch runs every statement
+    // regardless of an earlier one's row count within the same call.
+    // Without this, an auction resolving (transferring ownership) in the
+    // await gap between the ownership check above and this batch would
+    // still let this request attribute a version snapshot to the
+    // landlet's new owner using the old owner's placed_instances.
+    const results = await db.batch([
+      db.prepare(`
+        UPDATE landlets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND owner_builder_id IS ?
+      `).bind(landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
         SELECT ?, ?, next_version_number,
@@ -1192,14 +1206,19 @@ async function handleLandletVersions(request, db, route, url) {
           SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version_number
           FROM landlet_versions WHERE landlet_id = ?
         )
-      `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId),
+        WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+      `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
           (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
-      `).bind(versionId, landletId),
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+      `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
+    if (results[0].meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
 
     const version = await getVersion(db, landletId, versionId);
     return json({ version }, 201);
@@ -1220,10 +1239,18 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const version = await getVersion(db, landletId, route[3]);
     if (!version) return json({ error: 'Landlet version not found' }, 404);
-    await db.prepare(`
+    // #415: re-pins owner_builder_id, the same way the hardened /landlets/:id
+    // PUT/PATCH guard does — without it, an auction resolving (transferring
+    // ownership) in the await gap between the ownership check above and
+    // this write would still let this request set active_version_id on the
+    // landlet's new owner using a version that belonged to the old one.
+    const result = await db.prepare(`
       UPDATE landlets SET active_version_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
-    `).bind(route[3], landletId).run();
+      WHERE landlet_id = ? AND owner_builder_id IS ?
+    `).bind(route[3], landletId, landlet.owner_builder_id).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const updatedLandlet = await requireLandlet(db, landletId);
     return json({ landlet: landletFromRow(updatedLandlet), version });
   }
@@ -3781,12 +3808,28 @@ async function handleLandletDraft(request, db, landletId) {
     // *looked* untouched in the UI. Genuinely-removed instances (not
     // present in the new set) still get a real DELETE below, which is the
     // one case where losing their posts/events to the cascade is correct.
-    await db.batch([
+    //
+    // #415: the leading guard statement (re-pinning owner_builder_id, its
+    // own meta.changes checked after the batch) plus the same condition
+    // folded into every real write's own WHERE/SELECT below is the same
+    // belt-and-suspenders idiom as handleLandletVersions' POST above —
+    // without it, an auction resolving (transferring ownership, wiping
+    // this landlet's placed_instances/landlet_versions) in the await gap
+    // between the ownership check above and this batch would still let
+    // this request repopulate the new owner's landlet with the old
+    // owner's stale content.
+    const ownerGuard = 'EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)';
+    const batchResults = await db.batch([
+      db.prepare(`
+        UPDATE landlets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND owner_builder_id IS ?
+      `).bind(landletId, landlet.owner_builder_id),
       db.prepare(`
         DELETE FROM placed_instances
         WHERE landlet_id = ?
           AND instance_id NOT IN (SELECT json_extract(value, '$.instanceId') FROM json_each(?))
-      `).bind(landletId, JSON.stringify(instances)),
+          AND ${ownerGuard}
+      `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO placed_instances
           (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
@@ -3797,12 +3840,13 @@ async function handleLandletDraft(request, db, landletId) {
           json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
           json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar')
         FROM json_each(?)
-        -- "WHERE true" is load-bearing, not decorative: SQLite's upsert
-        -- grammar treats a bare "ON" after "INSERT ... SELECT ... FROM"
-        -- as ambiguous with a join's ON clause unless the SELECT has a
-        -- WHERE (see sqlite.org/lang_upsert.html) -- confirmed by hand,
-        -- this statement 400s with "near DO: syntax error" without it.
-        WHERE true
+        -- Doubles as the ownership guard and as the non-trivial WHERE
+        -- SQLite's upsert grammar requires here (a bare "ON" after
+        -- "INSERT ... SELECT ... FROM" is otherwise ambiguous with a
+        -- join's ON clause — see sqlite.org/lang_upsert.html; confirmed
+        -- by hand, this statement 400s with "near DO: syntax error"
+        -- without some WHERE clause).
+        WHERE ${ownerGuard}
         ON CONFLICT(instance_id) DO UPDATE SET
           landlet_id = excluded.landlet_id, template_id = excluded.template_id,
           x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
@@ -3811,7 +3855,7 @@ async function handleLandletDraft(request, db, landletId) {
           scale = excluded.scale, is_community_sign = excluded.is_community_sign,
           is_community_calendar = excluded.is_community_calendar,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      `).bind(landletId, JSON.stringify(instances)),
+      `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
         SELECT ?, ?, next_version_number,
@@ -3820,14 +3864,19 @@ async function handleLandletDraft(request, db, landletId) {
           SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version_number
           FROM landlet_versions WHERE landlet_id = ?
         )
-      `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId),
+        WHERE ${ownerGuard}
+      `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
           (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
-      `).bind(versionId, landletId),
+          AND ${ownerGuard}
+      `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
+    if (batchResults[0].meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
 
     const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
     const version = await getVersion(db, landletId, versionId);
