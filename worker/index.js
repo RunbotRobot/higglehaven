@@ -1828,7 +1828,7 @@ async function handleBundles(request, db, route, url) {
     // saving a bundle "as" someone else isn't a feature.
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderId = sessionBuilder.builder_id;
-    const name = stringValue(input.name, 'name');
+    const name = labelValue(input.name, 'name');
     const items = validateBundleItems(input.items);
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
@@ -1848,7 +1848,7 @@ async function handleBundles(request, db, route, url) {
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
     // also resend the current shared flag, and vice versa.
-    const name = input.name === undefined ? existing.name : stringValue(input.name, 'name');
+    const name = input.name === undefined ? existing.name : labelValue(input.name, 'name');
     const shared = input.shared === undefined ? Boolean(existing.shared) : input.shared === true;
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
