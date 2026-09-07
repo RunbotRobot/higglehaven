@@ -988,10 +988,16 @@ async function handleProductReviews(request, db, route) {
   if (request.method === 'GET' && route.length === 3) {
     const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
+    // #416: this was ORDER BY created_at with no DESC — ascending, so once a
+    // product passed 200 reviews, the LIMIT window was always the *oldest*
+    // 200, permanently hiding every review submitted after that point (the
+    // same #356 already fixed for sign_posts/calendar_events). DESC picks
+    // the right window (always the newest 200); .reverse() restores the
+    // response's own ascending (oldest-of-the-window-first) order.
     const { results } = await db.prepare(`
-      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at LIMIT 200
+      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at DESC LIMIT 200
     `).bind(templateId).all();
-    const reviews = results.map(reviewFromRow);
+    const reviews = results.reverse().map(reviewFromRow);
     // averageRating/count are the product's real, all-time summary, not
     // derived from the LIMIT-200 page above (docs/API.md documents them as
     // authoritative — "no caller needs to re-derive it from the list
