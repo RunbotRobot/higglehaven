@@ -4860,7 +4860,7 @@ describe('Extensibility (crop floor)', () => {
   // crop set used to brick that instance -- any later PATCH re-validated
   // the *carried-over* crop against the template's *current* bounds, even
   // when the request itself never touched crop or templateId.
-  it('does not re-validate an unchanged crop against a template shrunk after the crop was set', async () => {
+  it('does not re-validate an unchanged crop value against a template shrunk after the crop was set', async () => {
     const builder = await signupBuilder('crop-revalidation-builder');
     await createGreenbeltLandlet('crop-revalidation-landlet');
     await api('/landlets/crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
@@ -4896,23 +4896,46 @@ describe('Extensibility (crop floor)', () => {
     });
     expect(shrunk.response.status).toBe(200);
 
-    // An unrelated PATCH (just moving it) must still succeed -- it never
-    // touched crop or templateId, so the stale crop isn't re-checked.
+    // An unrelated PATCH (just moving it) must still succeed even though it
+    // resends the same unchanged crop.x=2 -- matching src/main.js's
+    // syncUpdate, which always round-trips the mesh's full current state
+    // (crop included) on every edit, not just a sparse diff. A presence-only
+    // check ("did the body include crop?") would wrongly re-reject this.
     const moved = await api('/instances/crop-revalidation-instance', builder.session({
       method: 'PATCH',
-      body: JSON.stringify({ x: 5, y: 5 }),
+      body: JSON.stringify({ x: 5, y: 5, crop: { x: 2 } }),
     }));
     expect(moved.response.status).toBe(200);
     expect(moved.body.instance.crop).toEqual({ x: 2 });
     expect(moved.body.instance).toMatchObject({ x: 5, y: 5 });
 
-    // But explicitly re-asserting that same crop value now correctly 400s
-    // -- the caller IS asking for this crop/template pairing to hold today.
-    const reassertedCrop = await api('/instances/crop-revalidation-instance', builder.session({
+    // But actually changing the crop value now correctly 400s -- the caller
+    // IS asserting a new crop/template pairing that must hold today. 1.6 is
+    // above the shrunk template's own width (1.5), so it's out of bounds
+    // regardless of this fix.
+    const realCropChange = await api('/instances/crop-revalidation-instance', builder.session({
       method: 'PATCH',
-      body: JSON.stringify({ crop: { x: 2 } }),
+      body: JSON.stringify({ crop: { x: 1.6 } }),
     }));
-    expect(reassertedCrop.response.status).toBe(400);
+    expect(realCropChange.response.status).toBe(400);
+
+    // Switching templateId is re-validated even with the same crop value,
+    // since it's now measured against a different template's bounds.
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'crop-revalidation-other-template',
+        name: 'Another extensible product',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 0.5 } } },
+      }),
+    });
+    const templateSwap = await api('/instances/crop-revalidation-instance', builder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ templateId: 'crop-revalidation-other-template', crop: { x: 2 } }),
+    }));
+    expect(templateSwap.response.status).toBe(400);
   });
 });
 

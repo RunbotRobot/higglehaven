@@ -2054,12 +2054,18 @@ the draft-replace `PUT`) validates `crop` against the referenced template's
 declared extensible axes and `minM`/max-dimension bounds, rejecting anything
 outside them or naming an axis the template didn't declare extensible.
 `PATCH`/`PUT` on an existing single instance only re-runs this check when the
-request body actually includes `crop` and/or `templateId` — if a seller
-shrinks a template (or raises its `minM`) after an instance's crop was
-already validly set, that instance's carried-over crop is not re-validated
-against the template's new bounds on some later, unrelated field-only edit
-(moving it, renaming its label); only a request that itself sets a new
-`crop` or `templateId` is checked against the template's current bounds.
+request's `crop` and/or `templateId` actually differ from the instance's
+stored values, not merely whether the request body includes those keys —
+the frontend always resends an instance's full current state (crop
+included) on every edit, so a presence check alone would re-validate on
+every request. If a seller shrinks a template (or raises its `minM`) after
+an instance's crop was already validly set, that instance's carried-over
+crop is not re-validated against the template's new bounds on some later,
+unrelated field-only edit (moving it, renaming its label) that resends the
+same crop unchanged; only a request that actually changes `crop` to a new
+value, or switches `templateId` (even while reusing the same crop values,
+now measured against different bounds), is checked against the template's
+current bounds.
 
 `scale` is a real uniform scale factor, unrelated to `crop` and available on
 any instance regardless of whether its template is extensible — see
