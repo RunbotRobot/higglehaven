@@ -9181,7 +9181,14 @@ function checkScheduledCalendarEvents() {
         // actually won the race, so a lost race doesn't keep retrying
         // this same event every 10 seconds for the rest of the visit.
         event.triggeredAt = updated.triggeredAt;
-        if (triggered) spawnConfettiBurst(calendar.mesh.position, calendar.group);
+        // #436: this request's own await is a real gap the landlet can
+        // unload (or reload with a fresh calendar object of the same
+        // instanceId) across — unloadShopLandletInstances already
+        // disposes calendar.group/sprites in that case, so spawning into
+        // it here would burst confetti into a detached, no-longer-in-
+        // scene Three.js group. Same guard the click-driven sign-post/
+        // calendar-event handlers already use for #426.
+        if (triggered && shopCalendars.includes(calendar)) spawnConfettiBurst(calendar.mesh.position, calendar.group);
         pendingCalendarEventTriggers.delete(event.eventId);
       }).catch(() => { pendingCalendarEventTriggers.delete(event.eventId); });
     }
