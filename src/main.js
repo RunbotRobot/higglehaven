@@ -7256,6 +7256,20 @@ authLogoutBtn.addEventListener('click', async () => {
   }
   authLogoutBtn.disabled = false;
   currentAuthUser = null;
+  // #432: these are only ever reset via a full page reload otherwise, but
+  // the reload below is conditional on currentMode === 'build' — logging
+  // out while still in Shop mode (where Sell is just an overlay modal, not
+  // a currentMode change) previously left the old account's sellerId
+  // cached, so ensureSellerIdentity's own `if (sellerId) return sellerId`
+  // short-circuit would hand the *next* logged-in account's Sell tab the
+  // previous account's seller identity — and with it, their private
+  // "My Products" listing — until something else happened to reload the
+  // page. Reset unconditionally, before the mode check, so both the
+  // reload path and the stay-on-Shop path start clean.
+  builderId = null;
+  sellerId = null;
+  builderIdentityFlowPromise = null;
+  sellerIdentityFlowPromise = null;
   // Build mode requires a real, logged-in account (ensureBuilderIdentity's
   // own login wall) — staying on it post-logout would just immediately
   // reprompt the login modal over whatever was on screen, stranding the
