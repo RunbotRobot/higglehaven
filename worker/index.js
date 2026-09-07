@@ -1706,20 +1706,30 @@ async function handleFriendships(request, db, route, url) {
     assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
-    // Found via backlog audit: without checking this UPDATE's own
-    // meta.changes, a concurrent DELETE (the requester cancelling, or
-    // either side unfriending) landing between the existence check above
-    // and this UPDATE would silently affect 0 rows — the follow-up SELECT
-    // below then returns undefined, and dereferencing
-    // updated.requester_builder_id throws an uncaught TypeError (a 500)
-    // instead of the clean 404 this should be.
-    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ?`).bind(route[1]).run();
-    if (result.meta.changes === 0) throw new HttpError('Friendship not found', 404);
+    // #353: gated on the row's *current* status (mirroring resolveAuction's
+    // `WHERE status = 'active'` and the calendar-trigger's `WHERE
+    // triggered_at IS NULL`) so a repeated accept of an already-accepted
+    // friendship is a silent no-op instead of re-sending the notification
+    // below on every single call — previously this UPDATE matched
+    // regardless of the row's status, so the recipient could spam the
+    // requester with unlimited duplicate notifications just by re-PATCHing.
+    // meta.changes === 0 here is ambiguous on its own (already-accepted, or
+    // a concurrent DELETE mid-race) — disambiguated below via the
+    // follow-up SELECT instead of trusting this count alone.
+    const result = await db.prepare(`UPDATE friendships SET status = 'accepted' WHERE friendship_id = ? AND status = 'pending'`).bind(route[1]).run();
     // Same "no passive way to find out" gap as the new-request notification
-    // above (#319), for the requester's side of an acceptance.
-    await notificationStatement(db, existing.requester_builder_id,
-      `${sessionBuilder.label} accepted your friend request.`).run();
+    // above (#319), for the requester's side of an acceptance — only fired
+    // when this call is the one that actually made the transition.
+    if (result.meta.changes === 1) {
+      await notificationStatement(db, existing.requester_builder_id,
+        `${sessionBuilder.label} accepted your friend request.`).run();
+    }
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+    // Not found here means a concurrent DELETE (the requester cancelling,
+    // or either side unfriending) landed between the existence check above
+    // and the UPDATE — a genuine 404, distinct from the already-accepted
+    // no-op case above (where this SELECT still finds the row).
+    if (!updated) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
     const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
     return json({ friendship: friendshipFromRow(updated, updated.recipient_builder_id, labelsById, landletsById) });
