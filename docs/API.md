@@ -565,7 +565,11 @@ Request body:
 }
 ```
 
-`label` is required. Returns `409` if `builderId` is already taken.
+`label` is required, capped at 100 characters like every other short
+free-text field in this API. Returns `409` if `builderId` is already
+taken. Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
+window) — unauthenticated and repeatable, the same abuse-cost reasoning as
+sign posts/purchases (#362, mirroring #337).
 
 ### `PUT /api/builders/:builderId`
 ### `PATCH /api/builders/:builderId`
@@ -773,8 +777,10 @@ Request body:
 }
 ```
 
-`label` is required. Returns `409` if a caller-supplied `sellerId` is
-already taken.
+`label` is required, capped at 100 characters. Returns `409` if a
+caller-supplied `sellerId` is already taken. Rate-limited per client IP
+(`SELLER_CREATE_RATE_LIMIT_MAX`, 20 per window) — same reasoning as
+`POST /api/builders` (#362).
 
 ### `PUT /api/sellers/:sellerId`
 ### `PATCH /api/sellers/:sellerId`
@@ -961,7 +967,17 @@ must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
 same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
 value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `dallers_balance_cents` credit through a
-self-purchase or auction win.
+self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
+are each capped at 100 characters, same as `label` elsewhere in this API.
+
+Deliberately **not** rate-limited (#362 flagged the gap, same as
+builders/sellers below, but an IP-keyed limit isn't safe to add here at
+any size a real automated flood would actually need to trip on):
+unauthenticated catalog creation is this app's own primary way of seeding
+ordinary system/placeholder products, and legitimately happens dozens of
+times over in normal operation — the same "bootstrapping trap" shape of
+problem "Land cap" below documents for why a hard block there got
+reverted.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`

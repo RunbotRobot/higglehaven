@@ -3558,6 +3558,104 @@ describe('Builders', () => {
     expect(lateAfter.isPioneer).toBe(false);
     expect(lateAfter.pioneerRank).toBeNull();
   });
+
+  // Found via backlog audit (#362): unlike every other public, repeatable
+  // mutation in this file, POST /api/builders (unauthenticated on purpose
+  // — see that handler's own comment) had no rate limit and no length cap
+  // on label at all.
+  it('rejects a label over the length cap', async () => {
+    const rejected = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
+  });
+
+  it('rate-limits repeated builder creation from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders', {
+        method: 'POST', headers, body: JSON.stringify({ label: `Rate Limit Builder ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders', {
+      method: 'POST', headers, body: JSON.stringify({ label: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+});
+
+// Same gap as Builders' own (#362): POST /api/sellers is unauthenticated on
+// purpose (a brand-new, unlinked row — nothing to spoof) but had no rate
+// limit and no length cap on label. Normal test setup never exercises this
+// raw endpoint directly (signupSeller lazily creates a seller via GET
+// /sellers/me instead), so these are the first direct tests of it.
+describe('Sellers', () => {
+  it('creates a seller and rejects a label over the length cap', async () => {
+    const created = await api('/sellers', { method: 'POST', body: JSON.stringify({ label: 'A Seller' }) });
+    expect(created.response.status).toBe(201);
+    expect(created.body.seller.label).toBe('A Seller');
+    expect(created.body.seller.sellerId).toMatch(/^seller-/);
+
+    const rejected = await api('/sellers', {
+      method: 'POST', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
+  });
+
+  it('rate-limits repeated seller creation from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/sellers', {
+        method: 'POST', headers, body: JSON.stringify({ label: `Rate Limit Seller ${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/sellers', {
+      method: 'POST', headers, body: JSON.stringify({ label: 'One too many' }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+});
+
+// Same length-cap gap as Builders'/Sellers' own (#362): name/category/
+// subcategory/color went through plain stringValue with no cap, unlike
+// every other short free-text field in this file. Deliberately no rate
+// limit here — see handleCatalog's own comment on why an IP-keyed one
+// isn't safe to add for unauthenticated catalog creation.
+describe('Catalog creation limits', () => {
+  it('rejects name, category, subcategory, and color over the length cap', async () => {
+    const base = {
+      templateId: 'catalog-label-cap-template',
+      color: '#111111',
+      dimensions: { width: 1, depth: 1, height: 1 },
+    };
+    const overLongName = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'x'.repeat(101) }),
+    });
+    expect(overLongName.response.status).toBe(400);
+    expect(overLongName.body.error).toMatch(/name must be 100 characters or fewer/);
+
+    const overLongCategory = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine Name', category: 'x'.repeat(101) }),
+    });
+    expect(overLongCategory.response.status).toBe(400);
+    expect(overLongCategory.body.error).toMatch(/category must be 100 characters or fewer/);
+
+    const overLongSubcategory = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine Name', subcategory: 'x'.repeat(101) }),
+    });
+    expect(overLongSubcategory.response.status).toBe(400);
+    expect(overLongSubcategory.body.error).toMatch(/subcategory must be 100 characters or fewer/);
+
+    const overLongColor = await api('/catalog', {
+      method: 'POST', body: JSON.stringify({ ...base, name: 'Fine Name', color: 'x'.repeat(101) }),
+    });
+    expect(overLongColor.response.status).toBe(400);
+    expect(overLongColor.body.error).toMatch(/color must be 100 characters or fewer/);
+  });
 });
 
 describe('Auctions', () => {

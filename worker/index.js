@@ -638,6 +638,18 @@ function formatBytes(bytes) {
 // SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
 const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 
+// #362 flagged catalog template creation for the same missing-rate-limit
+// gap as builders/sellers below, but unlike those two, an IP-keyed limit
+// here isn't safe to add at any size a real automated flood would
+// actually need to trip on: unauthenticated catalog creation (no
+// sellerId) is this app's own primary way of seeding ordinary
+// system/placeholder products, used dozens of times over in normal
+// operation (this file's own test suite alone makes 50+ such calls
+// across unrelated setup helpers, all sharing one IP when run without a
+// synthetic header) — the same "bootstrapping trap" shape of problem
+// documented on Land cap below for why a hard block there got reverted.
+// Length-capping name/category/subcategory/color (see labelValue below)
+// still lands here; only the rate limit is deliberately left out.
 async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
@@ -1207,6 +1219,17 @@ async function getVersion(db, landletId, versionId) {
   return row ? versionFromRow(row) : null;
 }
 
+// Found via backlog audit (#362): unlike every other public, repeatable
+// mutation in this file (signup, password-reset, model-upload, sign-post,
+// purchase — see #337), the three unauthenticated identity/catalog
+// creation paths below (builders, sellers below, catalog further down)
+// had no checkRateLimit call at all, and their free-text fields went
+// through plain stringValue with no length cap (now labelValue's, same
+// fix #337 applied to authorLabel/buyerLabel) — an anonymous caller could
+// spam either endpoint with arbitrarily large rows at an unlimited rate.
+const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
+const SELLER_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleBuilders(request, db, route) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
@@ -1235,7 +1258,8 @@ async function handleBuilders(request, db, route) {
 
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    await checkRateLimit(db, `builder-create:${clientIp(request)}`, BUILDER_CREATE_RATE_LIMIT_MAX);
+    const label = labelValue(input.label, 'label');
     // Unauthenticated on purpose, unlike everything else in this handler
     // below — this only ever creates a brand-new, unlinked (user_id NULL)
     // row, never touches anyone else's identity or data, so there's
@@ -1500,7 +1524,8 @@ async function handleSellers(request, db, route) {
     // Unauthenticated on purpose — same reasoning as POST /api/builders
     // above: a brand-new, unlinked row, nothing to spoof.
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    await checkRateLimit(db, `seller-create:${clientIp(request)}`, SELLER_CREATE_RATE_LIMIT_MAX);
+    const label = labelValue(input.label, 'label');
     const sellerId = input.sellerId !== undefined
       ? stringValue(input.sellerId, 'sellerId')
       : `seller-${crypto.randomUUID()}`;
@@ -5375,10 +5400,10 @@ function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
     templateId: stringValue(input.templateId || fallbackId, 'templateId'),
-    name: stringValue(input.name, 'name'),
-    category: input.category || 'placeholder',
-    subcategory: input.subcategory || null,
-    color: stringValue(input.color, 'color'),
+    name: labelValue(input.name, 'name'),
+    category: input.category ? labelValue(input.category, 'category') : 'placeholder',
+    subcategory: optionalLabelValue(input.subcategory, 'subcategory'),
+    color: labelValue(input.color, 'color'),
     dimensions: {
       width: positiveNumber(dimensions.width, 'dimensions.width'),
       depth: positiveNumber(dimensions.depth, 'dimensions.depth'),
@@ -5729,6 +5754,15 @@ function labelValue(value, field) {
     throw new HttpError(`${field} must be ${MAX_LABEL_LENGTH} characters or fewer`, 400);
   }
   return label;
+}
+
+// Same null-passthrough shape as optionalInteger below, for a free-text
+// field that's allowed to be absent entirely (category/subcategory's own
+// "falsy input defaults instead of erroring" contract) but still needs
+// labelValue's length cap whenever a real value is actually given.
+function optionalLabelValue(value, field) {
+  if (!value) return null;
+  return labelValue(value, field);
 }
 
 function positiveNumber(value, field) {
