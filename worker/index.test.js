@@ -1045,6 +1045,60 @@ describe('Worker API', () => {
     expect(atCap.body.template.priceCents).toBe(100_000_000);
   });
 
+  // Found via backlog audit (#375): modelUrl had no format check at all —
+  // assertUploadedModelExists only validates a `/uploads/`-prefixed value
+  // and silently no-ops for anything else, so an arbitrary external URL
+  // sailed straight through into a stored template. src/main.js's model
+  // loader then fetches template.modelUrl unconditionally from the browser
+  // of every shopper/builder who loads a lándlet with that template placed
+  // on it — a real SSRF-shaped hole. Only "absent" and a real /uploads/
+  // reference are legitimate.
+  it('rejects a modelUrl that does not reference an uploaded model', async () => {
+    const externalUrl = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-url-external-test',
+        name: 'External model URL test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelUrl: 'https://attacker.example/track.glb',
+      }),
+    });
+    expect(externalUrl.response.status).toBe(400);
+
+    const nonString = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-url-non-string-test',
+        name: 'Non-string model URL test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelUrl: 12345,
+      }),
+    });
+    expect(nonString.response.status).toBe(400);
+
+    const omitted = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-url-omitted-test',
+        name: 'Omitted model URL test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(omitted.response.status).toBe(201);
+    expect(omitted.body.template.modelUrl).toBeNull();
+
+    // An update to an existing (omitted-modelUrl) template is checked the
+    // same way — the vulnerability applied equally to PATCH.
+    const patchedExternal = await api('/catalog/model-url-omitted-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ modelUrl: 'https://attacker.example/track.glb' }),
+    });
+    expect(patchedExternal.response.status).toBe(400);
+  });
+
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', draftBuilder.session({

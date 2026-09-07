@@ -963,6 +963,14 @@ value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `dallers_balance_cents` credit through a
 self-purchase or auction win.
 
+`modelUrl`, when present, must start with `/uploads/` (a real reference
+returned by `POST /api/models`) — `400` otherwise. Found via backlog audit
+(#375): every placed instance's `modelUrl` is fetched directly by the
+browser of anyone who loads that lándlet (`src/main.js`'s model loader), so
+an unvalidated arbitrary external URL here let any seller turn every
+visitor's browser into an unwitting requester of a URL of their choosing.
+Omit the field entirely (or pass `null`) for a plain colored-box template.
+
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
 
