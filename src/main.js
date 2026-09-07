@@ -6820,7 +6820,19 @@ function showAuthView(view) {
   setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
 }
 
+// Found via backlog audit (#373): refreshAccountAuthUI's pioneer-badge
+// fetch had no re-entrancy guard, unlike the monotonic load-token pattern
+// used everywhere else in this file for an async render that can be
+// called again before its own fetch resolves (axisPreviewLoadToken,
+// uploadFlowToken, friendsLoadToken above, ...). Reopening the account
+// menu quickly, or a login -> logout -> login-as-different-account
+// sequence within one round trip, could let an earlier, slower fetch
+// resolve after a newer one and overwrite the pioneer badge with stale
+// data from the wrong request.
+let accountAuthLoadToken = 0;
+
 function refreshAccountAuthUI() {
+  const myLoadToken = ++accountAuthLoadToken;
   if (currentAuthUser) {
     accountAuthBtn.textContent = currentAuthUser.username;
     authLoggedOutEl.hidden = true;
@@ -6839,6 +6851,7 @@ function refreshAccountAuthUI() {
     // between one open and the next.
     authAccountPioneerEl.textContent = '';
     fetchMyBuilder().then((builder) => {
+      if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading — a newer call owns the panel now
       if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
     }).catch(() => {});
   } else {
