@@ -188,6 +188,21 @@ cost when it happens anyway:
   de facto claim instead. A feedback item small enough that filing a
   real issue feels like overkill is still worth a `tasks` doc for this
   reason alone — the claim is the point, not the issue tracker.
+- **Immediately after writing your claim, re-read that same doc once
+  before doing anything else.** Two sessions can still write a claim
+  within moments of each other — this doesn't stop that, but it stops
+  the *wasted work* it causes. Right after your own `set`/`update` call
+  lands, `get` that exact doc back: if it shows your session name, you
+  genuinely won the race and can start investigating for real; if it
+  shows someone else's, you lost it (their write landed after yours but
+  was read after, or simply overwrote yours) — note in the doc that
+  you're standing down as a duplicate claim and go find different work,
+  *before* spending a single minute reading code or planning a fix. The
+  cost of one extra read is negligible next to the cost of two sessions
+  fully duplicating an implementation (per the project owner directly:
+  "the extra effort of grabbing a single task one more time before
+  executing a task is minuscule compared with the wasted effort of
+  duplicating work").
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —
