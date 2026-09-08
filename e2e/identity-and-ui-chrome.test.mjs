@@ -82,6 +82,19 @@ await page.click('#claim-confirm-btn');
 await page.waitForTimeout(2500);
 await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 
+// --- Owner: "the menu should default to the tab of the mode they're
+// already in." Now in Build mode (just claimed a landlet) -- reopening
+// Settings from scratch should land straight on the Build tab, not
+// whatever activeSettingsTab last happened to be (nothing was clicked
+// this session, so it'd otherwise still be its 'general' initial value). ---
+await openAccountMenu(page);
+await page.click('#settings-btn');
+await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+const activeTabInBuildMode = await page.locator('#settings-tabs .settings-tab-btn.active').getAttribute('data-section');
+console.log('Settings tab active by default while in Build mode (should be "build"):', activeTabInBuildMode);
+await page.click('#settings-close-btn');
+await page.waitForTimeout(300);
+
 // #product-info no longer shows an idle "Tap a product to inspect it"
 // hint (removed — permanent screen space spent stating the obvious), so
 // there's nothing to hide/reveal here unless something's actually
@@ -124,6 +137,7 @@ console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb)
 const pass = sellNavActiveImmediately && closeBtnVisible &&
   modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellerModalOpenedAfterCancel === 0 &&
   uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
+  activeTabInBuildMode === 'build' &&
   hintVisibleBeforePicker && hintTextBeforePicker.includes('Tree') && hintHiddenWhilePickerOpen &&
   pickerOpaque && hintVisibleAfterClosingPicker &&
   pillRgb === '214 232 190' && panelRgb === '250 240 199' &&
