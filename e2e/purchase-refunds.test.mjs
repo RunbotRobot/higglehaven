@@ -1,4 +1,4 @@
-// Refunds + dáller-commission clawback (docs/SPEC.md §5, docs/API.md's
+// Refunds + higgles-commission clawback (docs/SPEC.md §5, docs/API.md's
 // "Simulated purchases" > "Refunds", migrations/0052_purchase_refunds.sql)
 // — undoes a simulated purchase's commission credit, not real currency
 // (nothing real moved in the first place). Refunding is seller-initiated
@@ -73,7 +73,7 @@ const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   body: JSON.stringify({ buyerLabel: 'A Refund Shopper' }),
 });
 console.log('purchase created (status should be 201):', purchased.status);
-const balanceAfterSale = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).dallersBalanceCents;
+const balanceAfterSale = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).higglesBalanceCents;
 
 // Open the product's row and its Sales panel.
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -99,7 +99,7 @@ const refundBtnCountAfter = await row().locator('.product-sale-row-refund-btn').
 console.log('rows showing "Refunded" after clicking refund (should be 1):', refundedLabelCount);
 console.log('refund buttons remaining (should be 0 — nothing left to refund again):', refundBtnCountAfter);
 
-const balanceAfterRefund = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).dallersBalanceCents;
+const balanceAfterRefund = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).higglesBalanceCents;
 console.log('builder balance before/after refund (should differ by exactly the commission clawed back):', balanceAfterSale, balanceAfterRefund);
 
 const { purchases: serverPurchases } = (await fetchJson(`/api/purchases?templateId=${template.templateId}`)).body;
