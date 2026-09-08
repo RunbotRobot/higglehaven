@@ -543,9 +543,19 @@ describe('Auctions', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const firstAuctionId = firstAuction.body.auction.auctionId;
-    await api(`/auctions/${firstAuctionId}/bids`, owner.session({
+    // owner already owns instance-update-move-race-source, so bidding on a
+    // second landlet here now needs land-cap headroom (#489) — same
+    // "grant plenty via a real earnings event" pattern the
+    // resolve-existing-owner test above uses; what's under test is the
+    // instance-move race, not the cap gate itself.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, owner.builderId, 100000000).run();
+    await api('/builders');
+    const firstBid = await api(`/auctions/${firstAuctionId}/bids`, owner.session({
       method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
     }));
+    expect(firstBid.response.status).toBe(201);
     await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(firstAuctionId).run();
     const firstResolve = await api(`/auctions/${firstAuctionId}/resolve`, { method: 'POST' });
     expect(firstResolve.response.status).toBe(200);
