@@ -65,8 +65,11 @@ describe('Landlet updates', () => {
     expect(claimed.response.status).toBe(200);
     // A PATCH that loses the race gets a 409 instead of silently no-op'ing
     // over the claim; one that fully completes before the claim starts is
-    // untouched by any of this and still succeeds normally.
-    expect([200, 409]).toContain(patched.response.status);
+    // untouched by any of this and still succeeds normally. A third
+    // legitimate outcome (#500): if the claim's write commits between this
+    // PATCH's own initial read and its ownership check, the PATCH correctly
+    // sees an owned landlet and requires a session it doesn't have — 401.
+    expect([200, 401, 409]).toContain(patched.response.status);
 
     const stored = await env.DB.prepare(
       'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
