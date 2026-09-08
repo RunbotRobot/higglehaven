@@ -345,13 +345,19 @@
         background: var(--brand-green);
         color: #16240a;
       }
-      /* Top-right is otherwise empty (wordmark owns top-left, camera debug
-         owns bottom-right) — undo/redo are always-relevant, not tied to a
-         selection, so they get their own persistent spot rather than
-         crowding into the selection-only gizmo-mode-controls row. */
+      /* Undo/redo are always-relevant, not tied to a selection, so they get
+         their own persistent spot rather than crowding into the
+         selection-only gizmo-mode-controls row. Owner: "I want the Shop/
+         Build/Sell tab buttons to be in the same row as the higglehaven
+         wordmark to increase open screen space" — that claimed this
+         panel's old top-right-of-row-1 spot (see #mode-nav below), so
+         undo/redo swapped down into #mode-nav's old row (top: 48px)
+         instead, rather than needing a brand new one. That row's left
+         side (once the account menu's own spot — see #topbar-left) is
+         empty now that the account menu moved up next to the wordmark. */
       #undo-redo-panel {
         position: fixed;
-        top: 10px;
+        top: 48px;
         right: 8px;
         z-index: 10;
         display: flex;
@@ -471,10 +477,15 @@
       /* The three peer top-level views — always reachable regardless of
          which one is currently active (including during Shop mode, unlike
          most of the builder UI — see SHOP_HIDDEN_BUILDER_UI_IDS in main.js),
-         so switching feels like tabs rather than one-way doors. */
+         so switching feels like tabs rather than one-way doors. Owner: "I
+         want the Shop/Build/Sell tab buttons to be in the same row as the
+         higglehaven wordmark to increase open screen space" — shares the
+         top row with #topbar-left (wordmark + account menu) now
+         (top: 10px, same as it), rather than the row below (where
+         #undo-redo-panel moved to instead). */
       #mode-nav {
         position: fixed;
-        top: 48px;
+        top: 10px;
         right: 8px;
         z-index: 10;
         display: flex;
@@ -573,16 +584,17 @@
       #gizmo-mode-controls.visible {
         display: flex;
       }
-      /* Below ~480px, the gap between the wordmark and the undo/redo panel
-         (both anchored to the same top row) is narrower than product-info's
-         own centered text — no amount of shrinking the neighbors avoids the
-         overlap, since undo/redo alone is wider than the gap on either side
-         of a centered box that size. product-info (and the gizmo-mode-
-         controls row that follows it) drop below both corner panels
-         instead — and below the #mode-nav row (top: 48px, itself roughly
-         27px tall) that sits between them and the top edge,
-         so a long centered hint (Measure's own delta readout is the
-         longest one) clears all three rows rather than just the first.
+      /* Below ~480px, the gap between #topbar-left (wordmark + account
+         menu) and #mode-nav (both anchored to the same top row) is
+         narrower than product-info's own centered text — no amount of
+         shrinking the neighbors avoids the overlap, since that centered
+         box is wider than the gap on either side of it. product-info (and
+         the gizmo-mode-controls row that follows it) drop below both
+         corner panels instead — and below the #undo-redo-panel row
+         (top: 48px, itself roughly 27px tall) that sits between them and
+         the top edge, so a long centered hint (Measure's own delta
+         readout is the longest one) clears all three rows rather than
+         just the first.
          Placed after the rules it
          overrides, not inside the wordmark-shrink media query above, so the
          cascade's source-order tiebreak doesn't let the unconditional base
