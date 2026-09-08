@@ -1162,9 +1162,14 @@ async function handleCatalog(request, db, route, url, models) {
 // opt-in flag: every catalog template is already product-like by
 // definition, so every one is reviewable. DELETE (moderation) is gated to
 // the template's own seller, same "if (existing.seller_id)" pattern the
-// catalog template's own PATCH/DELETE handler above already uses — a
-// template with no seller stays unrestricted, since there's no owner to
-// check against.
+// catalog template's own PATCH/DELETE handler above already uses — an
+// unowned/orphaned template's reviews get the same per-IP throttle
+// (below) the catalog template's own DELETE already needed for the exact
+// same reason (#520): with no owning seller to gate the request behind a
+// session, an unthrottled anonymous caller could otherwise wipe every
+// review on that template in an unbounded flood.
+const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -1257,6 +1262,8 @@ async function handleProductReviews(request, db, route) {
     if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     return json({ deleted: true });
