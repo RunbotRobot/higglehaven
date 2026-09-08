@@ -8882,10 +8882,21 @@ function createShopAvatar() {
     eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
     head.add(eye);
   }
+  // Owner (Control Room feedback): "more stylish hair... I don't want him
+  // to be balding!" The original cap sat too far back and too flat (scale
+  // 0.85/0.65, offset -0.25R/+0.3R) to reach the crown/hairline at all —
+  // its own front edge stopped well short of the eyes (at y=+0.85R),
+  // leaving the whole forehead-to-crown area bare skin-colored sphere from
+  // straight on, which read as a receding hairline/bald spot rather than a
+  // flat-cap silhouette. Pulled forward and enlarged so it now reaches
+  // right up to the eye line at the front, still tapers off before the
+  // back of the neck, and pokes very slightly above the head's own crown
+  // (z max ~1.03R vs the head's 1R) for a bit of volume instead of a
+  // shrink-wrapped skullcap.
   const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
   const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
-  hair.scale.set(1, 0.85, 0.65); // flatten into a cap rather than a full second head
-  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.25, SHOP_AVATAR_HEAD_RADIUS_M * 0.3); // back (-Y) and up
+  hair.scale.set(1, 0.95, 0.75);
+  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.05, SHOP_AVATAR_HEAD_RADIUS_M * 0.32);
   head.add(hair);
 
   group.add(headPivot);
