@@ -293,9 +293,14 @@ describe('Auctions', () => {
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
     // Whichever ran first, both landing 200 is impossible — the loser's
-    // write is guarded out with a 409 (the draft) or was simply too late
-    // to matter for the caller to notice (resolve, already idempotent).
-    expect([200, 409]).toContain(drafted.response.status);
+    // write is guarded out with a 409 (the draft's own atomic write-time
+    // guard), or, if the transfer commits before this PUT's own
+    // requireLandlet() read even resolves, a 403 (its assertOwner check,
+    // using that now-already-stale-relative-to-the-transfer read, correctly
+    // sees the new owner and rejects — same root cause #455 already fixed
+    // for the sibling "concurrent version save" race just below this one,
+    // just never ported to this test's own accepted-outcomes list).
+    expect([200, 403, 409]).toContain(drafted.response.status);
 
     const landlet = await api('/landlets/draft-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -376,19 +381,23 @@ describe('Auctions', () => {
     // itself: activate's own getVersion existence check can race against
     // resolveAuction's DELETE FROM landlet_versions and lose, the version
     // it was about to activate having genuinely ceased to exist by then.
-    expect([200, 409, 404]).toContain(activated.response.status);
+    // 403 is legitimate too (same root cause #455 already fixed for the
+    // sibling "concurrent version save" test above, just never ported
+    // here): if the transfer commits before this endpoint's own
+    // requireLandlet() read resolves, its assertOwner check correctly
+    // sees the new owner and rejects, ahead of ever reaching the
+    // write-time guard that would otherwise produce 409.
+    expect([200, 403, 404, 409]).toContain(activated.response.status);
 
     const landlet = await api('/landlets/activate-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
     expect(landlet.body.landlet.activeVersionId).toBeNull();
   });
 
-  // #456: same shape of race as the three above, for handleInstances'
-  // three write paths — each checked ownership once, early, then wrote
-  // unconditionally with no re-check against a concurrently resolving
-  // auction, letting the old owner plant (or move) content onto the
-  // landlet after it had already transferred to a new owner.
-  it('does not let a concurrent single instance create plant content on a landlet once an auction transfers it', async () => {
+  // #456: same race shape as the draft/version/activate tests above, for
+  // the plain instance-create endpoint — it had no atomic ownership guard
+  // at all before this fix (unlike those three, which #415 already closed).
+  it('does not let a concurrent instance create land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-create-resolve-race-owner');
     const bidder = await signupBuilder('instance-create-resolve-race-bidder');
     await createGreenbeltLandlet('instance-create-resolve-race-landlet');
@@ -405,25 +414,28 @@ describe('Auctions', () => {
     const [created] = await Promise.all([
       api('/instances', owner.session({
         method: 'POST',
-        body: JSON.stringify({
-          instanceId: 'instance-create-resolve-race-instance', landletId: 'instance-create-resolve-race-landlet',
-          templateId: 'placeholder-tree', x: 1, y: 1,
-        }),
+        body: JSON.stringify({ instanceId: 'instance-create-resolve-race-instance', landletId: 'instance-create-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
       })),
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
-    // 403 is also legitimate here: the initial requireOwnedLandlet check
-    // can itself lose the race and reject before ever reaching the new
-    // write-time guard.
+    // 403 is also legitimate here (same shape as #455): the endpoint's own
+    // early requireOwnedLandlet check can itself lose the race and see the
+    // new owner already in place, ahead of ever reaching the write-time
+    // guard this fix adds (which is what produces 409 instead).
     expect([201, 403, 409]).toContain(created.response.status);
 
     const landlet = await api('/landlets/instance-create-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    // Whichever ran first: the create's own guard rejected it if resolve
+    // won, or resolve's unconditional wipe removed it right after if the
+    // create won — the old owner's instance never survives under the new
+    // owner either way.
     const instances = await api('/instances?landletId=instance-create-resolve-race-landlet');
     expect(instances.body.instances).toEqual([]);
   });
 
-  it('does not let a concurrent batch instance create plant content on a landlet once an auction transfers it', async () => {
+  // #456: same race shape, for the batch create/replace endpoint.
+  it('does not let a concurrent batch instance create land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-batch-resolve-race-owner');
     const bidder = await signupBuilder('instance-batch-resolve-race-bidder');
     await createGreenbeltLandlet('instance-batch-resolve-race-landlet');
@@ -440,15 +452,15 @@ describe('Auctions', () => {
     const [created] = await Promise.all([
       api('/instances/batch', owner.session({
         method: 'POST',
-        body: JSON.stringify({ instances: [
-          { instanceId: 'instance-batch-resolve-race-a', landletId: 'instance-batch-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 },
-        ] }),
+        body: JSON.stringify({
+          instances: [{ instanceId: 'instance-batch-resolve-race-instance', landletId: 'instance-batch-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }],
+        }),
       })),
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
-    // 403 is also legitimate here: the initial requireOwnedLandlets check
-    // can itself lose the race and reject before ever reaching the new
-    // write-time guard.
+    // 403 is also legitimate here — same reasoning as the single-create
+    // test above (requireOwnedLandlets' own early check can itself lose
+    // the race).
     expect([201, 403, 409]).toContain(created.response.status);
 
     const landlet = await api('/landlets/instance-batch-resolve-race-landlet');
@@ -457,17 +469,65 @@ describe('Auctions', () => {
     expect(instances.body.instances).toEqual([]);
   });
 
-  it('does not let a concurrent instance update move content onto a landlet once an auction transfers it', async () => {
+  // #456: same race shape, for the single instance update endpoint —
+  // places an instance first (before the race) so there's something to
+  // update; resolveAuction's own wipe means the row can already be gone by
+  // the time the update's initial existence check runs, hence the extra
+  // legitimate 404 outcome (mirroring the activate test's own 404 case
+  // above, for the same "existence check itself lost the race" reason),
+  // and the endpoint's own early requireOwnedLandlet check can likewise
+  // lose the race and see the new owner already in place (403, same
+  // reasoning as the create tests above).
+  it('does not let a concurrent instance update land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-update-resolve-race-owner');
-    const priorTargetOwner = await signupBuilder('instance-update-race-prior-owner');
     const bidder = await signupBuilder('instance-update-resolve-race-bidder');
-    await createGreenbeltLandlet('instance-update-resolve-race-target');
-    await createGreenbeltLandlet('instance-update-resolve-race-source');
-    await claim('instance-update-resolve-race-source', owner);
+    await createGreenbeltLandlet('instance-update-resolve-race-landlet');
+    await claim('instance-update-resolve-race-landlet', owner);
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'instance-update-resolve-race-instance', landletId: 'instance-update-resolve-race-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    }));
+    const started = await api('/landlets/instance-update-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [updated] = await Promise.all([
+      api('/instances/instance-update-resolve-race-instance', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ x: 5, y: 5 }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    expect([200, 403, 404, 409]).toContain(updated.response.status);
+
+    const landlet = await api('/landlets/instance-update-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=instance-update-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  // #456: the update test above only exercises the "instance stays on the
+  // same landlet" path — this one specifically exercises the second
+  // requireOwnedLandlet branch (instance.landletId !== existing.landlet_id),
+  // moving an instance from a landlet the owner keeps onto one that's
+  // concurrently transferred away, to confirm the write-time guard also
+  // re-checks the *destination* landlet's ownership, not just the source.
+  it('does not let a concurrent instance update move content onto a landlet once an auction transfers it', async () => {
+    const owner = await signupBuilder('instance-update-move-race-owner');
+    const priorTargetOwner = await signupBuilder('instance-update-move-race-prior-owner');
+    const bidder = await signupBuilder('instance-update-move-race-bidder');
+    await createGreenbeltLandlet('instance-update-move-race-target');
+    await createGreenbeltLandlet('instance-update-move-race-source');
+    await claim('instance-update-move-race-source', owner);
     const createdOnSource = await api('/instances', owner.session({
       method: 'POST',
       body: JSON.stringify({
-        instanceId: 'instance-update-resolve-race-instance', landletId: 'instance-update-resolve-race-source',
+        instanceId: 'instance-update-move-race-instance', landletId: 'instance-update-move-race-source',
         templateId: 'placeholder-tree', x: 1, y: 1,
       }),
     }));
@@ -478,8 +538,8 @@ describe('Auctions', () => {
     // so the only legitimate way for `owner` to also come to own the
     // target landlet here is to win it at auction — same as any other
     // builder accumulating a second landlet in the real app.
-    await claim('instance-update-resolve-race-target', priorTargetOwner);
-    const firstAuction = await api('/landlets/instance-update-resolve-race-target/auction', priorTargetOwner.session({
+    await claim('instance-update-move-race-target', priorTargetOwner);
+    const firstAuction = await api('/landlets/instance-update-move-race-target/auction', priorTargetOwner.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const firstAuctionId = firstAuction.body.auction.auctionId;
@@ -490,7 +550,7 @@ describe('Auctions', () => {
     const firstResolve = await api(`/auctions/${firstAuctionId}/resolve`, { method: 'POST' });
     expect(firstResolve.response.status).toBe(200);
 
-    const started = await api('/landlets/instance-update-resolve-race-target/auction', owner.session({
+    const started = await api('/landlets/instance-update-move-race-target/auction', owner.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const auctionId = started.body.auction.auctionId;
@@ -503,8 +563,8 @@ describe('Auctions', () => {
     // is entirely in the gap between handleInstances' own ownership checks
     // and its write, not in the request's own legitimacy at send time.
     const [moved] = await Promise.all([
-      api('/instances/instance-update-resolve-race-instance', owner.session({
-        method: 'PATCH', body: JSON.stringify({ landletId: 'instance-update-resolve-race-target' }),
+      api('/instances/instance-update-move-race-instance', owner.session({
+        method: 'PATCH', body: JSON.stringify({ landletId: 'instance-update-move-race-target' }),
       })),
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
@@ -513,9 +573,9 @@ describe('Auctions', () => {
     // write-time guard.
     expect([200, 403, 409]).toContain(moved.response.status);
 
-    const targetLandlet = await api('/landlets/instance-update-resolve-race-target');
+    const targetLandlet = await api('/landlets/instance-update-move-race-target');
     expect(targetLandlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
-    const targetInstances = await api('/instances?landletId=instance-update-resolve-race-target');
+    const targetInstances = await api('/instances?landletId=instance-update-move-race-target');
     expect(targetInstances.body.instances).toEqual([]);
   });
 
@@ -1025,6 +1085,35 @@ describe('Bundles', () => {
       method: 'PATCH', body: JSON.stringify({ name: 'Whatever' }),
     }));
     expect(missing.response.status).toBe(404);
+  });
+
+  // #468: unlike the sequential test above, this fires a rename and a
+  // share-toggle PATCH genuinely concurrently (Promise.all) — the actual
+  // shape of the race, since the old code merged the omitted field in
+  // from a snapshot read at the top of each request, so whichever request
+  // resolved that read *last* still overwrote the other's just-written
+  // field with a stale value once its own UPDATE landed. Both edits must
+  // survive regardless of which request's DB read/write happens to
+  // interleave first.
+  it('does not let a concurrent rename and share-toggle clobber each other', async () => {
+    const owner = await signupBuilder('bundle-patch-race-owner');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const [renamed, shared] = await Promise.all([
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Raced rename' }),
+      })),
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ shared: true }),
+      })),
+    ]);
+    expect(renamed.response.status).toBe(200);
+    expect(shared.response.status).toBe(200);
+
+    const list = await api('/bundles', owner.session());
+    const final = list.body.bundles.find((b) => b.bundleId === bundleId);
+    expect(final).toMatchObject({ name: 'Raced rename', shared: true });
   });
 
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
@@ -1842,5 +1931,127 @@ describe('Simulated purchases', () => {
       }),
     });
     expect(rejected.response.status).toBe(400);
+  });
+
+  // #453: real-money checkout for a seller who has fully completed Stripe
+  // Connect onboarding (#452). This test suite never configures
+  // STRIPE_SECRET_KEY (same dev-mode-friendly pattern as RESEND_API_KEY
+  // and stripe-connect.test.js's own tests), so the actual PaymentIntent-
+  // creation/confirmation round trip can't be exercised here — only the
+  // fallback behavior and handlePurchaseFinalize's own validation/
+  // idempotency logic, which run entirely without a live Stripe call.
+  describe('Real-money checkout (#453)', () => {
+    it('still uses the simulated purchase path when Stripe is not configured, even for a fully connected seller', async () => {
+      const seller = await signupSeller('checkout-fallback-seller');
+      const builder = await signupBuilder('checkout-fallback-builder');
+      await createGreenbeltLandletWithArea('checkout-fallback-landlet', 1000);
+      await claim('checkout-fallback-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'checkout-fallback-template',
+          name: 'Connected-seller product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 5000,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('checkout-fallback-instance', 'checkout-fallback-landlet', 'checkout-fallback-template', builder);
+
+      // Simulates a seller who has finished onboarding (#452's own POST
+      // endpoint is what would normally set these, but that requires a
+      // real Stripe call this test suite deliberately never makes).
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_test123', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+      `).bind(seller.sellerId).run();
+
+      const purchased = await api('/instances/checkout-fallback-instance/purchase', { method: 'POST' });
+      expect(purchased.response.status).toBe(201);
+      expect(purchased.body.purchase).toMatchObject({ totalCents: 5000, paymentIntentId: null });
+      expect(purchased.body.requiresPayment).toBeUndefined();
+    });
+
+    it('validates paymentIntentId before checking whether Stripe is configured', async () => {
+      const missing = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({}) });
+      expect(missing.response.status).toBe(400);
+
+      const wrongType = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({ paymentIntentId: 42 }) });
+      expect(wrongType.response.status).toBe(400);
+    });
+
+    it('503s once a well-formed but unknown paymentIntentId passes validation, since Stripe is never configured in this test suite', async () => {
+      const notConfigured = await api('/purchases/finalize', {
+        method: 'POST',
+        body: JSON.stringify({ paymentIntentId: 'pi_does_not_exist' }),
+      });
+      expect(notConfigured.response.status).toBe(503);
+    });
+
+    it('is idempotent for an already-finalized paymentIntentId, entirely without needing Stripe configured', async () => {
+      const seller = await signupBuilder('checkout-idempotent-seller');
+      await createGreenbeltLandletWithArea('checkout-idempotent-landlet', 1000);
+      await claim('checkout-idempotent-landlet', seller);
+      await createTemplate('checkout-idempotent-template', { priceCents: 2000 });
+      await placeInstance('checkout-idempotent-instance', 'checkout-idempotent-landlet', 'checkout-idempotent-template', seller);
+      const purchased = await api('/instances/checkout-idempotent-instance/purchase', { method: 'POST' });
+      const { purchaseId } = purchased.body.purchase;
+
+      // Directly attaches a payment_intent_id to an existing (simulated)
+      // purchase to stand in for one handlePurchaseFinalize itself wrote
+      // — the idempotency lookup only cares that a purchases row already
+      // carries this id, not how it got there.
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_already_finalized', purchaseId).run();
+
+      const finalized = await api('/purchases/finalize', {
+        method: 'POST',
+        body: JSON.stringify({ paymentIntentId: 'pi_already_finalized' }),
+      });
+      expect(finalized.response.status).toBe(200);
+      expect(finalized.body.purchase.purchaseId).toBe(purchaseId);
+    });
+  });
+
+  // #348: refunding a real-money purchase (one with a paymentIntentId, see
+  // #453) needs to reverse the actual Stripe charge, not just flag the
+  // local row. Same limitation as the "Real-money checkout" tests above —
+  // this suite never configures STRIPE_SECRET_KEY, so the only exercisable
+  // path is the 503 "not configured" branch — which is exactly what proves
+  // the important safety property: a purchase whose Stripe reversal never
+  // happened must not end up looking refunded, and the builder's dáller
+  // share must stay untouched until it does.
+  describe('Real-money refunds (#348)', () => {
+    it('leaves the purchase unrefunded and the builder\'s balance untouched when Stripe is not configured', async () => {
+      const seller = await signupBuilder('real-refund-seller');
+      await createGreenbeltLandletWithArea('real-refund-landlet', 1000);
+      await claim('real-refund-landlet', seller);
+      await createTemplate('real-refund-template', { priceCents: 8000 });
+      await placeInstance('real-refund-instance', 'real-refund-landlet', 'real-refund-template', seller);
+      const purchased = await api('/instances/real-refund-instance/purchase', { method: 'POST' });
+      const { purchaseId } = purchased.body.purchase;
+
+      // Stands in for a real-money purchase handlePurchaseFinalize would
+      // have written (same technique as the idempotent-finalize test
+      // above) — the refund path only cares that payment_intent_id is set.
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_real_refund_test', purchaseId).run();
+
+      const before = await builderRow(seller.builderId);
+      const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+      expect(refunded.response.status).toBe(503);
+
+      const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(purchaseRow.refunded_at).toBeNull();
+      const after = await builderRow(seller.builderId);
+      expect(after.dallers_balance_cents).toBe(before.dallers_balance_cents);
+
+      // The refunded_at guard was released, not left stuck — a retry (once
+      // Stripe is actually configured) isn't permanently blocked by this
+      // failed attempt.
+      const retried = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+      expect(retried.response.status).toBe(503);
+    });
   });
 });
