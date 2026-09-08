@@ -2,7 +2,7 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker from './index.js';
+import worker, { claimPurchasesForPayout } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -2566,6 +2566,42 @@ describe('Simulated purchases', () => {
 
       const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(row.paid_out_at).toBeNull();
+    });
+
+    // Self-found audit fix, no issue: handleSellerPayouts used to read
+    // unpaid purchases, call Stripe, and only afterward mark paid_out_at
+    // with no guard at all — two concurrent POST /sellers/me/payouts calls
+    // (a double-click, two tabs) could both pass the read, both trigger a
+    // real Stripe payout for the same purchases, and both write. Fixed by
+    // claiming purchases (this guarded UPDATE) BEFORE ever calling Stripe.
+    // Can't prove the fix through the real endpoint the way this file's
+    // other concurrent-request tests do (auction-start/bid races, above) —
+    // this suite deliberately never configures STRIPE_SECRET_KEY (see
+    // stripe-connect.test.js's own comment), so POST /sellers/me/payouts
+    // always 503s before ever reaching this claim. Testing the extracted
+    // claim primitive directly instead, the same concurrency-proof shape
+    // (Promise.all, assert an all-or-nothing split) applied one layer down.
+    it('claimPurchasesForPayout lets only one of two concurrent claims win the same purchases, never both', async () => {
+      const builder = await signupBuilder('payout-race-builder');
+      const seller = await createConnectedSeller('payout-race-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+      const purchase = await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+
+      const [first, second] = await Promise.all([
+        claimPurchasesForPayout(env.DB, [purchase], '2026-01-01T00:00:00.000Z'),
+        claimPurchasesForPayout(env.DB, [purchase], '2026-01-01T00:00:01.000Z'),
+      ]);
+      // All-or-nothing on each purchase, the same shape as the auction-start
+      // race above — never both empty (that would mean the claim silently
+      // failed for everyone) and never both non-empty (that would be the
+      // double-payout bug this test exists to catch).
+      const winners = [first.length, second.length].filter((n) => n === 1);
+      const losers = [first.length, second.length].filter((n) => n === 0);
+      expect(winners.length).toBe(1);
+      expect(losers.length).toBe(1);
+
+      const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.paid_out_at).toBeTruthy();
     });
   });
 });

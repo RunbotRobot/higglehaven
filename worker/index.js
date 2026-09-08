@@ -3780,6 +3780,39 @@ async function sellerPayoutSummaryJson(env, db, sessionSeller) {
   };
 }
 
+// Atomically claims a batch of purchases for payout by stamping
+// paid_out_at, guarded so a purchase a concurrent request already claimed
+// (or already fully paid out) is silently skipped rather than claimed a
+// second time — the same guarded-write idiom this file already uses for
+// auction bids/instance moves (PR #415/#462), applied here to close a
+// double-payout race: two concurrent POST /sellers/me/payouts calls used
+// to both read the same unpaid purchases, both trigger a real Stripe
+// payout for them, and only afterward both write paid_out_at with no
+// guard at all — a genuine double Stripe transfer, not just a DB
+// inconsistency. Returns only the purchases this call actually won the
+// claim on, so the caller can size its Stripe payout request off the
+// post-claim set rather than the pre-claim one.
+export async function claimPurchasesForPayout(db, purchases, nowIso) {
+  if (purchases.length === 0) return [];
+  const results = await db.batch(purchases.map((purchase) =>
+    db.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ? AND paid_out_at IS NULL')
+      .bind(nowIso, purchase.purchase_id)));
+  return purchases.filter((_, i) => results[i].meta.changes === 1);
+}
+
+// Undoes a claim made by claimPurchasesForPayout, for when the Stripe call
+// that was supposed to follow it never succeeds — otherwise a failed
+// attempt would strand these purchases as permanently "already paid out"
+// with no stripe_payout_id and no way to retry. Guarded on paid_out_at
+// still matching this exact claim's own timestamp so it only ever releases
+// a claim this call made, never a different, later one.
+async function releasePurchaseClaim(db, purchases, nowIso) {
+  if (purchases.length === 0) return;
+  await db.batch(purchases.map((purchase) =>
+    db.prepare('UPDATE purchases SET paid_out_at = NULL WHERE purchase_id = ? AND paid_out_at = ?')
+      .bind(purchase.purchase_id, nowIso)));
+}
+
 // GET returns the seller's current held/available-for-cash-out balance
 // (folded into the same shape stripeAccountStatusJson already gives the
 // onboarding panel, so one call covers both); POST actually triggers a
@@ -3836,15 +3869,35 @@ async function handleSellerPayouts(request, env, db) {
       throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
     }
 
-    const payout = await stripeRequest(
-      env, 'POST', 'payouts', { amount: payoutCents, currency: 'usd' }, undefined, sessionSeller.stripe_account_id,
-    );
+    // Claimed BEFORE calling Stripe, not after — the actual money-moving
+    // call only ever fires for purchases this request itself won the claim
+    // on, so a concurrent request racing the same purchases can never
+    // trigger a second real Stripe payout for them (see
+    // claimPurchasesForPayout's own comment).
     const nowIso = new Date().toISOString();
-    await db.batch(included.map((purchase) =>
-      db.prepare('UPDATE purchases SET paid_out_at = ?, stripe_payout_id = ? WHERE purchase_id = ?')
-        .bind(nowIso, payout.id, purchase.purchase_id)));
+    const claimed = await claimPurchasesForPayout(db, included, nowIso);
+    if (claimed.length === 0) {
+      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+    }
+    const claimedCents = claimed.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
 
-    return json({ payoutCents, purchaseCount: included.length, stripePayoutId: payout.id });
+    let payout;
+    try {
+      payout = await stripeRequest(
+        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' }, undefined, sessionSeller.stripe_account_id,
+      );
+    } catch (err) {
+      // The claim above already stamped paid_out_at — undo it so a failed
+      // attempt doesn't strand these purchases as permanently unclaimable
+      // with no actual payout behind them.
+      await releasePurchaseClaim(db, claimed, nowIso);
+      throw err;
+    }
+    await db.batch(claimed.map((purchase) =>
+      db.prepare('UPDATE purchases SET stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind(payout.id, purchase.purchase_id)));
+
+    return json({ payoutCents: claimedCents, purchaseCount: claimed.length, stripePayoutId: payout.id });
   }
 
   return json({ error: 'Not found' }, 404);
