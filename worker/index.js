@@ -1364,7 +1364,11 @@ async function handleBuilders(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: this rename path used plain stringValue (no upper bound),
+    // unlike POST /api/builders' own create path just above (already
+    // labelValue) — a rename call could bypass the create-time cap
+    // entirely. Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?
     `).bind(label, route[1]).run();
@@ -1640,7 +1644,10 @@ async function handleSellers(request, env, db, route) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: same gap as the builder-rename fix just above — this used
+    // plain stringValue (no upper bound), unlike POST /api/sellers' own
+    // create path (already labelValue). Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE seller_id = ?
     `).bind(label, route[1]).run();
