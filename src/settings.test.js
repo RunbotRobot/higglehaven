@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromDisplayLength, formatLength, toDisplayLength, unitSuffix } from './settings.js';
+import { fromDisplayLength, formatLength, toDisplayLength, unitSuffix, areaSuffix, toDisplayArea, formatArea } from './settings.js';
 
 // getUnits/setUnits aren't covered here: they read/write localStorage, a
 // browser global this test pool (workerd, not jsdom) doesn't provide.
@@ -72,5 +72,56 @@ describe('formatLength', () => {
   it('handles zero and negative lengths', () => {
     expect(formatLength(0, 2, 'm')).toBe('0.00m');
     expect(formatLength(-5, 2, 'm')).toBe('-5.00m');
+  });
+});
+
+describe('areaSuffix', () => {
+  it('returns ft² for feet', () => {
+    expect(areaSuffix('ft')).toBe('ft²');
+  });
+
+  it('returns m² for meters', () => {
+    expect(areaSuffix('m')).toBe('m²');
+  });
+
+  it('falls back to m² for anything else', () => {
+    expect(areaSuffix('yards')).toBe('m²');
+  });
+});
+
+describe('toDisplayArea', () => {
+  it('passes square meters through unchanged', () => {
+    expect(toDisplayArea(10, 'm')).toBe(10);
+    expect(toDisplayArea(0, 'm')).toBe(0);
+  });
+
+  it('converts square meters to square feet using the squared factor, not the linear one', () => {
+    // 1 m == ~3.28084 ft (linear), so 1 m² == ~10.7639 ft² (squared) —
+    // reusing the linear factor directly here would have been the bug.
+    expect(toDisplayArea(1, 'ft')).toBeCloseTo(10.7639, 3);
+    expect(toDisplayArea(0.3048 * 0.3048, 'ft')).toBeCloseTo(1, 8);
+  });
+
+  it('treats an unrecognized unit as meters', () => {
+    expect(toDisplayArea(10, 'yards')).toBe(10);
+  });
+});
+
+describe('formatArea', () => {
+  it('formats square meters with a suffix and an explicit decimal count', () => {
+    expect(formatArea(1, 2, 'm')).toBe('1.00m²');
+  });
+
+  it('formats square feet, converting and suffixing', () => {
+    expect(formatArea(1, 2, 'ft')).toBe('10.76ft²');
+  });
+
+  it('defaults to rounding to the nearest integer, unlike formatLength', () => {
+    expect(formatArea(1234.5, undefined, 'm')).toBe('1,235m²');
+  });
+
+  it('comma-separates thousands regardless of decimal count', () => {
+    expect(formatArea(12345, 0, 'm')).toBe('12,345m²');
+    expect(formatArea(12345, 2, 'm')).toBe('12,345.00m²');
   });
 });

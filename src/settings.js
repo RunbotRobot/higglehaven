@@ -29,3 +29,26 @@ export function fromDisplayLength(value, units = getUnits()) {
 export function formatLength(meters, decimals = 2, units = getUnits()) {
   return `${toDisplayLength(meters, units).toFixed(decimals)}${unitSuffix(units)}`;
 }
+
+export function areaSuffix(units = getUnits()) {
+  return units === 'ft' ? 'ft²' : 'm²';
+}
+
+// Area scales with the square of length, so this can't reuse
+// toDisplayLength's own per-axis factor directly.
+export function toDisplayArea(squareMeters, units = getUnits()) {
+  return units === 'ft' ? squareMeters / (METERS_PER_FOOT * METERS_PER_FOOT) : squareMeters;
+}
+
+// Owner: "Whenever we display a lánd size, please round to the nearest
+// integer and show a comma for thousands-separation." Unlike formatLength
+// (still 2-decimal by default — used for fine-grained placement/transform
+// values, not land-cap-scale areas), every real call site here is a whole
+// land/lándlet size, so the default itself rounds; toLocaleString's grouping
+// applies regardless of decimals in case a caller ever passes a nonzero one.
+export function formatArea(squareMeters, decimals = 0, units = getUnits()) {
+  return `${toDisplayArea(squareMeters, units).toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}${areaSuffix(units)}`;
+}

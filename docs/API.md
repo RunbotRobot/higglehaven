@@ -13,8 +13,10 @@ from browser `localStorage` placeholders toward persistent data.
   not a scope boundary this backend is meant to stay behind. See AGENTS.md's
   "Proposing big feature work" for how this project picks that kind of work
   up.
-- Internal names use plain `a` (`land`, `landlet`, `daller`) even when display
-  copy may eventually use accented customer-facing strings.
+- Internal names use plain `a` (`land`, `landlet`) even when display copy may
+  eventually use accented customer-facing strings. The currency term
+  (`higgle`/`higgles`) has no "a" at all, so this split doesn't apply to it —
+  it's spelled identically everywhere.
 - Coordinates and dimensions are decimal meters. Placed object positions use the
   current client convention: `x`/`y` are ground-plane coordinates and `z` is
   vertical.
@@ -156,7 +158,7 @@ can burn shared R2 storage headroom, so it's bucketed by client IP alone
 It also guards `POST /api/instances/:instanceId/purchase` (see "Simulated
 purchases" below), bucketed by client IP alone, 30 attempts per 15-minute
 window — the one other public, repeatable endpoint that credits real state
-(a builder's `dallers_balance_cents`/`daller_earnings_events`, which feeds
+(a builder's `higgles_balance_cents`/`higgles_earnings_events`, which feeds
 land cap) with no shopper account of any kind to otherwise attribute or
 throttle by.
 
@@ -513,7 +515,7 @@ profile, auto-provisioning one if somehow missing (a defensive fallback —
 signup already creates it, so this should never actually need to):
 
 ```json
-{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "dallersBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
+{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "higglesBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
 ```
 
 Idempotent — the same profile every call, never a new one.
@@ -526,7 +528,7 @@ Idempotent — the same profile every call, never a new one.
   "label": "Ada",
   "isPioneer": false,
   "pioneerRank": null,
-  "dallersBalanceCents": 0,
+  "higglesBalanceCents": 0,
   "landCapM2": 1000,
   "ownedAreaM2": 1000,
   "createdAt": "2026-08-16T00:00:00.000Z",
@@ -535,7 +537,7 @@ Idempotent — the same profile every call, never a new one.
 ```
 
 `isPioneer`/`pioneerRank` are docs/SPEC.md §3's founding/pioneer
-recognition — see "Founding/pioneer recognition" below. `dallersBalanceCents`
+recognition — see "Founding/pioneer recognition" below. `higglesBalanceCents`
 is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
 acquisition auctions" below for what can (and can't yet) change it.
 `landCapM2`/`ownedAreaM2` are "Land cap" below's cap itself and the real
@@ -1050,7 +1052,7 @@ All dimensions must be numbers greater than zero. `priceCents`, when present,
 must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
 same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
 value large enough to lose precision past `Number.isSafeInteger` once
-persisted, or to mint an outsized `dallers_balance_cents` credit through a
+persisted, or to mint an outsized `higgles_balance_cents` credit through a
 self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
 
@@ -1395,6 +1397,25 @@ password-reset flow, and `checkRateLimit` only ever prunes the one bucket
 it's currently checking, so a bucket keyed to a target nobody retries (e.g.
 one email's signup/reset attempts) would otherwise sit in the table
 forever.
+
+The same cron also runs `checkMigrationDrift` (#499, follow-up to #488: a
+real 4-day production outage where `wrangler d1 migrations apply --remote`
+silently failed partway through a batch and nothing noticed until an owner
+bug report). It compares a live `SELECT name FROM d1_migrations` against
+`worker/migrations-manifest.json` — a list of `migrations/*.sql` filenames
+generated at build/deploy time (`npm run generate:migrations-manifest`,
+wired into `deploy`/`deploy:ci`) since `scheduled()` has no filesystem
+access to read `migrations/` directly. `scripts/check-migrations-manifest-
+fresh.mjs` runs as a `pretest` check so the checked-in manifest can't
+silently drift from `migrations/` itself. On finding production missing any
+migration the manifest expects, it logs a loud `console.error` (always
+visible in `wrangler tail`/the dashboard) and, if the optional `OPS_ALERT_EMAIL`
+Worker secret is configured, also emails that address via the existing
+`sendEmail`/Resend integration — same dev-mode-friendly "no secret, no
+network call" fallback as `RESEND_API_KEY` itself. This is a detection net,
+not a replacement for `scripts/check-migration-drift.mjs` (#492), which
+still catches the same drift immediately at deploy time; this catches it
+within the next 10-minute cron tick even when nobody deploys for a while.
 
 ### World object
 
@@ -2046,7 +2067,8 @@ contain at most 250 instances. An empty array clears the draft. D1 applies the
 draft replacement and immutable version snapshot as one batch, so a validation
 or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
-`Version N`.
+`Version N`. `versionName` is capped at 100 characters (`400` past that,
+#480 — see the versions endpoint below for why).
 
 **Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
 `instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
@@ -2113,6 +2135,12 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 Requires a session logged in as the landlet's owner (`403` otherwise).
 Saves the landlet's current placed instances as a new immutable snapshot.
 `name` and `metadata` are optional; omitted names default to `Version N`.
+`name` is capped at 100 characters (`400` past that, #480) — the same
+`labelValue`/`optionalLabelValue` short-label cap already applied to
+`authorLabel`/`buyerLabel` (#337) and bundle `name` (#358); a version's
+`name` is echoed straight into the Version History panel and the live
+landlet's own UI, same exposure those fixes closed off elsewhere. The
+draft-save endpoint's own `versionName` (above) gets the identical cap.
 
 ```json
 {
@@ -2938,12 +2966,12 @@ committing).
 
 ## Product reviews
 
-docs/SPEC.md §5's "Review incentives: small dáller bonus for genuine,
-substantive reviews, capped per account/period." The dáller-bonus half is
+docs/SPEC.md §5's "Review incentives: small higgle bonus for genuine,
+substantive reviews, capped per account/period." The higgle-bonus half is
 explicitly out of scope here, same reasoning "Community calendar" gave for
 carving out its own out-of-scope half: there is no shopper account/balance
 concept anywhere in this app to credit a bonus to — only builders ever hold
-dállers, and only for their own commission earnings. This covers the
+higgles, and only for their own commission earnings. This covers the
 reviewable-content half only.
 
 **Purchase-gated (standard marketplace practice):** only a shopper who has
@@ -3231,7 +3259,7 @@ data/state changes a DOM-only assertion could see.
 docs/SPEC.md §5's "simplified auction system" — the mechanism only, not
 the full cash economy around it (see "Deliberate scope boundary" below).
 `migrations/0045_auctions.sql` adds `auctions` and `auction_bids` tables
-plus a `builders.dallers_balance_cents` ledger.
+plus a `builders.higgles_balance_cents` ledger.
 
 ### Deliberate scope boundary
 
@@ -3245,14 +3273,14 @@ neither has anywhere to attach to in this dev-mode backend yet:
   an auction. That section covers why: a hard block was implemented,
   tested, and reverted after e2e testing surfaced a bootstrapping trap
   (every builder starts at exactly 100% of their cap, and auction sale
-  proceeds are the only dáller-earning path this dev-mode backend actually
+  proceeds are the only higgle-earning path this dev-mode backend actually
   has).
-- **Balance-gated bidding.** Every builder starts at `dallersBalanceCents:
+- **Balance-gated bidding.** Every builder starts at `higglesBalanceCents:
   0` with no way to earn any except winning an auction as the *seller* —
   requiring a sufficient balance to *bid* would make the feature
   untestable today (nobody could ever place a first bid). Bids are
   validated only against the minimum-increment rule below, never against
-  the bidder's balance. `dallersBalanceCents` is still a real, persisted
+  the bidder's balance. `higglesBalanceCents` is still a real, persisted
   ledger (not a UI-only number) so a winning seller's proceeds land
   somewhere meaningful, ready for balance-gating to be added later without
   a schema change.
@@ -3388,8 +3416,8 @@ lazily or via the explicit endpoint:
   instances, versions, `active_version_id`) exactly like `DELETE
   /api/builders/:id` already clears a reclaimed landlet's build — a new
   owner gets the land, not the previous owner's stuff on it — and the
-  seller's `dallersBalanceCents` is credited the winning bid amount
-  (docs/SPEC.md §5: "Dállers raised in a successful auction go to the
+  seller's `higglesBalanceCents` is credited the winning bid amount
+  (docs/SPEC.md §5: "Higgles raised in a successful auction go to the
   previously-inactive builder's account"). `auctions.status` becomes
   `ended`, `winningBidId` records which bid won.
 - **No bids, `startingBidCents` was `0`:** the landlet releases to
@@ -3520,16 +3548,16 @@ is 1 hour, so waiting for a real one isn't practical in an e2e run.
 
 docs/SPEC.md §3: "Land cap — the growth-gating mechanic (distinct from
 land acquisition, §5): Per-builder max total m², gating hosting burden.
-Grows via a formula converting trailing-30-day dáller earnings per
+Grows via a formula converting trailing-30-day higgle earnings per
 1,000 m² owned into cap increases. Ratcheting: once increased, never
 decreases." Also: "Two independent constraints (do not conflate): 1. Land
-cap — how much total area, grows only via earnings formula. 2. Dáller
+cap — how much total area, grows only via earnings formula. 2. Higgle
 balance — which specific already-claimed lands can be acquired via auction
 (§5)." This section (`migrations/0050_land_cap.sql`) had no implementation
 at all before it — `builders.land_cap_m2` (defaults to `1000`, matching the
-free starter lándlet exactly) and a per-event `daller_earnings_events`
+free starter lándlet exactly) and a per-event `higgles_earnings_events`
 ledger (needed for a genuine trailing-30-day *window*, which the existing
-lifetime `dallers_balance_cents` total, migrations/0045, can't answer on
+lifetime `higgles_balance_cents` total, migrations/0045, can't answer on
 its own).
 
 **This is deliberately tracking-only, not enforced against auction bids —
@@ -3544,12 +3572,12 @@ surfaced a genuine bootstrapping trap:
 - The default cap (`1000`) exactly equals the mandatory starter lándlet's
   own size. So every builder, the moment they exist, is already at 100% of
   their cap.
-- docs/SPEC.md §5 makes clear the *intended primary* dáller-earning path is
-  commerce commissions — "Dállers credit instantly to builders on sale
+- docs/SPEC.md §5 makes clear the *intended primary* higgle-earning path is
+  commerce commissions — "Higgles credit instantly to builders on sale
   completion" (of a *product*, not of land). But this dev-mode backend has
   no real checkout/commerce system at all (out of scope, same as real
   payments generally elsewhere in this project). Auction sale proceeds are
-  the *only* dáller source actually implemented.
+  the *only* higgle source actually implemented.
 - Hard-enforcing the cap against that one lone source would make growing
   past your starter lándlet structurally impossible for *every* builder:
   nobody can ever earn without first having cap headroom to acquire
@@ -3571,7 +3599,7 @@ loop exists to make that gate navigable — not a stub.
 
 ```
 normalizedThousands = max(ownedAreaM2, 1000) / 1000
-trailingEarningsDollars = SUM(daller_earnings_events.amount_cents WHERE created_at >= now - 30 days) / 100
+trailingEarningsDollars = SUM(higgles_earnings_events.amount_cents WHERE created_at >= now - 30 days) / 100
 earningsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands
 increaseM2 = floor(earningsPerThousandM2Owned * 100)
 candidateCap = 1000 + increaseM2
@@ -3587,8 +3615,8 @@ at most once/month, small increments" describes an *operator* tuning this
 constant over time; there is no mechanism here (or need for one) for the
 backend to change it on its own.
 
-`daller_earnings_events` gains one row whenever `resolveAuction` credits a
-seller's `dallers_balance_cents` on a successful sale — same event, same
+`higgles_earnings_events` gains one row whenever `resolveAuction` credits a
+seller's `higgles_balance_cents` on a successful sale — same event, same
 amount, recorded twice for two different purposes (a lifetime running
 total vs. a queryable time-windowed ledger).
 
@@ -3725,8 +3753,8 @@ cap is actually charged for going vertical.
 
 Land cap's own commentary above flags the actual gap directly: this
 backend originally had no real commerce/checkout system at all, only
-auction sale proceeds as a dáller source, even though docs/SPEC.md §5's
-*intended primary* earning path is "Dállers credit instantly to builders
+auction sale proceeds as a higgle source, even though docs/SPEC.md §5's
+*intended primary* earning path is "Higgles credit instantly to builders
 on sale completion" of a *product*. `POST
 /api/instances/:instanceId/purchase` (`migrations/0051_purchases.sql`)
 lets a shopper "buy" a priced, placed product.
@@ -3737,8 +3765,8 @@ answer:**
 - **Dev-mode simulation** (the original, and still the default for the
   vast majority of products): no real payment is ever processed and a
   shopper is charged nothing. What *is* real is the commission math: a
-  successful purchase credits an actual builder's `dallers_balance_cents`
-  and `daller_earnings_events` ledger (migrations/0050), so it feeds land
+  successful purchase credits an actual builder's `higgles_balance_cents`
+  and `higgles_earnings_events` ledger (migrations/0050), so it feeds land
   cap's own formula for real.
 - **Real-money checkout** (#453, sub-issue of #347/#324): once a
   product's seller has *fully completed* Stripe Connect Custom onboarding
@@ -3798,7 +3826,7 @@ buy), the instance sits on an unclaimed lándlet (no builder to credit), or
 `quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
 reasoning as auctions' `durationHours` cap above) against this deliberately
 unauthenticated endpoint turning one request into an unbounded
-`dallers_balance_cents`/land-cap credit. `429` past 30 calls per 15 minutes
+`higgles_balance_cents`/land-cap credit. `429` past 30 calls per 15 minutes
 from one client IP (see "Rate limiting" above) closes the other half of
 that gap — repeated smaller requests instead of one large one.
 
@@ -3866,10 +3894,10 @@ the *entire* `commissionCents` (not just `platformShareCents`) with
 `transfer_data.destination` set to the seller's own connected account, so
 Stripe transfers the remaining ~98% (`totalCents - commissionCents`)
 straight to the seller. The Builder's own `builderShareCents` is
-unaffected by any of this — it's still credited as dállers, never real
+unaffected by any of this — it's still credited as higgles, never real
 money, exactly as the simulated path always did (per the owner's own #331
-answer: "They never receive dallers for the sale of the product... paid to
-the builder in dallers"). Every amount this PaymentIntent needs later is
+answer: "They never receive higgles for the sale of the product... paid to
+the builder in higgles"). Every amount this PaymentIntent needs later is
 stored in its own Stripe-side `metadata` at creation time (`instanceId`,
 `templateId`, `builderId`, `quantity`, `buyerLabel`, and all five cent
 amounts) — locked in against the price *right now*, so a later price
@@ -3887,7 +3915,7 @@ POST /api/purchases/finalize
 This never trusts that client-side success signal on its own. It
 re-fetches the PaymentIntent from Stripe directly (server-side, using this
 server's own secret key, which the client never has) and only writes the
-`purchases` row — crediting the builder's dállers exactly as the simulated
+`purchases` row — crediting the builder's higgles exactly as the simulated
 path does — once Stripe itself reports `status: 'succeeded'`, using the
 amounts from that PaymentIntent's own metadata rather than any fresh
 client input. Validation (`paymentIntentId` must be a non-empty string)
@@ -3917,7 +3945,7 @@ what's already meant to be a permanent historical receipt). `builderId` is
 only used if it still resolves to a real builder account (the same `NULL`
 state an ordinary purchase already reaches when its builder self-deletes
 *after* a normal purchase, `migrations/0062`) — otherwise the row is
-written with a `null` `builderId` and no dáller credit, since there's no
+written with a `null` `builderId` and no higgle credit, since there's no
 one to credit. This deliberately does **not** decide what should happen
 next for a sale like this (auto-refund, manual reconciliation, re-crediting
 if the instance reappears, ...) — that's a reconciliation-policy call left
@@ -3970,8 +3998,8 @@ covered by any automated test in this repo.
 
 ### Refunds
 
-docs/SPEC.md §5: "Returns/refunds return real currency, not dállers ...
-**Requires a dáller-commission clawback mechanism** (builder's instant
+docs/SPEC.md §5: "Returns/refunds return real currency, not higgles ...
+**Requires a higgle-commission clawback mechanism** (builder's instant
 commission on a returned sale is deducted, potentially creating a negative
 balance to settle)." "Returns return real currency" describes *real*
 commerce and doesn't apply here — a simulated purchase never moved real
@@ -3983,12 +4011,12 @@ requires a session logged in as the purchase's own `sellerId`, if it has
 one (`403` otherwise). A purchase of a seller-less template (an
 admin/system-owned catalog item can still be priced) does **not** stay
 open the way the `GET` above does — unlike a read, a refund claws back
-real dállers from a builder's balance, so it falls back to requiring an
+real higgles from a builder's balance, so it falls back to requiring an
 admin session instead (`401`/`403`), never no check at all. Marks a
 purchase refunded and
 deducts exactly `builderShareCents` (not the
 full sale total — that was never the builder's money) from
-`builders.dallers_balance_cents`. **No floor** — this can and deliberately
+`builders.higgles_balance_cents`. **No floor** — this can and deliberately
 does push a builder's balance negative, matching the spec's own "potentially
 creating a negative balance to settle." `404` if the purchase doesn't
 exist, `400` if it's already been refunded, `400` if the product's seller
@@ -4001,17 +4029,17 @@ the spec's own default of accepting returns).
 A purchase with a `paymentIntentId` (see "Real-money checkout" above —
 #453) went through Stripe, not just the dev-mode simulation, so refunding
 it needs to actually reverse the Stripe charge, not just flag the local
-row. Alongside the dáller-commission clawback above, this issues a Stripe
+row. Alongside the higgle-commission clawback above, this issues a Stripe
 refund against the original PaymentIntent with `reverse_transfer: true`
 (pulls the seller's ~98% share back out of their connected account's
-balance — the real-money mirror of clawing back the builder's dáller
+balance — the real-money mirror of clawing back the builder's higgle
 share) and `refund_application_fee: true` (reverses higglehaven's own cut
 too, so nobody keeps money on a refunded sale). `503` if
 `STRIPE_SECRET_KEY` isn't configured. If Stripe's refund call fails for
 any reason, the purchase is left exactly as it was before this
-request — not marked refunded, builder's dáller balance untouched — so a
+request — not marked refunded, builder's higgle balance untouched — so a
 failed real-money reversal never looks like a successful refund and stays
-retryable; only once Stripe confirms the refund does the dáller clawback
+retryable; only once Stripe confirms the refund does the higgle clawback
 above happen at all.
 
 A purchase's `builderId` can itself be null (migrations/0062 — the host
@@ -4021,11 +4049,11 @@ receipt" design). In that case the balance clawback and the refund
 notification are both skipped (nothing to credit back, and no account
 left to notify) — the purchase is still marked refunded.
 
-**Deliberately does not touch `daller_earnings_events`** (migrations/0050)
+**Deliberately does not touch `higgles_earnings_events`** (migrations/0050)
 or land cap — that ledger exists only to feed land cap's trailing-earnings
 formula, and land cap's own ratchet ("once increased, never decreases")
 means a refund shouldn't claw back cap growth it already produced, only the
-dállers balance itself.
+higgles balance itself.
 
 **Refunding is seller-initiated, not shopper self-service** — the Seller
 modal's own per-product "Sales" panel (mirroring "Reviews" above,
@@ -4085,9 +4113,9 @@ The migrations currently create seventeen main backend tables:
 - `friendships`: one row per friend relationship between two builders,
   direction preserved, status `pending`/`accepted` (see "Friend requests"
   above).
-- `daller_earnings_events`: a per-event, timestamped dáller-earnings ledger
+- `higgles_earnings_events`: a per-event, timestamped higgle-earnings ledger
   per builder (see "Land cap" above), distinct from the running
-  `builders.dallers_balance_cents` lifetime total.
+  `builders.higgles_balance_cents` lifetime total.
 - `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
 - `sign_posts`: shopper-authored posts on a placed instance flagged
   `isCommunitySign` (see "Community signs" above), cascade-deleted with

@@ -55,6 +55,19 @@ Only ever run `wrangler deploy` or `wrangler d1 migrations apply
 --remote` from `main`, after merging — never from your own session
 branch before its PR has merged.
 
+Applying migrations remotely means `npm run db:migrate:remote`, not the
+bare `wrangler d1 migrations apply --remote` command — the npm script
+chains a drift check (`scripts/check-migration-drift.mjs`) after the
+apply and fails loudly if anything is still pending. This isn't
+optional: #488 is a real 4-day production outage this exact gap
+caused — a migration renamed after already being applied made
+`wrangler d1 migrations apply --remote` error out partway through a
+batch and silently skip everything after it, and `wrangler`'s own exit
+code stayed `0` throughout, so nothing noticed until an owner bug
+report. If the drift check ever fails, stop — do not run `wrangler
+deploy` on top of a schema that isn't what the code expects — and
+investigate before doing anything else.
+
 This file has been wrong about this twice before, so don't re-derive
 the convention from old commit history or guess: (1) an early version
 had numbered branches with an ad-hoc, self-assign-via-GitHub-Issue
@@ -237,6 +250,21 @@ cost when it happens anyway:
   small enough that filing a real issue feels like overkill is still
   worth claiming its own `tasks` doc for this reason alone — the claim
   is the point, not the issue tracker.
+- **Immediately after writing your claim, re-read that same doc once
+  before doing anything else.** Two sessions can still write a claim
+  within moments of each other — this doesn't stop that, but it stops
+  the *wasted work* it causes. Right after your own `set`/`update` call
+  lands, `get` that exact doc back: if it shows your session name, you
+  genuinely won the race and can start investigating for real; if it
+  shows someone else's, you lost it (their write landed after yours but
+  was read after, or simply overwrote yours) — note in the doc that
+  you're standing down as a duplicate claim and go find different work,
+  *before* spending a single minute reading code or planning a fix. The
+  cost of one extra read is negligible next to the cost of two sessions
+  fully duplicating an implementation (per the project owner directly:
+  "the extra effort of grabbing a single task one more time before
+  executing a task is minuscule compared with the wasted effort of
+  duplicating work").
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —
@@ -262,6 +290,36 @@ cost when it happens anyway:
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
+
+### Partial-scope PRs — never let a closing keyword outrun what you actually did
+
+Issue #220 sat invisible to the whole fleet for over a day, not because
+anyone ignored it: it was silently auto-closed. PR #238 landed only the
+water-rendering half of #220's scope, and its own comment on the issue said
+so explicitly — *"Not closing this issue — the remaining scope is just the
+regional biome ground-texture half... Leaving this open and unassigned"* —
+but the PR's title, body, or a commit message must still have contained a
+GitHub closing keyword (`Closes #220`/`Fixes #220`/`Resolves #220`)
+somewhere, because merging it closed the issue anyway. GitHub's keyword
+auto-close doesn't read your comment for intent; it just fires. The owner
+had to notice the issue "wasn't being picked up" and dig in — it wasn't
+stalled, it had quietly vanished from every open-issue listing (including
+every session's own backlog scan) the moment that PR merged.
+
+So: if a PR does not complete an issue's **entire** scope, never use a
+closing keyword against that issue anywhere the PR merge can see it — not
+in the title, not in the body, not in any commit message. Say `Part of #N`
+or `Addresses #N` instead (plain text, no keyword GitHub recognizes), and
+add a comment on the issue itself confirming what's done, what's left, and
+that it's staying open — matching what PR #238's author *intended* to do,
+just without the keyword that undid it. Reserve `Closes #N`/`Fixes #N` for
+a PR you're confident finishes the issue outright.
+
+This is also a reason to actually read an issue's most recent comment
+before treating "closed" as "nothing left to do" — if you're ever unsure
+whether a closed issue's full scope really shipped, its comment thread is
+the fastest way to check, the same way this one still had the answer
+sitting right there.
 
 ### Backlog exploration — file everything you find, not just one issue
 
@@ -325,3 +383,14 @@ before starting to code:
    same as any other backlog item. A top-level tracking issue stays open
    until every sub-issue under it is closed — don't close it yourself just
    because you finished one branch of it.
+5. **Whoever closes the last leaf closes the trunk.** #133, #206, and #207
+   each sat open on GitHub (and stayed `queued`/`in_progress` on the
+   Control Room board) for hours-to-a-day after their actual last
+   sub-issue merged, because closing a sub-issue never prompted anyone to
+   check whether it was the *last* one. When you close a sub-issue (or
+   confirm one another session just merged), check its parent's
+   `sub_issues_summary` (`issue_read`'s `get` method returns this) — if
+   `completed === total`, close the tracking issue on GitHub too and mark
+   its Control Room `tasks` doc `done` in the same pass, not as a
+   separate follow-up. Don't wait for the owner to notice a 100%-complete
+   tracking issue still showing as open.

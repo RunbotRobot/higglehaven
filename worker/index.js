@@ -4,6 +4,7 @@ import {
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
+import migrationsManifest from './migrations-manifest.json';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -239,8 +240,62 @@ export default {
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
+    ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
+      console.error('checkMigrationDrift failed', error);
+    }));
   },
 };
+
+// #499 (follow-up to #488): #488 was a real 4-day production outage where
+// `wrangler d1 migrations apply --remote` silently failed partway through a
+// batch and nothing noticed until an owner bug report. scripts/check-
+// migration-drift.mjs (#492) only catches this at deploy time, i.e. only if
+// someone actually runs `db:migrate:remote` — if nothing gets deployed for a
+// while, drift is invisible until the next one does. This runs on every
+// cron tick instead (wrangler.jsonc's */10 * * * * trigger), independent of
+// deploys, by comparing a live read of d1_migrations against
+// migrations-manifest.json — a list of migrations/*.sql filenames baked
+// into the Worker bundle at build time (see generate-migrations-
+// manifest.mjs; the Worker's scheduled() has no filesystem access to read
+// migrations/ directly). computeMissingMigrations is exported standalone so
+// the comparison logic itself has direct unit-test coverage without needing
+// a real D1 instance.
+export function computeMissingMigrations(appliedNames, manifest) {
+  const applied = new Set(appliedNames);
+  return manifest.filter((name) => !applied.has(name));
+}
+
+async function checkMigrationDrift(env) {
+  if (!env.DB) return;
+  let appliedNames;
+  try {
+    const { results } = await env.DB.prepare('SELECT name FROM d1_migrations').all();
+    appliedNames = results.map((row) => row.name);
+  } catch (error) {
+    console.error('checkMigrationDrift: failed to read d1_migrations', error);
+    return;
+  }
+
+  const missing = computeMissingMigrations(appliedNames, migrationsManifest);
+  if (missing.length === 0) return;
+
+  const message = `Production D1 is missing ${missing.length} migration(s) present in migrations/: `
+    + `${missing.join(', ')}. Run "npm run db:migrate:remote" to apply them (see issue #488).`;
+  console.error(`MIGRATION DRIFT DETECTED: ${message}`);
+
+  // OPS_ALERT_EMAIL is an optional Worker secret (same dev-mode-friendly
+  // pattern as RESEND_API_KEY itself) — with neither configured this still
+  // surfaces loudly in `wrangler tail`/dashboard logs via the console.error
+  // above, it just won't also land in anyone's inbox.
+  if (env.OPS_ALERT_EMAIL) {
+    await sendEmail(env, {
+      to: env.OPS_ALERT_EMAIL,
+      subject: 'higglehaven: production D1 migration drift detected',
+      text: message,
+      html: `<p>${message}</p>`,
+    }).catch((error) => console.error('checkMigrationDrift: failed to send alert email', error));
+  }
+}
 
 async function handleUploadedAsset(request, env) {
   if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
@@ -672,6 +727,12 @@ function formatBytes(bytes) {
 // SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
 const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 
+// Same unauthenticated-path gap as CATALOG_PATCH_RATE_LIMIT_MAX above, but
+// for DELETE (#520) — unlike PATCH, DELETE has no bootstrapping-trap reason
+// to stay ungated (nothing legitimate deletes the same unowned templates
+// dozens of times over), so this can be a plain, low ceiling.
+const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
+
 // #362 flagged catalog template creation for the same missing-rate-limit
 // gap as builders/sellers below, but unlike those two, an IP-keyed limit
 // here isn't safe to add at any size a real automated flood would
@@ -709,6 +770,14 @@ async function handleCatalog(request, db, route, url, models) {
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+    }
+    // At least one template in this batch has no live owning seller to gate
+    // it behind a session (same shape as the single-item DELETE below) —
+    // rate-limit the request itself so up to 100 such templates can't be
+    // wiped in one unauthenticated, unthrottled call (#520).
+    const hasUnownedTemplate = existing.results.some((row) => !row.seller_id || !ownerSellerIds.has(row.seller_id));
+    if (hasUnownedTemplate) {
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
@@ -966,6 +1035,12 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller to gate this DELETE behind a session (see the
+      // PATCH handler's identical comment above) — cap the request rate the
+      // same way, so an unowned template can't be wiped by an unthrottled
+      // anonymous flood (#520).
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
     return json({ deleted: true });
@@ -1177,7 +1252,11 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const input = await readJson(request);
     const versionId = crypto.randomUUID();
-    const name = input.name === undefined ? null : stringValue(input.name, 'name');
+    // #480: same "optional user-facing short label, no upper bound" gap
+    // #337/#358 already closed elsewhere — optionalLabelValue caps it
+    // whenever a real value is given, same as absent-or-capped fields
+    // like category/subcategory.
+    const name = optionalLabelValue(input.name, 'name');
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
 
@@ -1466,6 +1545,28 @@ async function handleBuilders(request, db, route) {
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
 
+  // Admin-only test/ops fixture support — mirrors POST /api/landlets'
+  // own reasoning (admin-gated so an anonymous caller can't credit
+  // themselves real land-cap headroom): #489 made land cap actually gate
+  // vertical construction and auction bidding, and every fresh builder's
+  // owned area already equals their default cap exactly. A real earnings
+  // event is the only legitimate way to grow a builder's cap — there's no
+  // shortcut through the normal player-facing API — so tests that need a
+  // builder to have cap headroom (without that headroom itself being what
+  // they're testing) need a way to grant it directly, the same escape
+  // hatch POST /api/landlets already gives land-setup fixtures.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'land-cap-grants') {
+    await requireAdmin(request, db);
+    await requireBuilder(db, route[1]);
+    const input = await readJson(request);
+    const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
+    await db.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents).run();
+    const { nextCap } = await recomputeLandCap(db, route[1]);
+    return json({ landCapM2: nextCap }, 201);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -1484,9 +1585,9 @@ function builderFromRow(row) {
     // real, persisted ledger credited when this builder sells a landlet
     // via auction. See migrations/0045's own note on why bidding itself
     // isn't gated by having a sufficient balance yet.
-    dallersBalanceCents: row.dallers_balance_cents,
+    higglesBalanceCents: row.higgles_balance_cents,
     // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
-    // area this builder may own at once, distinct from dallersBalanceCents
+    // area this builder may own at once, distinct from higglesBalanceCents
     // above (which land-specific lándlets can be acquired via auction).
     landCapM2: row.land_cap_m2,
     // The real total currently counted against that cap — ground-level
@@ -2229,6 +2330,23 @@ async function handleLandletLevels(request, db, route) {
         409,
       );
     }
+    // #489 (owner-confirmed): land cap now actually gates vertical
+    // construction, not just the depth/footprint limits above. Ratchets
+    // the cap to its current value first (recomputeLandCap only ever
+    // moves it up, off trailing earnings — see that function's own
+    // comment) so a builder who just earned isn't rejected against a
+    // stale cap, then checks the level's own consumption against
+    // whatever headroom is left. This eager check gives the clear 409
+    // message in the common case; the atomic clause folded into the
+    // INSERT below is the real race guard (see its own comment).
+    const landCap = await recomputeLandCap(db, landlet.owner_builder_id);
+    if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `This would take you to ${(landCap.ownedAreaM2 + capConsumedM2).toFixed(2)}m², `
+        + `over your ${landCap.nextCap}m² land cap`,
+        409,
+      );
+    }
     const levelId = `level-${crypto.randomUUID()}`;
     // Found via backlog audit (#395): levelIndex above was computed from a
     // plain SELECT snapshot, then this was a plain INSERT — a concurrent
@@ -2249,6 +2367,15 @@ async function handleLandletLevels(request, db, route) {
     // Math.min(0, ...) floor levelIndex itself was just computed with above,
     // via a synthetic zero row unioned into the scan.
     const extentBefore = input.direction === 'up' ? levelIndex - 1 : levelIndex + 1;
+    // #489: the eager land-cap check above reads a snapshot of the
+    // builder's owned area, so two concurrent level-adds on two
+    // *different* landlets owned by the same builder (the per-landlet
+    // extent check right below can't catch that — it's scoped to this
+    // one landlet_id) could each pass it and jointly land over cap. This
+    // clause re-derives total owned area (ground + levels, across every
+    // claimed landlet) live at INSERT time and folds it into the same
+    // atomic statement as the extent guard, same idiom as that guard's
+    // own comment above.
     const inserted = await db.prepare(`
       INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2)
       SELECT ?, ?, ?, ?
@@ -2258,7 +2385,22 @@ async function handleLandletLevels(request, db, route) {
         )
       ) = ?
         AND NOT EXISTS (SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = ?)
-    `).bind(levelId, landletId, levelIndex, capConsumedM2, landletId, extentBefore, landletId, levelIndex).run();
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets l ON l.landlet_id = ll.landlet_id
+              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+            ), 0)
+        )
+    `).bind(
+      levelId, landletId, levelIndex, capConsumedM2,
+      landletId, extentBefore, landletId, levelIndex,
+      landlet.owner_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, capConsumedM2, landlet.owner_builder_id, landlet.owner_builder_id,
+    ).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('This landlet\'s levels changed — please retry', 409);
     }
@@ -2406,6 +2548,23 @@ async function handleAuctionBids(request, db, route) {
     if (amountCents < resolved.starting_bid_cents) {
       throw new HttpError(`amountCents must be at least ${resolved.starting_bid_cents}`, 400);
     }
+    // #489 (owner-confirmed): land cap now gates bidding, not just
+    // vertical construction — a bid is only ever a *ground* landlet
+    // changing hands (resolveAuction deletes the sold landlet's levels
+    // before transferring it, so its levels' cap_consumed_m2 never
+    // transfers), so the only area that matters here is the auctioned
+    // landlet's own area_m2. Checked against what winning would add to
+    // the bidder's own current owned area, same ratchet-then-check
+    // pattern as the level-add gate above.
+    const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(resolved.landlet_id).first();
+    const bidderCap = await recomputeLandCap(db, builderId);
+    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `Winning this auction would take you to ${(bidderCap.ownedAreaM2 + auctionedLandlet.area_m2).toFixed(2)}m², `
+        + `over your ${bidderCap.nextCap}m² land cap`,
+        409,
+      );
+    }
     const bidId = `bid-${crypto.randomUUID()}`;
     // A read-then-insert here (read the highest bid, validate against it,
     // insert) would be the same TOCTOU shape this codebase deliberately
@@ -2416,18 +2575,42 @@ async function handleAuctionBids(request, db, route) {
     // exceed whatever the highest actually is by the time it's inserted.
     // This conditional insert makes "no existing bid already meets or
     // beats this amount" part of the write itself.
+    // #489: the eager land-cap check above reads a snapshot of the
+    // bidder's owned area, so two concurrent bids from the same builder
+    // on two *different* auctions could each individually pass it and
+    // jointly land them over cap if both won. Re-derives owned area live
+    // at INSERT time and folds it into the same atomic statement as the
+    // existing highest-bid guard, so this bid only actually lands if the
+    // builder is still under cap the instant it's written.
     const inserted = await db.prepare(`
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
       SELECT ?, ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
       )
-    `).bind(bidId, auctionId, builderId, amountCents, auctionId, amountCents).run();
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets l ON l.landlet_id = ll.landlet_id
+              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+            ), 0)
+        )
+    `).bind(
+      bidId, auctionId, builderId, amountCents, auctionId, amountCents,
+      builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
+    ).run();
     if (inserted.meta.changes === 0) {
       const currentHighest = await db.prepare(`
         SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
       `).bind(auctionId).first();
-      throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+      if (currentHighest && currentHighest.amount_cents >= amountCents) {
+        throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+      }
+      throw new HttpError('This would put you over your land cap — please retry', 409);
     }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
     // Re-derived after the insert (excluding the bid just inserted) rather
@@ -2451,7 +2634,7 @@ async function requireAuction(db, auctionId) {
 }
 
 // Land cap (docs/SPEC.md §3: "Grows via a formula converting trailing-30-day
-// dáller earnings per 1,000 m² owned into cap increases. Ratcheting: once
+// higgles earnings per 1,000 m² owned into cap increases. Ratcheting: once
 // increased, never decreases. Conversion ratio adjusts at most once/month,
 // small increments.") The conversion ratio itself is exactly the kind of
 // number docs/SPEC.md §10's own "Lándlet hosting cost validation" open
@@ -2462,29 +2645,42 @@ async function requireAuction(db, auctionId) {
 // own — there is no mechanism here (or need for one) to change it
 // automatically.
 //
-// DELIBERATELY TRACKING-ONLY, NOT ENFORCED, for now — this was tried as a
-// hard block on auction bids and reverted after e2e testing surfaced a real
-// bootstrapping trap: claiming is mandatory to use Build mode at all
-// (resolveLandletId in src/main.js forces the claim flow for a landless
-// builder), and the default cap is exactly the starter lándlet's own size,
-// so EVERY fresh builder starts already at 100% of their cap the moment
-// they exist. Spec's own intended primary earning path is commerce
-// commissions (§5: dállers credit on a product SALE, not on selling land),
-// but this dev-mode backend has no real checkout/commerce system at all
-// (out of scope, same as real payments generally) — auction sale proceeds
-// are the ONLY dáller source actually implemented. Hard-enforcing the cap
-// against that one source alone would make growing past your starter
-// lándlet structurally impossible for every builder (nobody can ever earn
-// without first having cap headroom to acquire something to resell, and
-// nobody has headroom without having already earned) — a regression that
-// would make the auction system self-defeating, not a faithful
-// implementation of "growth is earned through demonstrated performance."
-// The formula, ratcheting, and per-event ledger are still real and
-// correctly implemented — recomputeLandCap is exposed via `landCapM2` on
-// the builder object (see docs/API.md's "Land cap") so this is visible and
-// ready to gate real acquisitions once a real commerce/commission loop
-// exists to make that gate navigable.
+// Was deliberately tracking-only (displayed, never enforced) for a long
+// stretch: an earlier attempt at a hard block on auction bids was reverted
+// after e2e testing surfaced a real bootstrapping trap — claiming is
+// mandatory to use Build mode at all (resolveLandletId in src/main.js
+// forces the claim flow for a landless builder), and the default cap is
+// exactly the starter lándlet's own size, so EVERY fresh builder starts
+// already at 100% of their cap the moment they exist. Back then, auction
+// sale proceeds were the ONLY higgles source actually implemented (no real
+// checkout/commerce system existed yet), so hard-enforcing the cap against
+// that one source alone would have made growing past your starter lándlet
+// structurally impossible for every builder — self-defeating, not a
+// faithful "growth is earned" implementation.
+//
+// #489 (owner-confirmed): now enforced, against both vertical construction
+// (handleLandletLevels) and auction bidding (handleAuctionBids) — real
+// checkout now exists (#452/#453), so the bootstrapping trap's original
+// premise no longer holds; a builder has a real way to earn before needing
+// more cap. The trap itself is still real for a builder who hasn't earned
+// anything yet: they simply can't add a level or win an auction until they
+// have. See POST /api/builders/:id/land-cap-grants for how a test grants
+// itself around that on purpose.
+//
+// Owner: the frontend always displays area rounded to the nearest whole
+// unit (src/settings.js's formatArea), so a builder can see "1,000" on
+// both sides of a comparison whose real, unrounded values differ by a
+// fraction of a unit. Both gates below gave themselves LAND_CAP_DISPLAY_
+// ROUNDING_BUFFER_M2 of slack against exactly that — comparing raw m²
+// values directly against what's shown would let a technically-just-
+// barely-too-small addition read as blocked, or a technically-just-
+// barely-too-big one read as allowed, purely because of where the display
+// rounded.
 const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
+// See the land-cap comment block above — a builder comparing two numbers
+// the UI itself only ever shows rounded to the nearest whole m² shouldn't
+// get a different answer than what those rounded numbers themselves imply.
+const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
 const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
 const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 
@@ -2522,7 +2718,7 @@ async function recomputeLandCap(db, builderId) {
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earningsRow, ownedRow, levelsRow] = await Promise.all([
     db.prepare(`
-      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
       WHERE builder_id = ? AND created_at >= ?
     `).bind(builderId, windowStart).first(),
     db.prepare(`
@@ -2558,7 +2754,7 @@ async function recomputeLandCapsBatch(db, rows) {
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earnings, owned, levels] = await Promise.all([
     db.prepare(`
-      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
       WHERE created_at >= ? GROUP BY builder_id
     `).bind(windowStart).all(),
     db.prepare(`
@@ -2628,7 +2824,7 @@ async function resolveAuctionIfDue(db, auction) {
 }
 
 // The actual resolution: highest bidder wins and pays the seller (in
-// dállers — see migrations/0045's own note on why bidding isn't
+// higgles — see migrations/0045's own note on why bidding isn't
 // balance-gated yet), or the land is released to greenbelt / stays with
 // the seller depending on whether the starting bid was $0 ("explicit
 // willingness to relinquish for free") — see docs/SPEC.md §5. Clearing
@@ -2674,17 +2870,17 @@ async function resolveAuction(db, auction) {
         WHERE landlet_id = ?
       `).bind(highest.bidder_builder_id, auction.landlet_id),
       db.prepare(`
-        UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?
+        UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
       `).bind(highest.amount_cents, auction.seller_builder_id),
       // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
       // trailing-30-day earnings WINDOW, not the lifetime
-      // dallers_balance_cents total above — this per-event ledger is what
+      // higgles_balance_cents total above — this per-event ledger is what
       // makes that window computable later (see recomputeLandCap).
       db.prepare(`
-        INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+        INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
       `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
       notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your dállers balance.`),
+        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your higgles balance.`),
       notificationStatement(db, highest.bidder_builder_id,
         `You won the auction for ${auction.landlet_id} at ${formatCents(highest.amount_cents)}! It's yours to build on now.`),
     );
@@ -4040,7 +4236,8 @@ async function handleLandletDraft(request, db, landletId) {
     await assertInstanceZWithinLevels(db, instances);
 
     const versionId = crypto.randomUUID();
-    const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
+    // #480: same gap as handleLandletVersions' POST above.
+    const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
 
@@ -5379,9 +5576,9 @@ function isoDateString(value, field) {
 // migrations/0051) — see that migration's own comment for why this exists
 // and why it is explicitly NOT real commerce (no real payment is ever
 // processed; a shopper is charged nothing). This is the actual mechanism
-// that credits a builder's dállers balance and land-cap-feeding earnings
+// that credits a builder's higgles balance and land-cap-feeding earnings
 // ledger when a shopper "buys" a product placed on their lándlet — the one
-// concrete dáller-earning path docs/SPEC.md §5 treats as PRIMARY (auction
+// concrete higgles-earning path docs/SPEC.md §5 treats as PRIMARY (auction
 // sale proceeds, migrations/0045, are the only other one this backend
 // implements).
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
@@ -5390,7 +5587,7 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // quantity had no upper bound at all until this was added — a single
 // unauthenticated call with an absurd quantity (there's no shopper account
 // to even attribute it to) could mint an arbitrary amount of a builder's
-// dallers_balance_cents and daller_earnings_events credit in one request,
+// higgles_balance_cents and higgles_earnings_events credit in one request,
 // directly undermining "growth is earned through demonstrated performance,
 // never purchased" (docs/SPEC.md §0) since earnings feed the land cap
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
@@ -5401,7 +5598,7 @@ const PURCHASE_MAX_QUANTITY = 1000;
 // a bid's amountCents (nonnegativeInteger/optionalInteger below): with no
 // upper bound, a seller could set an astronomical priceCents on their own
 // catalog template and self-purchase it once to mint an arbitrary
-// dallers_balance_cents/daller_earnings_events credit, and the same hole
+// higgles_balance_cents/higgles_earnings_events credit, and the same hole
 // exists on auction bids. $1,000,000 (in cents) stays generous for this
 // dev-mode play economy while ruling out that abuse and, just as
 // importantly, keeping every stored value within Number.isSafeInteger
@@ -5473,7 +5670,7 @@ async function handleInstancePurchase(request, env, instanceId) {
 function computePurchaseAmounts(template, input) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
   // Capped as a sanity bound against a malformed/abusive request producing
-  // an absurd totalCents (and the dállers-balance/land-cap credit that
+  // an absurd totalCents (and the higgles-balance/land-cap credit that
   // flows from it) — not itself a spec requirement, same reasoning as
   // durationHours' cap above. The simulated endpoint has no session (see
   // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
@@ -5486,6 +5683,14 @@ function computePurchaseAmounts(template, input) {
 
   const unitPriceCents = template.price_cents;
   const totalCents = unitPriceCents * quantity;
+  // #521: priceCents and quantity are each capped individually (above, and
+  // at template-creation time), but neither cap bounds their product — a
+  // request combining both at their ceilings reintroduces exactly the
+  // unbounded-credit risk those caps exist to prevent, just at compound
+  // scale. Bounding totalCents itself closes that gap for both this
+  // (simulated) path and the real-money path below, which shares this
+  // function.
+  if (totalCents > MAX_MONEY_CENTS) throw new HttpError(`total price must be ${MAX_MONEY_CENTS} cents or fewer`, 400);
   const commissionCents = Math.round(totalCents * PURCHASE_COMMISSION_RATE);
   const builderShareCents = Math.max(
     Math.round(commissionCents * PURCHASE_BUILDER_SPLIT),
@@ -5500,14 +5705,14 @@ function computePurchaseAmounts(template, input) {
 }
 
 // #453: creates a real Stripe PaymentIntent instead of immediately
-// crediting dállers — the actual purchases row (and builder dáller
+// crediting higgles — the actual purchases row (and builder higgles
 // credit) is only written once the buyer has genuinely paid, via
 // handlePurchaseFinalize below, once Stripe confirms the PaymentIntent
 // succeeded. Reuses the exact same commission math as the simulated path
 // so the two stay consistent; the only difference is where the money
 // goes: the ENTIRE commissionCents (not just platformShareCents) is taken
 // as Stripe's application_fee_amount, since the builder's own share of it
-// is still paid out as dállers — never real money, per the owner's own
+// is still paid out as higgles — never real money, per the owner's own
 // #331 answer — only the remaining ~98% (totalCents - commissionCents)
 // transfers to the seller's connected account via transfer_data.
 // #473: the buyer's own client mints and persists idempotencyKey (see
@@ -5574,7 +5779,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
 // Stripe Elements (stripe.confirmCardPayment) — never trusts that client
 // signal on its own. Instead it re-fetches the PaymentIntent from Stripe
 // directly (using our own secret key, which the client never has) and
-// only writes the purchases row/credits dállers once Stripe itself
+// only writes the purchases row/credits higgles once Stripe itself
 // reports the payment actually succeeded, using the amounts locked into
 // this PaymentIntent's own metadata at creation time (createPurchaseCheckout
 // above) — never recomputed from the live template — so what gets
@@ -5672,12 +5877,12 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
   ];
   if (builderId) {
     statements.push(
-      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
-      db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
         .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
       notificationStatement(db, builderId,
-        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
     );
   }
   await db.batch(statements);
@@ -5698,12 +5903,12 @@ async function writePurchaseRow(db, instance, template, landlet, amounts, paymen
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
-    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+    db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
-    db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+    db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
     notificationStatement(db, builderId,
-      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -5764,9 +5969,9 @@ async function handlePurchases(request, env, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql
-// — see its own comment for why only dallers_balance_cents is touched, not
-// daller_earnings_events/land cap). Reachable from the Seller modal's own
+// Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
+// — see its own comment for why only higgles_balance_cents is touched, not
+// higgles_earnings_events/land cap). Reachable from the Seller modal's own
 // "Sales" panel on the product being refunded — a seller-initiated action
 // (standing in for a real customer-service-initiated refund, per
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
@@ -5779,7 +5984,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // A purchase's seller_id can genuinely be null — catalog templates don't
   // require a sellerId at creation (an admin/system-owned placeholder
   // item can still be priced and purchased). That's fine for creating one,
-  // but a refund actually claws back real dállers from a builder's
+  // but a refund actually claws back real higgles from a builder's
   // balance, so it can never fall through to "no owner, no check" the way
   // read-only/creation paths on ownerless resources do elsewhere — it
   // needs admin instead, the same fallback used for the other genuinely
@@ -5823,10 +6028,10 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // its Stripe charge actually reversed, not just the local row flagged.
   // reverse_transfer pulls the ~98% share back out of the seller's
   // connected-account balance (the same way the block below claws back
-  // the builder's dáller share); refund_application_fee reverses
+  // the builder's higgles share); refund_application_fee reverses
   // higglehaven's own cut too, so nobody keeps money on a refunded sale.
   // If Stripe's call fails, the guard above is released (refunded_at reset
-  // to NULL) and the error propagates before the builder's dáller balance
+  // to NULL) and the error propagates before the builder's higgles balance
   // is ever touched — a failed real-money reversal should never look like
   // a successful refund, and should stay retryable.
   if (purchase.payment_intent_id) {
@@ -5853,7 +6058,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // rather than crediting/notifying a builder that no longer exists.
   if (purchase.builder_id) {
     await db.batch([
-      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(purchase.builder_share_cents, purchase.builder_id),
       notificationStatement(db, purchase.builder_id,
         `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),

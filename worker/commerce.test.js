@@ -200,7 +200,7 @@ describe('Auctions', () => {
     expect(bids.body.bids[0].amountCents).toBe(1000);
   });
 
-  it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
+  it('resolves a winning auction: ownership transfers, build clears, seller is paid in higgles', async () => {
     const owner = await signupBuilder('resolve-winner-owner');
     const bidder = await signupBuilder('resolve-winner-bidder');
     await createGreenbeltLandlet('auction-resolve-win-landlet');
@@ -237,7 +237,7 @@ describe('Auctions', () => {
 
     const builders = await api('/builders');
     const sellerAfter = builders.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfter.dallersBalanceCents).toBe(2500);
+    expect(sellerAfter.higglesBalanceCents).toBe(2500);
 
     const sellerNotices = await api('/notifications', owner.session());
     expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $25.00'))).toBe(true);
@@ -255,9 +255,9 @@ describe('Auctions', () => {
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
     const buildersAfterSecondResolve = await api('/builders');
     const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    expect(sellerAfterSecondResolve.higglesBalanceCents).toBe(2500);
     const earningsCount = await env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+      'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(owner.builderId).first();
     expect(earningsCount.n).toBe(1);
   });
@@ -590,6 +590,14 @@ describe('Auctions', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const auctionId = started.body.auction.auctionId;
+    // The bidder here already owns a claimed landlet (this test's whole
+    // point), so bidding on a second one now needs land-cap headroom —
+    // see #489. What's being tested is auction resolution mechanics, not
+    // the cap gate, so grant plenty of it via a real earnings event.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, bidder.builderId, 100000000).run();
+    await api('/builders');
     await api(`/auctions/${auctionId}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 500 }),
     }));
@@ -1499,11 +1507,11 @@ describe('Simulated purchases', () => {
     expect(badBuyerLabel.response.status).toBe(400);
   });
 
-  it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
+  it('rejects an absurd quantity rather than crediting an unbounded higgles amount', async () => {
     // This endpoint is deliberately unauthenticated (see docs/API.md's
     // "Simulated purchases"), so quantity is one of two guards (alongside
     // the rate limit below) against one request minting an arbitrary
-    // dállers credit.
+    // higgles credit.
     const seller = await signupBuilder('purchase-quantity-cap-seller');
     await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
     await claim('purchase-quantity-cap-landlet', seller);
@@ -1523,6 +1531,31 @@ describe('Simulated purchases', () => {
     });
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.quantity).toBe(1000);
+  });
+
+  it('rejects a total price that exceeds MAX_MONEY_CENTS even when quantity and priceCents each pass their own cap (#521)', async () => {
+    const seller = await signupBuilder('purchase-total-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-total-cap-landlet', 1000);
+    await claim('purchase-total-cap-landlet', seller);
+    // 100_000_000 is MAX_MONEY_CENTS itself — individually valid for priceCents.
+    await createTemplate('purchase-total-cap-template', { priceCents: 100_000_000 });
+    await placeInstance('purchase-total-cap-instance', 'purchase-total-cap-landlet', 'purchase-total-cap-template', seller);
+
+    // quantity 2 is well within PURCHASE_MAX_QUANTITY (1000), but combined
+    // with the price above it produces a totalCents twice MAX_MONEY_CENTS.
+    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 2 }),
+    });
+    expect(tooMuch.response.status).toBe(400);
+    expect(tooMuch.body).toEqual({ error: 'total price must be 100000000 cents or fewer' });
+
+    const atCap = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.totalCents).toBe(100_000_000);
   });
 
   it('rate-limits repeated purchases from the same client', async () => {
@@ -1592,10 +1625,10 @@ describe('Simulated purchases', () => {
     });
 
     const after = await builderRow(seller.builderId);
-    expect(after.dallers_balance_cents - before.dallers_balance_cents).toBe(100);
+    expect(after.higgles_balance_cents - before.higgles_balance_cents).toBe(100);
 
     const { results } = await env.DB.prepare(
-      'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(100);
@@ -1713,7 +1746,7 @@ describe('Simulated purchases', () => {
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
     const after = await builderRow(seller.builderId);
-    expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
+    expect(before.higgles_balance_cents - after.higgles_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
     // This is also the observable contract #192's fix protects under real
@@ -1727,7 +1760,7 @@ describe('Simulated purchases', () => {
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
     const afterSecondAttempt = await builderRow(seller.builderId);
-    expect(afterSecondAttempt.dallers_balance_cents).toBe(after.dallers_balance_cents);
+    expect(afterSecondAttempt.higgles_balance_cents).toBe(after.higgles_balance_cents);
   });
 
   it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
@@ -1890,7 +1923,7 @@ describe('Simulated purchases', () => {
     );
   });
 
-  it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
+  it('lets the clawback push a builder\'s higgles balance negative — there is no floor on a refund', async () => {
     const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
     await claim('purchase-refund-negative-landlet', seller);
@@ -1900,11 +1933,11 @@ describe('Simulated purchases', () => {
     const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
     // Spend down the builder's balance below the commission they're about
     // to have clawed back, so the refund must push it negative.
-    await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
     await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
-    expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
+    expect(after.higgles_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
 
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
@@ -2020,7 +2053,7 @@ describe('Simulated purchases', () => {
   // this suite never configures STRIPE_SECRET_KEY, so the only exercisable
   // path is the 503 "not configured" branch — which is exactly what proves
   // the important safety property: a purchase whose Stripe reversal never
-  // happened must not end up looking refunded, and the builder's dáller
+  // happened must not end up looking refunded, and the builder's higgles
   // share must stay untouched until it does.
   describe('Real-money refunds (#348)', () => {
     it('leaves the purchase unrefunded and the builder\'s balance untouched when Stripe is not configured', async () => {
@@ -2045,7 +2078,7 @@ describe('Simulated purchases', () => {
       const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(purchaseRow.refunded_at).toBeNull();
       const after = await builderRow(seller.builderId);
-      expect(after.dallers_balance_cents).toBe(before.dallers_balance_cents);
+      expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
 
       // The refunded_at guard was released, not left stuck — a retry (once
       // Stripe is actually configured) isn't permanently blocked by this
