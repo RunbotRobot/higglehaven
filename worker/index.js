@@ -1177,7 +1177,7 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const input = await readJson(request);
     const versionId = crypto.randomUUID();
-    const name = input.name === undefined ? null : stringValue(input.name, 'name');
+    const name = optionalLabelValue(input.name, 'name');
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
 
@@ -4040,7 +4040,7 @@ async function handleLandletDraft(request, db, landletId) {
     await assertInstanceZWithinLevels(db, instances);
 
     const versionId = crypto.randomUUID();
-    const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
+    const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
 

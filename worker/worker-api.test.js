@@ -1337,6 +1337,35 @@ describe('Worker API', () => {
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
+  // #480: same "optional short label, no upper bound" gap #337/#358 fixed
+  // elsewhere — this endpoint's own `name` went through plain stringValue
+  // instead of labelValue, so a version could be saved with an
+  // arbitrarily long name that later renders straight into the Version
+  // History panel/live-landlet UI.
+  it('caps a saved landlet version\'s name length, same as #337/#358\'s other short labels', async () => {
+    const nameCapBuilder = await signupBuilder('version-name-cap-builder');
+    await api('/landlets', nameCapBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'version-name-cap-landlet', name: 'Version name cap landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: nameCapBuilder.builderId,
+      }),
+    }));
+
+    const rejected = await api('/landlets/version-name-cap-landlet/versions', nameCapBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ name: 'x'.repeat(101) }),
+    }));
+    expect(rejected.response.status).toBe(400);
+
+    const accepted = await api('/landlets/version-name-cap-landlet/versions', nameCapBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ name: 'x'.repeat(100) }),
+    }));
+    expect(accepted.response.status).toBe(201);
+    expect(accepted.body.version.name).toBe('x'.repeat(100));
+  });
+
   // migrations/0060: version_instances never got is_community_sign/
   // is_community_calendar when 0041/0042 added them to placed_instances
   // (unlike crop_json/scale, which 0034/0036 added to both tables) — a

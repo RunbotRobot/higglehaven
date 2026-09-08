@@ -1419,5 +1419,28 @@ describe('Landlet levels', () => {
       }));
       expect(accepted.response.status).toBe(200);
     });
+
+    // #480: same "optional short label, no upper bound" gap #337/#358 fixed
+    // elsewhere — versionName went through plain stringValue instead of
+    // labelValue, so a draft save could stash an arbitrarily long value
+    // that a later "Restored from ..."/version-history string would echo
+    // straight into the builder's own UI.
+    it('caps landlet draft versionName length, same as #337/#358\'s other short labels', async () => {
+      const owner = await signupBuilder('draft-version-name-owner');
+      await createGreenbeltLandletWithArea('draft-version-name-landlet', 1000);
+      await claim('draft-version-name-landlet', owner);
+
+      const rejected = await api('/landlets/draft-version-name-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({ instances: [], versionName: 'x'.repeat(101) }),
+      }));
+      expect(rejected.response.status).toBe(400);
+
+      const accepted = await api('/landlets/draft-version-name-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({ instances: [], versionName: 'x'.repeat(100) }),
+      }));
+      expect(accepted.response.status).toBe(200);
+    });
   });
 });
