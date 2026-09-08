@@ -2860,7 +2860,15 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <button id="shop-fly-btn" class="shop-ui" type="button">&#128038;</button>
+    <!-- #506 picked the generic bird glyph (U+1F426) over a plane per the
+         owner's own request, but most platforms render it standing/
+         perched rather than airborne. Owner follow-up
+         (j4qrtom5gafp25dasccz): "Please make the bird be in flight." The
+         dove (U+1F54A) is the one bird emoji most sets (Apple, Twemoji)
+         consistently render mid-glide with wings spread -- a far more
+         reliable way to read as "flight" via a native emoji glyph than
+         trying to force a specific pose out of the same generic bird. -->
+    <button id="shop-fly-btn" class="shop-ui" type="button">&#128330;</button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
