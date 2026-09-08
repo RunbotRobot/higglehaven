@@ -73,6 +73,7 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  clearPurchaseIdempotencyKey,
   finalizePurchase,
   fetchPurchases,
   refundPurchase,
@@ -9697,12 +9698,20 @@ shopBuyHintEl.addEventListener('click', async () => {
   const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}?`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
+  const instanceId = review.mesh.userData.instanceId;
   try {
-    const result = await purchaseInstance(review.mesh.userData.instanceId);
+    const result = await purchaseInstance(instanceId);
     if (result.requiresPayment) {
       await runCheckoutFlow(result, { name, totalCents: priceCents });
+      // #473: only clear the persisted idempotency key (see purchaseInstance
+      // in src/api.js) once the purchase has genuinely finalized — a
+      // network failure anywhere before this point should leave it in
+      // place so a retried "Buy" click reuses the same key instead of
+      // risking a second real PaymentIntent for the same attempt.
+      clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase complete — thank you!');
     } else {
+      clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase simulated — the seller has been credited.');
     }
   } catch (err) {
