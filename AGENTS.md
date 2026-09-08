@@ -93,6 +93,20 @@ maintain all messages inside the task thread"). Every board item, GitHub-
 backed or not, is a `tasks` doc now, and every reply/discussion thread on
 it lives in a separate flat `replies` collection:
 
+If you ever find the `messages` collection non-empty again: this is not
+data loss. The live Control Room page has never read from `messages`
+since this migration — it only subscribes to `tasks`/`replies` — so a
+non-empty `messages` collection is inert, stale, pre-migration content,
+not a sign anything is broken or missing. (This happened once already,
+2026-09-07 ~23:30 UTC: a session mistook the deletion for corruption and
+restored a ~19:36 UTC snapshot from a cached read, which just re-created
+exactly the duplication the owner asked to eliminate, all of it already
+present and current in `tasks`/`replies`. It was deleted again for that
+reason.) Before treating a non-empty `messages` collection as an incident,
+diff its content against `tasks`/`replies` first — if everything in it is
+already represented there, it's safe to delete outright with no
+sign-off needed.
+
 - **`tasks` collection**, one doc per issue/PR/feedback/question. A
   GitHub-backed doc (id `issue-<N>` or `pr-<N>`) has `number`, `kind`
   (`"issue"`|`"pr"`), `title`, `status` (`"queued"`|`"in_progress"`|
