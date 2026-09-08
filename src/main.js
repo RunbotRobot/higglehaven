@@ -4038,6 +4038,13 @@ function renderGeneralSettingsSection() {
 // chosen at all this session — builderId can still be null if Settings is
 // opened from Shop mode before ever entering Build).
 async function renderLandCapField() {
+  // builderId can be null here purely because Settings was opened from Shop
+  // mode before Build mode ever ran ensureBuilderIdentity() this session —
+  // not because the visitor is actually logged out. If they already have a
+  // session, silently establish it the same way (requireLogin's own
+  // `if (currentAuthUser) return currentAuthUser` means this never pops a
+  // login prompt) instead of just leaving this whole field missing.
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
   if (!builderId) return;
   const field = document.createElement('div');
   field.className = 'settings-field';
@@ -4423,6 +4430,13 @@ function formatAuctionSummary(auction) {
 // latter isn't tied to currentLandletId, so it still renders here even
 // outside an active Build session, same as Land Cap above it.
 async function renderAuctionSection() {
+  // Same Shop-mode-opened-Settings gap as renderLandCapField above — an
+  // already-logged-in visitor can still have a null builderId simply
+  // because nothing's called ensureBuilderIdentity() yet this session.
+  // Establish it silently (no login prompt, since requireLogin short-
+  // circuits on an existing currentAuthUser) rather than showing a
+  // "choose an identity" dead end to someone who already has one.
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
