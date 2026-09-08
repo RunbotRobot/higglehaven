@@ -29,3 +29,17 @@ export function fromDisplayLength(value, units = getUnits()) {
 export function formatLength(meters, decimals = 2, units = getUnits()) {
   return `${toDisplayLength(meters, units).toFixed(decimals)}${unitSuffix(units)}`;
 }
+
+export function areaSuffix(units = getUnits()) {
+  return units === 'ft' ? 'ft²' : 'm²';
+}
+
+// Area scales with the square of length, so this can't reuse
+// toDisplayLength's own per-axis factor directly.
+export function toDisplayArea(squareMeters, units = getUnits()) {
+  return units === 'ft' ? squareMeters / (METERS_PER_FOOT * METERS_PER_FOOT) : squareMeters;
+}
+
+export function formatArea(squareMeters, decimals = 2, units = getUnits()) {
+  return `${toDisplayArea(squareMeters, units).toFixed(decimals)}${areaSuffix(units)}`;
+}

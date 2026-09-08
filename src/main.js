@@ -79,7 +79,7 @@ import {
   refundPurchase,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
-import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
+import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
@@ -4060,7 +4060,7 @@ async function renderLandCapField() {
     const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
-    status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
+    status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
       'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
   } catch (err) {
     status.textContent = err.message || 'Could not load your land cap.';
@@ -4810,8 +4810,8 @@ function renderLevelControls() {
   levelUpBtn.disabled = currentLevelIndex >= top;
   const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
-  levelBuildBtn.textContent = `Build Level Above (${upCostM2.toFixed(2)} m²)`;
-  levelDigBtn.textContent = `Dig Level Below (${downCostM2.toFixed(2)} m²)`;
+  levelBuildBtn.textContent = `Build Level Above (${formatArea(upCostM2)})`;
+  levelDigBtn.textContent = `Dig Level Below (${formatArea(downCostM2)})`;
   // Only the outermost existing level (in whichever direction it's on) can
   // actually be removed (worker/index.js's own 409 otherwise) — ground
   // (index 0) is never a real row and can never be removed at all.
@@ -10504,7 +10504,7 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    claimSelectionNameEl.textContent = `${landlet.name} (${formatArea(landlet.areaM2)}) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });
