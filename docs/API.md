@@ -2046,7 +2046,8 @@ contain at most 250 instances. An empty array clears the draft. D1 applies the
 draft replacement and immutable version snapshot as one batch, so a validation
 or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
-`Version N`.
+`Version N`. `versionName` is capped at 100 characters (`400` past that,
+#480 — see the versions endpoint below for why).
 
 **Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
 `instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
@@ -2113,6 +2114,12 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 Requires a session logged in as the landlet's owner (`403` otherwise).
 Saves the landlet's current placed instances as a new immutable snapshot.
 `name` and `metadata` are optional; omitted names default to `Version N`.
+`name` is capped at 100 characters (`400` past that, #480) — the same
+`labelValue`/`optionalLabelValue` short-label cap already applied to
+`authorLabel`/`buyerLabel` (#337) and bundle `name` (#358); a version's
+`name` is echoed straight into the Version History panel and the live
+landlet's own UI, same exposure those fixes closed off elsewhere. The
+draft-save endpoint's own `versionName` (above) gets the identical cap.
 
 ```json
 {
