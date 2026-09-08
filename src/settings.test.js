@@ -108,7 +108,7 @@ describe('toDisplayArea', () => {
 });
 
 describe('formatArea', () => {
-  it('formats square meters with a suffix and default 2 decimals', () => {
+  it('formats square meters with a suffix and an explicit decimal count', () => {
     expect(formatArea(1, 2, 'm')).toBe('1.00m²');
   });
 
@@ -116,7 +116,12 @@ describe('formatArea', () => {
     expect(formatArea(1, 2, 'ft')).toBe('10.76ft²');
   });
 
-  it('honors a custom decimal count', () => {
-    expect(formatArea(1000, 0, 'm')).toBe('1000m²');
+  it('defaults to rounding to the nearest integer, unlike formatLength', () => {
+    expect(formatArea(1234.5, undefined, 'm')).toBe('1,235m²');
+  });
+
+  it('comma-separates thousands regardless of decimal count', () => {
+    expect(formatArea(12345, 0, 'm')).toBe('12,345m²');
+    expect(formatArea(12345, 2, 'm')).toBe('12,345.00m²');
   });
 });
