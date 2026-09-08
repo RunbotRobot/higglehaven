@@ -429,6 +429,14 @@
       #account-menu-panel button:hover {
         background: rgb(var(--ink-rgb) / 0.08);
       }
+      #account-menu-landcap {
+        padding: 7px 12px;
+        margin-top: 2px;
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
       #notifications-badge,
       #friends-badge {
         display: inline-block;
@@ -2697,6 +2705,7 @@
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
         <button id="settings-btn" type="button">Settings</button>
+        <div id="account-menu-landcap" hidden></div>
       </div>
     </div>
     <div id="mode-nav">

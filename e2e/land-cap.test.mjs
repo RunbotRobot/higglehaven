@@ -15,6 +15,11 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
 await openAccountMenu(page);
+// Owner feedback: "Builders should see their lánd cap in the menu
+// somewhere" — refreshAccountMenuLandCap (src/main.js) populates this on
+// every menu open, independent of Settings/Build mode.
+const menuLandCapText = await waitForText(page, '#account-menu-landcap', '/');
+console.log('Account menu land cap text (should read "Land cap: 1000m² / 1000m²"):', menuLandCapText);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
@@ -32,8 +37,9 @@ const landCapFieldLabel = await page.locator('#settings-section .settings-field'
 console.log('Land Cap field label (should be "Land Cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1000m²" twice — owned and cap):', landCapFieldText);
 
-const pass = landCapFieldLabel.trim() === 'Land Cap' &&
+const pass = menuLandCapText === 'Land cap: 1000m² / 1000m²' &&
+  landCapFieldLabel.trim() === 'Land Cap' &&
   landCapFieldText.includes('You own 1000m²') &&
   landCapFieldText.includes('your 1000m² cap') &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Land cap: Settings > Build tab display', errors });
+await finish(browser, { pass, label: 'Land cap: Settings > Build tab + account menu display', errors });
