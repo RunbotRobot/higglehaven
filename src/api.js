@@ -45,14 +45,15 @@ export async function logOut() {
 // in (see handleMe's own comment on why) — called unconditionally on every
 // page load, so a 4xx here for the common "nobody's logged in" case would
 // mean every visitor's very first request logs a browser-level console
-// error. The try/catch is only for a genuine network failure.
+// error. Deliberately no try/catch here (this module's own top comment:
+// "nothing in here retries... callers catch and fall back") — a genuine
+// backend error surfacing as a thrown Error, same as any other requestJson
+// call, is exactly what lets refreshCurrentUser's own caller tell "really
+// logged out" apart from "couldn't tell right now" instead of collapsing
+// both into the same null.
 export async function fetchCurrentUser() {
-  try {
-    const { user } = await requestJson('/auth/me');
-    return user;
-  } catch {
-    return null;
-  }
+  const { user } = await requestJson('/auth/me');
+  return user;
 }
 
 export async function requestPasswordReset(email) {

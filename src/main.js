@@ -7419,7 +7419,18 @@ function closeAuthModal() {
 }
 
 async function refreshCurrentUser() {
-  currentAuthUser = await fetchCurrentUser();
+  // fetchCurrentUser now throws on a genuine backend/network failure
+  // instead of returning null for it the same as "really logged out" (the
+  // one case /auth/me itself already returns 200/{user: null} for — see
+  // that function's own comment). Leaving currentAuthUser untouched on
+  // failure means a transient error here can't make an already-logged-in
+  // visitor's session appear to vanish; the next successful refresh (a
+  // login/signup, or simply reopening this panel) corrects it either way.
+  try {
+    currentAuthUser = await fetchCurrentUser();
+  } catch (err) {
+    console.warn('Could not refresh current user:', err);
+  }
   refreshAccountAuthUI();
   return currentAuthUser;
 }

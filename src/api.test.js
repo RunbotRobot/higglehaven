@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchAllAuctions, fetchAllLandlets } from './api.js';
+import { fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
@@ -90,5 +90,39 @@ describe('fetchAllAuctions', () => {
     mockPaginatedFetch([{ auctions: [{ auctionId: 'a' }], nextCursor: null }]);
     const all = await fetchAllAuctions();
     expect(all).toEqual([{ auctionId: 'a' }]);
+  });
+});
+
+describe('fetchCurrentUser', () => {
+  it('resolves the user on a normal 200 response', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ user: { userId: 'user-1' } }),
+    })));
+    await expect(fetchCurrentUser()).resolves.toEqual({ userId: 'user-1' });
+  });
+
+  it('resolves null when nobody is logged in (the real 200/{user: null} case)', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ user: null }),
+    })));
+    await expect(fetchCurrentUser()).resolves.toBeNull();
+  });
+
+  // A genuine backend error must not collapse into the same result as
+  // "nobody is logged in" (handleMe's own 200/{user: null}) — that
+  // conflation is exactly what silently signed out an already-logged-in
+  // visitor on a transient 500. This module's own top comment says
+  // nothing in here retries or swallows errors; refreshCurrentUser
+  // (src/main.js) is the one responsible for deciding what to do with
+  // a thrown error, not this function.
+  it('rejects (does not swallow) a real HTTP error instead of returning null for it', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: 'Internal server error' }),
+    })));
+    await expect(fetchCurrentUser()).rejects.toThrow('Internal server error');
   });
 });
