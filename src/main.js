@@ -3952,6 +3952,10 @@ function renderSettingsSection() {
     renderGeneralSettingsSection();
     return;
   }
+  if (activeSettingsTab === 'shop') {
+    renderShopSettingsSection();
+    return;
+  }
   if (activeSettingsTab === 'build') {
     renderBuildSettingsSection();
     return;
@@ -3965,6 +3969,25 @@ function renderSettingsSection() {
   note.className = 'settings-empty-note';
   note.textContent = 'Nothing to configure here yet.';
   settingsSectionEl.appendChild(note);
+}
+
+// Owner: "I want the instructional note at the bottom of the shop screen
+// that explains the three controls... to go into a Help section in Menu
+// to clean up the interface." Moved out of the always-visible #shop-hint
+// overlay (removed from index.html/enterShopMode) into this Settings tab,
+// which already existed as an empty placeholder — reachable any time via
+// Menu → Settings → Shop, not just while actually standing in the world.
+function renderShopSettingsSection() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Controls';
+  field.appendChild(label);
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap ✈️ (or double-press space) to fly.';
+  field.appendChild(note);
+  settingsSectionEl.appendChild(field);
 }
 
 function renderGeneralSettingsSection() {
@@ -7641,7 +7664,6 @@ friendsAddBtn.addEventListener('click', async () => {
 // their ordinary local coordinates, so nothing about createMeshForInstance
 // itself needs to know Shop mode exists.
 const shopStatusEl = document.getElementById('shop-status');
-const shopHintEl = document.getElementById('shop-hint');
 const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
@@ -9796,7 +9818,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 ];
 
 async function enterShopMode() {
-  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
+  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
