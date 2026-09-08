@@ -2694,7 +2694,7 @@ async function handleUploadDimensionsStep() {
     // showing up right away — not straight into a Build-mode tap-to-place
     // flow, since Upload Model can now be reached from Shop (no landlet to
     // place onto at all) as easily as from Build.
-    renderSellerList();
+    renderActiveSellerView();
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
@@ -2722,13 +2722,70 @@ uploadSubmitBtn.addEventListener('click', () => {
 // stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerListEl = document.getElementById('seller-list');
+const sellerListViewEl = document.getElementById('seller-list-view');
+const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
+const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
+const sellerSearchInput = document.getElementById('seller-search-input');
+const sellerCategoryFilterSelect = document.getElementById('seller-category-filter');
+const sellerSortSelect = document.getElementById('seller-sort-select');
 
 function myProducts() {
   return activeCatalog.filter((template) =>
     template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+// #542: shared filtered/sorted product set for Sell mode, independent of
+// whichever view renders it (this row-list today; #540/#541's own views
+// later) — matches other categories/subcategories already round-tripped
+// through the catalog API (see worker/index.js), so filtering by category
+// costs nothing beyond what's already on each template. Search matches
+// name first (the issue's own stated minimum) plus category/subcategory
+// as a cheap stretch, since they're already in hand.
+function populateSellerCategoryFilterOptions(templates) {
+  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const previous = sellerCategoryFilterSelect.value;
+  sellerCategoryFilterSelect.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = 'All categories';
+  sellerCategoryFilterSelect.appendChild(allOption);
+  for (const category of categories) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    sellerCategoryFilterSelect.appendChild(option);
+  }
+  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+}
+
+function filterAndSortSellerProducts(templates) {
+  const query = sellerSearchInput.value.trim().toLowerCase();
+  const category = sellerCategoryFilterSelect.value;
+  let filtered = templates;
+  if (query) {
+    filtered = filtered.filter((t) =>
+      t.name.toLowerCase().includes(query) ||
+      (t.category || '').toLowerCase().includes(query) ||
+      (t.subcategory || '').toLowerCase().includes(query));
+  }
+  if (category) filtered = filtered.filter((t) => t.category === category);
+  const sort = sellerSortSelect.value;
+  filtered = filtered.slice().sort((a, b) => {
+    if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
+    if (sort === 'price-desc') return (b.priceCents ?? -Infinity) - (a.priceCents ?? -Infinity);
+    return a.name.localeCompare(b.name);
+  });
+  return filtered;
+}
+
+// #541 added a second (List) view of the same product set — re-render
+// whichever view is actually showing, not always Manage, the same idiom
+// renderActiveSellerView's own other callers already follow.
+for (const el of [sellerSearchInput, sellerCategoryFilterSelect, sellerSortSelect]) {
+  el.addEventListener(el === sellerSearchInput ? 'input' : 'change', () => renderActiveSellerView());
 }
 
 const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
@@ -2937,9 +2994,17 @@ function renderSellerList() {
   // closures goes with it.
   disposeAxisPreview();
   sellerListEl.innerHTML = '';
-  const templates = myProducts();
-  if (templates.length === 0) {
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
     return;
   }
   sellerStatusEl.textContent = '';
@@ -4017,6 +4082,120 @@ function renderSellerList() {
   }
 }
 
+// #541: a lighter, thumbnail-first way to browse the same products
+// renderSellerList's rows already manage — persists only for this open of
+// the modal (resets to 'manage' on next open, same as activeSettingsTab
+// resetting per its own comment) since there's no strong reason yet for a
+// seller's view choice to survive a close/reopen.
+let sellerActiveView = 'manage';
+
+function updateSellerViewToggleUI() {
+  for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+    btn.classList.toggle('active', btn.dataset.view === sellerActiveView);
+  }
+}
+
+// Cards, not rows — no edit controls here (that's what Manage is for);
+// tapping a card jumps straight into Manage with that product already
+// expanded, the same "browse here, edit there" split issue #540 (the
+// sibling 3D-array sub-issue) proposes for its own view.
+function renderSellerListView() {
+  sellerListViewEl.replaceChildren();
+  // #542: same shared filtered/sorted product set Manage's own
+  // renderSellerList uses — search/filter/sort is meant to work "from
+  // either the 3D array or the list view," per the issue's own text, not
+  // duplicated per view.
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
+    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
+    return;
+  }
+  sellerStatusEl.textContent = '';
+
+  for (const template of templates) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'seller-card';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'seller-card-thumb';
+    thumb.alt = '';
+    // Same fallback order as buildCatalogPickerButtons' own thumb.src line
+    // (in-session render cache, then a persisted image_url, then a flat
+    // color swatch) — this view and the catalog picker are showing the
+    // same templates, so they should never disagree on what a product
+    // looks like.
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    card.appendChild(thumb);
+    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
+      renderCatalogThumbnail(template).then((dataUrl) => {
+        if (dataUrl) thumb.src = dataUrl;
+      });
+    }
+
+    const name = document.createElement('span');
+    name.className = 'seller-card-name';
+    name.textContent = template.name;
+    card.appendChild(name);
+
+    const price = document.createElement('span');
+    price.className = 'seller-card-price';
+    price.textContent = template.priceCents == null ? 'Not priced' : formatPriceCents(template.priceCents);
+    card.appendChild(price);
+
+    const digitalGoodKey = template.metadata?.digitalGoodDisclaimer;
+    if (digitalGoodKey) {
+      const digitalGood = document.createElement('span');
+      digitalGood.className = 'seller-card-digital-good';
+      digitalGood.textContent = 'Digital good';
+      card.appendChild(digitalGood);
+    }
+
+    card.addEventListener('click', () => {
+      sellerActiveView = 'manage';
+      updateSellerViewToggleUI();
+      renderActiveSellerView();
+      const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(template.templateId))}"]`);
+      if (row) {
+        row.classList.add('expanded');
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+
+    sellerListViewEl.appendChild(card);
+  }
+}
+
+// Single entry point for (re)rendering whichever of Manage/List view is
+// currently active — every caller that used to render the Manage view
+// unconditionally (opening the modal, a Units-setting change) goes through
+// here now so it keeps refreshing whichever view the seller actually has
+// open, not always Manage.
+function renderActiveSellerView() {
+  sellerListEl.hidden = sellerActiveView !== 'manage';
+  sellerListViewEl.hidden = sellerActiveView !== 'list';
+  if (sellerActiveView === 'list') renderSellerListView();
+  else renderSellerList();
+}
+
+for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === sellerActiveView) return;
+    sellerActiveView = btn.dataset.view;
+    updateSellerViewToggleUI();
+    renderActiveSellerView();
+  });
+}
+updateSellerViewToggleUI();
+
 // Ensures a seller identity is active before showing the modal. Only
 // reachable via the #mode-nav Sell tab (openSellerModal call sites below),
 // which calls this rather than separately remembering to await
@@ -4045,7 +4224,12 @@ async function openSellerModal() {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
     return;
   }
-  renderSellerList();
+  // #541: always opens back on Manage, same as activeSettingsTab resetting
+  // to 'general' on next Settings open — a seller's view choice doesn't
+  // need to survive a close/reopen yet.
+  sellerActiveView = 'manage';
+  updateSellerViewToggleUI();
+  renderActiveSellerView();
   sellerModalEl.classList.add('visible');
 }
 function closeSellerModal() {
@@ -4091,7 +4275,7 @@ let activeSettingsTab = 'general';
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
-  if (sellerModalEl.classList.contains('visible')) renderSellerList();
+  if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
 function renderSettingsSection() {
@@ -8773,10 +8957,21 @@ function createShopAvatar() {
     eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
     head.add(eye);
   }
+  // Owner (Control Room feedback): "more stylish hair... I don't want him
+  // to be balding!" The original cap sat too far back and too flat (scale
+  // 0.85/0.65, offset -0.25R/+0.3R) to reach the crown/hairline at all —
+  // its own front edge stopped well short of the eyes (at y=+0.85R),
+  // leaving the whole forehead-to-crown area bare skin-colored sphere from
+  // straight on, which read as a receding hairline/bald spot rather than a
+  // flat-cap silhouette. Pulled forward and enlarged so it now reaches
+  // right up to the eye line at the front, still tapers off before the
+  // back of the neck, and pokes very slightly above the head's own crown
+  // (z max ~1.03R vs the head's 1R) for a bit of volume instead of a
+  // shrink-wrapped skullcap.
   const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
   const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
-  hair.scale.set(1, 0.85, 0.65); // flatten into a cap rather than a full second head
-  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.25, SHOP_AVATAR_HEAD_RADIUS_M * 0.3); // back (-Y) and up
+  hair.scale.set(1, 0.95, 0.75);
+  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.05, SHOP_AVATAR_HEAD_RADIUS_M * 0.32);
   head.add(hair);
 
   group.add(headPivot);
