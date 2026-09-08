@@ -1398,6 +1398,25 @@ it's currently checking, so a bucket keyed to a target nobody retries (e.g.
 one email's signup/reset attempts) would otherwise sit in the table
 forever.
 
+The same cron also runs `checkMigrationDrift` (#499, follow-up to #488: a
+real 4-day production outage where `wrangler d1 migrations apply --remote`
+silently failed partway through a batch and nothing noticed until an owner
+bug report). It compares a live `SELECT name FROM d1_migrations` against
+`worker/migrations-manifest.json` — a list of `migrations/*.sql` filenames
+generated at build/deploy time (`npm run generate:migrations-manifest`,
+wired into `deploy`/`deploy:ci`) since `scheduled()` has no filesystem
+access to read `migrations/` directly. `scripts/check-migrations-manifest-
+fresh.mjs` runs as a `pretest` check so the checked-in manifest can't
+silently drift from `migrations/` itself. On finding production missing any
+migration the manifest expects, it logs a loud `console.error` (always
+visible in `wrangler tail`/the dashboard) and, if the optional `OPS_ALERT_EMAIL`
+Worker secret is configured, also emails that address via the existing
+`sendEmail`/Resend integration — same dev-mode-friendly "no secret, no
+network call" fallback as `RESEND_API_KEY` itself. This is a detection net,
+not a replacement for `scripts/check-migration-drift.mjs` (#492), which
+still catches the same drift immediately at deploy time; this catches it
+within the next 10-minute cron tick even when nobody deploys for a while.
+
 ### World object
 
 ```json
