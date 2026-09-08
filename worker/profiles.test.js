@@ -410,6 +410,25 @@ describe('Builders', () => {
     expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
   });
 
+  // #479: the create path above already rejected an over-long label, but
+  // the rename path used plain stringValue with no cap at all — a rename
+  // call could set an arbitrarily long label regardless of what the
+  // create-time cap allowed.
+  it('rejects a rename to a label over the length cap', async () => {
+    const renamer = await signupBuilder('rename-cap-builder');
+    const rejected = await api(`/builders/${renamer.builderId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
+
+    const stillFine = await api(`/builders/${renamer.builderId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(100) }),
+    }));
+    expect(stillFine.response.status).toBe(200);
+    expect(stillFine.body.builder.label).toBe('x'.repeat(100));
+  });
+
   it('rate-limits repeated builder creation from the same client', async () => {
     const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 20; i++) {
@@ -435,6 +454,24 @@ describe('Sellers', () => {
     const rejected = await api('/sellers', {
       method: 'POST', body: JSON.stringify({ label: 'x'.repeat(101) }),
     });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
+  });
+
+  // #479: same gap as the builder-rename fix above — this seller-rename
+  // path used plain stringValue with no upper bound, unlike this same
+  // endpoint's own create path just above.
+  it('renames a seller and rejects a rename over the length cap', async () => {
+    const renamer = await signupSeller('rename-cap-seller');
+    const renamed = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'Renamed Seller' }),
+    }));
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.seller.label).toBe('Renamed Seller');
+
+    const rejected = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(101) }),
+    }));
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
   });

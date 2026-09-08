@@ -55,6 +55,19 @@ Only ever run `wrangler deploy` or `wrangler d1 migrations apply
 --remote` from `main`, after merging — never from your own session
 branch before its PR has merged.
 
+Applying migrations remotely means `npm run db:migrate:remote`, not the
+bare `wrangler d1 migrations apply --remote` command — the npm script
+chains a drift check (`scripts/check-migration-drift.mjs`) after the
+apply and fails loudly if anything is still pending. This isn't
+optional: #488 is a real 4-day production outage this exact gap
+caused — a migration renamed after already being applied made
+`wrangler d1 migrations apply --remote` error out partway through a
+batch and silently skip everything after it, and `wrangler`'s own exit
+code stayed `0` throughout, so nothing noticed until an owner bug
+report. If the drift check ever fails, stop — do not run `wrangler
+deploy` on top of a schema that isn't what the code expects — and
+investigate before doing anything else.
+
 This file has been wrong about this twice before, so don't re-derive
 the convention from old commit history or guess: (1) an early version
 had numbered branches with an ad-hoc, self-assign-via-GitHub-Issue

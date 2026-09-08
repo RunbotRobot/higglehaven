@@ -200,7 +200,7 @@ describe('Auctions', () => {
     expect(bids.body.bids[0].amountCents).toBe(1000);
   });
 
-  it('resolves a winning auction: ownership transfers, build clears, seller is paid in dállers', async () => {
+  it('resolves a winning auction: ownership transfers, build clears, seller is paid in higgles', async () => {
     const owner = await signupBuilder('resolve-winner-owner');
     const bidder = await signupBuilder('resolve-winner-bidder');
     await createGreenbeltLandlet('auction-resolve-win-landlet');
@@ -237,7 +237,7 @@ describe('Auctions', () => {
 
     const builders = await api('/builders');
     const sellerAfter = builders.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfter.dallersBalanceCents).toBe(2500);
+    expect(sellerAfter.higglesBalanceCents).toBe(2500);
 
     const sellerNotices = await api('/notifications', owner.session());
     expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $25.00'))).toBe(true);
@@ -255,9 +255,9 @@ describe('Auctions', () => {
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
     const buildersAfterSecondResolve = await api('/builders');
     const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfterSecondResolve.dallersBalanceCents).toBe(2500);
+    expect(sellerAfterSecondResolve.higglesBalanceCents).toBe(2500);
     const earningsCount = await env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM daller_earnings_events WHERE builder_id = ?',
+      'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(owner.builderId).first();
     expect(earningsCount.n).toBe(1);
   });
@@ -293,9 +293,14 @@ describe('Auctions', () => {
       api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
     ]);
     // Whichever ran first, both landing 200 is impossible — the loser's
-    // write is guarded out with a 409 (the draft) or was simply too late
-    // to matter for the caller to notice (resolve, already idempotent).
-    expect([200, 409]).toContain(drafted.response.status);
+    // write is guarded out with a 409 (the draft's own atomic write-time
+    // guard), or, if the transfer commits before this PUT's own
+    // requireLandlet() read even resolves, a 403 (its assertOwner check,
+    // using that now-already-stale-relative-to-the-transfer read, correctly
+    // sees the new owner and rejects — same root cause #455 already fixed
+    // for the sibling "concurrent version save" race just below this one,
+    // just never ported to this test's own accepted-outcomes list).
+    expect([200, 403, 409]).toContain(drafted.response.status);
 
     const landlet = await api('/landlets/draft-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -376,7 +381,13 @@ describe('Auctions', () => {
     // itself: activate's own getVersion existence check can race against
     // resolveAuction's DELETE FROM landlet_versions and lose, the version
     // it was about to activate having genuinely ceased to exist by then.
-    expect([200, 409, 404]).toContain(activated.response.status);
+    // 403 is legitimate too (same root cause #455 already fixed for the
+    // sibling "concurrent version save" test above, just never ported
+    // here): if the transfer commits before this endpoint's own
+    // requireLandlet() read resolves, its assertOwner check correctly
+    // sees the new owner and rejects, ahead of ever reaching the
+    // write-time guard that would otherwise produce 409.
+    expect([200, 403, 404, 409]).toContain(activated.response.status);
 
     const landlet = await api('/landlets/activate-resolve-race-landlet');
     expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
@@ -1008,6 +1019,35 @@ describe('Bundles', () => {
     expect(missing.response.status).toBe(404);
   });
 
+  // #468: unlike the sequential test above, this fires a rename and a
+  // share-toggle PATCH genuinely concurrently (Promise.all) — the actual
+  // shape of the race, since the old code merged the omitted field in
+  // from a snapshot read at the top of each request, so whichever request
+  // resolved that read *last* still overwrote the other's just-written
+  // field with a stale value once its own UPDATE landed. Both edits must
+  // survive regardless of which request's DB read/write happens to
+  // interleave first.
+  it('does not let a concurrent rename and share-toggle clobber each other', async () => {
+    const owner = await signupBuilder('bundle-patch-race-owner');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const [renamed, shared] = await Promise.all([
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Raced rename' }),
+      })),
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ shared: true }),
+      })),
+    ]);
+    expect(renamed.response.status).toBe(200);
+    expect(shared.response.status).toBe(200);
+
+    const list = await api('/bundles', owner.session());
+    const final = list.body.bundles.find((b) => b.bundleId === bundleId);
+    expect(final).toMatchObject({ name: 'Raced rename', shared: true });
+  });
+
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
     const owner = await signupBuilder('bundle-delete-owner');
     const other = await signupBuilder('bundle-delete-other');
@@ -1391,11 +1431,11 @@ describe('Simulated purchases', () => {
     expect(badBuyerLabel.response.status).toBe(400);
   });
 
-  it('rejects an absurd quantity rather than crediting an unbounded dállers amount', async () => {
+  it('rejects an absurd quantity rather than crediting an unbounded higgles amount', async () => {
     // This endpoint is deliberately unauthenticated (see docs/API.md's
     // "Simulated purchases"), so quantity is one of two guards (alongside
     // the rate limit below) against one request minting an arbitrary
-    // dállers credit.
+    // higgles credit.
     const seller = await signupBuilder('purchase-quantity-cap-seller');
     await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
     await claim('purchase-quantity-cap-landlet', seller);
@@ -1484,10 +1524,10 @@ describe('Simulated purchases', () => {
     });
 
     const after = await builderRow(seller.builderId);
-    expect(after.dallers_balance_cents - before.dallers_balance_cents).toBe(100);
+    expect(after.higgles_balance_cents - before.higgles_balance_cents).toBe(100);
 
     const { results } = await env.DB.prepare(
-      'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(100);
@@ -1605,7 +1645,7 @@ describe('Simulated purchases', () => {
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
     const after = await builderRow(seller.builderId);
-    expect(before.dallers_balance_cents - after.dallers_balance_cents).toBe(builderShareCents);
+    expect(before.higgles_balance_cents - after.higgles_balance_cents).toBe(builderShareCents);
 
     // Refunding twice is rejected — the clawback already happened once.
     // This is also the observable contract #192's fix protects under real
@@ -1619,7 +1659,7 @@ describe('Simulated purchases', () => {
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(secondRefund.response.status).toBe(400);
     const afterSecondAttempt = await builderRow(seller.builderId);
-    expect(afterSecondAttempt.dallers_balance_cents).toBe(after.dallers_balance_cents);
+    expect(afterSecondAttempt.higgles_balance_cents).toBe(after.higgles_balance_cents);
   });
 
   it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
@@ -1782,7 +1822,7 @@ describe('Simulated purchases', () => {
     );
   });
 
-  it('lets the clawback push a builder\'s dállers balance negative — there is no floor on a refund', async () => {
+  it('lets the clawback push a builder\'s higgles balance negative — there is no floor on a refund', async () => {
     const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
     await claim('purchase-refund-negative-landlet', seller);
@@ -1792,11 +1832,11 @@ describe('Simulated purchases', () => {
     const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
     // Spend down the builder's balance below the commission they're about
     // to have clawed back, so the refund must push it negative.
-    await env.DB.prepare('UPDATE builders SET dallers_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
     await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
-    expect(after.dallers_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
+    expect(after.higgles_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
 
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
@@ -1912,7 +1952,7 @@ describe('Simulated purchases', () => {
   // this suite never configures STRIPE_SECRET_KEY, so the only exercisable
   // path is the 503 "not configured" branch — which is exactly what proves
   // the important safety property: a purchase whose Stripe reversal never
-  // happened must not end up looking refunded, and the builder's dáller
+  // happened must not end up looking refunded, and the builder's higgles
   // share must stay untouched until it does.
   describe('Real-money refunds (#348)', () => {
     it('leaves the purchase unrefunded and the builder\'s balance untouched when Stripe is not configured', async () => {
@@ -1937,7 +1977,7 @@ describe('Simulated purchases', () => {
       const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(purchaseRow.refunded_at).toBeNull();
       const after = await builderRow(seller.builderId);
-      expect(after.dallers_balance_cents).toBe(before.dallers_balance_cents);
+      expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
 
       // The refunded_at guard was released, not left stuck — a retry (once
       // Stripe is actually configured) isn't permanently blocked by this

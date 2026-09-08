@@ -1177,7 +1177,11 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     const input = await readJson(request);
     const versionId = crypto.randomUUID();
-    const name = input.name === undefined ? null : stringValue(input.name, 'name');
+    // #480: same "optional user-facing short label, no upper bound" gap
+    // #337/#358 already closed elsewhere — optionalLabelValue caps it
+    // whenever a real value is given, same as absent-or-capped fields
+    // like category/subcategory.
+    const name = optionalLabelValue(input.name, 'name');
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
 
@@ -1364,7 +1368,11 @@ async function handleBuilders(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: this rename path used plain stringValue (no upper bound),
+    // unlike POST /api/builders' own create path just above (already
+    // labelValue) — a rename call could bypass the create-time cap
+    // entirely. Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?
     `).bind(label, route[1]).run();
@@ -1480,9 +1488,9 @@ function builderFromRow(row) {
     // real, persisted ledger credited when this builder sells a landlet
     // via auction. See migrations/0045's own note on why bidding itself
     // isn't gated by having a sufficient balance yet.
-    dallersBalanceCents: row.dallers_balance_cents,
+    higglesBalanceCents: row.higgles_balance_cents,
     // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
-    // area this builder may own at once, distinct from dallersBalanceCents
+    // area this builder may own at once, distinct from higglesBalanceCents
     // above (which land-specific lándlets can be acquired via auction).
     landCapM2: row.land_cap_m2,
     // The real total currently counted against that cap — ground-level
@@ -1640,7 +1648,10 @@ async function handleSellers(request, env, db, route) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: same gap as the builder-rename fix just above — this used
+    // plain stringValue (no upper bound), unlike POST /api/sellers' own
+    // create path (already labelValue). Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE seller_id = ?
     `).bind(label, route[1]).run();
@@ -2008,9 +2019,19 @@ async function handleBundles(request, db, route, url) {
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
-    // also resend the current shared flag, and vice versa.
-    const name = input.name === undefined ? existing.name : labelValue(input.name, 'name');
-    const shared = input.shared === undefined ? Boolean(existing.shared) : input.shared === true;
+    // also resend the current shared flag, and vice versa. #468: this used
+    // to fill in whichever field the caller omitted from `existing` (read
+    // once at the top of this handler) and write BOTH fields back
+    // unconditionally — so two concurrent partial updates (a rename and a
+    // share-toggle landing close together) each recomputed the OTHER
+    // field from the same pre-race snapshot, and whichever UPDATE landed
+    // second silently clobbered the first with that stale value. Binding
+    // `null` for an omitted field and resolving it via COALESCE at the SQL
+    // level instead makes the merge atomic against whatever the row
+    // actually holds at UPDATE time, not a value read before this
+    // request's own await gap.
+    const name = input.name === undefined ? null : labelValue(input.name, 'name');
+    const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
     // existence check above and this UPDATE would silently affect 0 rows —
@@ -2018,8 +2039,8 @@ async function handleBundles(request, db, route, url) {
     // bundleFromRow(undefined) throws an uncaught TypeError (a 500) instead
     // of the clean 404 this should be. Same shape as #288's friendship fix.
     const result = await db.prepare(`
-      UPDATE bundles SET name = ?, shared = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, shared ? 1 : 0, route[1]).run();
+      UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, shared, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     return json({ bundle: bundleFromRow(updated) });
@@ -2434,7 +2455,7 @@ async function requireAuction(db, auctionId) {
 }
 
 // Land cap (docs/SPEC.md §3: "Grows via a formula converting trailing-30-day
-// dáller earnings per 1,000 m² owned into cap increases. Ratcheting: once
+// higgles earnings per 1,000 m² owned into cap increases. Ratcheting: once
 // increased, never decreases. Conversion ratio adjusts at most once/month,
 // small increments.") The conversion ratio itself is exactly the kind of
 // number docs/SPEC.md §10's own "Lándlet hosting cost validation" open
@@ -2452,10 +2473,10 @@ async function requireAuction(db, auctionId) {
 // builder), and the default cap is exactly the starter lándlet's own size,
 // so EVERY fresh builder starts already at 100% of their cap the moment
 // they exist. Spec's own intended primary earning path is commerce
-// commissions (§5: dállers credit on a product SALE, not on selling land),
+// commissions (§5: higgles credit on a product SALE, not on selling land),
 // but this dev-mode backend has no real checkout/commerce system at all
 // (out of scope, same as real payments generally) — auction sale proceeds
-// are the ONLY dáller source actually implemented. Hard-enforcing the cap
+// are the ONLY higgles source actually implemented. Hard-enforcing the cap
 // against that one source alone would make growing past your starter
 // lándlet structurally impossible for every builder (nobody can ever earn
 // without first having cap headroom to acquire something to resell, and
@@ -2505,7 +2526,7 @@ async function recomputeLandCap(db, builderId) {
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earningsRow, ownedRow, levelsRow] = await Promise.all([
     db.prepare(`
-      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
       WHERE builder_id = ? AND created_at >= ?
     `).bind(builderId, windowStart).first(),
     db.prepare(`
@@ -2541,7 +2562,7 @@ async function recomputeLandCapsBatch(db, rows) {
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const [earnings, owned, levels] = await Promise.all([
     db.prepare(`
-      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM daller_earnings_events
+      SELECT builder_id, COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
       WHERE created_at >= ? GROUP BY builder_id
     `).bind(windowStart).all(),
     db.prepare(`
@@ -2611,7 +2632,7 @@ async function resolveAuctionIfDue(db, auction) {
 }
 
 // The actual resolution: highest bidder wins and pays the seller (in
-// dállers — see migrations/0045's own note on why bidding isn't
+// higgles — see migrations/0045's own note on why bidding isn't
 // balance-gated yet), or the land is released to greenbelt / stays with
 // the seller depending on whether the starting bid was $0 ("explicit
 // willingness to relinquish for free") — see docs/SPEC.md §5. Clearing
@@ -2657,17 +2678,17 @@ async function resolveAuction(db, auction) {
         WHERE landlet_id = ?
       `).bind(highest.bidder_builder_id, auction.landlet_id),
       db.prepare(`
-        UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?
+        UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
       `).bind(highest.amount_cents, auction.seller_builder_id),
       // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
       // trailing-30-day earnings WINDOW, not the lifetime
-      // dallers_balance_cents total above — this per-event ledger is what
+      // higgles_balance_cents total above — this per-event ledger is what
       // makes that window computable later (see recomputeLandCap).
       db.prepare(`
-        INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+        INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
       `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
       notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your dállers balance.`),
+        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your higgles balance.`),
       notificationStatement(db, highest.bidder_builder_id,
         `You won the auction for ${auction.landlet_id} at ${formatCents(highest.amount_cents)}! It's yours to build on now.`),
     );
@@ -3193,13 +3214,23 @@ function flattenStripeParams(value, prefix) {
   return pairs;
 }
 
-async function stripeRequest(env, method, path, params) {
+// #473: idempotencyKey is only meaningful (and only ever passed by a
+// caller) on a request that CREATES a resource — Stripe keys it for ~24h
+// and returns the original response for a repeated call with the same
+// key instead of creating a second one, closing the "network dropped the
+// response, but the create already went through" gap that a raw retry
+// (client-side or a future automatic one) would otherwise hit. Reads and
+// updates against an already-known resource id don't need one; they're
+// naturally safe to repeat.
+async function stripeRequest(env, method, path, params, idempotencyKey) {
+  const headers = {
+    authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
+    'content-type': 'application/x-www-form-urlencoded',
+  };
+  if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method,
-    headers: {
-      authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
+    headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
   const data = await response.json();
@@ -3307,22 +3338,48 @@ async function handleSellerStripeAccount(request, env, db) {
     }
 
     let account;
+    let createdNewAccount = false;
     if (sessionSeller.stripe_account_id) {
       // country can't be changed on an existing Stripe account.
       const { country, ...updateParams } = params;
       account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
     } else {
-      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+      // #473: keyed on seller_id alone is safe here — this branch only
+      // ever runs while stripe_account_id is still null, and a successful
+      // create (or #474's own DB guard losing a concurrent race) means it
+      // never runs again for this seller, so there's no future "genuine
+      // second create" this key could wrongly dedupe against.
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `seller-account-create:${sessionSeller.seller_id}`);
+      createdNewAccount = true;
     }
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
     const nowIso = new Date().toISOString();
-    await db.prepare(`
+    // Found via backlog audit (#474): two concurrent first-time submissions
+    // (double-click, a retried request) both read stripe_account_id as
+    // null above and both create their own real, distinct Stripe account —
+    // an unconditional write here would let the loser's account id get
+    // silently discarded, leaving a live Stripe account holding real KYC
+    // PII that nothing in this app ever references again. Only matters
+    // for first-time creation — two concurrent updates to an *existing*
+    // account both target the same id, so there's no orphaning risk there.
+    const result = await db.prepare(`
       UPDATE sellers
       SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-      WHERE seller_id = ?
+      WHERE seller_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
     `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionSeller.seller_id).run();
+
+    if (createdNewAccount && result.meta.changes === 0) {
+      // Lost the race — another request's account already won. Don't leave
+      // the account this request just created live and unreferenced:
+      // best-effort delete it (a Custom account with no completed
+      // onboarding can be deleted), then hand back the winning
+      // submission's own state instead of this one's.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      return json(stripeAccountStatusJson(env, winner));
+    }
 
     return json(stripeAccountStatusJson(env, {
       stripe_account_id: account.id,
@@ -3987,7 +4044,8 @@ async function handleLandletDraft(request, db, landletId) {
     await assertInstanceZWithinLevels(db, instances);
 
     const versionId = crypto.randomUUID();
-    const versionName = input.versionName === undefined ? null : stringValue(input.versionName, 'versionName');
+    // #480: same gap as handleLandletVersions' POST above.
+    const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
 
@@ -5326,9 +5384,9 @@ function isoDateString(value, field) {
 // migrations/0051) — see that migration's own comment for why this exists
 // and why it is explicitly NOT real commerce (no real payment is ever
 // processed; a shopper is charged nothing). This is the actual mechanism
-// that credits a builder's dállers balance and land-cap-feeding earnings
+// that credits a builder's higgles balance and land-cap-feeding earnings
 // ledger when a shopper "buys" a product placed on their lándlet — the one
-// concrete dáller-earning path docs/SPEC.md §5 treats as PRIMARY (auction
+// concrete higgles-earning path docs/SPEC.md §5 treats as PRIMARY (auction
 // sale proceeds, migrations/0045, are the only other one this backend
 // implements).
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
@@ -5337,7 +5395,7 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // quantity had no upper bound at all until this was added — a single
 // unauthenticated call with an absurd quantity (there's no shopper account
 // to even attribute it to) could mint an arbitrary amount of a builder's
-// dallers_balance_cents and daller_earnings_events credit in one request,
+// higgles_balance_cents and higgles_earnings_events credit in one request,
 // directly undermining "growth is earned through demonstrated performance,
 // never purchased" (docs/SPEC.md §0) since earnings feed the land cap
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
@@ -5348,7 +5406,7 @@ const PURCHASE_MAX_QUANTITY = 1000;
 // a bid's amountCents (nonnegativeInteger/optionalInteger below): with no
 // upper bound, a seller could set an astronomical priceCents on their own
 // catalog template and self-purchase it once to mint an arbitrary
-// dallers_balance_cents/daller_earnings_events credit, and the same hole
+// higgles_balance_cents/higgles_earnings_events credit, and the same hole
 // exists on auction bids. $1,000,000 (in cents) stays generous for this
 // dev-mode play economy while ruling out that abuse and, just as
 // importantly, keeping every stored value within Number.isSafeInteger
@@ -5420,7 +5478,7 @@ async function handleInstancePurchase(request, env, instanceId) {
 function computePurchaseAmounts(template, input) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
   // Capped as a sanity bound against a malformed/abusive request producing
-  // an absurd totalCents (and the dállers-balance/land-cap credit that
+  // an absurd totalCents (and the higgles-balance/land-cap credit that
   // flows from it) — not itself a spec requirement, same reasoning as
   // durationHours' cap above. The simulated endpoint has no session (see
   // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
@@ -5447,16 +5505,34 @@ function computePurchaseAmounts(template, input) {
 }
 
 // #453: creates a real Stripe PaymentIntent instead of immediately
-// crediting dállers — the actual purchases row (and builder dáller
+// crediting higgles — the actual purchases row (and builder higgles
 // credit) is only written once the buyer has genuinely paid, via
 // handlePurchaseFinalize below, once Stripe confirms the PaymentIntent
 // succeeded. Reuses the exact same commission math as the simulated path
 // so the two stay consistent; the only difference is where the money
 // goes: the ENTIRE commissionCents (not just platformShareCents) is taken
 // as Stripe's application_fee_amount, since the builder's own share of it
-// is still paid out as dállers — never real money, per the owner's own
+// is still paid out as higgles — never real money, per the owner's own
 // #331 answer — only the remaining ~98% (totalCents - commissionCents)
 // transfers to the seller's connected account via transfer_data.
+// #473: the buyer's own client mints and persists idempotencyKey (see
+// purchaseInstance in src/api.js) across a retry of what THEY consider
+// the same attempt — most importantly, one where the initial request's
+// response never made it back (a network drop after Stripe already
+// created the PaymentIntent), which otherwise looks, client-side,
+// identical to the request never having reached us at all and invites an
+// innocent second "Buy" click. Namespaced with the instance id so a
+// buyer's own key can never collide across two different products, and
+// validated (fixed charset/length) before it ever reaches Stripe's own
+// header, since it arrives as arbitrary client input. A missing or
+// malformed key degrades to no idempotency protection for this one
+// request rather than failing the purchase outright — defense in depth,
+// not a hard requirement for a real purchase to go through.
+function purchaseIdempotencyKey(instanceId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `purchase:${instanceId}:${rawKey}`;
+}
+
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
   const amounts = computePurchaseAmounts(template, input);
 
@@ -5485,7 +5561,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
     },
-  });
+  }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
   // publishableKey is safe to hand to the browser by design (it's how
   // Stripe.js identifies which Stripe account to talk to) — the frontend
@@ -5503,7 +5579,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
 // Stripe Elements (stripe.confirmCardPayment) — never trusts that client
 // signal on its own. Instead it re-fetches the PaymentIntent from Stripe
 // directly (using our own secret key, which the client never has) and
-// only writes the purchases row/credits dállers once Stripe itself
+// only writes the purchases row/credits higgles once Stripe itself
 // reports the payment actually succeeded, using the amounts locked into
 // this PaymentIntent's own metadata at creation time (createPurchaseCheckout
 // above) — never recomputed from the live template — so what gets
@@ -5601,12 +5677,12 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
   ];
   if (builderId) {
     statements.push(
-      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
-      db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
         .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
       notificationStatement(db, builderId,
-        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
     );
   }
   await db.batch(statements);
@@ -5627,12 +5703,12 @@ async function writePurchaseRow(db, instance, template, landlet, amounts, paymen
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
-    db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+    db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
-    db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+    db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
     notificationStatement(db, builderId,
-      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -5693,9 +5769,9 @@ async function handlePurchases(request, env, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql
-// — see its own comment for why only dallers_balance_cents is touched, not
-// daller_earnings_events/land cap). Reachable from the Seller modal's own
+// Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
+// — see its own comment for why only higgles_balance_cents is touched, not
+// higgles_earnings_events/land cap). Reachable from the Seller modal's own
 // "Sales" panel on the product being refunded — a seller-initiated action
 // (standing in for a real customer-service-initiated refund, per
 // docs/SPEC.md §6's no-personal-support-contact policy), not shopper
@@ -5708,7 +5784,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // A purchase's seller_id can genuinely be null — catalog templates don't
   // require a sellerId at creation (an admin/system-owned placeholder
   // item can still be priced and purchased). That's fine for creating one,
-  // but a refund actually claws back real dállers from a builder's
+  // but a refund actually claws back real higgles from a builder's
   // balance, so it can never fall through to "no owner, no check" the way
   // read-only/creation paths on ownerless resources do elsewhere — it
   // needs admin instead, the same fallback used for the other genuinely
@@ -5752,10 +5828,10 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // its Stripe charge actually reversed, not just the local row flagged.
   // reverse_transfer pulls the ~98% share back out of the seller's
   // connected-account balance (the same way the block below claws back
-  // the builder's dáller share); refund_application_fee reverses
+  // the builder's higgles share); refund_application_fee reverses
   // higglehaven's own cut too, so nobody keeps money on a refunded sale.
   // If Stripe's call fails, the guard above is released (refunded_at reset
-  // to NULL) and the error propagates before the builder's dáller balance
+  // to NULL) and the error propagates before the builder's higgles balance
   // is ever touched — a failed real-money reversal should never look like
   // a successful refund, and should stay retryable.
   if (purchase.payment_intent_id) {
@@ -5782,7 +5858,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // rather than crediting/notifying a builder that no longer exists.
   if (purchase.builder_id) {
     await db.batch([
-      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents - ? WHERE builder_id = ?')
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(purchase.builder_share_cents, purchase.builder_id),
       notificationStatement(db, purchase.builder_id,
         `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
