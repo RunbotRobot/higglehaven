@@ -1149,6 +1149,53 @@ function flatGroundHitPoint(hit) {
   return new THREE.Vector3(flat.x, flat.y, flat.z);
 }
 
+// #220 (biome ground texture): #219's own real classification-data
+// pipeline (worker/geoData.js, scripts/ingest-geo-data.mjs) never actually
+// landed a `biome` field on a landlet — it only ever shipped water/
+// buildable landType (already given its own distinct look), and its
+// ingestion script has never been run against real data at all. Every
+// landlet this game currently generates therefore falls into exactly the
+// "no real classification" bucket #220 itself calls out needing a
+// fallback for — so rather than invent a speculative per-biome system
+// with nothing real to key off (the same call PR #238 already made for
+// this same issue), this just replaces the flat single-color ground
+// fill with a textured "default/unclassified" one. A real per-biome
+// material lookup can slot in wherever createGroundTexture() is called
+// once #219's pipeline actually reaches a landlets column, without
+// touching any of its callers.
+//
+// Generated on a canvas rather than loaded from an image asset (matching
+// makeDimensionLabelSprite's own CanvasTexture precedent elsewhere in
+// this file) — small random dabs in a few close shades of green over a
+// base fill read as mottled grass without needing real art. colorSpace
+// must be set explicitly: THREE.Texture defaults to NoColorSpace, which
+// reads a canvas's colors washed-out/oversaturated against everything
+// else in the scene using the sRGB pipeline.
+let cachedGroundTexture = null;
+function createGroundTexture() {
+  if (cachedGroundTexture) return cachedGroundTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#6ca42e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const speckleColors = ['#7cb83a', '#5c9424', '#82c244', '#568c20'];
+  for (let i = 0; i < 4000; i++) {
+    ctx.fillStyle = speckleColors[i % speckleColors.length];
+    const w = 1 + Math.random() * 2;
+    const h = 3 + Math.random() * 4;
+    ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, w, h);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 8);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  cachedGroundTexture = texture;
+  return texture;
+}
+
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
 // square is only a placeholder shown before bootstrap() resolves which
@@ -1160,7 +1207,7 @@ const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
 curveGroundGeometry(landletGeometry);
 // DoubleSide so the plane stays visible from below during dev orbiting;
 // the finished game will never let a shopper get under the ground plane.
-const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
+const landletMaterial = new THREE.MeshStandardMaterial({ map: createGroundTexture(), side: THREE.DoubleSide });
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 scene.add(landlet);
 
@@ -9936,16 +9983,17 @@ async function enterShopMode() {
 
   // The visible world stops at the wall — no glimpse of "wild ground" that
   // isn't actually any land's own polygon. A thin overlap keeps the ground
-  // from leaving a seam right at the wall's own base. Uses the same brand
-  // green as the UI's own "active" accent (index.html's --brand-green) —
-  // this used to be a much darker forest green that read as a heavy,
-  // ominous swath across an otherwise bright scene once every visible
-  // landlet resolves against it.
+  // from leaving a seam right at the wall's own base. Textured (#220) with
+  // the same base brand green the flat fill used before (index.html's
+  // --brand-green) — this used to be a much darker forest green that read
+  // as a heavy, ominous swath across an otherwise bright scene once every
+  // visible landlet resolves against it; the mottling stays subtle for the
+  // same reason.
   const wildGroundGeometry = new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64);
   applyGroundCurvature(wildGroundGeometry, 0, 0); // this mesh's own local origin *is* the world origin
   const wildGround = new THREE.Mesh(
     wildGroundGeometry,
-    new THREE.MeshStandardMaterial({ color: 0x6ca42e }),
+    new THREE.MeshStandardMaterial({ map: createGroundTexture() }),
   );
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
@@ -10005,10 +10053,17 @@ async function enterShopMode() {
 
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
-    const groundMesh = new THREE.Mesh(
-      new THREE.ShapeGeometry(shapeForLandlet(record)),
-      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKeyForLandlet(record)] ?? 0x4caf50 }),
-    );
+    // #220: only the default/unclassified case (an unclaimed 'greenbelt'
+    // plot — the same "no real biome data" bucket wildGround/the Build-mode
+    // plane fall into) gets the textured ground. claimed/generating/water
+    // keep their own flat SHOP_PLOT_COLORS fill — those are ownership-status
+    // indicators, not a ground biome, and need to stay instantly readable
+    // as a single solid color at a glance across the whole world.
+    const plotColorKey = plotColorKeyForLandlet(record);
+    const groundMaterial = plotColorKey === 'greenbelt'
+      ? new THREE.MeshStandardMaterial({ map: createGroundTexture() })
+      : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
+    const groundMesh = new THREE.Mesh(new THREE.ShapeGeometry(shapeForLandlet(record)), groundMaterial);
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
