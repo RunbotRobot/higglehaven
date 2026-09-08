@@ -3985,7 +3985,7 @@ function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap ✈️ (or double-press space) to fly.';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🐦 (or double-press space) to fly.';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 }
@@ -4038,6 +4038,13 @@ function renderGeneralSettingsSection() {
 // chosen at all this session — builderId can still be null if Settings is
 // opened from Shop mode before ever entering Build).
 async function renderLandCapField() {
+  // builderId can be null here purely because Settings was opened from Shop
+  // mode before Build mode ever ran ensureBuilderIdentity() this session —
+  // not because the visitor is actually logged out. If they already have a
+  // session, silently establish it the same way (requireLogin's own
+  // `if (currentAuthUser) return currentAuthUser` means this never pops a
+  // login prompt) instead of just leaving this whole field missing.
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
   if (!builderId) return;
   const field = document.createElement('div');
   field.className = 'settings-field';
@@ -4423,6 +4430,13 @@ function formatAuctionSummary(auction) {
 // latter isn't tied to currentLandletId, so it still renders here even
 // outside an active Build session, same as Land Cap above it.
 async function renderAuctionSection() {
+  // Same Shop-mode-opened-Settings gap as renderLandCapField above — an
+  // already-logged-in visitor can still have a null builderId simply
+  // because nothing's called ensureBuilderIdentity() yet this session.
+  // Establish it silently (no login prompt, since requireLogin short-
+  // circuits on an existing currentAuthUser) rather than showing a
+  // "choose an identity" dead end to someone who already has one.
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -4709,7 +4723,17 @@ for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
   });
 }
 
+// Owner (Control Room feedback): "When a user opens the menu, it should
+// default to the menu tab of the site tab they're already in (Shop,
+// Build, or Sell)." activeSettingsTab used to just persist whatever tab
+// was last clicked (starting at 'general'), so opening Settings from
+// Build mode after a previous session left it on e.g. Shop showed the
+// wrong tab first. currentMode's own values ('shop'/'build'/'sell')
+// match the settings-tab-btn dataset values exactly.
 function openSettingsModal() {
+  if (currentMode === 'shop' || currentMode === 'build' || currentMode === 'sell') {
+    activeSettingsTab = currentMode;
+  }
   renderSettingsSection();
   settingsModalEl.classList.add('visible');
 }

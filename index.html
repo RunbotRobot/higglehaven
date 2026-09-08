@@ -255,8 +255,16 @@
         height: 108px;
         bottom: 24px;
         border-radius: 50%;
-        background: rgb(var(--ink-rgb) / 0.12);
-        border: 2px solid rgb(var(--ink-rgb) / 0.3);
+        /* Owner: "the three controls at the bottom of shop mode" (this,
+           #shop-fly-btn, #shop-vertical-controls below) read as gray
+           rather than on-brand green — an ink-rgb tint reads that way at
+           low alpha since ink-rgb is a near-black green. Every other bit
+           of floating HUD chrome over the 3D scene (#shop-status,
+           #shop-sign-hint, ...) already uses a pale pill-rgb fill with no
+           border for contrast against an arbitrary backdrop instead; this
+           just brings the joystick in line with that, matching what the
+           :root palette comment already claimed it did. */
+        background: rgb(var(--pill-rgb) / 0.65);
         touch-action: none;
       }
       .shop-joystick-knob {
@@ -286,15 +294,14 @@
         transform: translateX(-50%);
         padding: 8px 16px;
         border-radius: 999px;
-        border: 1px solid rgb(var(--ink-rgb) / 0.3);
-        background: rgb(var(--ink-rgb) / 0.15);
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
-        border-color: transparent;
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
@@ -316,8 +323,8 @@
         width: 52px;
         height: 40px;
         border-radius: 12px;
-        border: 1px solid rgb(var(--ink-rgb) / 0.3);
-        background: rgb(var(--ink-rgb) / 0.15);
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
         color: var(--pill-text);
         font-size: 16px;
         touch-action: none;
@@ -325,15 +332,18 @@
       #shop-vertical-controls button.active {
         background: var(--brand-green);
         color: #16240a;
-        border-color: transparent;
       }
-      /* Top-right is otherwise empty (wordmark owns top-left, camera debug
-         owns bottom-right) — undo/redo are always-relevant, not tied to a
-         selection, so they get their own persistent spot rather than
-         crowding into the selection-only gizmo-mode-controls row. */
+      /* Undo/redo are always-relevant, not tied to a selection, so they get
+         their own persistent spot rather than crowding into the
+         selection-only gizmo-mode-controls row. Owner: "I want the Shop/
+         Build/Sell tab buttons to be in the same row as the higglehaven
+         wordmark to increase open screen space" — that claimed this
+         panel's old top-right-of-row-1 spot (see #mode-nav below), so
+         undo/redo swapped down into #mode-nav's old spot instead, right
+         under the account menu, rather than needing a brand new row. */
       #undo-redo-panel {
         position: fixed;
-        top: 10px;
+        top: 48px;
         right: 8px;
         z-index: 10;
         display: flex;
@@ -457,10 +467,14 @@
       /* The three peer top-level views — always reachable regardless of
          which one is currently active (including during Shop mode, unlike
          most of the builder UI — see SHOP_HIDDEN_BUILDER_UI_IDS in main.js),
-         so switching feels like tabs rather than one-way doors. */
+         so switching feels like tabs rather than one-way doors. Owner: "I
+         want the Shop/Build/Sell tab buttons to be in the same row as the
+         higglehaven wordmark to increase open screen space" — shares the
+         top row with #wordmark-panel now (top: 10px, same as it), rather
+         than the row below (where #undo-redo-panel moved to instead). */
       #mode-nav {
         position: fixed;
-        top: 48px;
+        top: 10px;
         right: 8px;
         z-index: 10;
         display: flex;
@@ -559,16 +573,16 @@
       #gizmo-mode-controls.visible {
         display: flex;
       }
-      /* Below ~480px, the gap between the wordmark and the undo/redo panel
-         (both anchored to the same top row) is narrower than product-info's
-         own centered text — no amount of shrinking the neighbors avoids the
-         overlap, since undo/redo alone is wider than the gap on either side
-         of a centered box that size. product-info (and the gizmo-mode-
-         controls row that follows it) drop below both corner panels
-         instead — and below the Identity/Settings/#mode-nav row (top: 48px,
-         itself roughly 27px tall) that sits between them and the top edge,
-         so a long centered hint (Measure's own delta readout is the
-         longest one) clears all three rows rather than just the first.
+      /* Below ~480px, the gap between the wordmark and #mode-nav (both
+         anchored to the same top row) is narrower than product-info's own
+         centered text — no amount of shrinking the neighbors avoids the
+         overlap, since that centered box is wider than the gap on either
+         side of it. product-info (and the gizmo-mode-controls row that
+         follows it) drop below both corner panels instead — and below the
+         Identity/Settings/#undo-redo-panel row (top: 48px, itself roughly
+         27px tall) that sits between them and the top edge, so a long
+         centered hint (Measure's own delta readout is the longest one)
+         clears all three rows rather than just the first.
          Placed after the rules it
          overrides, not inside the wordmark-shrink media query above, so the
          cascade's source-order tiebreak doesn't let the unconditional base
@@ -2690,7 +2704,7 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <button id="shop-fly-btn" class="shop-ui" type="button">&#9992;&#65039;</button>
+    <button id="shop-fly-btn" class="shop-ui" type="button">&#128038;</button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
