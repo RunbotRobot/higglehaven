@@ -989,7 +989,7 @@ describe('Worker API', () => {
   // Number.isInteger rather than Number.isSafeInteger, letting a value past
   // MAX_MONEY_CENTS (or past safe-integer range entirely) through — a
   // seller could set an astronomical priceCents on their own template and
-  // self-purchase it once to mint an outsized dallers_balance_cents credit.
+  // self-purchase it once to mint an outsized higgles_balance_cents credit.
   it('rejects a priceCents over the money-field cap, and a non-safe-integer value', async () => {
     const overCap = await api('/catalog', {
       method: 'POST',
