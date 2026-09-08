@@ -1337,6 +1337,43 @@ describe('Worker API', () => {
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
+  // #480: `name`/`versionName` on a landlet version used plain stringValue
+  // (no upper bound), unlike every other free-text label field in this
+  // codebase (authorLabel/buyerLabel #337, bundle name #358) — the same
+  // gap, just two different endpoints that both create a version.
+  it('rejects a landlet version name over the length cap, on both the Publish endpoint and a draft save', async () => {
+    const builder = await signupBuilder('version-name-too-long-builder');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'version-name-too-long-landlet', name: 'Version name cap landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId,
+      }),
+    }));
+
+    const rejectedPublish = await api('/landlets/version-name-too-long-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'x'.repeat(101) }),
+    }));
+    expect(rejectedPublish.response.status).toBe(400);
+
+    const acceptedPublish = await api('/landlets/version-name-too-long-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'x'.repeat(100) }),
+    }));
+    expect(acceptedPublish.response.status).toBe(201);
+
+    const rejectedDraft = await api('/landlets/version-name-too-long-landlet/draft', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: [], versionName: 'x'.repeat(101) }),
+    }));
+    expect(rejectedDraft.response.status).toBe(400);
+
+    const acceptedDraft = await api('/landlets/version-name-too-long-landlet/draft', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: [], versionName: 'x'.repeat(100) }),
+    }));
+    expect(acceptedDraft.response.status).toBe(200);
+  });
+
   // migrations/0060: version_instances never got is_community_sign/
   // is_community_calendar when 0041/0042 added them to placed_instances
   // (unlike crop_json/scale, which 0034/0036 added to both tables) — a
