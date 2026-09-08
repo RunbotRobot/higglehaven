@@ -334,3 +334,14 @@ before starting to code:
    same as any other backlog item. A top-level tracking issue stays open
    until every sub-issue under it is closed — don't close it yourself just
    because you finished one branch of it.
+5. **Whoever closes the last leaf closes the trunk.** #133, #206, and #207
+   each sat open on GitHub (and stayed `queued`/`in_progress` on the
+   Control Room board) for hours-to-a-day after their actual last
+   sub-issue merged, because closing a sub-issue never prompted anyone to
+   check whether it was the *last* one. When you close a sub-issue (or
+   confirm one another session just merged), check its parent's
+   `sub_issues_summary` (`issue_read`'s `get` method returns this) — if
+   `completed === total`, close the tracking issue on GitHub too and mark
+   its Control Room `tasks` doc `done` in the same pass, not as a
+   separate follow-up. Don't wait for the owner to notice a 100%-complete
+   tracking issue still showing as open.

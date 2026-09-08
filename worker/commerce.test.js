@@ -522,6 +522,14 @@ describe('Auctions', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const auctionId = started.body.auction.auctionId;
+    // The bidder here already owns a claimed landlet (this test's whole
+    // point), so bidding on a second one now needs land-cap headroom —
+    // see #489. What's being tested is auction resolution mechanics, not
+    // the cap gate, so grant plenty of it via a real earnings event.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, bidder.builderId, 100000000).run();
+    await api('/builders');
     await api(`/auctions/${auctionId}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 500 }),
     }));
@@ -1455,6 +1463,31 @@ describe('Simulated purchases', () => {
     });
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.quantity).toBe(1000);
+  });
+
+  it('rejects a total price that exceeds MAX_MONEY_CENTS even when quantity and priceCents each pass their own cap (#521)', async () => {
+    const seller = await signupBuilder('purchase-total-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-total-cap-landlet', 1000);
+    await claim('purchase-total-cap-landlet', seller);
+    // 100_000_000 is MAX_MONEY_CENTS itself — individually valid for priceCents.
+    await createTemplate('purchase-total-cap-template', { priceCents: 100_000_000 });
+    await placeInstance('purchase-total-cap-instance', 'purchase-total-cap-landlet', 'purchase-total-cap-template', seller);
+
+    // quantity 2 is well within PURCHASE_MAX_QUANTITY (1000), but combined
+    // with the price above it produces a totalCents twice MAX_MONEY_CENTS.
+    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 2 }),
+    });
+    expect(tooMuch.response.status).toBe(400);
+    expect(tooMuch.body).toEqual({ error: 'total price must be 100000000 cents or fewer' });
+
+    const atCap = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.totalCents).toBe(100_000_000);
   });
 
   it('rate-limits repeated purchases from the same client', async () => {
