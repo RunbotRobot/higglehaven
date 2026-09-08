@@ -2694,7 +2694,7 @@ async function handleUploadDimensionsStep() {
     // showing up right away — not straight into a Build-mode tap-to-place
     // flow, since Upload Model can now be reached from Shop (no landlet to
     // place onto at all) as easily as from Build.
-    renderSellerList();
+    renderActiveSellerView();
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
@@ -2722,6 +2722,8 @@ uploadSubmitBtn.addEventListener('click', () => {
 // stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerListEl = document.getElementById('seller-list');
+const sellerListViewEl = document.getElementById('seller-list-view');
+const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
 const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
@@ -2779,8 +2781,11 @@ function filterAndSortSellerProducts(templates) {
   return filtered;
 }
 
+// #541 added a second (List) view of the same product set — re-render
+// whichever view is actually showing, not always Manage, the same idiom
+// renderActiveSellerView's own other callers already follow.
 for (const el of [sellerSearchInput, sellerCategoryFilterSelect, sellerSortSelect]) {
-  el.addEventListener(el === sellerSearchInput ? 'input' : 'change', () => renderSellerList());
+  el.addEventListener(el === sellerSearchInput ? 'input' : 'change', () => renderActiveSellerView());
 }
 
 const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
@@ -4077,6 +4082,120 @@ function renderSellerList() {
   }
 }
 
+// #541: a lighter, thumbnail-first way to browse the same products
+// renderSellerList's rows already manage — persists only for this open of
+// the modal (resets to 'manage' on next open, same as activeSettingsTab
+// resetting per its own comment) since there's no strong reason yet for a
+// seller's view choice to survive a close/reopen.
+let sellerActiveView = 'manage';
+
+function updateSellerViewToggleUI() {
+  for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+    btn.classList.toggle('active', btn.dataset.view === sellerActiveView);
+  }
+}
+
+// Cards, not rows — no edit controls here (that's what Manage is for);
+// tapping a card jumps straight into Manage with that product already
+// expanded, the same "browse here, edit there" split issue #540 (the
+// sibling 3D-array sub-issue) proposes for its own view.
+function renderSellerListView() {
+  sellerListViewEl.replaceChildren();
+  // #542: same shared filtered/sorted product set Manage's own
+  // renderSellerList uses — search/filter/sort is meant to work "from
+  // either the 3D array or the list view," per the issue's own text, not
+  // duplicated per view.
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
+    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
+    return;
+  }
+  sellerStatusEl.textContent = '';
+
+  for (const template of templates) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'seller-card';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'seller-card-thumb';
+    thumb.alt = '';
+    // Same fallback order as buildCatalogPickerButtons' own thumb.src line
+    // (in-session render cache, then a persisted image_url, then a flat
+    // color swatch) — this view and the catalog picker are showing the
+    // same templates, so they should never disagree on what a product
+    // looks like.
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    card.appendChild(thumb);
+    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
+      renderCatalogThumbnail(template).then((dataUrl) => {
+        if (dataUrl) thumb.src = dataUrl;
+      });
+    }
+
+    const name = document.createElement('span');
+    name.className = 'seller-card-name';
+    name.textContent = template.name;
+    card.appendChild(name);
+
+    const price = document.createElement('span');
+    price.className = 'seller-card-price';
+    price.textContent = template.priceCents == null ? 'Not priced' : formatPriceCents(template.priceCents);
+    card.appendChild(price);
+
+    const digitalGoodKey = template.metadata?.digitalGoodDisclaimer;
+    if (digitalGoodKey) {
+      const digitalGood = document.createElement('span');
+      digitalGood.className = 'seller-card-digital-good';
+      digitalGood.textContent = 'Digital good';
+      card.appendChild(digitalGood);
+    }
+
+    card.addEventListener('click', () => {
+      sellerActiveView = 'manage';
+      updateSellerViewToggleUI();
+      renderActiveSellerView();
+      const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(template.templateId))}"]`);
+      if (row) {
+        row.classList.add('expanded');
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+
+    sellerListViewEl.appendChild(card);
+  }
+}
+
+// Single entry point for (re)rendering whichever of Manage/List view is
+// currently active — every caller that used to render the Manage view
+// unconditionally (opening the modal, a Units-setting change) goes through
+// here now so it keeps refreshing whichever view the seller actually has
+// open, not always Manage.
+function renderActiveSellerView() {
+  sellerListEl.hidden = sellerActiveView !== 'manage';
+  sellerListViewEl.hidden = sellerActiveView !== 'list';
+  if (sellerActiveView === 'list') renderSellerListView();
+  else renderSellerList();
+}
+
+for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === sellerActiveView) return;
+    sellerActiveView = btn.dataset.view;
+    updateSellerViewToggleUI();
+    renderActiveSellerView();
+  });
+}
+updateSellerViewToggleUI();
+
 // Ensures a seller identity is active before showing the modal. Only
 // reachable via the #mode-nav Sell tab (openSellerModal call sites below),
 // which calls this rather than separately remembering to await
@@ -4105,7 +4224,12 @@ async function openSellerModal() {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
     return;
   }
-  renderSellerList();
+  // #541: always opens back on Manage, same as activeSettingsTab resetting
+  // to 'general' on next Settings open — a seller's view choice doesn't
+  // need to survive a close/reopen yet.
+  sellerActiveView = 'manage';
+  updateSellerViewToggleUI();
+  renderActiveSellerView();
   sellerModalEl.classList.add('visible');
 }
 function closeSellerModal() {
@@ -4151,7 +4275,7 @@ let activeSettingsTab = 'general';
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
-  if (sellerModalEl.classList.contains('visible')) renderSellerList();
+  if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
 function renderSettingsSection() {
