@@ -18,8 +18,6 @@
 //
 // Usage: node scripts/check-migration-drift.mjs
 // Exits 0 with nothing pending, 1 (and a loud message) otherwise.
-import { execFileSync } from 'node:child_process';
-
 const NO_PENDING_MARKER = 'No migrations to apply!';
 
 // Exported for direct testing against captured wrangler output — see this
@@ -28,20 +26,36 @@ export function hasPendingMigrations(wranglerOutput) {
   return !wranglerOutput.includes(NO_PENDING_MARKER);
 }
 
-function main() {
+async function main() {
+  // Imported lazily, inside main(), rather than at module scope: this
+  // module's own hasPendingMigrations is imported directly by scripts/
+  // check-migration-drift.test.mjs (#560), which — like every other test
+  // in this repo — runs under vitest-pool-workers' workerd runtime. A
+  // top-level `node:child_process` import segfaults that runtime outright
+  // (confirmed by hand) rather than raising a catchable error, even though
+  // main() itself (the only thing that actually touches child_process) is
+  // never called from a test.
+  const { execFileSync } = await import('node:child_process');
   let output;
   try {
     output = execFileSync(
       'npx',
       ['wrangler', 'd1', 'migrations', 'list', 'higglehaven-db', '--remote'],
-      { encoding: 'utf8' },
+      // #562: this is a live network call (authenticates against
+      // Cloudflare's API) with no default upper bound — an OAuth token
+      // needing interactive re-consent, or a stalled API, otherwise hangs
+      // this indefinitely with no output and no error, which is a more
+      // confusing failure for whoever's running a real deploy by hand than
+      // the drift this script exists to catch.
+      { encoding: 'utf8', timeout: 60_000 },
     );
   } catch (error) {
-    // wrangler itself failing to run (auth, network, a genuine CLI error) is
-    // just as much a reason to stop as drift is — surface its own output
-    // rather than swallowing it.
     console.error('Failed to run `wrangler d1 migrations list --remote`:');
-    console.error(error.stdout || error.message);
+    if (error.signal === 'SIGTERM' && error.killed) {
+      console.error('It timed out after 60s — check your network connection and Cloudflare API auth.');
+    } else {
+      console.error(error.stdout || error.message);
+    }
     process.exit(1);
   }
 
