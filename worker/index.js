@@ -851,6 +851,45 @@ async function handleCatalog(request, db, route, url, models) {
     return json({ templates: templates.map((template) => byId.get(template.templateId)) }, request.method === 'POST' ? 201 : 200);
   }
 
+  // #329 (backend half only — see this route's own docs/API.md entry for
+  // why the frontend "Prompt mode" entry point isn't built yet): given an
+  // embedding (the same shape POST .../thumbnail stores), ranks every
+  // template that has one by cosine similarity and returns the closest
+  // matches. No Vectorize/vector-search binding exists in this project
+  // (confirmed via wrangler.jsonc — #327's own comment thread already
+  // found this), so this is a plain in-memory scan over D1 rows, not an
+  // indexed nearest-neighbor query — fine at this catalog's current size,
+  // matching this codebase's own "get the mechanic working, model the
+  // real thing later" pattern; a real vector index is a swap-in later,
+  // not something this endpoint's callers need to know about.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'similarity-search') {
+    const input = await readJson(request);
+    const embedding = validateThumbnailEmbedding(input.embedding);
+    if (!embedding) throw new HttpError('embedding is required', 400);
+    // A JSON-body integer, not a query-string one, so this doesn't reuse
+    // queryLimit (which validates a raw url.searchParams string and always
+    // caps at 100) — a much smaller max fits a from-scratch full-scan
+    // search better than the ordinary paginated-listing endpoints' cap.
+    const limit = input.limit === undefined ? 10 : input.limit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new HttpError('limit must be an integer between 1 and 50', 400);
+    }
+    const { results } = await db.prepare(`
+      SELECT * FROM catalog_templates WHERE image_embedding IS NOT NULL
+    `).all();
+    const ranked = results
+      .map((row) => ({ template: templateFromRow(row), candidateEmbedding: JSON.parse(row.image_embedding) }))
+      // A future embedding-model swap can produce a different vector
+      // length than what's already stored — comparing across lengths is
+      // meaningless, so those rows are silently excluded rather than
+      // erroring the whole search over a handful of stale entries.
+      .filter(({ candidateEmbedding }) => candidateEmbedding.length === embedding.length)
+      .map(({ template, candidateEmbedding }) => ({ template, similarity: cosineSimilarity(embedding, candidateEmbedding) }))
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+    return json({ templates: ranked.map((r) => ({ ...r.template, similarity: r.similarity })) });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const categoryParam = url.searchParams.get('category');
     const category = categoryParam === null ? null : stringValue(categoryParam, 'category');
@@ -6484,6 +6523,27 @@ function validateThumbnailEmbedding(embedding) {
     }
   }
   return embedding;
+}
+
+// #329: cosine similarity — scale-invariant (so it doesn't matter that
+// today's stub embedding is a bounded [0,1] color average rather than a
+// normalized unit vector), and undefined only when a vector is all
+// zeros, which can't happen for the stub (a genuinely all-black or
+// all-transparent thumbnail is possible but vanishingly unlikely, and
+// still just correctly reads as "no meaningful direction to compare");
+// returns 0 rather than NaN if it ever does, so a degenerate row sorts
+// last instead of corrupting the whole ranking.
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  return denominator === 0 ? 0 : dot / denominator;
 }
 
 function validateTemplate(input, fallbackId) {
