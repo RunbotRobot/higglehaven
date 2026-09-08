@@ -2726,11 +2726,66 @@ const sellerListViewEl = document.getElementById('seller-list-view');
 const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
+const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
+const sellerSearchInput = document.getElementById('seller-search-input');
+const sellerCategoryFilterSelect = document.getElementById('seller-category-filter');
+const sellerSortSelect = document.getElementById('seller-sort-select');
 
 function myProducts() {
   return activeCatalog.filter((template) =>
     template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+// #542: shared filtered/sorted product set for Sell mode, independent of
+// whichever view renders it (this row-list today; #540/#541's own views
+// later) — matches other categories/subcategories already round-tripped
+// through the catalog API (see worker/index.js), so filtering by category
+// costs nothing beyond what's already on each template. Search matches
+// name first (the issue's own stated minimum) plus category/subcategory
+// as a cheap stretch, since they're already in hand.
+function populateSellerCategoryFilterOptions(templates) {
+  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const previous = sellerCategoryFilterSelect.value;
+  sellerCategoryFilterSelect.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = 'All categories';
+  sellerCategoryFilterSelect.appendChild(allOption);
+  for (const category of categories) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    sellerCategoryFilterSelect.appendChild(option);
+  }
+  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+}
+
+function filterAndSortSellerProducts(templates) {
+  const query = sellerSearchInput.value.trim().toLowerCase();
+  const category = sellerCategoryFilterSelect.value;
+  let filtered = templates;
+  if (query) {
+    filtered = filtered.filter((t) =>
+      t.name.toLowerCase().includes(query) ||
+      (t.category || '').toLowerCase().includes(query) ||
+      (t.subcategory || '').toLowerCase().includes(query));
+  }
+  if (category) filtered = filtered.filter((t) => t.category === category);
+  const sort = sellerSortSelect.value;
+  filtered = filtered.slice().sort((a, b) => {
+    if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
+    if (sort === 'price-desc') return (b.priceCents ?? -Infinity) - (a.priceCents ?? -Infinity);
+    return a.name.localeCompare(b.name);
+  });
+  return filtered;
+}
+
+// #541 added a second (List) view of the same product set — re-render
+// whichever view is actually showing, not always Manage, the same idiom
+// renderActiveSellerView's own other callers already follow.
+for (const el of [sellerSearchInput, sellerCategoryFilterSelect, sellerSortSelect]) {
+  el.addEventListener(el === sellerSearchInput ? 'input' : 'change', () => renderActiveSellerView());
 }
 
 const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
@@ -2939,9 +2994,17 @@ function renderSellerList() {
   // closures goes with it.
   disposeAxisPreview();
   sellerListEl.innerHTML = '';
-  const templates = myProducts();
-  if (templates.length === 0) {
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
     return;
   }
   sellerStatusEl.textContent = '';
@@ -4038,9 +4101,21 @@ function updateSellerViewToggleUI() {
 // sibling 3D-array sub-issue) proposes for its own view.
 function renderSellerListView() {
   sellerListViewEl.replaceChildren();
-  const templates = myProducts();
-  if (templates.length === 0) {
+  // #542: same shared filtered/sorted product set Manage's own
+  // renderSellerList uses — search/filter/sort is meant to work "from
+  // either the 3D array or the list view," per the issue's own text, not
+  // duplicated per view.
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
     return;
   }
   sellerStatusEl.textContent = '';
