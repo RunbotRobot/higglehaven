@@ -1525,6 +1525,28 @@ async function handleBuilders(request, db, route) {
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
 
+  // Admin-only test/ops fixture support — mirrors POST /api/landlets'
+  // own reasoning (admin-gated so an anonymous caller can't credit
+  // themselves real land-cap headroom): #489 made land cap actually gate
+  // vertical construction and auction bidding, and every fresh builder's
+  // owned area already equals their default cap exactly. A real earnings
+  // event is the only legitimate way to grow a builder's cap — there's no
+  // shortcut through the normal player-facing API — so tests that need a
+  // builder to have cap headroom (without that headroom itself being what
+  // they're testing) need a way to grant it directly, the same escape
+  // hatch POST /api/landlets already gives land-setup fixtures.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'land-cap-grants') {
+    await requireAdmin(request, db);
+    await requireBuilder(db, route[1]);
+    const input = await readJson(request);
+    const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
+    await db.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents).run();
+    const { nextCap } = await recomputeLandCap(db, route[1]);
+    return json({ landCapM2: nextCap }, 201);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2288,6 +2310,23 @@ async function handleLandletLevels(request, db, route) {
         409,
       );
     }
+    // #489 (owner-confirmed): land cap now actually gates vertical
+    // construction, not just the depth/footprint limits above. Ratchets
+    // the cap to its current value first (recomputeLandCap only ever
+    // moves it up, off trailing earnings — see that function's own
+    // comment) so a builder who just earned isn't rejected against a
+    // stale cap, then checks the level's own consumption against
+    // whatever headroom is left. This eager check gives the clear 409
+    // message in the common case; the atomic clause folded into the
+    // INSERT below is the real race guard (see its own comment).
+    const landCap = await recomputeLandCap(db, landlet.owner_builder_id);
+    if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `This would take you to ${(landCap.ownedAreaM2 + capConsumedM2).toFixed(2)}m², `
+        + `over your ${landCap.nextCap}m² land cap`,
+        409,
+      );
+    }
     const levelId = `level-${crypto.randomUUID()}`;
     // Found via backlog audit (#395): levelIndex above was computed from a
     // plain SELECT snapshot, then this was a plain INSERT — a concurrent
@@ -2308,6 +2347,15 @@ async function handleLandletLevels(request, db, route) {
     // Math.min(0, ...) floor levelIndex itself was just computed with above,
     // via a synthetic zero row unioned into the scan.
     const extentBefore = input.direction === 'up' ? levelIndex - 1 : levelIndex + 1;
+    // #489: the eager land-cap check above reads a snapshot of the
+    // builder's owned area, so two concurrent level-adds on two
+    // *different* landlets owned by the same builder (the per-landlet
+    // extent check right below can't catch that — it's scoped to this
+    // one landlet_id) could each pass it and jointly land over cap. This
+    // clause re-derives total owned area (ground + levels, across every
+    // claimed landlet) live at INSERT time and folds it into the same
+    // atomic statement as the extent guard, same idiom as that guard's
+    // own comment above.
     const inserted = await db.prepare(`
       INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2)
       SELECT ?, ?, ?, ?
@@ -2317,7 +2365,22 @@ async function handleLandletLevels(request, db, route) {
         )
       ) = ?
         AND NOT EXISTS (SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = ?)
-    `).bind(levelId, landletId, levelIndex, capConsumedM2, landletId, extentBefore, landletId, levelIndex).run();
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets l ON l.landlet_id = ll.landlet_id
+              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+            ), 0)
+        )
+    `).bind(
+      levelId, landletId, levelIndex, capConsumedM2,
+      landletId, extentBefore, landletId, levelIndex,
+      landlet.owner_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, capConsumedM2, landlet.owner_builder_id, landlet.owner_builder_id,
+    ).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('This landlet\'s levels changed — please retry', 409);
     }
@@ -2465,6 +2528,23 @@ async function handleAuctionBids(request, db, route) {
     if (amountCents < resolved.starting_bid_cents) {
       throw new HttpError(`amountCents must be at least ${resolved.starting_bid_cents}`, 400);
     }
+    // #489 (owner-confirmed): land cap now gates bidding, not just
+    // vertical construction — a bid is only ever a *ground* landlet
+    // changing hands (resolveAuction deletes the sold landlet's levels
+    // before transferring it, so its levels' cap_consumed_m2 never
+    // transfers), so the only area that matters here is the auctioned
+    // landlet's own area_m2. Checked against what winning would add to
+    // the bidder's own current owned area, same ratchet-then-check
+    // pattern as the level-add gate above.
+    const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(resolved.landlet_id).first();
+    const bidderCap = await recomputeLandCap(db, builderId);
+    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `Winning this auction would take you to ${(bidderCap.ownedAreaM2 + auctionedLandlet.area_m2).toFixed(2)}m², `
+        + `over your ${bidderCap.nextCap}m² land cap`,
+        409,
+      );
+    }
     const bidId = `bid-${crypto.randomUUID()}`;
     // A read-then-insert here (read the highest bid, validate against it,
     // insert) would be the same TOCTOU shape this codebase deliberately
@@ -2475,18 +2555,42 @@ async function handleAuctionBids(request, db, route) {
     // exceed whatever the highest actually is by the time it's inserted.
     // This conditional insert makes "no existing bid already meets or
     // beats this amount" part of the write itself.
+    // #489: the eager land-cap check above reads a snapshot of the
+    // bidder's owned area, so two concurrent bids from the same builder
+    // on two *different* auctions could each individually pass it and
+    // jointly land them over cap if both won. Re-derives owned area live
+    // at INSERT time and folds it into the same atomic statement as the
+    // existing highest-bid guard, so this bid only actually lands if the
+    // builder is still under cap the instant it's written.
     const inserted = await db.prepare(`
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
       SELECT ?, ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
       )
-    `).bind(bidId, auctionId, builderId, amountCents, auctionId, amountCents).run();
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets l ON l.landlet_id = ll.landlet_id
+              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+            ), 0)
+        )
+    `).bind(
+      bidId, auctionId, builderId, amountCents, auctionId, amountCents,
+      builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
+    ).run();
     if (inserted.meta.changes === 0) {
       const currentHighest = await db.prepare(`
         SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
       `).bind(auctionId).first();
-      throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+      if (currentHighest && currentHighest.amount_cents >= amountCents) {
+        throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
+      }
+      throw new HttpError('This would put you over your land cap — please retry', 409);
     }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
     // Re-derived after the insert (excluding the bid just inserted) rather
@@ -2521,39 +2625,42 @@ async function requireAuction(db, auctionId) {
 // own — there is no mechanism here (or need for one) to change it
 // automatically.
 //
-// DELIBERATELY TRACKING-ONLY, NOT ENFORCED, for now — this was tried as a
-// hard block on auction bids and reverted after e2e testing surfaced a real
-// bootstrapping trap: claiming is mandatory to use Build mode at all
-// (resolveLandletId in src/main.js forces the claim flow for a landless
-// builder), and the default cap is exactly the starter lándlet's own size,
-// so EVERY fresh builder starts already at 100% of their cap the moment
-// they exist. Spec's own intended primary earning path is commerce
-// commissions (§5: higgles credit on a product SALE, not on selling land),
-// but this dev-mode backend has no real checkout/commerce system at all
-// (out of scope, same as real payments generally) — auction sale proceeds
-// are the ONLY higgles source actually implemented. Hard-enforcing the cap
-// against that one source alone would make growing past your starter
-// lándlet structurally impossible for every builder (nobody can ever earn
-// without first having cap headroom to acquire something to resell, and
-// nobody has headroom without having already earned) — a regression that
-// would make the auction system self-defeating, not a faithful
-// implementation of "growth is earned through demonstrated performance."
-// The formula, ratcheting, and per-event ledger are still real and
-// correctly implemented — recomputeLandCap is exposed via `landCapM2` on
-// the builder object (see docs/API.md's "Land cap") so this is visible and
-// ready to gate real acquisitions once a real commerce/commission loop
-// exists to make that gate navigable (see #489).
+// Was deliberately tracking-only (displayed, never enforced) for a long
+// stretch: an earlier attempt at a hard block on auction bids was reverted
+// after e2e testing surfaced a real bootstrapping trap — claiming is
+// mandatory to use Build mode at all (resolveLandletId in src/main.js
+// forces the claim flow for a landless builder), and the default cap is
+// exactly the starter lándlet's own size, so EVERY fresh builder starts
+// already at 100% of their cap the moment they exist. Back then, auction
+// sale proceeds were the ONLY higgles source actually implemented (no real
+// checkout/commerce system existed yet), so hard-enforcing the cap against
+// that one source alone would have made growing past your starter lándlet
+// structurally impossible for every builder — self-defeating, not a
+// faithful "growth is earned" implementation.
 //
-// Owner, on that eventual gate: the frontend now always displays area
-// rounded to the nearest whole unit (src/settings.js's formatArea), so a
-// builder can see "1,000" on both sides of a comparison whose real,
-// unrounded values differ by a fraction of a unit. Whatever check #489
-// adds needs a one-unit buffer against exactly that display rounding —
-// comparing raw m² values directly against what's shown would let a
-// technically-just-barely-too-small acquisition read as blocked, or a
-// technically-just-barely-too-big one read as allowed, purely because of
-// where the display rounded.
+// #489 (owner-confirmed): now enforced, against both vertical construction
+// (handleLandletLevels) and auction bidding (handleAuctionBids) — real
+// checkout now exists (#452/#453), so the bootstrapping trap's original
+// premise no longer holds; a builder has a real way to earn before needing
+// more cap. The trap itself is still real for a builder who hasn't earned
+// anything yet: they simply can't add a level or win an auction until they
+// have. See POST /api/builders/:id/land-cap-grants for how a test grants
+// itself around that on purpose.
+//
+// Owner: the frontend always displays area rounded to the nearest whole
+// unit (src/settings.js's formatArea), so a builder can see "1,000" on
+// both sides of a comparison whose real, unrounded values differ by a
+// fraction of a unit. Both gates below gave themselves LAND_CAP_DISPLAY_
+// ROUNDING_BUFFER_M2 of slack against exactly that — comparing raw m²
+// values directly against what's shown would let a technically-just-
+// barely-too-small addition read as blocked, or a technically-just-
+// barely-too-big one read as allowed, purely because of where the display
+// rounded.
 const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
+// See the land-cap comment block above — a builder comparing two numbers
+// the UI itself only ever shows rounded to the nearest whole m² shouldn't
+// get a different answer than what those rounded numbers themselves imply.
+const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
 const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
 const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 

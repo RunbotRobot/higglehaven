@@ -1,10 +1,10 @@
 // Land cap (docs/SPEC.md §3, docs/API.md's "Land cap") — the growth-gating
 // mechanic, distinct from land ACQUISITION (auctions, §5). This covers only
 // the Settings > Build tab's own display of a builder's current cap and
-// owned area, through the real UI. The formula/ratchet/per-event ledger
-// themselves are covered by worker/land.test.js's own "Land cap" describe
-// block, which documents in detail why this is deliberately tracking-only
-// (displayed, not enforced against auction bids) for now.
+// owned area, through the real UI. The formula/ratchet/per-event ledger,
+// and the actual enforcement against vertical construction and auction
+// bidding (#489), are covered instead by worker/land.test.js's own "Land
+// cap" and "Landlet levels" describe blocks.
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
 
 const LABEL = 'Land Cap Suite Tester';

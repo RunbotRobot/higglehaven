@@ -5,7 +5,7 @@
 // building up a level through #level-controls, navigating between
 // already-built levels, the cap-cost preview shown before committing, and
 // that a level (and an item placed on it) survives a reload.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, grantLandCapHeadroomAsAdmin, finish } from './helpers.mjs';
 
 const LABEL = 'Vertical Levels Suite Tester';
 
@@ -14,6 +14,13 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await page.waitForTimeout(500);
+
+// #489: land cap now gates adding a level, and a freshly-claimed builder's
+// owned area already equals their default cap exactly — this suite is
+// about the level-controls UI, not the cap gate itself, so grant real
+// headroom first (see grantLandCapHeadroomAsAdmin's own comment).
+const builderId = await page.evaluate(() => fetch('/api/builders/me').then((r) => r.json()).then((body) => body.builder.builderId));
+await grantLandCapHeadroomAsAdmin(builderId);
 
 const levelLabel = () => page.textContent('#level-label');
 const removeHidden = () => page.isHidden('#level-remove-btn');

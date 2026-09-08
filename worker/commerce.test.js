@@ -522,6 +522,14 @@ describe('Auctions', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const auctionId = started.body.auction.auctionId;
+    // The bidder here already owns a claimed landlet (this test's whole
+    // point), so bidding on a second one now needs land-cap headroom —
+    // see #489. What's being tested is auction resolution mechanics, not
+    // the cap gate, so grant plenty of it via a real earnings event.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, bidder.builderId, 100000000).run();
+    await api('/builders');
     await api(`/auctions/${auctionId}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 500 }),
     }));
