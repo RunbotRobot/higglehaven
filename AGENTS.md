@@ -242,6 +242,36 @@ If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
 
+### Partial-scope PRs — never let a closing keyword outrun what you actually did
+
+Issue #220 sat invisible to the whole fleet for over a day, not because
+anyone ignored it: it was silently auto-closed. PR #238 landed only the
+water-rendering half of #220's scope, and its own comment on the issue said
+so explicitly — *"Not closing this issue — the remaining scope is just the
+regional biome ground-texture half... Leaving this open and unassigned"* —
+but the PR's title, body, or a commit message must still have contained a
+GitHub closing keyword (`Closes #220`/`Fixes #220`/`Resolves #220`)
+somewhere, because merging it closed the issue anyway. GitHub's keyword
+auto-close doesn't read your comment for intent; it just fires. The owner
+had to notice the issue "wasn't being picked up" and dig in — it wasn't
+stalled, it had quietly vanished from every open-issue listing (including
+every session's own backlog scan) the moment that PR merged.
+
+So: if a PR does not complete an issue's **entire** scope, never use a
+closing keyword against that issue anywhere the PR merge can see it — not
+in the title, not in the body, not in any commit message. Say `Part of #N`
+or `Addresses #N` instead (plain text, no keyword GitHub recognizes), and
+add a comment on the issue itself confirming what's done, what's left, and
+that it's staying open — matching what PR #238's author *intended* to do,
+just without the keyword that undid it. Reserve `Closes #N`/`Fixes #N` for
+a PR you're confident finishes the issue outright.
+
+This is also a reason to actually read an issue's most recent comment
+before treating "closed" as "nothing left to do" — if you're ever unsure
+whether a closed issue's full scope really shipped, its comment thread is
+the fastest way to check, the same way this one still had the answer
+sitting right there.
+
 ### Backlog exploration — file everything you find, not just one issue
 
 When you go looking for work by exploring the codebase (rather than
