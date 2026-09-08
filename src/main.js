@@ -1685,6 +1685,31 @@ function persistLayout() {
   saveInstances(instances);
 }
 
+// #545 (owner-confirmed UX): the one visible signal that a sync write below
+// is failing for connectivity reasons — shown only for a genuine
+// connectivity failure (api.js's isConnectivityFailure: a thrown fetch, or
+// a 5xx), never for a reachable server's legitimate rejection (a 4xx, e.g.
+// a deleted-template FK reject) — those already get their own console.warn/
+// alert and saying "server unreachable" for one would just be wrong. Same
+// expand-on-click, close-on-outside-tap popover idiom as accountMenuToggle/
+// accountMenuPanel further down.
+const connectivityIndicatorEl = document.getElementById('connectivity-indicator');
+const connectivityIndicatorPanelEl = document.getElementById('connectivity-indicator-panel');
+function setServerReachable(reachable) {
+  connectivityIndicatorEl.hidden = reachable;
+  if (reachable) {
+    connectivityIndicatorPanelEl.classList.remove('expanded');
+  }
+}
+connectivityIndicatorEl.addEventListener('click', () => {
+  connectivityIndicatorPanelEl.classList.toggle('expanded');
+});
+document.addEventListener('click', (event) => {
+  if (!connectivityIndicatorPanelEl.classList.contains('expanded')) return;
+  if (event.target === connectivityIndicatorEl || connectivityIndicatorPanelEl.contains(event.target)) return;
+  connectivityIndicatorPanelEl.classList.remove('expanded');
+});
+
 // Best-effort sync to the backend: every call here is fire-and-forget and
 // swallows its own errors. persistLayout()'s localStorage write is the
 // source of truth the app can always rely on; these just try to keep the
@@ -1711,8 +1736,10 @@ function instanceFromMesh(mesh) {
 async function syncCreate(mesh) {
   try {
     await createInstanceRemote(instanceFromMesh(mesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
   }
 }
 
@@ -1720,16 +1747,20 @@ async function syncUpdate(mesh) {
   try {
     const { instanceId, ...patch } = instanceFromMesh(mesh);
     await updateInstanceRemote(instanceId, patch);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
   }
 }
 
 async function syncDelete(instanceId) {
   try {
     await deleteInstanceRemote(instanceId);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance delete to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
   }
 }
 
@@ -1748,8 +1779,10 @@ async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
   try {
     await createInstancesRemote(meshes.map(instanceFromMesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
     alert(`Couldn't save ${meshes.length} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
@@ -1758,8 +1791,10 @@ async function syncBatchUpdate(meshes) {
   if (meshes.length === 0) return;
   try {
     await upsertInstancesRemote(meshes.map(instanceFromMesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
     alert(`Couldn't save ${meshes.length} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
@@ -1768,8 +1803,10 @@ async function syncBatchDelete(instanceIds) {
   if (instanceIds.length === 0) return;
   try {
     await deleteInstancesRemote(instanceIds);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance deletes to backend:', err);
+    if (err.isConnectivityFailure) setServerReachable(false);
     alert(`Couldn't save the deletion of ${instanceIds.length} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
   }
 }

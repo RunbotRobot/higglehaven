@@ -4,11 +4,26 @@
 // functions, not this module; nothing in here retries or caches.
 const API_BASE = '/api';
 
+// #545: tags a thrown error as isConnectivityFailure when the server
+// genuinely couldn't be reached (fetch itself threw — offline, DNS, CORS)
+// or answered with a 5xx — as opposed to a reachable server legitimately
+// rejecting the request (a 4xx, e.g. a deleted-template FK reject). Callers
+// that show a connectivity indicator (see src/main.js's
+// setServerReachable) key off this flag specifically so a normal
+// validation error never falsely claims the server is down.
 async function requestJson(path, options) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, options);
+  } catch (err) {
+    err.isConnectivityFailure = true;
+    throw err;
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    const error = new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    if (response.status >= 500) error.isConnectivityFailure = true;
+    throw error;
   }
   return response.json();
 }

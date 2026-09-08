@@ -381,6 +381,44 @@
         display: flex;
         gap: 8px;
       }
+      /* #545 (owner-confirmed UX): a quiet signal that a sync write to the
+         server failed for connectivity reasons — the builder can keep
+         building off localStorage regardless (see persistLayout/syncCreate
+         in main.js), so this is deliberately not a blocking alert. Hidden
+         whenever the server is reachable (main.js's setServerReachable
+         toggles the `hidden` attribute, not a class, since there's no
+         transition to animate). Row 2's left side is the same "empty now"
+         spot #undo-redo-panel's own comment above already identified. */
+      #connectivity-indicator {
+        position: fixed;
+        top: 48px;
+        left: 12px;
+        z-index: 10;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Same expand-on-click, close-on-outside-tap popover idiom as
+         #account-menu-panel — see that element's own comment in main.js. */
+      #connectivity-indicator-panel {
+        display: none;
+        position: fixed;
+        top: 80px;
+        left: 12px;
+        z-index: 10;
+        max-width: 260px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 8px;
+        padding: 10px 14px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #connectivity-indicator-panel.expanded {
+        display: block;
+      }
       /* Account menu — Identity/Notices/Friends/Settings used to be four
          separate persistent pills across two rows. Consolidated into one
          expanding menu (docs/SPEC.md §1's "clean, minimalist... expanding
@@ -2762,6 +2800,10 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
+    </div>
+    <button id="connectivity-indicator" type="button" hidden>&#9888;&#65039;</button>
+    <div id="connectivity-indicator-panel">
+      Can't reach the server right now — your changes are still being saved on this device and will sync once connectivity is back.
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
