@@ -47,6 +47,21 @@
         --pill-text-soft: rgb(var(--ink-rgb) / 0.65);
         --brand-green: #6ca42e;
         --danger: #e2694f;
+        /* Owner (df3j71gtdpwkt8y9ze6j, after the first pill-rgb pass):
+           "They're still too gray. I want them to really pop with a
+           spring green of some kind." pill-rgb (214 232 190) is a very
+           pale, low-saturation tint — correct for the rest of the HUD
+           chrome it shares with dialogs/gizmo buttons, but blended at low
+           alpha over an arbitrary, often-dark 3D backdrop it still reads
+           as washed-out gray rather than a color anyone would call
+           "green." This is a distinctly more saturated, brighter green
+           reserved for the shop-mode movement controls' own resting state
+           (see .shop-joystick/#shop-fly-btn/#shop-vertical-controls below)
+           — deliberately still short of --brand-green's own saturation so
+           "active" (already using brand-green) keeps reading as a step up
+           in intensity, not just a different hue, per this file's own
+           palette convention above. */
+        --spring-green-rgb: 62 199 91;
       }
       html, body {
         margin: 0;
@@ -293,8 +308,12 @@
            #shop-sign-hint, ...) already uses a pale pill-rgb fill with no
            border for contrast against an arbitrary backdrop instead; this
            just brings the joystick in line with that, matching what the
-           :root palette comment already claimed it did. */
-        background: rgb(var(--pill-rgb) / 0.65);
+           :root palette comment already claimed it did.
+           Owner (follow-up): pill-rgb's own pale tint still read as gray,
+           not green — see --spring-green-rgb's own comment above for why
+           this now uses that instead, at a higher alpha so it doesn't
+           wash out the same way against a dark 3D backdrop. */
+        background: rgb(var(--spring-green-rgb) / 0.85);
         touch-action: none;
       }
       .shop-joystick-knob {
@@ -325,7 +344,7 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
+        background: rgb(var(--spring-green-rgb) / 0.85);
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
@@ -354,7 +373,7 @@
         height: 40px;
         border-radius: 12px;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
+        background: rgb(var(--spring-green-rgb) / 0.85);
         color: var(--pill-text);
         font-size: 16px;
         touch-action: none;
@@ -1297,12 +1316,102 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
+      /* #542: search/filter/sort across a seller's own products. Lives as
+         its own row between the upload button and the list so it's always
+         visible without needing any row expanded — matches the
+         .seller-digital-good-select styling convention already used for
+         other seller-modal form controls. */
+      #seller-filter-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #seller-filter-controls[hidden] {
+        display: none;
+      }
+      .seller-filter-control {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #seller-search-input.seller-filter-control {
+        flex: 1 1 140px;
+        min-width: 0;
+      }
       #seller-list {
         display: flex;
         flex-direction: column;
         gap: 10px;
         max-height: 55vh;
         overflow-y: auto;
+      }
+      #seller-list[hidden],
+      #seller-list-view[hidden] {
+        display: none;
+      }
+      /* #541: a lighter, thumbnail-first alternative to the per-row
+         editor above — same tab-toggle look #settings-tabs already uses,
+         reused rather than inventing a new pattern. */
+      #seller-view-toggle {
+        display: flex;
+        gap: 6px;
+      }
+      .seller-view-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-view-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      /* Same grid idiom as #catalog-picker-grid's own tiles, just larger —
+         this is a browsing surface, not a compact picker. */
+      #seller-list-view {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+      .seller-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px;
+        border-radius: 10px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+        font: 12px/1.3 sans-serif;
+        cursor: pointer;
+      }
+      .seller-card-thumb {
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      .seller-card-name {
+        text-align: center;
+        overflow-wrap: anywhere;
+        font-weight: 600;
+      }
+      .seller-card-price {
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .seller-card-digital-good {
+        color: rgb(var(--ink-rgb) / 0.55);
+        font-size: 11px;
       }
       .seller-row {
         display: flex;
@@ -2623,6 +2732,23 @@
         font-size: 11px;
         color: rgb(var(--ink-rgb) / 0.5);
       }
+      /* #454: seller's own side of the physical-goods payout hold. */
+      .product-sale-row-shipping {
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      .product-sale-row-ship-btn {
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 11px/1.4 sans-serif;
+      }
+      .product-sale-row-ship-btn:disabled {
+        opacity: 0.5;
+      }
       .seller-sales-empty {
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);
@@ -2772,7 +2898,15 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <button id="shop-fly-btn" class="shop-ui" type="button">&#128038;</button>
+    <!-- #506 picked the generic bird glyph (U+1F426) over a plane per the
+         owner's own request, but most platforms render it standing/
+         perched rather than airborne. Owner follow-up
+         (j4qrtom5gafp25dasccz): "Please make the bird be in flight." The
+         dove (U+1F54A) is the one bird emoji most sets (Apple, Twemoji)
+         consistently render mid-glide with wings spread -- a far more
+         reliable way to read as "flight" via a native emoji glyph than
+         trying to force a specific pose out of the same generic bird. -->
+    <button id="shop-fly-btn" class="shop-ui" type="button">&#128330;</button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
@@ -2946,7 +3080,21 @@
           and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
+        <div id="seller-view-toggle">
+          <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
+          <button type="button" class="seller-view-btn" data-view="list">List view</button>
+        </div>
+        <div id="seller-filter-controls">
+          <input type="text" id="seller-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off">
+          <select id="seller-category-filter" class="seller-filter-control"><option value="">All categories</option></select>
+          <select id="seller-sort-select" class="seller-filter-control">
+            <option value="name-asc">Name (A&ndash;Z)</option>
+            <option value="price-asc">Price (low to high)</option>
+            <option value="price-desc">Price (high to low)</option>
+          </select>
+        </div>
         <div id="seller-list"></div>
+        <div id="seller-list-view" hidden></div>
         <div id="seller-status"></div>
       </div>
     </div>

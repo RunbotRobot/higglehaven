@@ -894,6 +894,108 @@ or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
 
+### `GET /api/sellers/me/payouts`
+### `POST /api/sellers/me/payouts`
+
+Seller payout/cash-out (#454) — a real-money sale's proceeds
+(`totalCents - commissionCents`) already land in the seller's own Stripe
+Custom-account balance the instant it's charged, via the real-money
+checkout's own `transfer_data` (see "Real-money checkout" below). This is
+a policy-driven hold on top of that: higglehaven controls when the seller
+is actually allowed to request payout of it, since a Custom account
+doesn't get Stripe's own automatic payout scheduling.
+
+Hold policy (owner-confirmed): a digital good (`metadata.digitalGoodDisclaimer`
+set) pays out instantly, no hold at all — it's delivered the moment it's
+bought, so there's no chargeback window where non-delivery is plausible. A
+physical good holds until whichever comes first: the buyer confirms
+delivery (see "Purchase delivery confirmation" below), or 7 days after the
+seller marks it shipped (see "Mark purchase shipped" below) — a fallback
+for exactly the case where confirmation never happens. A simulated
+(higgles) purchase has no real Stripe balance at all and never appears
+here.
+
+Both require a session (`401` otherwise) and act on the calling account's
+own seller profile.
+
+`GET` response — folds in the same fields `GET .../stripe-account` returns,
+plus the payout-specific ones:
+
+```json
+{
+  "configured": true,
+  "connected": true,
+  "status": "complete",
+  "requirementsCurrentlyDue": [],
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "availableCents": 4900,
+  "heldCents": 9800,
+  "nextEligibleAt": "2026-01-08T00:00:00.000Z"
+}
+```
+
+`availableCents` is what a `POST` here would currently try to cash out;
+`heldCents` is everything else still on hold. `nextEligibleAt` is the
+earliest a currently-held, already-shipped purchase becomes eligible via
+the 7-day fallback (`null` if nothing held has shipped yet, or nothing is
+held at all) — informational only, since a buyer confirming delivery
+sooner can always unlock a purchase before this date.
+
+`POST` triggers an actual Stripe payout for whatever's currently
+available. Returns `503` if `STRIPE_SECRET_KEY` isn't configured, `400` if
+Stripe onboarding isn't `complete` yet, and `400` if nothing is available
+(either nothing eligible, or Stripe's own funds-availability delay hasn't
+cleared it on their side yet — this endpoint never requests more than
+Stripe's own reported available balance for the connected account, to
+avoid a payout Stripe would reject outright). Marks every purchase whose
+own share fit inside the actual payout amount as paid out; a purchase
+whose amount didn't fit stays available for the next request.
+
+```json
+{
+  "payoutCents": 4900,
+  "purchaseCount": 1,
+  "stripePayoutId": "po_..."
+}
+```
+
+### Mark purchase shipped
+
+`POST /api/purchases/:purchaseId/mark-shipped`
+
+Seller-initiated (there's no shipping-carrier integration to detect this
+automatically) — starts the 7-day payout-hold fallback clock described
+above. Requires a session logged in as this purchase's own seller (`403`
+otherwise). Returns `400` if the purchase isn't real-money
+(`paymentIntentId` unset), is a digital good (nothing to ship), or is
+already marked shipped.
+
+```json
+{ "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
+```
+
+### Purchase delivery confirmation
+
+`POST /api/purchases/confirm-delivery`
+
+Unauthenticated on purpose — there is no buyer account anywhere in this
+app (see "Simulated purchases" below) to authenticate a "my orders" view
+against. A real-money physical purchase gets an unguessable token the
+instant it's finalized; only its SHA-256 hash is ever stored (same
+discipline as password-reset tokens), and the raw token is handed to the
+buyer exactly once, in their own checkout's finalize response (see
+"Real-money checkout" below) — there's no way to retrieve it again later,
+by design, so losing it just means the purchase falls back to the 7-day
+post-shipping hold instead of an early release.
+
+```json
+{ "token": "..." }
+```
+
+Response: `{ "confirmed": true }`. Idempotent — confirming an
+already-confirmed purchase (a second visit to the same link) is a no-op,
+not an error. Returns `400` if the token doesn't match any purchase.
+
 ## Catalog templates
 
 Catalog templates describe product-like placeholders that can be placed into a
@@ -1180,6 +1282,64 @@ Response:
 
 `imageUrl` and `imageEmbedding` (`null` if never set) are included on every
 catalog template response once set (see "Catalog template object" above).
+
+### `POST /api/catalog/similarity-search`
+
+The backend half of #329 — see that issue's own text: it depends on both the
+embedding index (#327, above) **and** the prompt→concept-image endpoint
+(#328), and #328 is still blocked on the owner picking an image-gen provider.
+Only the frontend "Prompt mode" entry point genuinely needs #328 (there's
+nothing yet to call it with); the similarity-search half is independently
+buildable and testable today by passing any embedding directly, so it's
+shipped ahead of the frontend piece rather than waiting on an unrelated
+decision. No UI calls this endpoint yet.
+
+Given an embedding (the same shape `POST .../thumbnail` above stores), ranks
+every catalog template that has one by cosine similarity and returns the
+closest matches. Unauthenticated — this only ever reads already-public
+catalog data.
+
+Request body:
+
+```json
+{
+  "embedding": [0.12, 0.98, 0.5, "... more numbers ..."],
+  "limit": 10
+}
+```
+
+- `embedding`: required. Same validation as `POST .../thumbnail`'s own
+  `embedding` field — a non-empty array of at most 4096 finite numbers.
+- `limit`: optional integer from 1 to 50 (`400` otherwise), defaults to 10 —
+  a smaller cap than the ordinary paginated-listing endpoints above, since
+  this is a full in-memory scan (see below), not an indexed query.
+
+No Vectorize (or any other vector-search) binding exists in this project
+(confirmed via `wrangler.jsonc`) — this is a plain scan over every
+`catalog_templates` row with a non-null `image_embedding`, computing cosine
+similarity in-Worker rather than querying an index. Fine at this catalog's
+current size, matching this codebase's own "get the mechanic working, model
+the real thing later" pattern; swapping in a real vector index later doesn't
+change this endpoint's request/response shape. A stored embedding whose
+length doesn't match the query embedding's is silently excluded (comparing
+vectors of different dimensionality is meaningless) rather than erroring the
+whole search — relevant once a future embedding-model swap leaves some older
+rows with an old vector shape alongside newly-computed ones.
+
+Response:
+
+```json
+{
+  "templates": [
+    { "templateId": "...", "...": "...", "similarity": 0.94 }
+  ]
+}
+```
+
+Each entry is a full catalog template object (see "Catalog template object"
+above) plus `similarity` (this query's own cosine similarity score, highest
+first) — `similarity` is not itself persisted anywhere, only computed
+per-request.
 
 ### Extensible products (crop)
 

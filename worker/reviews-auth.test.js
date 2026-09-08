@@ -417,6 +417,36 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // Found via backlog audit: review moderation (DELETE) has the identical
+  // permissive-when-orphaned shape as catalog template DELETE above (#520)
+  // — a seller-less template's reviews stay unrestricted, but until now had
+  // no rate limit at all on that unauthenticated path either.
+  it('rate-limits repeated unauthenticated review DELETEs on a seller-less template', async () => {
+    const templateId = await createTemplate('review-delete-rate-limit');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      await createPurchase(templateId, `Shopper ${i}`);
+      const posted = await api(`/catalog/${templateId}/reviews`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ authorLabel: `Shopper ${i}`, rating: 5 }),
+      });
+      const attempt = await api(`/catalog/${templateId}/reviews/${posted.body.review.reviewId}`, {
+        method: 'DELETE', headers,
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    await createPurchase(templateId, 'Final Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Final Shopper', rating: 5 }),
+    });
+    const limited = await api(`/catalog/${templateId}/reviews/${posted.body.review.reviewId}`, {
+      method: 'DELETE', headers,
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');

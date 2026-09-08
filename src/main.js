@@ -78,6 +78,10 @@ import {
   finalizePurchase,
   fetchPurchases,
   refundPurchase,
+  fetchSellerPayouts,
+  requestSellerPayout,
+  markPurchaseShipped,
+  confirmPurchaseDelivery,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -2048,12 +2052,33 @@ function renderCatalogThumbnail(template) {
 // callers — a failure here shouldn't block or surface an error for
 // whatever product-creation/edit flow triggered it, since the picker
 // already works fine off the client-rendered dataUrl either way.
+//
+// Self-found audit fix, no issue: two calls for the same template (e.g.
+// a resize immediately followed by another, before the first call's own
+// upload has finished — nothing else here serializes persistCatalogThumbnail
+// itself, only the render step via catalogThumbnailQueue) used to just
+// both `await uploadCatalogTemplateThumbnail(...)` and unconditionally
+// assign the result, so whichever response happened to land last — not
+// necessarily the one from the more recent render — won. A slow response
+// from a now-stale render could overwrite a newer one that already landed,
+// leaving template.imageUrl (and the server's own stored copy) pointing at
+// an outdated thumbnail. Same supersede-guard idiom as uploadFlowToken
+// above, just keyed per templateId since persistCatalogThumbnail calls for
+// different templates run independently and shouldn't block each other.
+const catalogThumbnailPersistTokens = new Map(); // templateId -> generation of the most recently started call
 async function persistCatalogThumbnail(template) {
+  const generation = (catalogThumbnailPersistTokens.get(template.templateId) || 0) + 1;
+  catalogThumbnailPersistTokens.set(template.templateId, generation);
   try {
     const dataUrl = await renderCatalogThumbnail(template);
     if (!dataUrl) return;
     const embedding = catalogThumbnailEmbeddingCache.get(template.templateId) || null;
-    template.imageUrl = await uploadCatalogTemplateThumbnail(template.templateId, { imageDataUrl: dataUrl, embedding });
+    const imageUrl = await uploadCatalogTemplateThumbnail(template.templateId, { imageDataUrl: dataUrl, embedding });
+    // A newer call already started (and may have already written its own,
+    // more current result) — don't let this now-stale response regress it.
+    if (catalogThumbnailPersistTokens.get(template.templateId) === generation) {
+      template.imageUrl = imageUrl;
+    }
   } catch (err) {
     console.error('persistCatalogThumbnail: could not persist a thumbnail for', template.templateId, err);
   }
@@ -2731,7 +2756,7 @@ async function handleUploadDimensionsStep() {
     // showing up right away — not straight into a Build-mode tap-to-place
     // flow, since Upload Model can now be reached from Shop (no landlet to
     // place onto at all) as easily as from Build.
-    renderSellerList();
+    renderActiveSellerView();
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
@@ -2759,13 +2784,70 @@ uploadSubmitBtn.addEventListener('click', () => {
 // stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerListEl = document.getElementById('seller-list');
+const sellerListViewEl = document.getElementById('seller-list-view');
+const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
+const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
+const sellerSearchInput = document.getElementById('seller-search-input');
+const sellerCategoryFilterSelect = document.getElementById('seller-category-filter');
+const sellerSortSelect = document.getElementById('seller-sort-select');
 
 function myProducts() {
   return activeCatalog.filter((template) =>
     template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+// #542: shared filtered/sorted product set for Sell mode, independent of
+// whichever view renders it (this row-list today; #540/#541's own views
+// later) — matches other categories/subcategories already round-tripped
+// through the catalog API (see worker/index.js), so filtering by category
+// costs nothing beyond what's already on each template. Search matches
+// name first (the issue's own stated minimum) plus category/subcategory
+// as a cheap stretch, since they're already in hand.
+function populateSellerCategoryFilterOptions(templates) {
+  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const previous = sellerCategoryFilterSelect.value;
+  sellerCategoryFilterSelect.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = 'All categories';
+  sellerCategoryFilterSelect.appendChild(allOption);
+  for (const category of categories) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    sellerCategoryFilterSelect.appendChild(option);
+  }
+  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+}
+
+function filterAndSortSellerProducts(templates) {
+  const query = sellerSearchInput.value.trim().toLowerCase();
+  const category = sellerCategoryFilterSelect.value;
+  let filtered = templates;
+  if (query) {
+    filtered = filtered.filter((t) =>
+      t.name.toLowerCase().includes(query) ||
+      (t.category || '').toLowerCase().includes(query) ||
+      (t.subcategory || '').toLowerCase().includes(query));
+  }
+  if (category) filtered = filtered.filter((t) => t.category === category);
+  const sort = sellerSortSelect.value;
+  filtered = filtered.slice().sort((a, b) => {
+    if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
+    if (sort === 'price-desc') return (b.priceCents ?? -Infinity) - (a.priceCents ?? -Infinity);
+    return a.name.localeCompare(b.name);
+  });
+  return filtered;
+}
+
+// #541 added a second (List) view of the same product set — re-render
+// whichever view is actually showing, not always Manage, the same idiom
+// renderActiveSellerView's own other callers already follow.
+for (const el of [sellerSearchInput, sellerCategoryFilterSelect, sellerSortSelect]) {
+  el.addEventListener(el === sellerSearchInput ? 'input' : 'change', () => renderActiveSellerView());
 }
 
 const AXIS_ROW_LABELS = { x: 'Width (x)', y: 'Depth (y)', z: 'Height (z)' };
@@ -2974,9 +3056,17 @@ function renderSellerList() {
   // closures goes with it.
   disposeAxisPreview();
   sellerListEl.innerHTML = '';
-  const templates = myProducts();
-  if (templates.length === 0) {
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
     return;
   }
   sellerStatusEl.textContent = '';
@@ -4008,6 +4098,38 @@ function renderSellerList() {
         body.appendChild(time);
         saleRow.appendChild(body);
 
+        // #454: a physical (non-digital-good) real-money purchase holds
+        // its payout until delivery is confirmed or 7 days after shipping
+        // — this is the seller's own side of starting that fallback clock.
+        // Neither a digital good (nothing to ship) nor a simulated
+        // (higgles) sale (no real Stripe balance to ever hold) shows this.
+        if (purchase.paymentIntentId && !purchase.isDigitalGood) {
+          const shipping = document.createElement('div');
+          shipping.className = 'product-sale-row-shipping';
+          if (purchase.deliveryConfirmedAt) {
+            shipping.textContent = 'Delivery confirmed — available to cash out.';
+          } else if (purchase.shippedAt) {
+            shipping.textContent = `Shipped ${new Date(purchase.shippedAt).toLocaleDateString()} — available 7 days after shipping if not confirmed sooner.`;
+          } else {
+            const shipBtn = document.createElement('button');
+            shipBtn.className = 'product-sale-row-ship-btn';
+            shipBtn.type = 'button';
+            shipBtn.textContent = 'Mark shipped';
+            shipBtn.addEventListener('click', async () => {
+              shipBtn.disabled = true;
+              try {
+                await markPurchaseShipped(purchase.purchaseId);
+                await renderSales();
+              } catch (err) {
+                alert(err.message || 'Could not mark this purchase shipped.');
+                shipBtn.disabled = false;
+              }
+            });
+            shipping.appendChild(shipBtn);
+          }
+          body.appendChild(shipping);
+        }
+
         if (purchase.refundedAt) {
           const refundedLabel = document.createElement('div');
           refundedLabel.className = 'product-sale-row-refunded';
@@ -4054,6 +4176,120 @@ function renderSellerList() {
   }
 }
 
+// #541: a lighter, thumbnail-first way to browse the same products
+// renderSellerList's rows already manage — persists only for this open of
+// the modal (resets to 'manage' on next open, same as activeSettingsTab
+// resetting per its own comment) since there's no strong reason yet for a
+// seller's view choice to survive a close/reopen.
+let sellerActiveView = 'manage';
+
+function updateSellerViewToggleUI() {
+  for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+    btn.classList.toggle('active', btn.dataset.view === sellerActiveView);
+  }
+}
+
+// Cards, not rows — no edit controls here (that's what Manage is for);
+// tapping a card jumps straight into Manage with that product already
+// expanded, the same "browse here, edit there" split issue #540 (the
+// sibling 3D-array sub-issue) proposes for its own view.
+function renderSellerListView() {
+  sellerListViewEl.replaceChildren();
+  // #542: same shared filtered/sorted product set Manage's own
+  // renderSellerList uses — search/filter/sort is meant to work "from
+  // either the 3D array or the list view," per the issue's own text, not
+  // duplicated per view.
+  const allTemplates = myProducts();
+  populateSellerCategoryFilterOptions(allTemplates);
+  if (allTemplates.length === 0) {
+    sellerFilterControlsEl.hidden = true;
+    sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
+    return;
+  }
+  sellerFilterControlsEl.hidden = false;
+  const templates = filterAndSortSellerProducts(allTemplates);
+  if (templates.length === 0) {
+    sellerStatusEl.textContent = 'No products match your search or filter.';
+    return;
+  }
+  sellerStatusEl.textContent = '';
+
+  for (const template of templates) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'seller-card';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'seller-card-thumb';
+    thumb.alt = '';
+    // Same fallback order as buildCatalogPickerButtons' own thumb.src line
+    // (in-session render cache, then a persisted image_url, then a flat
+    // color swatch) — this view and the catalog picker are showing the
+    // same templates, so they should never disagree on what a product
+    // looks like.
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    card.appendChild(thumb);
+    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
+      renderCatalogThumbnail(template).then((dataUrl) => {
+        if (dataUrl) thumb.src = dataUrl;
+      });
+    }
+
+    const name = document.createElement('span');
+    name.className = 'seller-card-name';
+    name.textContent = template.name;
+    card.appendChild(name);
+
+    const price = document.createElement('span');
+    price.className = 'seller-card-price';
+    price.textContent = template.priceCents == null ? 'Not priced' : formatPriceCents(template.priceCents);
+    card.appendChild(price);
+
+    const digitalGoodKey = template.metadata?.digitalGoodDisclaimer;
+    if (digitalGoodKey) {
+      const digitalGood = document.createElement('span');
+      digitalGood.className = 'seller-card-digital-good';
+      digitalGood.textContent = 'Digital good';
+      card.appendChild(digitalGood);
+    }
+
+    card.addEventListener('click', () => {
+      sellerActiveView = 'manage';
+      updateSellerViewToggleUI();
+      renderActiveSellerView();
+      const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(template.templateId))}"]`);
+      if (row) {
+        row.classList.add('expanded');
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+
+    sellerListViewEl.appendChild(card);
+  }
+}
+
+// Single entry point for (re)rendering whichever of Manage/List view is
+// currently active — every caller that used to render the Manage view
+// unconditionally (opening the modal, a Units-setting change) goes through
+// here now so it keeps refreshing whichever view the seller actually has
+// open, not always Manage.
+function renderActiveSellerView() {
+  sellerListEl.hidden = sellerActiveView !== 'manage';
+  sellerListViewEl.hidden = sellerActiveView !== 'list';
+  if (sellerActiveView === 'list') renderSellerListView();
+  else renderSellerList();
+}
+
+for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === sellerActiveView) return;
+    sellerActiveView = btn.dataset.view;
+    updateSellerViewToggleUI();
+    renderActiveSellerView();
+  });
+}
+updateSellerViewToggleUI();
+
 // Ensures a seller identity is active before showing the modal. Only
 // reachable via the #mode-nav Sell tab (openSellerModal call sites below),
 // which calls this rather than separately remembering to await
@@ -4082,7 +4318,12 @@ async function openSellerModal() {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
     return;
   }
-  renderSellerList();
+  // #541: always opens back on Manage, same as activeSettingsTab resetting
+  // to 'general' on next Settings open — a seller's view choice doesn't
+  // need to survive a close/reopen yet.
+  sellerActiveView = 'manage';
+  updateSellerViewToggleUI();
+  renderActiveSellerView();
   sellerModalEl.classList.add('visible');
 }
 function closeSellerModal() {
@@ -4128,7 +4369,7 @@ let activeSettingsTab = 'general';
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
-  if (sellerModalEl.classList.contains('visible')) renderSellerList();
+  if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
 function renderSettingsSection() {
@@ -4174,7 +4415,7 @@ function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🐦 (or double-press space) to fly.';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 }
@@ -4563,6 +4804,59 @@ async function renderSellSettingsSection() {
   });
 
   formField.appendChild(form);
+
+  // #454: only meaningful once an account actually exists to hold a
+  // balance against — Stripe stays entirely invisible to the seller
+  // otherwise (#452's own mandate), same reasoning as the status field
+  // above gating on account.connected implicitly via describeStatus().
+  if (account.connected) {
+    const payoutsField = document.createElement('div');
+    payoutsField.className = 'settings-field';
+    const payoutsLabel = document.createElement('span');
+    payoutsLabel.textContent = 'Payouts';
+    payoutsField.appendChild(payoutsLabel);
+    const payoutsNote = document.createElement('div');
+    payoutsNote.className = 'settings-empty-note';
+    payoutsNote.textContent = 'Loading…';
+    payoutsField.appendChild(payoutsNote);
+    const cashOutBtn = document.createElement('button');
+    cashOutBtn.type = 'button';
+    cashOutBtn.className = 'version-action-btn';
+    cashOutBtn.textContent = 'Cash out';
+    cashOutBtn.hidden = true;
+    payoutsField.appendChild(cashOutBtn);
+    settingsSectionEl.appendChild(payoutsField);
+
+    async function refreshPayouts() {
+      try {
+        const payouts = await fetchSellerPayouts();
+        const parts = [`Available to cash out: ${formatPriceCents(payouts.availableCents)}`];
+        if (payouts.heldCents > 0) parts.push(`Held: ${formatPriceCents(payouts.heldCents)}`);
+        if (payouts.nextEligibleAt) parts.push(`Next eligible: ${new Date(payouts.nextEligibleAt).toLocaleDateString()}`);
+        payoutsNote.textContent = parts.join(' · ');
+        payoutsNote.classList.remove('error');
+        cashOutBtn.hidden = payouts.availableCents <= 0;
+      } catch (err) {
+        payoutsNote.textContent = err.message || 'Could not load your payout balance.';
+        payoutsNote.classList.add('error');
+      }
+    }
+
+    cashOutBtn.addEventListener('click', async () => {
+      cashOutBtn.disabled = true;
+      try {
+        await requestSellerPayout();
+        await refreshPayouts();
+        alert('Payout requested.');
+      } catch (err) {
+        alert(err.message || 'Could not request a payout.');
+      } finally {
+        cashOutBtn.disabled = false;
+      }
+    });
+
+    await refreshPayouts();
+  }
 }
 
 function formatHiggles(cents) {
@@ -7812,6 +8106,25 @@ authLogoutBtn.addEventListener('click', async () => {
 // fine (caught via a real reload-while-logged-in-and-in-Build-mode e2e
 // scenario, not something a fresh-every-time page load would ever surface
 // on its own).
+// #454: a buyer confirming delivery has no account here at all (see
+// "Simulated purchases") — this link works purely off the unguessable
+// token in the URL, entirely independent of authInitPromise below (which
+// is specifically about THIS browser's own login/session state, never
+// relevant to whichever purchase this token identifies). Handled
+// separately, at module load, rather than folded into that promise.
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const confirmToken = params.get('confirmDelivery');
+  if (!confirmToken) return;
+  history.replaceState(null, '', location.pathname);
+  try {
+    await confirmPurchaseDelivery(confirmToken);
+    alert('Delivery confirmed — thank you! The seller can now cash out for this order.');
+  } catch (err) {
+    alert(err.message || 'This delivery-confirmation link is invalid or has expired.');
+  }
+})();
+
 const authInitPromise = (async () => {
   const params = new URLSearchParams(location.search);
   const verifyToken = params.get('verifyEmail');
@@ -8810,10 +9123,21 @@ function createShopAvatar() {
     eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
     head.add(eye);
   }
+  // Owner (Control Room feedback): "more stylish hair... I don't want him
+  // to be balding!" The original cap sat too far back and too flat (scale
+  // 0.85/0.65, offset -0.25R/+0.3R) to reach the crown/hairline at all —
+  // its own front edge stopped well short of the eyes (at y=+0.85R),
+  // leaving the whole forehead-to-crown area bare skin-colored sphere from
+  // straight on, which read as a receding hairline/bald spot rather than a
+  // flat-cap silhouette. Pulled forward and enlarged so it now reaches
+  // right up to the eye line at the front, still tapers off before the
+  // back of the neck, and pokes very slightly above the head's own crown
+  // (z max ~1.03R vs the head's 1R) for a bit of volume instead of a
+  // shrink-wrapped skullcap.
   const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
   const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
-  hair.scale.set(1, 0.85, 0.65); // flatten into a cap rather than a full second head
-  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.25, SHOP_AVATAR_HEAD_RADIUS_M * 0.3); // back (-Y) and up
+  hair.scale.set(1, 0.95, 0.75);
+  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.05, SHOP_AVATAR_HEAD_RADIUS_M * 0.32);
   head.add(hair);
 
   group.add(headPivot);
@@ -9947,11 +10271,13 @@ function closeCheckoutModal() {
 // Collects real payment for a connected seller's product, once
 // purchaseInstance's response comes back as `requiresPayment` instead of
 // an already-completed `purchase` (#453). The returned promise resolves
-// once the purchase has genuinely been finalized (Stripe confirmed the
-// charge AND the server has recorded it) or rejects if the buyer cancels
-// — it deliberately does NOT resolve just because the modal was shown, so
-// a caller's own `finally` (e.g. re-enabling the button that opened this)
-// covers the whole checkout, not just the initial setup.
+// with `{ purchase, deliveryConfirmUrl }` (see finalizePurchase in
+// src/api.js — the latter is only set for a physical real-money purchase,
+// #454) once the purchase has genuinely been finalized (Stripe confirmed
+// the charge AND the server has recorded it), or rejects if the buyer
+// cancels — it deliberately does NOT resolve just because the modal was
+// shown, so a caller's own `finally` (e.g. re-enabling the button that
+// opened this) covers the whole checkout, not just the initial setup.
 function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { name, totalCents }) {
   return new Promise((resolve, reject) => {
     checkoutSummaryEl.textContent = `${name} — ${formatPriceCents(totalCents)}`;
@@ -9980,9 +10306,9 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         try {
           const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
           if (result.error) throw new Error(result.error.message || 'Payment failed.');
-          const purchase = await finalizePurchase(paymentIntentId);
+          const finalized = await finalizePurchase(paymentIntentId);
           closeCheckoutModal();
-          resolve(purchase);
+          resolve(finalized);
         } catch (err) {
           checkoutStatusEl.textContent = err.message || 'Payment failed.';
           checkoutStatusEl.classList.add('error');
@@ -10008,14 +10334,21 @@ shopBuyHintEl.addEventListener('click', async () => {
   try {
     const result = await purchaseInstance(instanceId);
     if (result.requiresPayment) {
-      await runCheckoutFlow(result, { name, totalCents: priceCents });
+      const { deliveryConfirmUrl } = await runCheckoutFlow(result, { name, totalCents: priceCents });
       // #473: only clear the persisted idempotency key (see purchaseInstance
       // in src/api.js) once the purchase has genuinely finalized — a
       // network failure anywhere before this point should leave it in
       // place so a retried "Buy" click reuses the same key instead of
       // risking a second real PaymentIntent for the same attempt.
       clearPurchaseIdempotencyKey(instanceId);
-      alert('Purchase complete — thank you!');
+      // #454: the ONLY time this link is ever shown — the server never
+      // stores the raw token, only its hash, so there is no "my orders"
+      // page to come back and find it later. Present for a physical
+      // (non-digital-good) purchase only; a digital good pays the seller
+      // out instantly with nothing to confirm.
+      alert(deliveryConfirmUrl
+        ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${deliveryConfirmUrl}`
+        : 'Purchase complete — thank you!');
     } else {
       clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase simulated — the seller has been credited.');

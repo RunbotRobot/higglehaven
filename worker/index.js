@@ -76,6 +76,15 @@ async function getStorageUsage(bucket) {
 // — good enough for "let a few friends see what I'm building," not a
 // substitute for real auth if this ever needs individual identities.
 const ACCESS_COOKIE_NAME = 'hh_access';
+// Unlike every other unauthenticated secret-comparison endpoint in this
+// file (handleAdminBootstrap, handleSignup, handleRequestPasswordReset —
+// each gated by checkRateLimit specifically because guessing a shared
+// secret should cost an attacker something), this one had no throttle at
+// all: unlimited POSTs to /__access/login could brute-force
+// ACCESS_PASSPHRASE for free. Same window/shape as ADMIN_BOOTSTRAP_RATE_
+// LIMIT_MAX below, since both are "compare against one Worker secret, no
+// account behind it" endpoints.
+const ACCESS_LOGIN_RATE_LIMIT_MAX = 10;
 // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) — how
 // many of the earliest landlet-claimers make up the founding cohort.
 // Deliberately a plain constant, not configurable world_settings state:
@@ -165,6 +174,12 @@ function htmlResponse(body, status = 200) {
 // it — the passphrase check passed.
 async function checkAccessGate(request, url, env) {
   if (url.pathname === '/__access/login' && request.method === 'POST') {
+    try {
+      await checkRateLimit(env.DB, `access-login:${clientIp(request)}`, ACCESS_LOGIN_RATE_LIMIT_MAX);
+    } catch (error) {
+      if (error instanceof HttpError) return htmlResponse(accessLoginPage(error.message), error.status);
+      throw error;
+    }
     const form = await request.formData();
     const submitted = String(form.get('passphrase') || '');
     if (!timingSafeEqual(submitted, env.ACCESS_PASSPHRASE)) {
@@ -277,7 +292,14 @@ export function computeMissingMigrations(appliedNames, manifest) {
   return manifest.filter((name) => !applied.has(name));
 }
 
-async function checkMigrationDrift(env) {
+// Exported alongside computeMissingMigrations (#561): this is the actual
+// function scheduled() invokes every 10 minutes in production — the pure
+// diffing helper it delegates to had direct test coverage already, but this
+// itself (the D1 query, the manifest import wiring, the alert-email branch)
+// didn't, so a regression here could silently stop the drift check from
+// ever working again with no test catching it — exactly the "invisible
+// until an owner bug report" failure mode #488/#499 exist to prevent.
+export async function checkMigrationDrift(env) {
   if (!env.DB) return;
   let appliedNames;
   try {
@@ -851,6 +873,45 @@ async function handleCatalog(request, db, route, url, models) {
     return json({ templates: templates.map((template) => byId.get(template.templateId)) }, request.method === 'POST' ? 201 : 200);
   }
 
+  // #329 (backend half only — see this route's own docs/API.md entry for
+  // why the frontend "Prompt mode" entry point isn't built yet): given an
+  // embedding (the same shape POST .../thumbnail stores), ranks every
+  // template that has one by cosine similarity and returns the closest
+  // matches. No Vectorize/vector-search binding exists in this project
+  // (confirmed via wrangler.jsonc — #327's own comment thread already
+  // found this), so this is a plain in-memory scan over D1 rows, not an
+  // indexed nearest-neighbor query — fine at this catalog's current size,
+  // matching this codebase's own "get the mechanic working, model the
+  // real thing later" pattern; a real vector index is a swap-in later,
+  // not something this endpoint's callers need to know about.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'similarity-search') {
+    const input = await readJson(request);
+    const embedding = validateThumbnailEmbedding(input.embedding);
+    if (!embedding) throw new HttpError('embedding is required', 400);
+    // A JSON-body integer, not a query-string one, so this doesn't reuse
+    // queryLimit (which validates a raw url.searchParams string and always
+    // caps at 100) — a much smaller max fits a from-scratch full-scan
+    // search better than the ordinary paginated-listing endpoints' cap.
+    const limit = input.limit === undefined ? 10 : input.limit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new HttpError('limit must be an integer between 1 and 50', 400);
+    }
+    const { results } = await db.prepare(`
+      SELECT * FROM catalog_templates WHERE image_embedding IS NOT NULL
+    `).all();
+    const ranked = results
+      .map((row) => ({ template: templateFromRow(row), candidateEmbedding: JSON.parse(row.image_embedding) }))
+      // A future embedding-model swap can produce a different vector
+      // length than what's already stored — comparing across lengths is
+      // meaningless, so those rows are silently excluded rather than
+      // erroring the whole search over a handful of stale entries.
+      .filter(({ candidateEmbedding }) => candidateEmbedding.length === embedding.length)
+      .map(({ template, candidateEmbedding }) => ({ template, similarity: cosineSimilarity(embedding, candidateEmbedding) }))
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+    return json({ templates: ranked.map((r) => ({ ...r.template, similarity: r.similarity })) });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const categoryParam = url.searchParams.get('category');
     const category = categoryParam === null ? null : stringValue(categoryParam, 'category');
@@ -1116,9 +1177,14 @@ async function handleCatalog(request, db, route, url, models) {
 // opt-in flag: every catalog template is already product-like by
 // definition, so every one is reviewable. DELETE (moderation) is gated to
 // the template's own seller, same "if (existing.seller_id)" pattern the
-// catalog template's own PATCH/DELETE handler above already uses — a
-// template with no seller stays unrestricted, since there's no owner to
-// check against.
+// catalog template's own PATCH/DELETE handler above already uses — an
+// unowned/orphaned template's reviews get the same per-IP throttle
+// (below) the catalog template's own DELETE already needed for the exact
+// same reason (#520): with no owning seller to gate the request behind a
+// session, an unthrottled anonymous caller could otherwise wipe every
+// review on that template in an unbounded flood.
+const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -1211,6 +1277,8 @@ async function handleProductReviews(request, db, route) {
     if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     return json({ deleted: true });
@@ -1768,6 +1836,10 @@ async function existingSellerIds(db, sellerIds) {
 async function handleSellers(request, env, db, route) {
   if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
     return handleSellerStripeAccount(request, env, db);
+  }
+
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'payouts') {
+    return handleSellerPayouts(request, env, db);
   }
 
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
@@ -3467,12 +3539,18 @@ function flattenStripeParams(value, prefix) {
 // (client-side or a future automatic one) would otherwise hit. Reads and
 // updates against an already-known resource id don't need one; they're
 // naturally safe to repeat.
-async function stripeRequest(env, method, path, params, idempotencyKey) {
+// #454: stripeAccountId scopes a request to a connected Custom account
+// (the "Stripe-Account" header) — needed for a payout, which draws from
+// THAT account's own balance, not the platform's. Every existing caller
+// (checkout, refunds, onboarding) omits it and keeps acting as the
+// platform itself, exactly as before.
+async function stripeRequest(env, method, path, params, idempotencyKey, stripeAccountId) {
   const headers = {
     authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
     'content-type': 'application/x-www-form-urlencoded',
   };
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+  if (stripeAccountId) headers['stripe-account'] = stripeAccountId;
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method,
     headers,
@@ -3632,6 +3710,194 @@ async function handleSellerStripeAccount(request, env, db) {
       stripe_requirements_due: JSON.stringify(requirementsDue),
       stripe_updated_at: nowIso,
     }));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #454: real-money sale proceeds already sit in the seller's own Stripe
+// Custom-account balance the instant a sale is charged (#453's own
+// transfer_data) — this is purely a policy-driven gate on when
+// higglehaven lets the seller actually request payout of it. Owner-
+// confirmed policy (Control Room msg-q-issue-454-trust-tiers): a digital
+// good pays out instantly (delivered the moment it's bought — no
+// chargeback window where non-delivery is plausible); a physical good
+// holds until whichever comes first: the buyer confirms delivery (see
+// handlePurchaseConfirmDelivery), or this many days after the seller
+// marks it shipped (see handleMarkShipped) — a fallback for exactly the
+// case where confirmation never happens.
+const PHYSICAL_GOOD_HOLD_DAYS = 7;
+
+function purchaseSellerShareCents(purchase) {
+  return purchase.total_cents - purchase.commission_cents;
+}
+
+function isPurchaseEligibleForPayout(purchase) {
+  if (!purchase.payment_intent_id) return false; // simulated — no real Stripe balance to release
+  if (purchase.is_digital_good) return true;
+  if (purchase.delivery_confirmed_at) return true;
+  if (!purchase.shipped_at) return false; // still not shipped — always held
+  return Date.now() >= new Date(purchase.shipped_at).getTime() + PHYSICAL_GOOD_HOLD_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// Purchases still owed to this seller (a real-money sale, not yet
+// refunded or paid out) — capped generously rather than paginated, since
+// a seller's own backlog of unpaid sales should stay small in practice
+// (payouts drain it), the same "good enough for now" scale as this file's
+// other uncapped-in-practice lists.
+async function unpaidSellerPurchases(db, sellerId) {
+  const { results } = await db.prepare(`
+    SELECT * FROM purchases
+    WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND paid_out_at IS NULL AND refunded_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 500
+  `).bind(sellerId).all();
+  return results;
+}
+
+async function sellerPayoutSummaryJson(env, db, sessionSeller) {
+  const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
+  let availableCents = 0;
+  let heldCents = 0;
+  let nextEligibleAt = null;
+  for (const purchase of purchases) {
+    const share = purchaseSellerShareCents(purchase);
+    if (isPurchaseEligibleForPayout(purchase)) {
+      availableCents += share;
+      continue;
+    }
+    heldCents += share;
+    if (purchase.shipped_at) {
+      const eligibleAt = new Date(purchase.shipped_at).getTime() + PHYSICAL_GOOD_HOLD_DAYS * 24 * 60 * 60 * 1000;
+      if (nextEligibleAt === null || eligibleAt < nextEligibleAt) nextEligibleAt = eligibleAt;
+    }
+  }
+  return {
+    ...stripeAccountStatusJson(env, sessionSeller),
+    availableCents,
+    heldCents,
+    nextEligibleAt: nextEligibleAt === null ? null : new Date(nextEligibleAt).toISOString(),
+  };
+}
+
+// Atomically claims a batch of purchases for payout by stamping
+// paid_out_at, guarded so a purchase a concurrent request already claimed
+// (or already fully paid out) is silently skipped rather than claimed a
+// second time — the same guarded-write idiom this file already uses for
+// auction bids/instance moves (PR #415/#462), applied here to close a
+// double-payout race: two concurrent POST /sellers/me/payouts calls used
+// to both read the same unpaid purchases, both trigger a real Stripe
+// payout for them, and only afterward both write paid_out_at with no
+// guard at all — a genuine double Stripe transfer, not just a DB
+// inconsistency. Returns only the purchases this call actually won the
+// claim on, so the caller can size its Stripe payout request off the
+// post-claim set rather than the pre-claim one.
+export async function claimPurchasesForPayout(db, purchases, nowIso) {
+  if (purchases.length === 0) return [];
+  const results = await db.batch(purchases.map((purchase) =>
+    db.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ? AND paid_out_at IS NULL')
+      .bind(nowIso, purchase.purchase_id)));
+  return purchases.filter((_, i) => results[i].meta.changes === 1);
+}
+
+// Undoes a claim made by claimPurchasesForPayout, for when the Stripe call
+// that was supposed to follow it never succeeds — otherwise a failed
+// attempt would strand these purchases as permanently "already paid out"
+// with no stripe_payout_id and no way to retry. Guarded on paid_out_at
+// still matching this exact claim's own timestamp so it only ever releases
+// a claim this call made, never a different, later one.
+async function releasePurchaseClaim(db, purchases, nowIso) {
+  if (purchases.length === 0) return;
+  await db.batch(purchases.map((purchase) =>
+    db.prepare('UPDATE purchases SET paid_out_at = NULL WHERE purchase_id = ? AND paid_out_at = ?')
+      .bind(purchase.purchase_id, nowIso)));
+}
+
+// GET returns the seller's current held/available-for-cash-out balance
+// (folded into the same shape stripeAccountStatusJson already gives the
+// onboarding panel, so one call covers both); POST actually triggers a
+// Stripe payout for whatever's currently available. Stripe stays entirely
+// invisible to the seller (#452's own Custom-account mandate) — this is
+// the seller-facing surface for a concept ("my money, when can I get it")
+// that otherwise only exists as raw Stripe API state.
+async function handleSellerPayouts(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionSeller = await getOrCreateSellerForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json(await sellerPayoutSummaryJson(env, db, sessionSeller));
+  }
+
+  if (request.method === 'POST') {
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
+    }
+    const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
+    const eligible = purchases.filter(isPurchaseEligibleForPayout);
+    const availableCents = eligible.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
+    if (availableCents <= 0) {
+      throw new HttpError('Nothing is available to cash out yet.', 400);
+    }
+
+    // Our own hold is a policy gate layered on top of Stripe's own
+    // funds-availability delay (a transfer typically takes a couple of
+    // days before it even shows up as "available" on the connected
+    // account's own balance) — capping at Stripe's own reported available
+    // balance avoids requesting a payout Stripe would reject outright
+    // because the money technically hasn't cleared on their side yet,
+    // even though our own hold already lifted.
+    const balance = await stripeRequest(env, 'GET', 'balance', undefined, undefined, sessionSeller.stripe_account_id);
+    const stripeAvailableCents = (balance.available || []).find((b) => b.currency === 'usd')?.amount ?? 0;
+    const payoutCapCents = Math.min(availableCents, stripeAvailableCents);
+
+    // Payouts are per-whole-purchase, not fractional — only mark a
+    // purchase paid out if its own share genuinely fit inside what Stripe
+    // will actually let us withdraw right now; anything left over just
+    // stays "available" for the next cash-out request.
+    let payoutCents = 0;
+    const included = [];
+    for (const purchase of eligible) {
+      const share = purchaseSellerShareCents(purchase);
+      if (payoutCents + share > payoutCapCents) continue;
+      payoutCents += share;
+      included.push(purchase);
+    }
+    if (included.length === 0) {
+      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+    }
+
+    // Claimed BEFORE calling Stripe, not after — the actual money-moving
+    // call only ever fires for purchases this request itself won the claim
+    // on, so a concurrent request racing the same purchases can never
+    // trigger a second real Stripe payout for them (see
+    // claimPurchasesForPayout's own comment).
+    const nowIso = new Date().toISOString();
+    const claimed = await claimPurchasesForPayout(db, included, nowIso);
+    if (claimed.length === 0) {
+      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+    }
+    const claimedCents = claimed.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
+
+    let payout;
+    try {
+      payout = await stripeRequest(
+        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' }, undefined, sessionSeller.stripe_account_id,
+      );
+    } catch (err) {
+      // The claim above already stamped paid_out_at — undo it so a failed
+      // attempt doesn't strand these purchases as permanently unclaimable
+      // with no actual payout behind them.
+      await releasePurchaseClaim(db, claimed, nowIso);
+      throw err;
+    }
+    await db.batch(claimed.map((purchase) =>
+      db.prepare('UPDATE purchases SET stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind(payout.id, purchase.purchase_id)));
+
+    return json({ payoutCents: claimedCents, purchaseCount: claimed.length, stripePayoutId: payout.id });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5723,7 +5989,7 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input);
   }
-  return writePurchaseRow(db, instance, template, landlet, computePurchaseAmounts(template, input));
+  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input));
 }
 
 // Shared by the simulated path (handleInstancePurchase's own direct write)
@@ -5799,6 +6065,12 @@ function purchaseIdempotencyKey(instanceId, rawKey) {
 
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
   const amounts = computePurchaseAmounts(template, input);
+  // #454: locked in at checkout time, same reasoning as every other amount
+  // here — a digital good pays out instantly with no hold, so
+  // handlePurchaseFinalize (and the orphaned-purchase fallback, which has
+  // no live template row to re-check this against) both need this snapshot
+  // rather than re-deriving it from a template that might change or vanish.
+  const isDigitalGood = !!JSON.parse(template.metadata_json || '{}').digitalGoodDisclaimer;
 
   // Everything handlePurchaseFinalize needs to actually write the purchase
   // travels here, in Stripe's own metadata — set once, server-side, at
@@ -5824,6 +6096,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       commissionCents: String(amounts.commissionCents),
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
+      isDigitalGood: String(isDigitalGood),
     },
   }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
@@ -5891,9 +6164,10 @@ async function handlePurchaseFinalize(request, env) {
     builderShareCents: Number(meta.builderShareCents),
     platformShareCents: Number(meta.platformShareCents),
   };
+  const isDigitalGood = meta.isDigitalGood === 'true';
 
   if (instance && template && landlet?.owner_builder_id) {
-    return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -5912,10 +6186,26 @@ async function handlePurchaseFinalize(request, env) {
   // (auto-refund, manual review, ...) — that's a reconciliation-policy
   // call left for separate design/owner input; this only guarantees the
   // money is never unaccounted for.
-  return writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId);
+  return writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood);
 }
 
-async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
+// #454: a real-money physical purchase gets an unguessable token (only its
+// hash ever stored, same discipline as password_reset_tokens) so whoever
+// holds the link — the buyer, handed it once in their own checkout's
+// finalize response — can confirm delivery. There's no buyer account
+// anywhere in this app to authenticate a "my orders" view against instead
+// (see "Simulated purchases"). Digital goods and simulated (higgles)
+// purchases skip this entirely: nothing physical to deliver, and a
+// simulated purchase has no real Stripe balance to ever hold against.
+async function buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood) {
+  if (!paymentIntentId || isDigitalGood) return { tokenHash: null, deliveryConfirmUrl: null };
+  const rawToken = generateToken();
+  const tokenHash = await sha256Hex(rawToken);
+  return { tokenHash, deliveryConfirmUrl: `${appBaseUrl(env)}/?confirmDelivery=${rawToken}` };
+}
+
+async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
+  const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   // builder_id is a real foreign key (unlike instance_id/template_id) —
@@ -5929,15 +6219,18 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
     : null;
   const builderId = builderStillExists ? meta.builderId : null;
   const sellerId = meta.sellerId || null;
+  const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
 
   const statements = [
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
-      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
+      isDigitalGood ? 1 : 0, tokenHash),
   ];
   if (builderId) {
     statements.push(
@@ -5952,21 +6245,25 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
   await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  return json({ purchase: purchaseFromRow(row) }, 201);
+  return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
-async function writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId = null) {
+async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false) {
+  const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
+  const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
   await db.batch([
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
-      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
+      isDigitalGood ? 1 : 0, tokenHash),
     db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
@@ -5976,7 +6273,7 @@ async function writePurchaseRow(db, instance, template, landlet, amounts, paymen
   ]);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  return json({ purchase: purchaseFromRow(row) }, 201);
+  return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
 async function handlePurchases(request, env, route, url) {
@@ -6030,7 +6327,63 @@ async function handlePurchases(request, env, route, url) {
     return handlePurchaseRefund(request, env, route[1]);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'mark-shipped') {
+    return handleMarkShipped(request, env, route[1]);
+  }
+
+  // Unauthenticated on purpose — see buildDeliveryConfirmFields' own
+  // comment: there is no buyer account here to authenticate against, so
+  // the unguessable token itself (hashed before ever reaching the DB) is
+  // the only credential this needs, the same trust model a real
+  // guest-checkout tracking link already relies on.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-delivery') {
+    return handlePurchaseConfirmDelivery(request, env);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// #454: seller-initiated (there's no buyer/shipping-carrier integration to
+// do this automatically) — starts the 7-day fallback clock for a physical
+// real-money purchase's payout hold (see PHYSICAL_GOOD_HOLD_DAYS). A
+// digital good or a simulated (higgles) purchase has nothing to ship.
+async function handleMarkShipped(request, env, purchaseId) {
+  const db = env.DB;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  if (!purchase.seller_id) throw new HttpError('This purchase has no seller to authorize the request', 400);
+  const sessionSeller = await requireSessionSeller(request, db);
+  assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  if (!purchase.payment_intent_id) {
+    throw new HttpError('Only real-money purchases can be marked shipped', 400);
+  }
+  if (purchase.is_digital_good) {
+    throw new HttpError('Digital goods have nothing to ship', 400);
+  }
+  if (purchase.shipped_at) {
+    throw new HttpError('This purchase is already marked shipped', 400);
+  }
+  await db.prepare('UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+    .bind(purchaseId).run();
+  const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(updated) });
+}
+
+async function handlePurchaseConfirmDelivery(request, env) {
+  const db = env.DB;
+  const input = await readJson(request);
+  const token = stringValue(input.token, 'token');
+  const tokenHash = await sha256Hex(token);
+  const purchase = await db.prepare('SELECT purchase_id, delivery_confirmed_at FROM purchases WHERE delivery_confirm_token_hash = ?')
+    .bind(tokenHash).first();
+  if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
+  // Idempotent — clicking an already-confirmed link again (a second visit,
+  // a bookmark) is a no-op, not an error.
+  if (!purchase.delivery_confirmed_at) {
+    await db.prepare('UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).run();
+  }
+  return json({ confirmed: true });
 }
 
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
@@ -6150,6 +6503,12 @@ function purchaseFromRow(row) {
     createdAt: row.created_at,
     refundedAt: row.refunded_at,
     paymentIntentId: row.payment_intent_id,
+    // #454: never expose delivery_confirm_token_hash itself — same
+    // discipline as password_reset_tokens never exposing its hash either.
+    isDigitalGood: !!row.is_digital_good,
+    shippedAt: row.shipped_at,
+    deliveryConfirmedAt: row.delivery_confirmed_at,
+    paidOutAt: row.paid_out_at,
   };
 }
 
@@ -6495,6 +6854,27 @@ function validateThumbnailEmbedding(embedding) {
     }
   }
   return embedding;
+}
+
+// #329: cosine similarity — scale-invariant (so it doesn't matter that
+// today's stub embedding is a bounded [0,1] color average rather than a
+// normalized unit vector), and undefined only when a vector is all
+// zeros, which can't happen for the stub (a genuinely all-black or
+// all-transparent thumbnail is possible but vanishingly unlikely, and
+// still just correctly reads as "no meaningful direction to compare");
+// returns 0 rather than NaN if it ever does, so a degenerate row sorts
+// last instead of corrupting the whole ranking.
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  return denominator === 0 ? 0 : dot / denominator;
 }
 
 function validateTemplate(input, fallbackId) {
