@@ -727,6 +727,12 @@ function formatBytes(bytes) {
 // SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
 const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 
+// Same unauthenticated-path gap as CATALOG_PATCH_RATE_LIMIT_MAX above, but
+// for DELETE (#520) — unlike PATCH, DELETE has no bootstrapping-trap reason
+// to stay ungated (nothing legitimate deletes the same unowned templates
+// dozens of times over), so this can be a plain, low ceiling.
+const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
+
 // #362 flagged catalog template creation for the same missing-rate-limit
 // gap as builders/sellers below, but unlike those two, an IP-keyed limit
 // here isn't safe to add at any size a real automated flood would
@@ -764,6 +770,14 @@ async function handleCatalog(request, db, route, url, models) {
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+    }
+    // At least one template in this batch has no live owning seller to gate
+    // it behind a session (same shape as the single-item DELETE below) —
+    // rate-limit the request itself so up to 100 such templates can't be
+    // wiped in one unauthenticated, unthrottled call (#520).
+    const hasUnownedTemplate = existing.results.some((row) => !row.seller_id || !ownerSellerIds.has(row.seller_id));
+    if (hasUnownedTemplate) {
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
@@ -1021,6 +1035,12 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller to gate this DELETE behind a session (see the
+      // PATCH handler's identical comment above) — cap the request rate the
+      // same way, so an unowned template can't be wiped by an unthrottled
+      // anonymous flood (#520).
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
     return json({ deleted: true });
