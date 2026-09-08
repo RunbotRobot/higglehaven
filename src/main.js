@@ -79,7 +79,7 @@ import {
   refundPurchase,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
-import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from './settings.js';
+import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
@@ -3952,6 +3952,10 @@ function renderSettingsSection() {
     renderGeneralSettingsSection();
     return;
   }
+  if (activeSettingsTab === 'shop') {
+    renderShopSettingsSection();
+    return;
+  }
   if (activeSettingsTab === 'build') {
     renderBuildSettingsSection();
     return;
@@ -3965,6 +3969,25 @@ function renderSettingsSection() {
   note.className = 'settings-empty-note';
   note.textContent = 'Nothing to configure here yet.';
   settingsSectionEl.appendChild(note);
+}
+
+// Owner: "I want the instructional note at the bottom of the shop screen
+// that explains the three controls... to go into a Help section in Menu
+// to clean up the interface." Moved out of the always-visible #shop-hint
+// overlay (removed from index.html/enterShopMode) into this Settings tab,
+// which already existed as an empty placeholder — reachable any time via
+// Menu → Settings → Shop, not just while actually standing in the world.
+function renderShopSettingsSection() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Controls';
+  field.appendChild(label);
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap ✈️ (or double-press space) to fly.';
+  field.appendChild(note);
+  settingsSectionEl.appendChild(field);
 }
 
 function renderGeneralSettingsSection() {
@@ -4037,8 +4060,8 @@ async function renderLandCapField() {
     const builders = await fetchBuilders();
     const me = builders.find((b) => b.builderId === builderId);
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
-    status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
-      'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
+    status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
+      'Your cap grows automatically as you earn higgles from selling land via auction — never purchasable with cash.';
   } catch (err) {
     status.textContent = err.message || 'Could not load your land cap.';
   }
@@ -4346,14 +4369,14 @@ async function renderSellSettingsSection() {
   formField.appendChild(form);
 }
 
-function formatDallers(cents) {
+function formatHiggles(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
 // A catalog template's own priceCents (docs/API.md's "Catalog templates")
 // is a real-world USD price a shopper would pay for the product — a
-// distinct concept from dállers (the platform's internal commission
-// currency, formatDallers above) even though the cents-to-dollars math is
+// distinct concept from higgles (the platform's internal commission
+// currency, formatHiggles above) even though the cents-to-dollars math is
 // identical, so this stays its own named helper rather than reusing that
 // one.
 function formatPriceCents(cents) {
@@ -4383,11 +4406,11 @@ function formatAuctionTimeRemaining(isoString) {
 
 function formatAuctionSummary(auction) {
   const bidText = auction.highestBidCents !== null
-    ? `high bid ${formatDallers(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
-    : `no bids yet, starts at ${formatDallers(auction.startingBidCents)}`;
+    ? `high bid ${formatHiggles(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
+    : `no bids yet, starts at ${formatHiggles(auction.startingBidCents)}`;
   const outcomeText = auction.startingBidCents === 0
     ? 'free to the highest bidder, or released if unsold'
-    : `stays yours at ${formatDallers(auction.startingBidCents)} if unsold`;
+    : `stays yours at ${formatHiggles(auction.startingBidCents)} if unsold`;
   return `${auction.landletId} — ${bidText} — ${formatAuctionTimeRemaining(auction.endsAt)} — ${outcomeText}`;
 }
 
@@ -4646,7 +4669,7 @@ async function renderAuctionSection() {
         bidInput.className = 'auction-row-bid-input';
         bidInput.min = (minCents / 100).toFixed(2);
         bidInput.step = '0.01';
-        bidInput.placeholder = `${formatDallers(minCents)}+`;
+        bidInput.placeholder = `${formatHiggles(minCents)}+`;
         form.appendChild(bidInput);
         const bidBtn = document.createElement('button');
         bidBtn.type = 'button';
@@ -4787,8 +4810,8 @@ function renderLevelControls() {
   levelUpBtn.disabled = currentLevelIndex >= top;
   const upCostM2 = levelCapConsumedM2(currentLandletAreaM2, top + 1);
   const downCostM2 = levelCapConsumedM2(currentLandletAreaM2, bottom - 1);
-  levelBuildBtn.textContent = `Build Level Above (${upCostM2.toFixed(2)} m²)`;
-  levelDigBtn.textContent = `Dig Level Below (${downCostM2.toFixed(2)} m²)`;
+  levelBuildBtn.textContent = `Build Level Above (${formatArea(upCostM2)})`;
+  levelDigBtn.textContent = `Dig Level Below (${formatArea(downCostM2)})`;
   // Only the outermost existing level (in whichever direction it's on) can
   // actually be removed (worker/index.js's own 409 otherwise) — ground
   // (index 0) is never a real row and can never be removed at all.
@@ -6960,6 +6983,31 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
   }
 });
 
+// Owner (Control Room feedback): "Builders should see their lánd cap in
+// the menu somewhere" — until now the only place it appeared was Settings
+// > Build (renderLandCapField above), which needs Build mode active *and*
+// Settings opened *and* its Build tab picked. Same "no live polling,
+// refresh on open" approach as refreshNotificationsBadge/refreshFriendsBadge
+// just below, except the source of truth to refresh against is this panel
+// itself (see the accountMenuToggle click handler further down) rather
+// than a separate modal.
+const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
+async function refreshAccountMenuLandCap() {
+  if (!builderId) {
+    accountMenuLandCapEl.hidden = true;
+    return;
+  }
+  try {
+    const builders = await fetchBuilders();
+    const me = builders.find((b) => b.builderId === builderId);
+    accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
+    accountMenuLandCapEl.hidden = false;
+  } catch (err) {
+    console.warn('Could not refresh land cap menu display:', err);
+    accountMenuLandCapEl.hidden = true;
+  }
+}
+
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
@@ -7160,8 +7208,10 @@ async function renderFriends() {
 const accountMenuToggle = document.getElementById('account-menu-toggle');
 const accountMenuPanel = document.getElementById('account-menu-panel');
 accountMenuToggle.addEventListener('click', () => {
+  const expanding = !accountMenuPanel.classList.contains('expanded');
   accountMenuPanel.classList.toggle('expanded');
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
+  if (expanding) refreshAccountMenuLandCap();
 });
 for (const row of accountMenuPanel.querySelectorAll('button')) {
   row.addEventListener('click', () => {
@@ -7641,7 +7691,6 @@ friendsAddBtn.addEventListener('click', async () => {
 // their ordinary local coordinates, so nothing about createMeshForInstance
 // itself needs to know Shop mode exists.
 const shopStatusEl = document.getElementById('shop-status');
-const shopHintEl = document.getElementById('shop-hint');
 const shopMoveJoystickEl = document.getElementById('shop-move-joystick');
 const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
@@ -9796,7 +9845,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 ];
 
 async function enterShopMode() {
-  for (const el of [shopStatusEl, shopHintEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
+  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
     el.classList.add('visible');
   }
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
@@ -10482,7 +10531,7 @@ async function loadLandletMap(resolve) {
     claimFlyover.selectionOutline = selectionOutline;
 
     const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${landlet.areaM2} m²) — ${statusLabel}`;
+    claimSelectionNameEl.textContent = `${landlet.name} (${formatArea(landlet.areaM2)}) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
   });

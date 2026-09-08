@@ -784,7 +784,7 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
   return { purchases, totalCount };
 }
 
-// Refund + dáller-commission clawback (migrations/0052_purchase_refunds.sql).
+// Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).
 export async function refundPurchase(purchaseId) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });
   return purchase;

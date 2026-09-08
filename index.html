@@ -156,23 +156,11 @@
         font: 12px/1.4 sans-serif;
         pointer-events: none;
       }
-      #shop-hint {
-        bottom: 16px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.55);
-        padding: 6px 12px;
-        border-radius: 8px;
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-        white-space: nowrap;
-        pointer-events: none;
-      }
       /* Only shown while within SIGN_INTERACT_RADIUS_M of a community sign
-         (see updateSignFade in src/main.js) — unlike shop-status/shop-hint
-         above, this one is a real tappable button, so it doesn't inherit
-         their pointer-events: none. Stacked well above the bottom-center
-         hint text below (found via manual verification, not caught by the
+         (see updateSignFade in src/main.js) — unlike shop-status above,
+         this one is a real tappable button, so it doesn't inherit its
+         pointer-events: none. Stacked well above the bottom-center movement
+         joysticks below (found via manual verification, not caught by the
          e2e suite since raw Shop-mode camera movement isn't automated —
          see docs/API.md's "Community signs"). */
       #shop-sign-hint {
@@ -440,6 +428,14 @@
       }
       #account-menu-panel button:hover {
         background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #account-menu-landcap {
+        padding: 7px 12px;
+        margin-top: 2px;
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
       }
       #notifications-badge,
       #friends-badge {
@@ -2687,7 +2683,6 @@
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
     <div id="shop-landlet-info" class="shop-ui"></div>
-    <div id="shop-hint" class="shop-ui">Left stick to walk (push further to run) — right stick to look — double-tap &#9992;&#65039; (or double-press space) to fly</div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
@@ -2710,6 +2705,7 @@
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
         <button id="settings-btn" type="button">Settings</button>
+        <div id="account-menu-landcap" hidden></div>
       </div>
     </div>
     <div id="mode-nav">
