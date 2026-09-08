@@ -24,6 +24,18 @@ const GLB_MAGIC = 0x46546c67; // ascii "glTF", little-endian uint32
 const GLB_VERSION = 2;
 const GLB_JSON_CHUNK = 0x4e4f534a;
 
+// #327: a client-rendered flat thumbnail (renderCatalogThumbnailNow in
+// src/main.js, a fixed 128x128 canvas) — nowhere near this cap in
+// practice, but bounded independently of MAX_MODEL_BYTES since this is a
+// completely different upload shape (a JSON data URL, not a multipart
+// file) with its own validation path. Deliberately skips the heavier
+// reservation dance handleModelUpload uses for MAX_TOTAL_STORAGE_BYTES —
+// a thumbnail this small, content-addressed and deduplicated the same
+// way, gated behind a real owning seller, can't meaningfully move that
+// aggregate budget the way concurrent large model uploads could race it.
+const MAX_THUMBNAIL_BYTES = 300 * 1024;
+const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
+
 // R2's free tier is 10GB of storage per month. This is our OWN
 // application-level backstop well under that — checked live against R2's
 // actual current contents on every upload — so a new upload gets rejected
@@ -966,6 +978,47 @@ async function handleCatalog(request, db, route, url, models) {
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     return row ? json({ template: templateFromRow(row) }) : json({ error: 'Catalog template not found' }, 404);
+  }
+
+  // #327: stores the flat thumbnail the client rendered from this
+  // template's own 3D model (renderCatalogThumbnailNow, src/main.js) plus
+  // a cheap client-computed embedding for it — see migrations/0071's own
+  // comment for why these two fields live outside the ordinary
+  // validateTemplate/templateParams path every other field goes through.
+  // Content-addressed the same way handleModelUpload's .glb uploads are
+  // (a hash of the bytes as the R2 key), not `thumbnails/<templateId>.png`
+  // — GET /uploads/:key below serves every object with a permanent,
+  // immutable cache-control header, so a fixed per-template key would mean
+  // a regenerated thumbnail (a reasonable one-time seller edit, not
+  // something anyone here is trying to prevent) could never actually
+  // reach anyone who'd already cached the old image under that same URL.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'thumbnail') {
+    const existing = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Catalog template not found' }, 404);
+    // Unlike PATCH's permissive fallback for an unowned/orphaned template
+    // (see that handler's own comment below), this writes new bytes to R2
+    // storage — an anonymous write path there is a real abuse surface an
+    // unauthenticated metadata edit isn't — so a genuine owning seller is
+    // required outright rather than falling open.
+    if (!existing.seller_id || !(await sellerExists(db, existing.seller_id))) {
+      throw new HttpError('This catalog template has no owning seller to authorize a thumbnail upload', 403);
+    }
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    const input = await readJson(request);
+    const bytes = decodeThumbnailDataUrl(input.imageDataUrl);
+    const embedding = validateThumbnailEmbedding(input.embedding);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const key = `thumbnails/${hash}.png`;
+    if (!(await models.head(key))) {
+      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    }
+    const imageUrl = `/uploads/${key}`;
+    await db.prepare(`
+      UPDATE catalog_templates SET image_url = ?, image_embedding = ? WHERE template_id = ?
+    `).bind(imageUrl, embedding ? JSON.stringify(embedding) : null, route[1]).run();
+    return json({ imageUrl });
   }
 
   if (request.method === 'POST' && route.length === 1) {
@@ -6392,6 +6445,47 @@ function assertValidExtensible(metadata, dimensions) {
   }
 }
 
+// #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
+// :templateId/thumbnail receives. A JSON data-URL body (not multipart)
+// deliberately, unlike handleModelUpload's raw .glb upload — this is a
+// small, browser-canvas-produced image accompanied by a same-shaped JSON
+// embedding array, and both fit naturally into one ordinary JSON request.
+function decodeThumbnailDataUrl(imageDataUrl) {
+  if (typeof imageDataUrl !== 'string' || !imageDataUrl.startsWith(THUMBNAIL_DATA_URL_PREFIX)) {
+    throw new HttpError(`imageDataUrl must be a data URL starting with "${THUMBNAIL_DATA_URL_PREFIX}"`, 400);
+  }
+  let binary;
+  try {
+    binary = atob(imageDataUrl.slice(THUMBNAIL_DATA_URL_PREFIX.length));
+  } catch {
+    throw new HttpError('imageDataUrl is not valid base64', 400);
+  }
+  if (binary.length > MAX_THUMBNAIL_BYTES) {
+    throw new HttpError(`Thumbnail is ${formatBytes(binary.length)}, over the ${formatBytes(MAX_THUMBNAIL_BYTES)} limit`, 413);
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// The embedding itself (see migrations/0071's own comment) is opaque —
+// this only bounds its shape against a malformed or oversized payload,
+// the same "don't trust the client" posture as every other input this
+// file validates, not an attempt to judge whether it's a *good*
+// embedding.
+function validateThumbnailEmbedding(embedding) {
+  if (embedding === undefined || embedding === null) return null;
+  if (!Array.isArray(embedding) || embedding.length === 0 || embedding.length > 4096) {
+    throw new HttpError('embedding must be a non-empty array of at most 4096 numbers', 400);
+  }
+  for (const value of embedding) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new HttpError('embedding values must all be finite numbers', 400);
+    }
+  }
+  return embedding;
+}
+
 function validateTemplate(input, fallbackId) {
   const dimensions = input.dimensions || {};
   const template = {
@@ -6555,6 +6649,13 @@ function templateFromRow(row) {
     priceCents: row.price_cents,
     sellerId: row.seller_id,
     modelUrl: row.model_url,
+    // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
+    // ordinary create/update paths above (validateTemplate/templateParams
+    // deliberately don't touch these two columns) — see that endpoint's
+    // own comment for why it's kept separate from the rest of a
+    // template's fields.
+    imageUrl: row.image_url,
+    imageEmbedding: row.image_embedding ? JSON.parse(row.image_embedding) : null,
     metadata: JSON.parse(row.metadata_json || '{}'),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

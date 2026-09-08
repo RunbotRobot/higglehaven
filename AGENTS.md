@@ -97,24 +97,66 @@ running commentary moves.
 
 You don't need a browser to use it — call it the same way you'd call any
 other tool, using the Artifact tool's `read_db`/`write_db` actions
-against the URL above:
+against the URL above.
 
-- **`tasks` collection**, one doc per issue/PR you touch, id
-  `issue-<N>` or `pr-<N>`. Fields: `number`, `kind` (`"issue"`|`"pr"`),
-  `title`, `status` (`"queued"`|`"in_progress"`|`"done"`), `session`
-  (your own session name), `url`, `updatedAt` (ISO timestamp). Write or
-  update your own task's doc the moment you self-assign, when you open a
-  PR, and when you merge — this is what replaces "post on #25 when you
-  start/finish."
-- **`messages` collection**, one doc per message, fields `kind`
-  (`"feedback"`|`"question"`), `from` (your session name, or `"owner"`),
-  `text`, `answer` (`null` until answered), `resolved` (bool),
-  `createdAt`. Check it — `where("resolved", "==", false)` — whenever you
-  look for your next task; the owner's direction (`from: "owner"`)
-  lands here via the page's textarea. If you have a genuine blocking
-  question of your own, `add` a `kind: "question"` doc instead of just
-  stopping — see "Continuing without a prompt" below for how to wait on
-  it without going idle.
+**As of 2026-09-07 there is only one collection — `messages` was
+eliminated and folded into `tasks`**, per an explicit owner request
+("eliminate duplication of information between messages and tasks...
+maintain all messages inside the task thread"). Every board item, GitHub-
+backed or not, is a `tasks` doc now, and every reply/discussion thread on
+it lives in a separate flat `replies` collection:
+
+If you ever find the `messages` collection non-empty again: this is not
+data loss. The live Control Room page has never read from `messages`
+since this migration — it only subscribes to `tasks`/`replies` — so a
+non-empty `messages` collection is inert, stale, pre-migration content,
+not a sign anything is broken or missing. (This happened once already,
+2026-09-07 ~23:30 UTC: a session mistook the deletion for corruption and
+restored a ~19:36 UTC snapshot from a cached read, which just re-created
+exactly the duplication the owner asked to eliminate, all of it already
+present and current in `tasks`/`replies`. It was deleted again for that
+reason.) Before treating a non-empty `messages` collection as an incident,
+diff its content against `tasks`/`replies` first — if everything in it is
+already represented there, it's safe to delete outright with no
+sign-off needed.
+
+- **`tasks` collection**, one doc per issue/PR/feedback/question. A
+  GitHub-backed doc (id `issue-<N>` or `pr-<N>`) has `number`, `kind`
+  (`"issue"`|`"pr"`), `title`, `status` (`"queued"`|`"in_progress"`|
+  `"done"`), `session` (your own session name), `url`, `updatedAt` (ISO
+  timestamp) — write or update it the moment you self-assign, when you
+  open a PR, and when you merge, exactly as before. A message-shaped doc
+  (freeform direction/feedback/a question with no GitHub issue behind
+  it — `add` it with an auto id, or `.doc('feedback-<id>').set(...)` if
+  you're claiming an existing feedback item per "Claiming a task" below)
+  instead carries `kind` (`"feedback"`|`"question"`), `tag` (`"note"`|
+  `"question"`, purely cosmetic), `title` (the message text itself),
+  `from` (your session name, or `"owner"`), `status` (same three
+  values — `"queued"` for anything still open/unresolved, `"done"` once
+  it's resolved), `session: ''`, `viewed`/`awaitingClaude` (bool, the
+  board's own triage state), `createdAt`/`updatedAt`, optionally
+  `imageUrl`. Check it for unresolved owner direction — `where("kind",
+  "==", "feedback").where("status", "!=", "done")`, or just read the
+  whole (still modest-sized) collection — whenever you look for your next
+  task; the owner's direction (`from: "owner"`) lands here via the page's
+  compose form, which now writes directly into `tasks`. If you have a
+  genuine blocking question of your own, `add` a `kind: "question"` doc
+  instead of just stopping — see "Continuing without a prompt" below for
+  how to wait on it without going idle. A `kind: "question"` task still
+  showing `status: "queued"` is unanswered; the board itself renders it
+  with an inline "Needs your answer" tag so the owner doesn't have to
+  scan for it.
+- **`replies` collection**, one doc per reply to any task (a GitHub one
+  or a message-shaped one alike) — fields `taskId` (the task doc it
+  replies to), `from` (your session name, or `"owner"`), `text`,
+  `createdAt`, optionally `imageUrl`. This is where you post progress
+  updates, answers, or follow-up discussion on a task — `add` a doc here
+  with `taskId` set to the task's own id rather than editing the task
+  doc's own fields (the board renders replies nested under their task's
+  card, newest-thread-activity-first). Replying to a task the owner has
+  it marked `viewed: true` should also flip that back to `viewed: false`
+  so your reply doesn't sit hidden — see the page's own compose handler
+  for the exact pattern.
 
 Read `db.d.ts`'s call contract (linked from the `artifact-capabilities`
 skill) if you need anything beyond simple reads/writes — `where`/`limit`
@@ -126,7 +168,8 @@ The owner would rather you keep working through the backlog than sit
 idle between their check-ins — so don't wait for one. When you finish a
 task (merged, control room updated), immediately look for your next one
 the same way you would if freshly prompted: check the control room's
-`messages` for unresolved owner direction first, then the GitHub Issues
+`tasks` collection for unresolved owner direction (`kind: "feedback"`/
+`"question"`, `status` not `"done"`) first, then the GitHub Issues
 backlog per "Claiming a task" below.
 
 To make that automatic rather than something you have to be re-prompted
@@ -156,11 +199,12 @@ inside a stopped turn.
 
 For a genuine blocking question you can't resolve alone (the owner's
 judgment call, not yours to make): `add` a `kind: "question"` doc to the
-control room's `messages` collection, then keep your own hourly Routine
-running rather than stopping — its next firing will find your answer
-(`resolved: true`, `answer` set) if one has arrived, or find nothing yet
-and just check again next hour. Either way you're never sitting fully
-idle waiting on it.
+control room's `tasks` collection, then keep your own hourly Routine
+running rather than stopping — its next firing will find your answer (a
+`replies` doc with `taskId` set to your question's id, and/or the
+question's own `status` flipped to `"done"`) if one has arrived, or find
+nothing yet and just check again next hour. Either way you're never
+sitting fully idle waiting on it.
 
 If you ever end up producing bad output under this — a broken merge, a
 regression — the fix is the same as it's always been: whoever notices
@@ -192,15 +236,20 @@ cost when it happens anyway:
   reading a task and claiming it is where collisions happen — don't
   spend several minutes reading code or planning a fix before claiming
   it. Claim first, investigate second. This applies equally to an
-  unresolved control-room `feedback` message you're about to act on,
-  not just a GitHub Issue: the moment you decide to do it, write (or
-  update) its `tasks` doc — id `feedback-<message id>` if you don't
-  also file a real GitHub issue for it — with `status: "in_progress"`
-  and your session name, *then* start reading code. Don't let "just
-  reply to the owner first" or "just check the code first" become the
-  de facto claim instead. A feedback item small enough that filing a
-  real issue feels like overkill is still worth a `tasks` doc for this
-  reason alone — the claim is the point, not the issue tracker.
+  unresolved control-room `feedback`/`question` task you're about to act
+  on, not just a GitHub Issue: the moment you decide to do it, update
+  that task's own doc directly with `status: "in_progress"` and your
+  session name, *then* start reading code — no separate claim doc
+  needed, since (as of the 2026-09-07 messages→tasks merge) the feedback
+  item already IS the `tasks` doc; there's no longer a `messages` doc
+  behind it to reference. If you *do* also file a real GitHub issue for
+  it, still update the feedback task's own doc (`status: "in_progress"`,
+  a `replies` doc noting the issue number) rather than leaving it
+  orphaned — don't let "just reply to the owner first" or "just check
+  the code first" become the de facto claim instead. A feedback item
+  small enough that filing a real issue feels like overkill is still
+  worth claiming its own `tasks` doc for this reason alone — the claim
+  is the point, not the issue tracker.
 - **Immediately after writing your claim, re-read that same doc once
   before doing anything else.** Two sessions can still write a claim
   within moments of each other — this doesn't stop that, but it stops

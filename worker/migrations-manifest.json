@@ -67,5 +67,6 @@
   "0067_builder_last_active.sql",
   "0068_seller_stripe_connect.sql",
   "0069_purchases_payment_intent.sql",
-  "0070_higgles_rename.sql"
+  "0070_higgles_rename.sql",
+  "0071_catalog_template_image.sql"
 ]

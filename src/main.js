@@ -26,6 +26,7 @@ import {
   createCatalogTemplate,
   updateCatalogTemplate,
   deleteCatalogTemplate,
+  uploadCatalogTemplateThumbnail,
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
@@ -1868,10 +1869,22 @@ const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
 // A template's appearance never changes after creation (there's no edit
-// flow for its color or model), so a thumbnail rendered once this session
-// is good for the rest of it — keyed by templateId rather than re-rendered
-// every time the picker reopens or a new upload rebuilds the whole grid.
+// flow for its color), so a thumbnail rendered once this session is good
+// for the rest of it — keyed by templateId rather than re-rendered every
+// time the picker reopens or a new upload rebuilds the whole grid. The one
+// exception is Save Size (#544): it can rescale/re-upload the model and
+// always changes template.dimensions, both of which change what
+// renderCatalogThumbnailNow's bounding-sphere framing actually renders —
+// its own success handler deletes this template's cache entry before
+// rebuilding the picker, so this cache would otherwise keep serving a
+// stale pre-resize thumbnail for the rest of the session.
 const catalogThumbnailCache = new Map();
+// #327: the cheap stand-in visual embedding computed alongside each
+// thumbnail render (computeThumbnailEmbedding below) — kept as its own
+// map, not folded into catalogThumbnailCache's value, so that cache's
+// existing dataUrl-in/dataUrl-out shape (relied on by every caller that
+// only ever wanted the image) doesn't need to change.
+const catalogThumbnailEmbeddingCache = new Map();
 const CATALOG_THUMBNAIL_SIZE = 128;
 let catalogThumbnailCanvas = null;
 let catalogThumbnailRenderer = null;
@@ -1937,8 +1950,39 @@ async function renderCatalogThumbnailNow(template) {
 
   catalogThumbnailRenderer.render(scene, camera);
   const dataUrl = catalogThumbnailCanvas.toDataURL('image/png');
+  // #327: computed from these exact pixels before disposeObject/before
+  // this shared canvas could possibly be reused by a queued render for a
+  // different template — see computeThumbnailEmbedding's own comment.
+  const embedding = computeThumbnailEmbedding(catalogThumbnailCanvas);
   disposeObject(previewObject);
-  return dataUrl;
+  return { dataUrl, embedding };
+}
+
+// #327 ("build the 3D Model > Flat image creation pathway," the owner's
+// own direction on issue #327 after ruling out a second seller photo
+// upload and server-side GLB rendering, which Workers can't do): a cheap
+// stand-in visual embedding — issue #327's own goal is a stored embedding
+// per product image, and its own text allows stubbing "whatever's
+// cheapest to get the pipeline working end-to-end first... swap in a
+// better model later." Downsampling the already-rendered thumbnail into a
+// small grid of normalized RGB averages needs no embedding-model/provider
+// choice (a real design decision this issue's comments explicitly left
+// open) and is derived from actual rendered pixels, not a metadata
+// stand-in like color/category/dimensions alone (which docs/API.md's own
+// discussion on #327 treated as a worse fallback, not the goal).
+const THUMBNAIL_EMBEDDING_GRID = 8;
+function computeThumbnailEmbedding(sourceCanvas) {
+  const grid = document.createElement('canvas');
+  grid.width = THUMBNAIL_EMBEDDING_GRID;
+  grid.height = THUMBNAIL_EMBEDDING_GRID;
+  const ctx = grid.getContext('2d');
+  ctx.drawImage(sourceCanvas, 0, 0, THUMBNAIL_EMBEDDING_GRID, THUMBNAIL_EMBEDDING_GRID);
+  const { data } = ctx.getImageData(0, 0, THUMBNAIL_EMBEDDING_GRID, THUMBNAIL_EMBEDDING_GRID);
+  const embedding = [];
+  for (let i = 0; i < data.length; i += 4) {
+    embedding.push(data[i] / 255, data[i + 1] / 255, data[i + 2] / 255);
+  }
+  return embedding;
 }
 
 function renderCatalogThumbnail(template) {
@@ -1950,10 +1994,32 @@ function renderCatalogThumbnail(template) {
     () => {},
     () => {}, // keep the queue alive even if one template's render fails
   );
-  result.then((dataUrl) => {
-    if (dataUrl) catalogThumbnailCache.set(template.templateId, dataUrl);
+  result.then((rendered) => {
+    if (rendered) {
+      catalogThumbnailCache.set(template.templateId, rendered.dataUrl);
+      catalogThumbnailEmbeddingCache.set(template.templateId, rendered.embedding);
+    }
   });
-  return result;
+  return result.then((rendered) => rendered?.dataUrl ?? null);
+}
+
+// #327: persists the client-rendered thumbnail (plus its embedding) to
+// the server so later page loads/sessions get a real stored image instead
+// of needing to load and render this template's full GLTF model again,
+// and so a future embedding-similarity search (#329, not built yet) has
+// something to query against. Best-effort and never awaited by its
+// callers — a failure here shouldn't block or surface an error for
+// whatever product-creation/edit flow triggered it, since the picker
+// already works fine off the client-rendered dataUrl either way.
+async function persistCatalogThumbnail(template) {
+  try {
+    const dataUrl = await renderCatalogThumbnail(template);
+    if (!dataUrl) return;
+    const embedding = catalogThumbnailEmbeddingCache.get(template.templateId) || null;
+    template.imageUrl = await uploadCatalogTemplateThumbnail(template.templateId, { imageDataUrl: dataUrl, embedding });
+  } catch (err) {
+    console.error('persistCatalogThumbnail: could not persist a thumbnail for', template.templateId, err);
+  }
 }
 
 // Client-side name filtering (see #catalog-search-input's own CSS comment)
@@ -1987,7 +2053,15 @@ function buildCatalogPickerButtons() {
     const thumb = document.createElement('img');
     thumb.className = 'catalog-thumb';
     thumb.alt = '';
-    thumb.src = catalogThumbnailCache.get(template.templateId) ?? solidColorDataUrl(template.color);
+    // #327: a persisted image_url (once one exists) is a real, already-
+    // rendered image straight from storage — cheaper than the client
+    // re-rendering this template's full GLTF model just to redraw the
+    // same picture the live render already produced once before. The
+    // in-session cache still wins when both exist since it's already in
+    // memory (no network round trip) and, right after a fresh upload,
+    // may be more current than a not-yet-finished persistCatalogThumbnail
+    // call.
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
     tile.appendChild(thumb);
 
     const name = document.createElement('span');
@@ -2001,7 +2075,7 @@ function buildCatalogPickerButtons() {
     });
     catalogPickerGridEl.appendChild(tile);
 
-    if (!catalogThumbnailCache.has(template.templateId)) {
+    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
       renderCatalogThumbnail(template).then((dataUrl) => {
         if (dataUrl) thumb.src = dataUrl;
       });
@@ -2609,6 +2683,10 @@ async function handleUploadDimensionsStep() {
     });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — the template still exists server-side, but nothing here should act on it
 
+    // #327: fire-and-forget, deliberately not awaited — this only feeds
+    // future page loads and #329's not-yet-built embedding search, so it
+    // shouldn't hold up the seller actually seeing their new product.
+    persistCatalogThumbnail(template);
     activeCatalog.push(template);
     buildCatalogPickerButtons();
     closeUploadModal();
@@ -3309,8 +3387,25 @@ function renderSellerList() {
         const updated = await updateCatalogTemplate(template.templateId, patch);
         Object.assign(template, updated);
         refreshDimsText();
+        // #544/#327: dimensions changed (and possibly the model itself, if
+        // it was rescaled/re-uploaded above) — both affect what the catalog
+        // picker's thumbnail actually renders, so the cached render (and
+        // its embedding) from before this save is stale. Re-persist so both
+        // the in-session picker and the stored image_url pick up the new
+        // size instead of quietly going stale.
+        catalogThumbnailCache.delete(template.templateId);
+        catalogThumbnailEmbeddingCache.delete(template.templateId);
+        persistCatalogThumbnail(template);
         buildCatalogPickerButtons();
-        if (axisPreview?.templateId === template.templateId) {
+        // #543: this row's own previewContainer can be stale by the time this
+        // slow (fetch → rescale → upload → save) chain resolves — the Seller
+        // modal may have been closed and reopened in the meantime, which
+        // rebuilds every row (and its previewContainer) from scratch while
+        // leaving this closure pointing at the old, now-detached node.
+        // Without this check, re-showing the preview here would yank the
+        // shared preview canvas out of whatever OTHER row currently has it
+        // open and re-mount it into this detached node instead.
+        if (axisPreview?.templateId === template.templateId && previewContainer.isConnected) {
           showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
         }
         sizeStatus.textContent = 'Saved — any builder with this placed has been notified.';

@@ -51,6 +51,34 @@ const sellerListText = await page.textContent('#seller-list');
 const productListed = sellerListText.includes(PRODUCT_NAME);
 console.log('new product listed in seller list (should be true):', productListed);
 
+// #327: persistCatalogThumbnail is fire-and-forget (never awaited by the
+// upload flow itself), so the real GLB render + upload can still be
+// in flight here — poll rather than checking once.
+async function fetchTemplateByName(name) {
+  return page.evaluate(async (productName) => {
+    const res = await fetch('/api/catalog?limit=100');
+    const { templates } = await res.json();
+    return templates.find((t) => t.name === productName) ?? null;
+  }, name);
+}
+await page.waitForFunction(
+  async (productName) => {
+    const res = await fetch('/api/catalog?limit=100');
+    const { templates } = await res.json();
+    return !!templates.find((t) => t.name === productName)?.imageUrl;
+  },
+  PRODUCT_NAME,
+  { timeout: 15000 },
+);
+const afterCreate = await fetchTemplateByName(PRODUCT_NAME);
+console.log('imageUrl persisted after create (should be set):', afterCreate?.imageUrl);
+console.log('imageEmbedding persisted after create (should be a non-empty array):', Array.isArray(afterCreate?.imageEmbedding) && afterCreate.imageEmbedding.length);
+const thumbnailResponse = await page.evaluate(async (url) => {
+  const res = await fetch(url);
+  return { status: res.status, contentType: res.headers.get('content-type') };
+}, afterCreate.imageUrl);
+console.log('persisted thumbnail is fetchable as a real PNG (should be 200/image/png):', thumbnailResponse);
+
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
 
@@ -99,6 +127,27 @@ await page.waitForFunction(
 const saveStatus = await row().locator('.seller-size-status').textContent();
 console.log('save status (should mention notified):', saveStatus);
 
+// #327: a resize invalidates and re-persists the thumbnail (see the Save
+// Size handler in src/main.js). Not asserting the resulting imageUrl
+// differs from the pre-resize one — renderCatalogThumbnailNow frames its
+// camera to the model's own bounding sphere, so a *uniform* rescale (this
+// test doubles all three axes proportionally — see "scaled proportionally"
+// above) renders pixel-identical either way, correctly deduplicating to
+// the same content-addressed URL rather than "changing" it for no visual
+// reason. What actually matters here is that the resize path doesn't
+// break the pipeline: a real image should still be there and fetchable.
+await page.waitForTimeout(1000); // let the fire-and-forget re-persist settle
+const afterResize = await fetchTemplateByName(PRODUCT_NAME);
+console.log('imageUrl still set after resize (should be truthy):', afterResize.imageUrl);
+console.log('imageUrl changed vs. pre-resize (informational only — a uniform rescale can legitimately render identically):', afterResize.imageUrl !== afterCreate.imageUrl);
+const thumbnailResponseAfterResize = await page.evaluate(async (url) => {
+  const res = await fetch(url);
+  return { status: res.status, contentType: res.headers.get('content-type') };
+}, afterResize.imageUrl);
+console.log('thumbnail still fetchable as a real PNG after resize (should be 200/image/png):', thumbnailResponseAfterResize);
+const thumbnailSurvivedResize = !!afterResize.imageUrl &&
+  thumbnailResponseAfterResize.status === 200 && thumbnailResponseAfterResize.contentType === 'image/png';
+
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);
 
@@ -139,7 +188,10 @@ const badgeHiddenAfterRead = await page.locator('#notifications-badge').isHidden
 console.log('badge hidden after reading the only notice (should be true):', badgeHiddenAfterRead);
 
 const pass = badgeHiddenInitially && fileStepVisible && originalX > 0 && productListed &&
+  !!afterCreate?.imageUrl && Array.isArray(afterCreate?.imageEmbedding) && afterCreate.imageEmbedding.length > 0 &&
+  thumbnailResponse.status === 200 && thumbnailResponse.contentType === 'image/png' &&
   scaledProportionally && saveStatus.includes('notified') &&
+  thumbnailSurvivedResize &&
   dotVisibleBeforeExpanding &&
   badgeVisible && badgeText === '1' &&
   noticeText.includes(PRODUCT_NAME) && noticeText.toLowerCase().includes('resized') &&
