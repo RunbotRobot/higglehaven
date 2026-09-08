@@ -145,6 +145,24 @@ export async function createGreenbeltLandletAsAdmin(landletId, { areaM2 = 1000 }
   }
 }
 
+// #489: land cap now actually gates vertical construction and auction
+// bidding, and every fresh builder's owned area already equals their
+// default cap exactly — so a suite whose real point is something *else*
+// (the level-controls UI, a second bid on top of an already-owned
+// landlet, ...) needs a way to give its test builder real cap headroom
+// first, the same "admin-gated escape hatch, same reasoning as
+// createGreenbeltLandletAsAdmin" story POST /api/landlets already has.
+export async function grantLandCapHeadroomAsAdmin(builderId, amountCents = 1000000) {
+  const cookie = await ensureAdminSession();
+  const granted = await adminApi(`/builders/${builderId}/land-cap-grants`, cookie, {
+    method: 'POST',
+    body: JSON.stringify({ amountCents }),
+  });
+  if (granted.response.status !== 201) {
+    throw new Error(`grantLandCapHeadroomAsAdmin: grant failed — ${granted.body.error}`);
+  }
+}
+
 // Launches a fresh browser + page against the running dev server, with
 // console/page errors collected (callers should assert `errors.length === 0`
 // at the end) and window.prompt() dialogs (used throughout for naming a new

@@ -386,6 +386,37 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #520: DELETE's unowned/orphaned path had the identical missing-rate-limit
+  // gap as PATCH above — a single unauthenticated DELETE (unlike PATCH,
+  // consumed one-shot) needs a fresh template per attempt.
+  it('rate-limits repeated unauthenticated DELETEs of seller-less templates', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createTemplate(`catalog-delete-rate-limit-${i}`);
+      const attempt = await api(`/catalog/${templateId}`, { method: 'DELETE', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const templateId = await createTemplate('catalog-delete-rate-limit-final');
+    const limited = await api(`/catalog/${templateId}`, { method: 'DELETE', headers });
+    expect(limited.response.status).toBe(429);
+  });
+
+  it('rate-limits repeated unauthenticated batch DELETEs containing seller-less templates', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createTemplate(`catalog-batch-delete-rate-limit-${i}`);
+      const attempt = await api('/catalog/batch', {
+        method: 'DELETE', headers, body: JSON.stringify({ templateIds: [templateId] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const templateId = await createTemplate('catalog-batch-delete-rate-limit-final');
+    const limited = await api('/catalog/batch', {
+      method: 'DELETE', headers, body: JSON.stringify({ templateIds: [templateId] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');

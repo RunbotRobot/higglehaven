@@ -1150,6 +1150,53 @@ function flatGroundHitPoint(hit) {
   return new THREE.Vector3(flat.x, flat.y, flat.z);
 }
 
+// #220 (biome ground texture): #219's own real classification-data
+// pipeline (worker/geoData.js, scripts/ingest-geo-data.mjs) never actually
+// landed a `biome` field on a landlet — it only ever shipped water/
+// buildable landType (already given its own distinct look), and its
+// ingestion script has never been run against real data at all. Every
+// landlet this game currently generates therefore falls into exactly the
+// "no real classification" bucket #220 itself calls out needing a
+// fallback for — so rather than invent a speculative per-biome system
+// with nothing real to key off (the same call PR #238 already made for
+// this same issue), this just replaces the flat single-color ground
+// fill with a textured "default/unclassified" one. A real per-biome
+// material lookup can slot in wherever createGroundTexture() is called
+// once #219's pipeline actually reaches a landlets column, without
+// touching any of its callers.
+//
+// Generated on a canvas rather than loaded from an image asset (matching
+// makeDimensionLabelSprite's own CanvasTexture precedent elsewhere in
+// this file) — small random dabs in a few close shades of green over a
+// base fill read as mottled grass without needing real art. colorSpace
+// must be set explicitly: THREE.Texture defaults to NoColorSpace, which
+// reads a canvas's colors washed-out/oversaturated against everything
+// else in the scene using the sRGB pipeline.
+let cachedGroundTexture = null;
+function createGroundTexture() {
+  if (cachedGroundTexture) return cachedGroundTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#6ca42e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const speckleColors = ['#7cb83a', '#5c9424', '#82c244', '#568c20'];
+  for (let i = 0; i < 4000; i++) {
+    ctx.fillStyle = speckleColors[i % speckleColors.length];
+    const w = 1 + Math.random() * 2;
+    const h = 3 + Math.random() * 4;
+    ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, w, h);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 8);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  cachedGroundTexture = texture;
+  return texture;
+}
+
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
 // square is only a placeholder shown before bootstrap() resolves which
@@ -1161,7 +1208,7 @@ const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
 curveGroundGeometry(landletGeometry);
 // DoubleSide so the plane stays visible from below during dev orbiting;
 // the finished game will never let a shopper get under the ground plane.
-const landletMaterial = new THREE.MeshStandardMaterial({ color: 0x4caf50, side: THREE.DoubleSide }); // placeholder grass
+const landletMaterial = new THREE.MeshStandardMaterial({ map: createGroundTexture(), side: THREE.DoubleSide });
 const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
 scene.add(landlet);
 
@@ -2900,22 +2947,24 @@ function renderSellerList() {
     row.dataset.templateId = String(template.templateId);
 
     // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
-    // Extensibility, Flooring) independently does
-    // `{ ...template.metadata, someKey: ... }` then PATCHes the whole
-    // metadata object back — the server replaces metadata wholesale rather
-    // than merging it (see the Extensibility save handler's own comment
-    // below), so two of these panels saved in overlapping in-flight
-    // windows would otherwise race: whichever response lands last
-    // silently discards the other panel's change, since its own
-    // `nextMetadata` snapshot was taken before the first save's
-    // `Object.assign(template, updated)` landed. One shared busy flag
-    // serializes them, the same idiom as undoRedoBusy/levelActionBusy
-    // elsewhere in this file — every metadata-editing button on this row
-    // registers itself here and is disabled while any one save is in
-    // flight. Backed by the module-level metadataSaveBusyByTemplateId map
-    // (see its own comment above) rather than a local variable, so the
-    // flag survives this row's own DOM/closures being thrown away by a
-    // modal close/reopen (#457) while an earlier save is still pending.
+    // Extensibility, Flooring, Size, Price) independently PATCHes this
+    // template via updateCatalogTemplate — the server does a full
+    // read-existing/merge/rewrite of the whole catalog_templates row rather
+    // than touching only the changed column(s) (see the Extensibility save
+    // handler's own comment below), so two of these panels saved in
+    // overlapping in-flight windows would otherwise race: whichever
+    // response lands last silently discards the other panel's change,
+    // since its own patch was built from a `template` snapshot taken
+    // before the first save's `Object.assign(template, updated)` landed.
+    // (Size and Price were originally left out of this guard despite
+    // hitting the same endpoint — #531.) One shared busy flag serializes
+    // them, the same idiom as undoRedoBusy/levelActionBusy elsewhere in
+    // this file — every save-triggering button on this row registers
+    // itself here and is disabled while any one save is in flight. Backed by the
+    // module-level metadataSaveBusyByTemplateId map (see its own comment
+    // above) rather than a local variable, so the flag survives this
+    // row's own DOM/closures being thrown away by a modal close/reopen
+    // (#457) while an earlier save is still pending.
     const isMetadataSaveBusy = () => metadataSaveBusyByTemplateId.get(template.templateId) === true;
     const setMetadataSaveBusy = (busy) => {
       if (busy) metadataSaveBusyByTemplateId.set(template.templateId, true);
@@ -3294,10 +3343,12 @@ function renderSellerList() {
     sizeStatus.className = 'seller-size-status';
 
     const sizeSaveBtn = document.createElement('button');
-    sizeSaveBtn.className = 'seller-size-save-btn';
+    sizeSaveBtn.className = 'seller-size-save-btn metadata-save-btn';
     sizeSaveBtn.type = 'button';
     sizeSaveBtn.textContent = 'Save Size';
+    metadataSaveButtons.push(sizeSaveBtn);
     sizeSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
       sizeStatus.textContent = '';
       sizeStatus.classList.remove('error');
       const nextDimensions = {
@@ -3314,7 +3365,8 @@ function renderSellerList() {
         sizeStatus.textContent = 'No change.';
         return;
       }
-      sizeSaveBtn.disabled = true;
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const patch = { dimensions: nextDimensions };
         if (template.modelUrl?.startsWith('/uploads/')) {
@@ -3345,7 +3397,8 @@ function renderSellerList() {
         sizeStatus.textContent = err.message || 'Could not resize.';
         sizeStatus.classList.add('error');
       } finally {
-        sizeSaveBtn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     sizePanel.appendChild(sizeSaveBtn);
@@ -3389,10 +3442,12 @@ function renderSellerList() {
     priceStatus.className = 'seller-price-status';
 
     const priceSaveBtn = document.createElement('button');
-    priceSaveBtn.className = 'seller-price-save-btn';
+    priceSaveBtn.className = 'seller-price-save-btn metadata-save-btn';
     priceSaveBtn.type = 'button';
     priceSaveBtn.textContent = 'Save Price';
+    metadataSaveButtons.push(priceSaveBtn);
     priceSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
       priceStatus.textContent = '';
       priceStatus.classList.remove('error');
       const trimmed = priceInput.value.trim();
@@ -3410,7 +3465,8 @@ function renderSellerList() {
         priceStatus.textContent = 'No change.';
         return;
       }
-      priceSaveBtn.disabled = true;
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { priceCents });
         Object.assign(template, updated);
@@ -3421,7 +3477,8 @@ function renderSellerList() {
         priceStatus.textContent = err.message || 'Could not save.';
         priceStatus.classList.add('error');
       } finally {
-        priceSaveBtn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     pricePanel.appendChild(priceSaveBtn);
@@ -7451,7 +7508,18 @@ function closeAuthModal() {
 }
 
 async function refreshCurrentUser() {
-  currentAuthUser = await fetchCurrentUser();
+  // fetchCurrentUser now throws on a genuine backend/network failure
+  // instead of returning null for it the same as "really logged out" (the
+  // one case /auth/me itself already returns 200/{user: null} for — see
+  // that function's own comment). Leaving currentAuthUser untouched on
+  // failure means a transient error here can't make an already-logged-in
+  // visitor's session appear to vanish; the next successful refresh (a
+  // login/signup, or simply reopening this panel) corrects it either way.
+  try {
+    currentAuthUser = await fetchCurrentUser();
+  } catch (err) {
+    console.warn('Could not refresh current user:', err);
+  }
   refreshAccountAuthUI();
   return currentAuthUser;
 }
@@ -8667,6 +8735,34 @@ function createShopAvatar() {
     SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
   const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
   headPivot.add(head);
+
+  // Face + hair (owner Control Room feedback: "give him a face and hair so
+  // we can tell which is his front and which is his back") — the body was
+  // otherwise fully symmetric front-to-back, so neither the walk cycle nor
+  // the idle look-around ever needed to define which local axis was
+  // "front" (see the sagittal-plane comment on `limb` above: rotating a
+  // pivot about local X swings it through the Y-Z plane, so Y is the
+  // forward/back axis — arbitrarily picking +Y as front here, since
+  // nothing else in this file depended on a convention existing yet).
+  // Both are simple offset/scaled spheres, matching this placeholder
+  // avatar's existing "primitives only" style rather than needing any new
+  // geometry.
+  const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+  const eyeRadius = SHOP_AVATAR_HEAD_RADIUS_M * 0.12;
+  const eyeY = SHOP_AVATAR_HEAD_RADIUS_M * 0.85;
+  const eyeZ = SHOP_AVATAR_HEAD_RADIUS_M * 0.1;
+  const eyeSpacingX = SHOP_AVATAR_HEAD_RADIUS_M * 0.4;
+  for (const sign of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 8, 6), eyeMaterial);
+    eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
+    head.add(eye);
+  }
+  const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
+  hair.scale.set(1, 0.85, 0.65); // flatten into a cap rather than a full second head
+  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.25, SHOP_AVATAR_HEAD_RADIUS_M * 0.3); // back (-Y) and up
+  head.add(hair);
+
   group.add(headPivot);
 
   // On `group` rather than `headPivot` so idle's own head-turn sway
@@ -8929,6 +9025,11 @@ function shopPositionBlocked(x, y, z) {
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
+      // Flooring always renders flush with the ground (see isFlooringTemplate)
+      // — it's a walkable surface replacing the default grass, not an
+      // obstacle, so it never blocks the shopper the way a real object
+      // would (#530).
+      if (isFlooringTemplate(mesh.userData.template)) continue;
       const worldX = entry.group.position.x + mesh.position.x;
       const worldY = entry.group.position.y + mesh.position.y;
       const { height } = meshDimensions(mesh);
@@ -10015,16 +10116,17 @@ async function enterShopMode() {
 
   // The visible world stops at the wall — no glimpse of "wild ground" that
   // isn't actually any land's own polygon. A thin overlap keeps the ground
-  // from leaving a seam right at the wall's own base. Uses the same brand
-  // green as the UI's own "active" accent (index.html's --brand-green) —
-  // this used to be a much darker forest green that read as a heavy,
-  // ominous swath across an otherwise bright scene once every visible
-  // landlet resolves against it.
+  // from leaving a seam right at the wall's own base. Textured (#220) with
+  // the same base brand green the flat fill used before (index.html's
+  // --brand-green) — this used to be a much darker forest green that read
+  // as a heavy, ominous swath across an otherwise bright scene once every
+  // visible landlet resolves against it; the mottling stays subtle for the
+  // same reason.
   const wildGroundGeometry = new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64);
   applyGroundCurvature(wildGroundGeometry, 0, 0); // this mesh's own local origin *is* the world origin
   const wildGround = new THREE.Mesh(
     wildGroundGeometry,
-    new THREE.MeshStandardMaterial({ color: 0x6ca42e }),
+    new THREE.MeshStandardMaterial({ map: createGroundTexture() }),
   );
   scene.add(wildGround);
   shopWorldObjects.push(wildGround);
@@ -10084,10 +10186,17 @@ async function enterShopMode() {
 
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
-    const groundMesh = new THREE.Mesh(
-      new THREE.ShapeGeometry(shapeForLandlet(record)),
-      new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKeyForLandlet(record)] ?? 0x4caf50 }),
-    );
+    // #220: only the default/unclassified case (an unclaimed 'greenbelt'
+    // plot — the same "no real biome data" bucket wildGround/the Build-mode
+    // plane fall into) gets the textured ground. claimed/generating/water
+    // keep their own flat SHOP_PLOT_COLORS fill — those are ownership-status
+    // indicators, not a ground biome, and need to stay instantly readable
+    // as a single solid color at a glance across the whole world.
+    const plotColorKey = plotColorKeyForLandlet(record);
+    const groundMaterial = plotColorKey === 'greenbelt'
+      ? new THREE.MeshStandardMaterial({ map: createGroundTexture() })
+      : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
+    const groundMesh = new THREE.Mesh(new THREE.ShapeGeometry(shapeForLandlet(record)), groundMaterial);
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);

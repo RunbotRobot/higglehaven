@@ -511,6 +511,84 @@ describe('Auctions', () => {
     expect(instances.body.instances).toEqual([]);
   });
 
+  // #456: the update test above only exercises the "instance stays on the
+  // same landlet" path — this one specifically exercises the second
+  // requireOwnedLandlet branch (instance.landletId !== existing.landlet_id),
+  // moving an instance from a landlet the owner keeps onto one that's
+  // concurrently transferred away, to confirm the write-time guard also
+  // re-checks the *destination* landlet's ownership, not just the source.
+  it('does not let a concurrent instance update move content onto a landlet once an auction transfers it', async () => {
+    const owner = await signupBuilder('instance-update-move-race-owner');
+    const priorTargetOwner = await signupBuilder('instance-update-move-race-prior-owner');
+    const bidder = await signupBuilder('instance-update-move-race-bidder');
+    await createGreenbeltLandlet('instance-update-move-race-target');
+    await createGreenbeltLandlet('instance-update-move-race-source');
+    await claim('instance-update-move-race-source', owner);
+    const createdOnSource = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-update-move-race-instance', landletId: 'instance-update-move-race-source',
+        templateId: 'placeholder-tree', x: 1, y: 1,
+      }),
+    }));
+    expect(createdOnSource.response.status).toBe(201);
+
+    // A builder can only ever have one landlet claimed directly (see
+    // POST .../claim's own "one claimed landlet per builder" invariant),
+    // so the only legitimate way for `owner` to also come to own the
+    // target landlet here is to win it at auction — same as any other
+    // builder accumulating a second landlet in the real app.
+    await claim('instance-update-move-race-target', priorTargetOwner);
+    const firstAuction = await api('/landlets/instance-update-move-race-target/auction', priorTargetOwner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const firstAuctionId = firstAuction.body.auction.auctionId;
+    // owner already owns instance-update-move-race-source, so bidding on a
+    // second landlet here now needs land-cap headroom (#489) — same
+    // "grant plenty via a real earnings event" pattern the
+    // resolve-existing-owner test above uses; what's under test is the
+    // instance-move race, not the cap gate itself.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, owner.builderId, 100000000).run();
+    await api('/builders');
+    const firstBid = await api(`/auctions/${firstAuctionId}/bids`, owner.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    expect(firstBid.response.status).toBe(201);
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(firstAuctionId).run();
+    const firstResolve = await api(`/auctions/${firstAuctionId}/resolve`, { method: 'POST' });
+    expect(firstResolve.response.status).toBe(200);
+
+    const started = await api('/landlets/instance-update-move-race-target/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // Owner still owns both landlets at the moment this fires — the race
+    // is entirely in the gap between handleInstances' own ownership checks
+    // and its write, not in the request's own legitimacy at send time.
+    const [moved] = await Promise.all([
+      api('/instances/instance-update-move-race-instance', owner.session({
+        method: 'PATCH', body: JSON.stringify({ landletId: 'instance-update-move-race-target' }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here: the initial requireOwnedLandlets check
+    // can itself lose the race and reject before ever reaching the new
+    // write-time guard.
+    expect([200, 403, 409]).toContain(moved.response.status);
+
+    const targetLandlet = await api('/landlets/instance-update-move-race-target');
+    expect(targetLandlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const targetInstances = await api('/instances?landletId=instance-update-move-race-target');
+    expect(targetInstances.body.instances).toEqual([]);
+  });
+
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');
@@ -522,6 +600,14 @@ describe('Auctions', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const auctionId = started.body.auction.auctionId;
+    // The bidder here already owns a claimed landlet (this test's whole
+    // point), so bidding on a second one now needs land-cap headroom —
+    // see #489. What's being tested is auction resolution mechanics, not
+    // the cap gate, so grant plenty of it via a real earnings event.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, bidder.builderId, 100000000).run();
+    await api('/builders');
     await api(`/auctions/${auctionId}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 500 }),
     }));
@@ -1620,6 +1706,31 @@ describe('Simulated purchases', () => {
     });
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.quantity).toBe(1000);
+  });
+
+  it('rejects a total price that exceeds MAX_MONEY_CENTS even when quantity and priceCents each pass their own cap (#521)', async () => {
+    const seller = await signupBuilder('purchase-total-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-total-cap-landlet', 1000);
+    await claim('purchase-total-cap-landlet', seller);
+    // 100_000_000 is MAX_MONEY_CENTS itself — individually valid for priceCents.
+    await createTemplate('purchase-total-cap-template', { priceCents: 100_000_000 });
+    await placeInstance('purchase-total-cap-instance', 'purchase-total-cap-landlet', 'purchase-total-cap-template', seller);
+
+    // quantity 2 is well within PURCHASE_MAX_QUANTITY (1000), but combined
+    // with the price above it produces a totalCents twice MAX_MONEY_CENTS.
+    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 2 }),
+    });
+    expect(tooMuch.response.status).toBe(400);
+    expect(tooMuch.body).toEqual({ error: 'total price must be 100000000 cents or fewer' });
+
+    const atCap = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.totalCents).toBe(100_000_000);
   });
 
   it('rate-limits repeated purchases from the same client', async () => {

@@ -60,6 +60,22 @@
         height: 100vh;
         display: block;
       }
+      /* Wordmark and the account-menu toggle share one fixed top-left row
+         (owner request: a cog icon "just to the right of the higglehaven
+         wordmark" instead of the menu living in its own row lower down,
+         freeing that space to see the 3D world). Sized by its two flex
+         children rather than a fixed width, so it stays correct regardless
+         of the wordmark's own responsive width (see the max-width:480px
+         rule below). */
+      #topbar-left {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       /* The wordmark's own green-on-transparent art has no contrast
          guarantee against an arbitrary background — great against the
          ground plane and most products, unreadable against the sky. Same
@@ -68,10 +84,6 @@
          since it controls the pixels immediately behind the logo instead
          of depending on whatever happens to be in the 3D scene there. */
       #wordmark-panel {
-        position: fixed;
-        top: 10px;
-        left: 12px;
-        z-index: 10;
         pointer-events: none;
         /* The wordmark art is itself green — sitting on the pale-green
            pill background every other bit of chrome now uses would leave
@@ -339,8 +351,10 @@
          Build/Sell tab buttons to be in the same row as the higglehaven
          wordmark to increase open screen space" — that claimed this
          panel's old top-right-of-row-1 spot (see #mode-nav below), so
-         undo/redo swapped down into #mode-nav's old spot instead, right
-         under the account menu, rather than needing a brand new row. */
+         undo/redo swapped down into #mode-nav's old row (top: 48px)
+         instead, rather than needing a brand new one. That row's left
+         side (once the account menu's own spot — see #topbar-left) is
+         empty now that the account menu moved up next to the wordmark. */
       #undo-redo-panel {
         position: fixed;
         top: 48px;
@@ -354,10 +368,10 @@
          expanding menu (docs/SPEC.md §1's "clean, minimalist... expanding
          menus... leave plenty of screen space open") — one small pill
          instead of a whole cluster, expanding into a dropdown only when
-         actually needed. Sits just under the wordmark panel — that panel
-         is pointer-events: none (it's decorative branding), so this lives
-         as its own fixed element rather than fighting that to become
-         clickable.
+         actually needed. Lives in #topbar-left next to the wordmark panel;
+         that panel is pointer-events: none (it's decorative branding), so
+         this is its own sibling element rather than fighting that to
+         become clickable.
 
          The four original buttons keep their original IDs/click handlers
          untouched in main.js — only their layout changed, from independent
@@ -366,20 +380,16 @@
          Notices/Friends hidden in Shop mode, Settings never hidden) keeps
          working exactly as before with no JS changes. */
       #account-menu {
-        position: fixed;
-        top: 48px;
-        left: 12px;
-        /* Above the z-index:10 floating-HUD tier (gizmo-mode-controls,
-           product-info, ...) — the expanded panel sits low enough on
-           screen to visually overlap #gizmo-mode-controls' full-width
-           (94vw) row once a selection is active, and at a tied z-index
-           the later-in-DOM element (gizmo-mode-controls) would otherwise
-           win the stacking order and silently swallow taps meant for the
-           menu underneath (found via e2e/seller-upload-and-resize.test.mjs
+        /* Purely to give the absolutely-positioned dropdown panel below
+           (and the ::after unread-badge dot) something to anchor to —
+           #topbar-left's own z-index:15 already lifts this whole row
+           above the z-index:10 floating-HUD tier (gizmo-mode-controls,
+           product-info, ...), the reason the dropdown needs to clear that
+           tier at all (found via e2e/seller-upload-and-resize.test.mjs
            timing out on a click that should have landed). Still below
            #catalog-picker (16) and every real modal (20+), since a row
            click always closes this panel before anything else can open. */
-        z-index: 15;
+        position: relative;
       }
       #account-menu-toggle {
         padding: 5px 14px;
@@ -470,8 +480,9 @@
          so switching feels like tabs rather than one-way doors. Owner: "I
          want the Shop/Build/Sell tab buttons to be in the same row as the
          higglehaven wordmark to increase open screen space" — shares the
-         top row with #wordmark-panel now (top: 10px, same as it), rather
-         than the row below (where #undo-redo-panel moved to instead). */
+         top row with #topbar-left (wordmark + account menu) now
+         (top: 10px, same as it), rather than the row below (where
+         #undo-redo-panel moved to instead). */
       #mode-nav {
         position: fixed;
         top: 10px;
@@ -573,16 +584,17 @@
       #gizmo-mode-controls.visible {
         display: flex;
       }
-      /* Below ~480px, the gap between the wordmark and #mode-nav (both
-         anchored to the same top row) is narrower than product-info's own
-         centered text — no amount of shrinking the neighbors avoids the
-         overlap, since that centered box is wider than the gap on either
-         side of it. product-info (and the gizmo-mode-controls row that
-         follows it) drop below both corner panels instead — and below the
-         Identity/Settings/#undo-redo-panel row (top: 48px, itself roughly
-         27px tall) that sits between them and the top edge, so a long
-         centered hint (Measure's own delta readout is the longest one)
-         clears all three rows rather than just the first.
+      /* Below ~480px, the gap between #topbar-left (wordmark + account
+         menu) and #mode-nav (both anchored to the same top row) is
+         narrower than product-info's own centered text — no amount of
+         shrinking the neighbors avoids the overlap, since that centered
+         box is wider than the gap on either side of it. product-info (and
+         the gizmo-mode-controls row that follows it) drop below both
+         corner panels instead — and below the #undo-redo-panel row
+         (top: 48px, itself roughly 27px tall) that sits between them and
+         the top edge, so a long centered hint (Measure's own delta
+         readout is the longest one) clears all three rows rather than
+         just the first.
          Placed after the rules it
          overrides, not inside the wordmark-shrink media query above, so the
          cascade's source-order tiebreak doesn't let the unconditional base
@@ -2709,17 +2721,19 @@
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
     </div>
-    <div id="wordmark-panel">
-      <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
-    </div>
-    <div id="account-menu">
-      <button id="account-menu-toggle" type="button">Menu</button>
-      <div id="account-menu-panel">
-        <button id="account-auth-btn" type="button">Log In / Sign Up</button>
-        <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
-        <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
-        <button id="settings-btn" type="button">Settings</button>
-        <div id="account-menu-landcap" hidden></div>
+    <div id="topbar-left">
+      <div id="wordmark-panel">
+        <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
+      </div>
+      <div id="account-menu">
+        <button id="account-menu-toggle" type="button">&#9881;&#65039;</button>
+        <div id="account-menu-panel">
+          <button id="account-auth-btn" type="button">Log In / Sign Up</button>
+          <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
+          <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
+          <button id="settings-btn" type="button">Settings</button>
+          <div id="account-menu-landcap" hidden></div>
+        </div>
       </div>
     </div>
     <div id="mode-nav">
