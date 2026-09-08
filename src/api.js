@@ -711,11 +711,50 @@ export async function resolveAuctionNow(auctionId) {
 // Elements (see runCheckoutFlow in src/main.js) and then call
 // finalizePurchase below once Stripe confirms it succeeded, before the
 // purchase is actually recorded (#453).
+// #473: a lost response after Stripe already created a real PaymentIntent
+// (a network drop between the server and this browser, not a Stripe-side
+// failure) looks, from here, identical to the request never having
+// reached the server at all — the buyer just sees an error and naturally
+// tries "Buy" again. Persisting one key per instance (not globally) means
+// that retry reuses the same key the server forwards to Stripe (see
+// purchaseIdempotencyKey in worker/index.js), while a genuine, separate
+// later purchase of the SAME item still gets its own fresh one, since
+// clearPurchaseIdempotencyKey below is called once a purchase actually
+// finalizes. The TTL is a safety net against a key stuck forever behind
+// an abandoned tab or a browser crash mid-checkout.
+const PURCHASE_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function purchaseIdempotencyStorageKey(instanceId) {
+  return `higglehaven-purchase-idempotency-${instanceId}`;
+}
+
+function purchaseIdempotencyKey(instanceId) {
+  const storageKey = purchaseIdempotencyStorageKey(instanceId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < PURCHASE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a purchase of this instance actually finalizes (see
+// src/main.js's Buy handler) so the NEXT purchase attempt — a real,
+// separate one, whether of this same item again or after this one simply
+// expired off the shop floor — mints its own fresh key instead of
+// colliding with this completed one.
+export function clearPurchaseIdempotencyKey(instanceId) {
+  try { localStorage.removeItem(purchaseIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
+}
+
 export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/purchase`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ quantity, buyerLabel }),
+    body: JSON.stringify({ quantity, buyerLabel, idempotencyKey: purchaseIdempotencyKey(instanceId) }),
   });
 }
 

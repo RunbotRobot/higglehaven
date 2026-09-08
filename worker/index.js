@@ -3203,13 +3203,23 @@ function flattenStripeParams(value, prefix) {
   return pairs;
 }
 
-async function stripeRequest(env, method, path, params) {
+// #473: idempotencyKey is only meaningful (and only ever passed by a
+// caller) on a request that CREATES a resource — Stripe keys it for ~24h
+// and returns the original response for a repeated call with the same
+// key instead of creating a second one, closing the "network dropped the
+// response, but the create already went through" gap that a raw retry
+// (client-side or a future automatic one) would otherwise hit. Reads and
+// updates against an already-known resource id don't need one; they're
+// naturally safe to repeat.
+async function stripeRequest(env, method, path, params, idempotencyKey) {
+  const headers = {
+    authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
+    'content-type': 'application/x-www-form-urlencoded',
+  };
+  if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method,
-    headers: {
-      authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
+    headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
   const data = await response.json();
@@ -3323,7 +3333,12 @@ async function handleSellerStripeAccount(request, env, db) {
       const { country, ...updateParams } = params;
       account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
     } else {
-      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+      // #473: keyed on seller_id alone is safe here — this branch only
+      // ever runs while stripe_account_id is still null, and a successful
+      // create (or #474's own DB guard losing a concurrent race) means it
+      // never runs again for this seller, so there's no future "genuine
+      // second create" this key could wrongly dedupe against.
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `seller-account-create:${sessionSeller.seller_id}`);
       createdNewAccount = true;
     }
 
@@ -5488,6 +5503,24 @@ function computePurchaseAmounts(template, input) {
 // is still paid out as dállers — never real money, per the owner's own
 // #331 answer — only the remaining ~98% (totalCents - commissionCents)
 // transfers to the seller's connected account via transfer_data.
+// #473: the buyer's own client mints and persists idempotencyKey (see
+// purchaseInstance in src/api.js) across a retry of what THEY consider
+// the same attempt — most importantly, one where the initial request's
+// response never made it back (a network drop after Stripe already
+// created the PaymentIntent), which otherwise looks, client-side,
+// identical to the request never having reached us at all and invites an
+// innocent second "Buy" click. Namespaced with the instance id so a
+// buyer's own key can never collide across two different products, and
+// validated (fixed charset/length) before it ever reaches Stripe's own
+// header, since it arrives as arbitrary client input. A missing or
+// malformed key degrades to no idempotency protection for this one
+// request rather than failing the purchase outright — defense in depth,
+// not a hard requirement for a real purchase to go through.
+function purchaseIdempotencyKey(instanceId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `purchase:${instanceId}:${rawKey}`;
+}
+
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
   const amounts = computePurchaseAmounts(template, input);
 
@@ -5515,7 +5548,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
     },
-  });
+  }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
   // publishableKey is safe to hand to the browser by design (it's how
   // Stripe.js identifies which Stripe account to talk to) — the frontend
