@@ -4061,7 +4061,7 @@ async function renderLandCapField() {
     const me = builders.find((b) => b.builderId === builderId);
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${ownedAreaM2.toLocaleString()} m² of your ${me.landCapM2.toLocaleString()} m² cap. ` +
-      'Your cap grows automatically as you earn dállers from selling land via auction — never purchasable with cash.';
+      'Your cap grows automatically as you earn higgles from selling land via auction — never purchasable with cash.';
   } catch (err) {
     status.textContent = err.message || 'Could not load your land cap.';
   }
@@ -4369,14 +4369,14 @@ async function renderSellSettingsSection() {
   formField.appendChild(form);
 }
 
-function formatDallers(cents) {
+function formatHiggles(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
 // A catalog template's own priceCents (docs/API.md's "Catalog templates")
 // is a real-world USD price a shopper would pay for the product — a
-// distinct concept from dállers (the platform's internal commission
-// currency, formatDallers above) even though the cents-to-dollars math is
+// distinct concept from higgles (the platform's internal commission
+// currency, formatHiggles above) even though the cents-to-dollars math is
 // identical, so this stays its own named helper rather than reusing that
 // one.
 function formatPriceCents(cents) {
@@ -4406,11 +4406,11 @@ function formatAuctionTimeRemaining(isoString) {
 
 function formatAuctionSummary(auction) {
   const bidText = auction.highestBidCents !== null
-    ? `high bid ${formatDallers(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
-    : `no bids yet, starts at ${formatDallers(auction.startingBidCents)}`;
+    ? `high bid ${formatHiggles(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
+    : `no bids yet, starts at ${formatHiggles(auction.startingBidCents)}`;
   const outcomeText = auction.startingBidCents === 0
     ? 'free to the highest bidder, or released if unsold'
-    : `stays yours at ${formatDallers(auction.startingBidCents)} if unsold`;
+    : `stays yours at ${formatHiggles(auction.startingBidCents)} if unsold`;
   return `${auction.landletId} — ${bidText} — ${formatAuctionTimeRemaining(auction.endsAt)} — ${outcomeText}`;
 }
 
@@ -4669,7 +4669,7 @@ async function renderAuctionSection() {
         bidInput.className = 'auction-row-bid-input';
         bidInput.min = (minCents / 100).toFixed(2);
         bidInput.step = '0.01';
-        bidInput.placeholder = `${formatDallers(minCents)}+`;
+        bidInput.placeholder = `${formatHiggles(minCents)}+`;
         form.appendChild(bidInput);
         const bidBtn = document.createElement('button');
         bidBtn.type = 'button';
