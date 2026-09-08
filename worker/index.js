@@ -76,6 +76,15 @@ async function getStorageUsage(bucket) {
 // — good enough for "let a few friends see what I'm building," not a
 // substitute for real auth if this ever needs individual identities.
 const ACCESS_COOKIE_NAME = 'hh_access';
+// Unlike every other unauthenticated secret-comparison endpoint in this
+// file (handleAdminBootstrap, handleSignup, handleRequestPasswordReset —
+// each gated by checkRateLimit specifically because guessing a shared
+// secret should cost an attacker something), this one had no throttle at
+// all: unlimited POSTs to /__access/login could brute-force
+// ACCESS_PASSPHRASE for free. Same window/shape as ADMIN_BOOTSTRAP_RATE_
+// LIMIT_MAX below, since both are "compare against one Worker secret, no
+// account behind it" endpoints.
+const ACCESS_LOGIN_RATE_LIMIT_MAX = 10;
 // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) — how
 // many of the earliest landlet-claimers make up the founding cohort.
 // Deliberately a plain constant, not configurable world_settings state:
@@ -165,6 +174,12 @@ function htmlResponse(body, status = 200) {
 // it — the passphrase check passed.
 async function checkAccessGate(request, url, env) {
   if (url.pathname === '/__access/login' && request.method === 'POST') {
+    try {
+      await checkRateLimit(env.DB, `access-login:${clientIp(request)}`, ACCESS_LOGIN_RATE_LIMIT_MAX);
+    } catch (error) {
+      if (error instanceof HttpError) return htmlResponse(accessLoginPage(error.message), error.status);
+      throw error;
+    }
     const form = await request.formData();
     const submitted = String(form.get('passphrase') || '');
     if (!timingSafeEqual(submitted, env.ACCESS_PASSPHRASE)) {
@@ -1162,9 +1177,14 @@ async function handleCatalog(request, db, route, url, models) {
 // opt-in flag: every catalog template is already product-like by
 // definition, so every one is reviewable. DELETE (moderation) is gated to
 // the template's own seller, same "if (existing.seller_id)" pattern the
-// catalog template's own PATCH/DELETE handler above already uses — a
-// template with no seller stays unrestricted, since there's no owner to
-// check against.
+// catalog template's own PATCH/DELETE handler above already uses — an
+// unowned/orphaned template's reviews get the same per-IP throttle
+// (below) the catalog template's own DELETE already needed for the exact
+// same reason (#520): with no owning seller to gate the request behind a
+// session, an unthrottled anonymous caller could otherwise wipe every
+// review on that template in an unbounded flood.
+const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -1257,6 +1277,8 @@ async function handleProductReviews(request, db, route) {
     if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     return json({ deleted: true });
