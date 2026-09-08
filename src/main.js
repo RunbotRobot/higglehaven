@@ -8635,6 +8635,34 @@ function createShopAvatar() {
     SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
   const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
   headPivot.add(head);
+
+  // Face + hair (owner Control Room feedback: "give him a face and hair so
+  // we can tell which is his front and which is his back") — the body was
+  // otherwise fully symmetric front-to-back, so neither the walk cycle nor
+  // the idle look-around ever needed to define which local axis was
+  // "front" (see the sagittal-plane comment on `limb` above: rotating a
+  // pivot about local X swings it through the Y-Z plane, so Y is the
+  // forward/back axis — arbitrarily picking +Y as front here, since
+  // nothing else in this file depended on a convention existing yet).
+  // Both are simple offset/scaled spheres, matching this placeholder
+  // avatar's existing "primitives only" style rather than needing any new
+  // geometry.
+  const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
+  const eyeRadius = SHOP_AVATAR_HEAD_RADIUS_M * 0.12;
+  const eyeY = SHOP_AVATAR_HEAD_RADIUS_M * 0.85;
+  const eyeZ = SHOP_AVATAR_HEAD_RADIUS_M * 0.1;
+  const eyeSpacingX = SHOP_AVATAR_HEAD_RADIUS_M * 0.4;
+  for (const sign of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 8, 6), eyeMaterial);
+    eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
+    head.add(eye);
+  }
+  const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
+  hair.scale.set(1, 0.85, 0.65); // flatten into a cap rather than a full second head
+  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.25, SHOP_AVATAR_HEAD_RADIUS_M * 0.3); // back (-Y) and up
+  head.add(hair);
+
   group.add(headPivot);
 
   // On `group` rather than `headPivot` so idle's own head-turn sway
