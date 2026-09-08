@@ -66,12 +66,30 @@
          freeing that space to see the 3D world). Sized by its two flex
          children rather than a fixed width, so it stays correct regardless
          of the wordmark's own responsive width (see the max-width:480px
-         rule below). */
+         rule below).
+
+         z-index (#539): every full-viewport action modal (Seller,
+         Notifications, Friends, Auth, ...) sits at z-index 20, deliberately
+         above this row — you're expected to reach them by opening the
+         account menu first, then that modal replaces it. The Seller modal
+         is different: it's reached from #mode-nav, not the account menu,
+         and stays open as an ongoing workspace rather than a quick
+         in-and-out action, so it needs the menu to actually stay reachable
+         while it's open (owner: "This change will open up the ability to
+         access the menu from Sell mode, which is currently not possible").
+         Raising this row above every z-index:20 modal (not just Seller's)
+         is the simplest fix that doesn't special-case Seller specifically,
+         and costs nothing: reaching the menu while another such modal is
+         open just means closing it via that modal's own X first, exactly
+         as before. Stays below claim-modal (30, a mandatory onboarding
+         step that should keep fully blocking everything) and settings-modal
+         (40, which needs to render above the account-menu-panel that opens
+         it). */
       #topbar-left {
         position: fixed;
         top: 10px;
         left: 12px;
-        z-index: 15;
+        z-index: 21;
         display: flex;
         align-items: center;
         gap: 8px;
