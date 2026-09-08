@@ -1181,6 +1181,64 @@ Response:
 `imageUrl` and `imageEmbedding` (`null` if never set) are included on every
 catalog template response once set (see "Catalog template object" above).
 
+### `POST /api/catalog/similarity-search`
+
+The backend half of #329 — see that issue's own text: it depends on both the
+embedding index (#327, above) **and** the prompt→concept-image endpoint
+(#328), and #328 is still blocked on the owner picking an image-gen provider.
+Only the frontend "Prompt mode" entry point genuinely needs #328 (there's
+nothing yet to call it with); the similarity-search half is independently
+buildable and testable today by passing any embedding directly, so it's
+shipped ahead of the frontend piece rather than waiting on an unrelated
+decision. No UI calls this endpoint yet.
+
+Given an embedding (the same shape `POST .../thumbnail` above stores), ranks
+every catalog template that has one by cosine similarity and returns the
+closest matches. Unauthenticated — this only ever reads already-public
+catalog data.
+
+Request body:
+
+```json
+{
+  "embedding": [0.12, 0.98, 0.5, "... more numbers ..."],
+  "limit": 10
+}
+```
+
+- `embedding`: required. Same validation as `POST .../thumbnail`'s own
+  `embedding` field — a non-empty array of at most 4096 finite numbers.
+- `limit`: optional integer from 1 to 50 (`400` otherwise), defaults to 10 —
+  a smaller cap than the ordinary paginated-listing endpoints above, since
+  this is a full in-memory scan (see below), not an indexed query.
+
+No Vectorize (or any other vector-search) binding exists in this project
+(confirmed via `wrangler.jsonc`) — this is a plain scan over every
+`catalog_templates` row with a non-null `image_embedding`, computing cosine
+similarity in-Worker rather than querying an index. Fine at this catalog's
+current size, matching this codebase's own "get the mechanic working, model
+the real thing later" pattern; swapping in a real vector index later doesn't
+change this endpoint's request/response shape. A stored embedding whose
+length doesn't match the query embedding's is silently excluded (comparing
+vectors of different dimensionality is meaningless) rather than erroring the
+whole search — relevant once a future embedding-model swap leaves some older
+rows with an old vector shape alongside newly-computed ones.
+
+Response:
+
+```json
+{
+  "templates": [
+    { "templateId": "...", "...": "...", "similarity": 0.94 }
+  ]
+}
+```
+
+Each entry is a full catalog template object (see "Catalog template object"
+above) plus `similarity` (this query's own cosine similarity score, highest
+first) — `similarity` is not itself persisted anywhere, only computed
+per-request.
+
 ### Extensible products (crop)
 
 A template's `metadata` can declare that it may be shortened along one or more

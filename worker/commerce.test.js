@@ -1570,6 +1570,98 @@ describe('Product-image thumbnail (#327)', () => {
   });
 });
 
+// #329 (backend half only — see docs/API.md for the frontend-scope note).
+describe('Embedding similarity search (#329)', () => {
+  async function createTemplateWithEmbedding(templateId, embedding) {
+    const seller = await signupSeller(`similarity-owner-${templateId}`);
+    await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Similarity test product ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    if (embedding !== undefined) {
+      await api(`/catalog/${templateId}/thumbnail`, seller.session({
+        method: 'POST',
+        body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL, embedding }),
+      }));
+    }
+    return seller;
+  }
+
+  it('rejects a missing or malformed embedding', async () => {
+    const missing = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    expect(missing.response.status).toBe(400);
+
+    const malformed = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: 'not-an-array' }),
+    });
+    expect(malformed.response.status).toBe(400);
+  });
+
+  it('rejects an out-of-range limit', async () => {
+    const tooMany = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: [1, 0, 0], limit: 51 }),
+    });
+    expect(tooMany.response.status).toBe(400);
+
+    const notAnInteger = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: [1, 0, 0], limit: 1.5 }),
+    });
+    expect(notAnInteger.response.status).toBe(400);
+  });
+
+  it('ranks exact and close matches above a dissimilar one, and excludes templates with no embedding', async () => {
+    await createTemplateWithEmbedding('similarity-exact-match', [1, 0, 0]);
+    await createTemplateWithEmbedding('similarity-close-match', [0.9, 0.1, 0]);
+    await createTemplateWithEmbedding('similarity-opposite', [-1, 0, 0]);
+    await createTemplateWithEmbedding('similarity-no-embedding', undefined);
+
+    const searched = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: [1, 0, 0], limit: 10 }),
+    });
+    expect(searched.response.status).toBe(200);
+    const ids = searched.body.templates.map((t) => t.templateId);
+    expect(ids).not.toContain('similarity-no-embedding');
+    expect(ids.indexOf('similarity-exact-match')).toBeLessThan(ids.indexOf('similarity-close-match'));
+    expect(ids.indexOf('similarity-close-match')).toBeLessThan(ids.indexOf('similarity-opposite'));
+    const exactMatch = searched.body.templates.find((t) => t.templateId === 'similarity-exact-match');
+    expect(exactMatch.similarity).toBeCloseTo(1, 5);
+  });
+
+  it('excludes a stored embedding whose length no longer matches the query embedding', async () => {
+    await createTemplateWithEmbedding('similarity-wrong-length', [1, 0, 0, 0]);
+    const searched = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: [1, 0, 0] }),
+    });
+    expect(searched.response.status).toBe(200);
+    expect(searched.body.templates.map((t) => t.templateId)).not.toContain('similarity-wrong-length');
+  });
+
+  it('respects the limit', async () => {
+    for (let i = 0; i < 5; i++) {
+      await createTemplateWithEmbedding(`similarity-limit-${i}`, [1, 0, 0]);
+    }
+    const searched = await api('/catalog/similarity-search', {
+      method: 'POST',
+      body: JSON.stringify({ embedding: [1, 0, 0], limit: 3 }),
+    });
+    expect(searched.body.templates.length).toBe(3);
+  });
+});
+
 describe('Simulated purchases', () => {
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
     return api('/landlets', adminSession({
