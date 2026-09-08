@@ -4723,7 +4723,17 @@ for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
   });
 }
 
+// Owner (Control Room feedback): "When a user opens the menu, it should
+// default to the menu tab of the site tab they're already in (Shop,
+// Build, or Sell)." activeSettingsTab used to just persist whatever tab
+// was last clicked (starting at 'general'), so opening Settings from
+// Build mode after a previous session left it on e.g. Shop showed the
+// wrong tab first. currentMode's own values ('shop'/'build'/'sell')
+// match the settings-tab-btn dataset values exactly.
 function openSettingsModal() {
+  if (currentMode === 'shop' || currentMode === 'build' || currentMode === 'sell') {
+    activeSettingsTab = currentMode;
+  }
   renderSettingsSection();
   settingsModalEl.classList.add('visible');
 }
