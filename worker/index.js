@@ -2320,7 +2320,7 @@ async function handleLandletLevels(request, db, route) {
     // message in the common case; the atomic clause folded into the
     // INSERT below is the real race guard (see its own comment).
     const landCap = await recomputeLandCap(db, landlet.owner_builder_id);
-    if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap) {
+    if (landCap.ownedAreaM2 + capConsumedM2 > landCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
       throw new HttpError(
         `This would take you to ${(landCap.ownedAreaM2 + capConsumedM2).toFixed(2)}m², `
         + `over your ${landCap.nextCap}m² land cap`,
@@ -2367,7 +2367,7 @@ async function handleLandletLevels(request, db, route) {
         AND NOT EXISTS (SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = ?)
         AND (
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
-        ) >= (
+        ) + ? >= (
           ?
           + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
           + COALESCE((
@@ -2379,7 +2379,7 @@ async function handleLandletLevels(request, db, route) {
     `).bind(
       levelId, landletId, levelIndex, capConsumedM2,
       landletId, extentBefore, landletId, levelIndex,
-      landlet.owner_builder_id, capConsumedM2, landlet.owner_builder_id, landlet.owner_builder_id,
+      landlet.owner_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, capConsumedM2, landlet.owner_builder_id, landlet.owner_builder_id,
     ).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('This landlet\'s levels changed — please retry', 409);
@@ -2538,7 +2538,7 @@ async function handleAuctionBids(request, db, route) {
     // pattern as the level-add gate above.
     const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(resolved.landlet_id).first();
     const bidderCap = await recomputeLandCap(db, builderId);
-    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap) {
+    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
       throw new HttpError(
         `Winning this auction would take you to ${(bidderCap.ownedAreaM2 + auctionedLandlet.area_m2).toFixed(2)}m², `
         + `over your ${bidderCap.nextCap}m² land cap`,
@@ -2570,7 +2570,7 @@ async function handleAuctionBids(request, db, route) {
       )
         AND (
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
-        ) >= (
+        ) + ? >= (
           ?
           + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
           + COALESCE((
@@ -2581,7 +2581,7 @@ async function handleAuctionBids(request, db, route) {
         )
     `).bind(
       bidId, auctionId, builderId, amountCents, auctionId, amountCents,
-      builderId, auctionedLandlet.area_m2, builderId, builderId,
+      builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
     ).run();
     if (inserted.meta.changes === 0) {
       const currentHighest = await db.prepare(`
@@ -2646,7 +2646,21 @@ async function requireAuction(db, auctionId) {
 // anything yet: they simply can't add a level or win an auction until they
 // have. See POST /api/builders/:id/land-cap-grants for how a test grants
 // itself around that on purpose.
+//
+// Owner: the frontend always displays area rounded to the nearest whole
+// unit (src/settings.js's formatArea), so a builder can see "1,000" on
+// both sides of a comparison whose real, unrounded values differ by a
+// fraction of a unit. Both gates below gave themselves LAND_CAP_DISPLAY_
+// ROUNDING_BUFFER_M2 of slack against exactly that — comparing raw m²
+// values directly against what's shown would let a technically-just-
+// barely-too-small addition read as blocked, or a technically-just-
+// barely-too-big one read as allowed, purely because of where the display
+// rounded.
 const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
+// See the land-cap comment block above — a builder comparing two numbers
+// the UI itself only ever shows rounded to the nearest whole m² shouldn't
+// get a different answer than what those rounded numbers themselves imply.
+const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
 const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
 const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 
