@@ -4893,6 +4893,17 @@ async function handleWorld(request, db, route) {
     const existing = await getWorldSettings(db);
     const input = await readJson(request);
     const world = validateWorld({ ...worldFromRow(existing), ...input });
+    // #523 (owner-confirmed): the world radius never shrinks — every other
+    // write path here (expandWorldOnce) only ever grows it, and already-
+    // materialized/greenbelt landlets outside a smaller radius were never
+    // designed to be re-validated against one. Owner: "Let's block
+    // shrinking the world at all. If it ever gets too large on accident, we
+    // can engineer a one-time shrink, but I don't plan on ever doing that" —
+    // i.e. a deliberate one-off fix stays possible by editing the DB
+    // directly if truly needed, but this endpoint itself never allows it.
+    if (world.radiusM < existing.radius_m) {
+      throw new HttpError('World radius cannot be decreased', 409);
+    }
     await db.prepare(`
       UPDATE world_settings
       SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,

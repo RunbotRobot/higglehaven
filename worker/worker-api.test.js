@@ -2124,6 +2124,37 @@ describe('Worker API', () => {
     });
   });
 
+  // #523 (owner-confirmed): the world radius never shrinks, even via the
+  // admin-gated PATCH — every other write path only ever grows it.
+  it('rejects a PATCH /world that would decrease radiusM, but allows one that leaves it unchanged or grows it', async () => {
+    const current = (await api('/world')).body.world;
+
+    const shrink = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: current.radiusM - 1 }),
+    }));
+    expect(shrink.response.status).toBe(409);
+    expect(shrink.body).toEqual({ error: 'World radius cannot be decreased' });
+    expect((await api('/world')).body.world.radiusM).toBe(current.radiusM);
+
+    // Unrelated field, radiusM omitted entirely — the merge in handleWorld
+    // leaves radiusM at its current value, which must not itself trip the
+    // new "no decrease" guard.
+    const unrelated = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ greenbeltMinRatio: current.greenbeltMinRatio }),
+    }));
+    expect(unrelated.response.status).toBe(200);
+    expect(unrelated.body.world.radiusM).toBe(current.radiusM);
+
+    const grow = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: current.radiusM + 1 }),
+    }));
+    expect(grow.response.status).toBe(200);
+    expect(grow.body.world.radiusM).toBe(current.radiusM + 1);
+  });
+
   // The scheduled() export (see wrangler.jsonc's triggers.crons) is what
   // actually keeps the world growing now — the old player-triggered "Grow
   // the world" button is gone. Invoked directly against the worker module
