@@ -47,6 +47,21 @@
         --pill-text-soft: rgb(var(--ink-rgb) / 0.65);
         --brand-green: #6ca42e;
         --danger: #e2694f;
+        /* Owner (df3j71gtdpwkt8y9ze6j, after the first pill-rgb pass):
+           "They're still too gray. I want them to really pop with a
+           spring green of some kind." pill-rgb (214 232 190) is a very
+           pale, low-saturation tint — correct for the rest of the HUD
+           chrome it shares with dialogs/gizmo buttons, but blended at low
+           alpha over an arbitrary, often-dark 3D backdrop it still reads
+           as washed-out gray rather than a color anyone would call
+           "green." This is a distinctly more saturated, brighter green
+           reserved for the shop-mode movement controls' own resting state
+           (see .shop-joystick/#shop-fly-btn/#shop-vertical-controls below)
+           — deliberately still short of --brand-green's own saturation so
+           "active" (already using brand-green) keeps reading as a step up
+           in intensity, not just a different hue, per this file's own
+           palette convention above. */
+        --spring-green-rgb: 62 199 91;
       }
       html, body {
         margin: 0;
@@ -293,8 +308,12 @@
            #shop-sign-hint, ...) already uses a pale pill-rgb fill with no
            border for contrast against an arbitrary backdrop instead; this
            just brings the joystick in line with that, matching what the
-           :root palette comment already claimed it did. */
-        background: rgb(var(--pill-rgb) / 0.65);
+           :root palette comment already claimed it did.
+           Owner (follow-up): pill-rgb's own pale tint still read as gray,
+           not green — see --spring-green-rgb's own comment above for why
+           this now uses that instead, at a higher alpha so it doesn't
+           wash out the same way against a dark 3D backdrop. */
+        background: rgb(var(--spring-green-rgb) / 0.85);
         touch-action: none;
       }
       .shop-joystick-knob {
@@ -325,7 +344,7 @@
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
+        background: rgb(var(--spring-green-rgb) / 0.85);
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
@@ -354,7 +373,7 @@
         height: 40px;
         border-radius: 12px;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
+        background: rgb(var(--spring-green-rgb) / 0.85);
         color: var(--pill-text);
         font-size: 16px;
         touch-action: none;
