@@ -2542,7 +2542,17 @@ async function requireAuction(db, auctionId) {
 // correctly implemented — recomputeLandCap is exposed via `landCapM2` on
 // the builder object (see docs/API.md's "Land cap") so this is visible and
 // ready to gate real acquisitions once a real commerce/commission loop
-// exists to make that gate navigable.
+// exists to make that gate navigable (see #489).
+//
+// Owner, on that eventual gate: the frontend now always displays area
+// rounded to the nearest whole unit (src/settings.js's formatArea), so a
+// builder can see "1,000" on both sides of a comparison whose real,
+// unrounded values differ by a fraction of a unit. Whatever check #489
+// adds needs a one-unit buffer against exactly that display rounding —
+// comparing raw m² values directly against what's shown would let a
+// technically-just-barely-too-small acquisition read as blocked, or a
+// technically-just-barely-too-big one read as allowed, purely because of
+// where the display rounded.
 const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
 const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
 const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
