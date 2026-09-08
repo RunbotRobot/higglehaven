@@ -78,6 +78,10 @@ import {
   finalizePurchase,
   fetchPurchases,
   refundPurchase,
+  fetchSellerPayouts,
+  requestSellerPayout,
+  markPurchaseShipped,
+  confirmPurchaseDelivery,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -4036,6 +4040,38 @@ function renderSellerList() {
         body.appendChild(time);
         saleRow.appendChild(body);
 
+        // #454: a physical (non-digital-good) real-money purchase holds
+        // its payout until delivery is confirmed or 7 days after shipping
+        // — this is the seller's own side of starting that fallback clock.
+        // Neither a digital good (nothing to ship) nor a simulated
+        // (higgles) sale (no real Stripe balance to ever hold) shows this.
+        if (purchase.paymentIntentId && !purchase.isDigitalGood) {
+          const shipping = document.createElement('div');
+          shipping.className = 'product-sale-row-shipping';
+          if (purchase.deliveryConfirmedAt) {
+            shipping.textContent = 'Delivery confirmed — available to cash out.';
+          } else if (purchase.shippedAt) {
+            shipping.textContent = `Shipped ${new Date(purchase.shippedAt).toLocaleDateString()} — available 7 days after shipping if not confirmed sooner.`;
+          } else {
+            const shipBtn = document.createElement('button');
+            shipBtn.className = 'product-sale-row-ship-btn';
+            shipBtn.type = 'button';
+            shipBtn.textContent = 'Mark shipped';
+            shipBtn.addEventListener('click', async () => {
+              shipBtn.disabled = true;
+              try {
+                await markPurchaseShipped(purchase.purchaseId);
+                await renderSales();
+              } catch (err) {
+                alert(err.message || 'Could not mark this purchase shipped.');
+                shipBtn.disabled = false;
+              }
+            });
+            shipping.appendChild(shipBtn);
+          }
+          body.appendChild(shipping);
+        }
+
         if (purchase.refundedAt) {
           const refundedLabel = document.createElement('div');
           refundedLabel.className = 'product-sale-row-refunded';
@@ -4710,6 +4746,59 @@ async function renderSellSettingsSection() {
   });
 
   formField.appendChild(form);
+
+  // #454: only meaningful once an account actually exists to hold a
+  // balance against — Stripe stays entirely invisible to the seller
+  // otherwise (#452's own mandate), same reasoning as the status field
+  // above gating on account.connected implicitly via describeStatus().
+  if (account.connected) {
+    const payoutsField = document.createElement('div');
+    payoutsField.className = 'settings-field';
+    const payoutsLabel = document.createElement('span');
+    payoutsLabel.textContent = 'Payouts';
+    payoutsField.appendChild(payoutsLabel);
+    const payoutsNote = document.createElement('div');
+    payoutsNote.className = 'settings-empty-note';
+    payoutsNote.textContent = 'Loading…';
+    payoutsField.appendChild(payoutsNote);
+    const cashOutBtn = document.createElement('button');
+    cashOutBtn.type = 'button';
+    cashOutBtn.className = 'version-action-btn';
+    cashOutBtn.textContent = 'Cash out';
+    cashOutBtn.hidden = true;
+    payoutsField.appendChild(cashOutBtn);
+    settingsSectionEl.appendChild(payoutsField);
+
+    async function refreshPayouts() {
+      try {
+        const payouts = await fetchSellerPayouts();
+        const parts = [`Available to cash out: ${formatPriceCents(payouts.availableCents)}`];
+        if (payouts.heldCents > 0) parts.push(`Held: ${formatPriceCents(payouts.heldCents)}`);
+        if (payouts.nextEligibleAt) parts.push(`Next eligible: ${new Date(payouts.nextEligibleAt).toLocaleDateString()}`);
+        payoutsNote.textContent = parts.join(' · ');
+        payoutsNote.classList.remove('error');
+        cashOutBtn.hidden = payouts.availableCents <= 0;
+      } catch (err) {
+        payoutsNote.textContent = err.message || 'Could not load your payout balance.';
+        payoutsNote.classList.add('error');
+      }
+    }
+
+    cashOutBtn.addEventListener('click', async () => {
+      cashOutBtn.disabled = true;
+      try {
+        await requestSellerPayout();
+        await refreshPayouts();
+        alert('Payout requested.');
+      } catch (err) {
+        alert(err.message || 'Could not request a payout.');
+      } finally {
+        cashOutBtn.disabled = false;
+      }
+    });
+
+    await refreshPayouts();
+  }
 }
 
 function formatHiggles(cents) {
@@ -7959,6 +8048,25 @@ authLogoutBtn.addEventListener('click', async () => {
 // fine (caught via a real reload-while-logged-in-and-in-Build-mode e2e
 // scenario, not something a fresh-every-time page load would ever surface
 // on its own).
+// #454: a buyer confirming delivery has no account here at all (see
+// "Simulated purchases") — this link works purely off the unguessable
+// token in the URL, entirely independent of authInitPromise below (which
+// is specifically about THIS browser's own login/session state, never
+// relevant to whichever purchase this token identifies). Handled
+// separately, at module load, rather than folded into that promise.
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const confirmToken = params.get('confirmDelivery');
+  if (!confirmToken) return;
+  history.replaceState(null, '', location.pathname);
+  try {
+    await confirmPurchaseDelivery(confirmToken);
+    alert('Delivery confirmed — thank you! The seller can now cash out for this order.');
+  } catch (err) {
+    alert(err.message || 'This delivery-confirmation link is invalid or has expired.');
+  }
+})();
+
 const authInitPromise = (async () => {
   const params = new URLSearchParams(location.search);
   const verifyToken = params.get('verifyEmail');
@@ -10105,11 +10213,13 @@ function closeCheckoutModal() {
 // Collects real payment for a connected seller's product, once
 // purchaseInstance's response comes back as `requiresPayment` instead of
 // an already-completed `purchase` (#453). The returned promise resolves
-// once the purchase has genuinely been finalized (Stripe confirmed the
-// charge AND the server has recorded it) or rejects if the buyer cancels
-// — it deliberately does NOT resolve just because the modal was shown, so
-// a caller's own `finally` (e.g. re-enabling the button that opened this)
-// covers the whole checkout, not just the initial setup.
+// with `{ purchase, deliveryConfirmUrl }` (see finalizePurchase in
+// src/api.js — the latter is only set for a physical real-money purchase,
+// #454) once the purchase has genuinely been finalized (Stripe confirmed
+// the charge AND the server has recorded it), or rejects if the buyer
+// cancels — it deliberately does NOT resolve just because the modal was
+// shown, so a caller's own `finally` (e.g. re-enabling the button that
+// opened this) covers the whole checkout, not just the initial setup.
 function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { name, totalCents }) {
   return new Promise((resolve, reject) => {
     checkoutSummaryEl.textContent = `${name} — ${formatPriceCents(totalCents)}`;
@@ -10138,9 +10248,9 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         try {
           const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
           if (result.error) throw new Error(result.error.message || 'Payment failed.');
-          const purchase = await finalizePurchase(paymentIntentId);
+          const finalized = await finalizePurchase(paymentIntentId);
           closeCheckoutModal();
-          resolve(purchase);
+          resolve(finalized);
         } catch (err) {
           checkoutStatusEl.textContent = err.message || 'Payment failed.';
           checkoutStatusEl.classList.add('error');
@@ -10166,14 +10276,21 @@ shopBuyHintEl.addEventListener('click', async () => {
   try {
     const result = await purchaseInstance(instanceId);
     if (result.requiresPayment) {
-      await runCheckoutFlow(result, { name, totalCents: priceCents });
+      const { deliveryConfirmUrl } = await runCheckoutFlow(result, { name, totalCents: priceCents });
       // #473: only clear the persisted idempotency key (see purchaseInstance
       // in src/api.js) once the purchase has genuinely finalized — a
       // network failure anywhere before this point should leave it in
       // place so a retried "Buy" click reuses the same key instead of
       // risking a second real PaymentIntent for the same attempt.
       clearPurchaseIdempotencyKey(instanceId);
-      alert('Purchase complete — thank you!');
+      // #454: the ONLY time this link is ever shown — the server never
+      // stores the raw token, only its hash, so there is no "my orders"
+      // page to come back and find it later. Present for a physical
+      // (non-digital-good) purchase only; a digital good pays the seller
+      // out instantly with nothing to confirm.
+      alert(deliveryConfirmUrl
+        ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${deliveryConfirmUrl}`
+        : 'Purchase complete — thank you!');
     } else {
       clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase simulated — the seller has been credited.');

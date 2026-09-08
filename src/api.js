@@ -165,6 +165,37 @@ export async function submitSellerStripeAccount(payload) {
   });
 }
 
+// Seller payout/cash-out (#454) — folds the same onboarding fields
+// fetchSellerStripeAccount already returns into one call, plus this
+// seller's currently held-vs-available-for-cash-out balance.
+export async function fetchSellerPayouts() {
+  return requestJson('/sellers/me/payouts');
+}
+
+export async function requestSellerPayout() {
+  return requestJson('/sellers/me/payouts', { method: 'POST' });
+}
+
+// Seller-initiated once a physical real-money order has actually been
+// shipped — starts the 7-day payout-hold fallback clock (see #454).
+export async function markPurchaseShipped(purchaseId) {
+  const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/mark-shipped`, { method: 'POST' });
+  return purchase;
+}
+
+// Unauthenticated on purpose (see worker/index.js's own comment on
+// handlePurchaseConfirmDelivery) — there is no buyer account anywhere in
+// this app; the unguessable token itself, handed to the buyer once in
+// their own checkout's finalize response, is the only credential this
+// needs.
+export async function confirmPurchaseDelivery(token) {
+  return requestJson('/purchases/confirm-delivery', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+}
+
 // Pages through every instance on a landlet rather than returning just the
 // first 100 (the server's per-request cap) — a landlet with a large build
 // (a brick wall hundreds of pieces deep, say) silently lost everything
@@ -780,13 +811,19 @@ export async function purchaseInstance(instanceId, { quantity, buyerLabel } = {}
 // succeeded (via Stripe's own API, using our secret key) before writing
 // the purchases row and crediting the builder, rather than trusting that
 // client-side signal on its own (#453).
+// #454: deliveryConfirmUrl is only present for a physical (non-digital-
+// good) real-money purchase — the buyer's only chance to ever see this
+// link, since the server never stores the raw token, only its hash (see
+// buildDeliveryConfirmFields in worker/index.js). Returned alongside
+// `purchase` rather than folded into it since it's this ONE checkout's
+// own one-time credential, not a durable field of the purchase record.
 export async function finalizePurchase(paymentIntentId) {
-  const { purchase } = await requestJson('/purchases/finalize', {
+  const { purchase, deliveryConfirmUrl } = await requestJson('/purchases/finalize', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ paymentIntentId }),
   });
-  return purchase;
+  return { purchase, deliveryConfirmUrl };
 }
 
 // The list is capped at 100 rows server-side (no pagination) — totalCount
