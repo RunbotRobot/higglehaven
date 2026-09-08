@@ -1869,9 +1869,15 @@ const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
 // A template's appearance never changes after creation (there's no edit
-// flow for its color or model), so a thumbnail rendered once this session
-// is good for the rest of it — keyed by templateId rather than re-rendered
-// every time the picker reopens or a new upload rebuilds the whole grid.
+// flow for its color), so a thumbnail rendered once this session is good
+// for the rest of it — keyed by templateId rather than re-rendered every
+// time the picker reopens or a new upload rebuilds the whole grid. The one
+// exception is Save Size (#544): it can rescale/re-upload the model and
+// always changes template.dimensions, both of which change what
+// renderCatalogThumbnailNow's bounding-sphere framing actually renders —
+// its own success handler deletes this template's cache entry before
+// rebuilding the picker, so this cache would otherwise keep serving a
+// stale pre-resize thumbnail for the rest of the session.
 const catalogThumbnailCache = new Map();
 // #327: the cheap stand-in visual embedding computed alongside each
 // thumbnail render (computeThumbnailEmbedding below) — kept as its own
@@ -3381,15 +3387,25 @@ function renderSellerList() {
         const updated = await updateCatalogTemplate(template.templateId, patch);
         Object.assign(template, updated);
         refreshDimsText();
-        // #327: the old cached render (and the client-rendered picker
-        // thumbnail it feeds) reflects the pre-resize appearance — drop
-        // it and re-persist so both the in-session picker and the stored
-        // image_url pick up the new size instead of quietly going stale.
+        // #544/#327: dimensions changed (and possibly the model itself, if
+        // it was rescaled/re-uploaded above) — both affect what the catalog
+        // picker's thumbnail actually renders, so the cached render (and
+        // its embedding) from before this save is stale. Re-persist so both
+        // the in-session picker and the stored image_url pick up the new
+        // size instead of quietly going stale.
         catalogThumbnailCache.delete(template.templateId);
         catalogThumbnailEmbeddingCache.delete(template.templateId);
         persistCatalogThumbnail(template);
         buildCatalogPickerButtons();
-        if (axisPreview?.templateId === template.templateId) {
+        // #543: this row's own previewContainer can be stale by the time this
+        // slow (fetch → rescale → upload → save) chain resolves — the Seller
+        // modal may have been closed and reopened in the meantime, which
+        // rebuilds every row (and its previewContainer) from scratch while
+        // leaving this closure pointing at the old, now-detached node.
+        // Without this check, re-showing the preview here would yank the
+        // shared preview canvas out of whatever OTHER row currently has it
+        // open and re-mount it into this detached node instead.
+        if (axisPreview?.templateId === template.templateId && previewContainer.isConnected) {
           showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
         }
         sizeStatus.textContent = 'Saved — any builder with this placed has been notified.';
