@@ -60,6 +60,22 @@
         height: 100vh;
         display: block;
       }
+      /* Wordmark and the account-menu toggle share one fixed top-left row
+         (owner request: a cog icon "just to the right of the higglehaven
+         wordmark" instead of the menu living in its own row lower down,
+         freeing that space to see the 3D world). Sized by its two flex
+         children rather than a fixed width, so it stays correct regardless
+         of the wordmark's own responsive width (see the max-width:480px
+         rule below). */
+      #topbar-left {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       /* The wordmark's own green-on-transparent art has no contrast
          guarantee against an arbitrary background — great against the
          ground plane and most products, unreadable against the sky. Same
@@ -68,10 +84,6 @@
          since it controls the pixels immediately behind the logo instead
          of depending on whatever happens to be in the 3D scene there. */
       #wordmark-panel {
-        position: fixed;
-        top: 10px;
-        left: 12px;
-        z-index: 10;
         pointer-events: none;
         /* The wordmark art is itself green — sitting on the pale-green
            pill background every other bit of chrome now uses would leave
@@ -350,10 +362,10 @@
          expanding menu (docs/SPEC.md §1's "clean, minimalist... expanding
          menus... leave plenty of screen space open") — one small pill
          instead of a whole cluster, expanding into a dropdown only when
-         actually needed. Sits just under the wordmark panel — that panel
-         is pointer-events: none (it's decorative branding), so this lives
-         as its own fixed element rather than fighting that to become
-         clickable.
+         actually needed. Lives in #topbar-left next to the wordmark panel;
+         that panel is pointer-events: none (it's decorative branding), so
+         this is its own sibling element rather than fighting that to
+         become clickable.
 
          The four original buttons keep their original IDs/click handlers
          untouched in main.js — only their layout changed, from independent
@@ -362,20 +374,16 @@
          Notices/Friends hidden in Shop mode, Settings never hidden) keeps
          working exactly as before with no JS changes. */
       #account-menu {
-        position: fixed;
-        top: 48px;
-        left: 12px;
-        /* Above the z-index:10 floating-HUD tier (gizmo-mode-controls,
-           product-info, ...) — the expanded panel sits low enough on
-           screen to visually overlap #gizmo-mode-controls' full-width
-           (94vw) row once a selection is active, and at a tied z-index
-           the later-in-DOM element (gizmo-mode-controls) would otherwise
-           win the stacking order and silently swallow taps meant for the
-           menu underneath (found via e2e/seller-upload-and-resize.test.mjs
+        /* Purely to give the absolutely-positioned dropdown panel below
+           (and the ::after unread-badge dot) something to anchor to —
+           #topbar-left's own z-index:15 already lifts this whole row
+           above the z-index:10 floating-HUD tier (gizmo-mode-controls,
+           product-info, ...), the reason the dropdown needs to clear that
+           tier at all (found via e2e/seller-upload-and-resize.test.mjs
            timing out on a click that should have landed). Still below
            #catalog-picker (16) and every real modal (20+), since a row
            click always closes this panel before anything else can open. */
-        z-index: 15;
+        position: relative;
       }
       #account-menu-toggle {
         padding: 5px 14px;
@@ -571,8 +579,8 @@
          overlap, since undo/redo alone is wider than the gap on either side
          of a centered box that size. product-info (and the gizmo-mode-
          controls row that follows it) drop below both corner panels
-         instead — and below the Identity/Settings/#mode-nav row (top: 48px,
-         itself roughly 27px tall) that sits between them and the top edge,
+         instead — and below the #mode-nav row (top: 48px, itself roughly
+         27px tall) that sits between them and the top edge,
          so a long centered hint (Measure's own delta readout is the
          longest one) clears all three rows rather than just the first.
          Placed after the rules it
@@ -2701,17 +2709,19 @@
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
     </div>
-    <div id="wordmark-panel">
-      <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
-    </div>
-    <div id="account-menu">
-      <button id="account-menu-toggle" type="button">Menu</button>
-      <div id="account-menu-panel">
-        <button id="account-auth-btn" type="button">Log In / Sign Up</button>
-        <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
-        <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
-        <button id="settings-btn" type="button">Settings</button>
-        <div id="account-menu-landcap" hidden></div>
+    <div id="topbar-left">
+      <div id="wordmark-panel">
+        <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
+      </div>
+      <div id="account-menu">
+        <button id="account-menu-toggle" type="button">&#9881;&#65039;</button>
+        <div id="account-menu-panel">
+          <button id="account-auth-btn" type="button">Log In / Sign Up</button>
+          <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
+          <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
+          <button id="settings-btn" type="button">Settings</button>
+          <div id="account-menu-landcap" hidden></div>
+        </div>
       </div>
     </div>
     <div id="mode-nav">
