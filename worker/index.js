@@ -277,7 +277,14 @@ export function computeMissingMigrations(appliedNames, manifest) {
   return manifest.filter((name) => !applied.has(name));
 }
 
-async function checkMigrationDrift(env) {
+// Exported alongside computeMissingMigrations (#561): this is the actual
+// function scheduled() invokes every 10 minutes in production — the pure
+// diffing helper it delegates to had direct test coverage already, but this
+// itself (the D1 query, the manifest import wiring, the alert-email branch)
+// didn't, so a regression here could silently stop the drift check from
+// ever working again with no test catching it — exactly the "invisible
+// until an owner bug report" failure mode #488/#499 exist to prevent.
+export async function checkMigrationDrift(env) {
   if (!env.DB) return;
   let appliedNames;
   try {

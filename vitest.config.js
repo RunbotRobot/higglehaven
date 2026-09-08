@@ -25,8 +25,12 @@ export default defineConfig(async () => {
       // belongs here, since this pool runs the workerd runtime, not a
       // browser; that kind of frontend code stays covered by e2e/
       // (Playwright) or manual verification instead, per this project's
-      // established convention (see docs/API.md).
-      include: ['worker/**/*.test.js', 'src/**/*.test.js'],
+      // established convention (see docs/API.md). scripts/**/*.test.mjs
+      // (#560) is a third category: standalone Node-side CLI/build
+      // scripts (deliberately .mjs, matching those scripts' own
+      // extension, since this whole config already runs under Node's
+      // ESM loader regardless of the .js/.mjs split used elsewhere).
+      include: ['worker/**/*.test.js', 'src/**/*.test.js', 'scripts/**/*.test.mjs'],
       // A single worker/*.test.js file shares one D1 instance across its
       // own tests (one instance per test *file*, not per test), so a file
       // with enough tests accumulates real data that can make ordinary,
