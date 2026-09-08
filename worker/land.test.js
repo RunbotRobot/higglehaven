@@ -935,12 +935,34 @@ describe('Land cap', () => {
     expect(landCapOf(await api('/builders'), builderId)).toBe(1000);
   });
 
-  it('does not block a bid that would exceed the bidder\'s cap — tracking only, not enforced', async () => {
+  // #489 (owner-confirmed): this used to be deliberately unenforced — see
+  // that issue and worker/index.js's own handleAuctionBids comment for why
+  // ("real checkout now exists" was the trigger the original comment
+  // named to revisit this). A bid is only ever a *ground* landlet
+  // changing hands (resolveAuction deletes the sold landlet's levels
+  // before transferring it), so what's checked is the bidder's own
+  // current owned area plus the auctioned landlet's area_m2 against their
+  // cap — a fresh bidder here owns nothing yet, so a 5000m² landlet alone
+  // already exceeds their default 1000m² cap.
+  it('blocks a bid that would take the bidder over their land cap', async () => {
     const seller = await signupBuilder('land-cap-seller-a');
     const bidder = await signupBuilder('land-cap-bidder-a');
     await createGreenbeltLandletWithArea('land-cap-big-landlet', 5000);
     await claim('land-cap-big-landlet', seller);
     const started = await startAuction('land-cap-big-landlet', seller);
+    const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(bid.response.status).toBe(409);
+    expect(bid.body.error).toMatch(/land cap/i);
+  });
+
+  it('allows a bid that stays within the bidder\'s land cap', async () => {
+    const seller = await signupBuilder('land-cap-seller-b');
+    const bidder = await signupBuilder('land-cap-bidder-b');
+    await createGreenbeltLandletWithArea('land-cap-small-landlet', 900);
+    await claim('land-cap-small-landlet', seller);
+    const started = await startAuction('land-cap-small-landlet', seller);
     const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
       method: 'POST', body: JSON.stringify({ amountCents: 100 }),
     }));
@@ -1006,6 +1028,47 @@ describe('Land cap', () => {
     expect(claimed.response.status).toBe(200);
     expect(claimed.body.landlet.ownerBuilderId).toBe(builder.builderId);
   });
+
+  // #489 made land cap a real gate, so anything (a test fixture, an e2e
+  // suite) that needs a builder to already have cap headroom now needs a
+  // legitimate way to grant it — there's no shortcut through the normal
+  // player-facing API, on purpose (a real earnings event is the only thing
+  // that's ever supposed to grow a cap). Admin-gated for the same reason
+  // POST /api/landlets is: an anonymous caller must not be able to credit
+  // themselves real land-cap headroom.
+  it('grants land cap headroom via a real earnings event, admin-only', async () => {
+    const builder = await createBuilder('Land Cap Grant Builder');
+
+    const unauthenticated = await api(`/builders/${builder}/land-cap-grants`, {
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const nonAdmin = await api(`/builders/${builder}/land-cap-grants`, (await signupBuilder('land-cap-grant-non-admin')).session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(nonAdmin.response.status).toBe(403);
+
+    const granted = await api(`/builders/${builder}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(granted.response.status).toBe(201);
+    expect(granted.body.landCapM2).toBeGreaterThan(1000);
+    expect(landCapOf(await api('/builders'), builder)).toBe(granted.body.landCapM2);
+
+    // It's a real earnings event, same ledger auction sales credit — not a
+    // side-channel that bypasses it.
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(builder).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].amount_cents).toBe(100000);
+
+    const missingBuilder = await api('/builders/does-not-exist/land-cap-grants', adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(missingBuilder.response.status).toBe(404);
+  });
 });
 
 describe('Landlet levels', () => {
@@ -1025,6 +1088,26 @@ describe('Landlet levels', () => {
   function expectedCapConsumedM2(areaM2, levelIndex) {
     const scale = footprintScaleAtHeight(levelIndex * LEVEL_HEIGHT_M, DEFAULT_EARTH_RADIUS_M);
     return areaM2 * scale * scale;
+  }
+
+  // #489: land cap now actually gates adding a level (see worker/index.js's
+  // own comment on that endpoint), and every fresh builder's default cap
+  // exactly equals their one free starter lándlet's area — so a builder who
+  // has only just claimed starts already at 100% of cap, with zero
+  // headroom for even a single level. Tests below whose actual point is
+  // something *other* than the cap gate itself (per-level cap math, the
+  // outermost-only removal rule, the z-range endpoint, ...) call this
+  // first to give the test builder enormous headroom via a real (large)
+  // earnings event, so the endpoint's happy path stays reachable. A test
+  // that needs to inspect the *exact* resulting land cap number after this
+  // still shouldn't call this (it would swamp the ratchet) — those seed a
+  // level directly via SQL instead, bypassing the gate entirely since it's
+  // not what they're testing.
+  async function growLandCapHeadroom(builderId) {
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, builderId, 100000000).run();
+    await api('/builders'); // forces recomputeLandCapsBatch to ratchet land_cap_m2 up now
   }
 
   it('lists no levels for a fresh lándlet', async () => {
@@ -1061,10 +1144,49 @@ describe('Landlet levels', () => {
     expect(invalidDirection.response.status).toBe(400);
   });
 
+  // #489 (owner-confirmed): land cap now gates vertical construction, not
+  // just the depth/footprint checks above. A freshly-claimed builder's
+  // owned area already equals their default cap exactly (the starter
+  // lándlet is sized to match LAND_CAP_STARTER_M2), so — with no headroom
+  // grown first — even a single level in either direction is over cap.
+  it('rejects adding a level that would exceed the builder\'s land cap', async () => {
+    const owner = await signupBuilder('levels-cap-gate-owner');
+    await createGreenbeltLandletWithArea('levels-cap-gate-landlet', 1000);
+    await claim('levels-cap-gate-landlet', owner);
+
+    const up = await api('/landlets/levels-cap-gate-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up.response.status).toBe(409);
+    expect(up.body.error).toMatch(/land cap/i);
+
+    const down = await api('/landlets/levels-cap-gate-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'down' }),
+    }));
+    expect(down.response.status).toBe(409);
+    expect(down.body.error).toMatch(/land cap/i);
+
+    const list = await api('/landlets/levels-cap-gate-landlet/levels');
+    expect(list.body.levels).toEqual([]);
+  });
+
+  it('allows adding a level once the builder has grown enough land cap headroom', async () => {
+    const owner = await signupBuilder('levels-cap-headroom-owner');
+    await createGreenbeltLandletWithArea('levels-cap-headroom-landlet', 1000);
+    await claim('levels-cap-headroom-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+
+    const up = await api('/landlets/levels-cap-headroom-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up.response.status).toBe(201);
+  });
+
   it('adds sequential levels above and below ground, each costing the correct asymmetric cap', async () => {
     const owner = await signupBuilder('levels-sequential-owner');
     await createGreenbeltLandletWithArea('levels-sequential-landlet', 1000);
     await claim('levels-sequential-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
 
     const up1 = await api('/landlets/levels-sequential-landlet/levels', owner.session({
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
@@ -1099,6 +1221,7 @@ describe('Landlet levels', () => {
     const stranger = await signupBuilder('levels-remove-stranger');
     await createGreenbeltLandletWithArea('levels-remove-landlet', 1000);
     await claim('levels-remove-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
     for (const direction of ['up', 'up', 'down']) {
       await api('/landlets/levels-remove-landlet/levels', owner.session({
         method: 'POST', body: JSON.stringify({ direction }),
@@ -1140,6 +1263,7 @@ describe('Landlet levels', () => {
     const owner = await signupBuilder('levels-remove-race-owner');
     await createGreenbeltLandletWithArea('levels-remove-race-landlet', 1000);
     await claim('levels-remove-race-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
     await api('/landlets/levels-remove-race-landlet/levels', owner.session({
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
@@ -1158,10 +1282,15 @@ describe('Landlet levels', () => {
     const owner = await signupBuilder('levels-cap-owner');
     await createGreenbeltLandletWithArea('levels-cap-landlet', 1000);
     await claim('levels-cap-landlet', owner);
-    await api('/landlets/levels-cap-landlet/levels', owner.session({
-      method: 'POST', body: JSON.stringify({ direction: 'up' }),
-    }));
     const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    // Seeded directly rather than through POST /levels (now gated by
+    // #489's land cap check — see growLandCapHeadroom's own comment above
+    // on why that endpoint isn't usable here): this test measures the
+    // cap-growth FORMULA's exact output, which any headroom big enough to
+    // pass the gate would itself ratchet the cap past.
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('levels-cap-seed', 'levels-cap-landlet', 1, levelCapM2).run();
 
     // $40 trailing earnings, normalized against (1000 ground + the level's
     // own consumed area) instead of just 1000 — a strictly smaller land
@@ -1181,10 +1310,12 @@ describe('Landlet levels', () => {
     const owner = await signupBuilder('levels-owned-area-owner');
     await createGreenbeltLandletWithArea('levels-owned-area-landlet', 1000);
     await claim('levels-owned-area-landlet', owner);
-    await api('/landlets/levels-owned-area-landlet/levels', owner.session({
-      method: 'POST', body: JSON.stringify({ direction: 'up' }),
-    }));
     const levelCapM2 = expectedCapConsumedM2(1000, 1);
+    // Seeded directly — see the cap-growth-formula test's own comment
+    // above on why POST /levels isn't used here now that #489 gates it.
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('levels-owned-area-seed', 'levels-owned-area-landlet', 1, levelCapM2).run();
     const expectedOwnedAreaM2 = 1000 + levelCapM2;
 
     const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
@@ -1203,9 +1334,13 @@ describe('Landlet levels', () => {
     const owner = await signupBuilder('levels-delete-owner');
     await createGreenbeltLandletWithArea('levels-delete-landlet', 1000);
     await claim('levels-delete-landlet', owner);
-    await api('/landlets/levels-delete-landlet/levels', owner.session({
-      method: 'POST', body: JSON.stringify({ direction: 'up' }),
-    }));
+    // Seeded directly — this test only cares that an existing level row
+    // gets cascade-deleted, not how it got there, and #489's land cap gate
+    // on POST /levels makes that endpoint no longer the cheapest way to
+    // set this precondition up.
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('levels-delete-seed', 'levels-delete-landlet', 1, expectedCapConsumedM2(1000, 1)).run();
 
     await api(`/builders/${owner.builderId}`, owner.session({ method: 'DELETE' }));
     const { results } = await env.DB.prepare('SELECT * FROM landlet_levels WHERE landlet_id = ?')
@@ -1315,6 +1450,7 @@ describe('Landlet levels', () => {
       const owner = await signupBuilder('instance-z-extend-owner');
       await createGreenbeltLandletWithArea('instance-z-extend-landlet', 1000);
       await claim('instance-z-extend-landlet', owner);
+      await growLandCapHeadroom(owner.builderId);
       await api('/landlets/instance-z-extend-landlet/levels', owner.session({
         method: 'POST', body: JSON.stringify({ direction: 'up' }),
       }));

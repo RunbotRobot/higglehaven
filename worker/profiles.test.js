@@ -312,6 +312,14 @@ describe('Builders', () => {
       method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
     }));
     const donorAuctionId = donorAuction.body.auction.auctionId;
+    // The seller already owns landlet-a (their claimed starter), so
+    // bidding on landlet-b too now needs land-cap headroom (#489) — this
+    // test is about the multi-auction-ownership/delete-guard mechanics,
+    // not the cap gate, so grant plenty of it via a real earnings event.
+    await env.DB.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(`headroom-${crypto.randomUUID()}`, seller.builderId, 100000000).run();
+    await api('/builders');
     await api(`/auctions/${donorAuctionId}/bids`, seller.session({
       method: 'POST', body: JSON.stringify({ amountCents: 100 }),
     }));

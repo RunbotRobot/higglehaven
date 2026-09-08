@@ -11,7 +11,7 @@
 // 24-hour default), so waiting for a real one isn't practical in an e2e
 // run. That's covered instead by worker/commerce.test.js, which can set
 // ends_at into the past directly via the D1 test binding.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin, grantLandCapHeadroomAsAdmin } from './helpers.mjs';
 
 const SELLER = 'Auction Seller';
 const BIDDER = 'Auction Bidder';
@@ -56,6 +56,14 @@ await sellerPage.waitForTimeout(300);
 const bidderPage = bidderSession.page;
 await chooseIdentity(bidderPage, { mode: 'build', label: BIDDER, isNew: true });
 await claimLandlet(bidderPage);
+
+// #489: land cap now gates auction bidding — the bidder here already owns
+// their own claimed landlet (the whole point of this test being "owning
+// land doesn't stop you from bidding"), so bidding on the seller's landlet
+// too now needs real headroom first (see grantLandCapHeadroomAsAdmin's own
+// comment); not what this suite is actually testing.
+const bidderBuilderId = await bidderPage.evaluate(() => fetch('/api/builders/me').then((r) => r.json()).then((body) => body.builder.builderId));
+await grantLandCapHeadroomAsAdmin(bidderBuilderId);
 
 await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
