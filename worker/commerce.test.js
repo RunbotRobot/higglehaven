@@ -1457,6 +1457,31 @@ describe('Simulated purchases', () => {
     expect(atCap.body.purchase.quantity).toBe(1000);
   });
 
+  it('rejects a total price that exceeds MAX_MONEY_CENTS even when quantity and priceCents each pass their own cap (#521)', async () => {
+    const seller = await signupBuilder('purchase-total-cap-seller');
+    await createGreenbeltLandletWithArea('purchase-total-cap-landlet', 1000);
+    await claim('purchase-total-cap-landlet', seller);
+    // 100_000_000 is MAX_MONEY_CENTS itself — individually valid for priceCents.
+    await createTemplate('purchase-total-cap-template', { priceCents: 100_000_000 });
+    await placeInstance('purchase-total-cap-instance', 'purchase-total-cap-landlet', 'purchase-total-cap-template', seller);
+
+    // quantity 2 is well within PURCHASE_MAX_QUANTITY (1000), but combined
+    // with the price above it produces a totalCents twice MAX_MONEY_CENTS.
+    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 2 }),
+    });
+    expect(tooMuch.response.status).toBe(400);
+    expect(tooMuch.body).toEqual({ error: 'total price must be 100000000 cents or fewer' });
+
+    const atCap = await api('/instances/purchase-total-cap-instance/purchase', {
+      method: 'POST',
+      body: JSON.stringify({ quantity: 1 }),
+    });
+    expect(atCap.response.status).toBe(201);
+    expect(atCap.body.purchase.totalCents).toBe(100_000_000);
+  });
+
   it('rate-limits repeated purchases from the same client', async () => {
     // Unauthenticated on purpose (no shopper account exists to check
     // against), but a successful call credits a real builder balance and

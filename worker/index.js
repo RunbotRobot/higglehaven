@@ -5556,6 +5556,14 @@ function computePurchaseAmounts(template, input) {
 
   const unitPriceCents = template.price_cents;
   const totalCents = unitPriceCents * quantity;
+  // #521: priceCents and quantity are each capped individually (above, and
+  // at template-creation time), but neither cap bounds their product — a
+  // request combining both at their ceilings reintroduces exactly the
+  // unbounded-credit risk those caps exist to prevent, just at compound
+  // scale. Bounding totalCents itself closes that gap for both this
+  // (simulated) path and the real-money path below, which shares this
+  // function.
+  if (totalCents > MAX_MONEY_CENTS) throw new HttpError(`total price must be ${MAX_MONEY_CENTS} cents or fewer`, 400);
   const commissionCents = Math.round(totalCents * PURCHASE_COMMISSION_RATE);
   const builderShareCents = Math.max(
     Math.round(commissionCents * PURCHASE_BUILDER_SPLIT),
