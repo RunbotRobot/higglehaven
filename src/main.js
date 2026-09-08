@@ -6983,6 +6983,31 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
   }
 });
 
+// Owner (Control Room feedback): "Builders should see their lánd cap in
+// the menu somewhere" — until now the only place it appeared was Settings
+// > Build (renderLandCapField above), which needs Build mode active *and*
+// Settings opened *and* its Build tab picked. Same "no live polling,
+// refresh on open" approach as refreshNotificationsBadge/refreshFriendsBadge
+// just below, except the source of truth to refresh against is this panel
+// itself (see the accountMenuToggle click handler further down) rather
+// than a separate modal.
+const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
+async function refreshAccountMenuLandCap() {
+  if (!builderId) {
+    accountMenuLandCapEl.hidden = true;
+    return;
+  }
+  try {
+    const builders = await fetchBuilders();
+    const me = builders.find((b) => b.builderId === builderId);
+    accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
+    accountMenuLandCapEl.hidden = false;
+  } catch (err) {
+    console.warn('Could not refresh land cap menu display:', err);
+    accountMenuLandCapEl.hidden = true;
+  }
+}
+
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
@@ -7183,8 +7208,10 @@ async function renderFriends() {
 const accountMenuToggle = document.getElementById('account-menu-toggle');
 const accountMenuPanel = document.getElementById('account-menu-panel');
 accountMenuToggle.addEventListener('click', () => {
+  const expanding = !accountMenuPanel.classList.contains('expanded');
   accountMenuPanel.classList.toggle('expanded');
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
+  if (expanding) refreshAccountMenuLandCap();
 });
 for (const row of accountMenuPanel.querySelectorAll('button')) {
   row.addEventListener('click', () => {
