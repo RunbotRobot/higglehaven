@@ -2015,12 +2015,33 @@ function renderCatalogThumbnail(template) {
 // callers — a failure here shouldn't block or surface an error for
 // whatever product-creation/edit flow triggered it, since the picker
 // already works fine off the client-rendered dataUrl either way.
+//
+// Self-found audit fix, no issue: two calls for the same template (e.g.
+// a resize immediately followed by another, before the first call's own
+// upload has finished — nothing else here serializes persistCatalogThumbnail
+// itself, only the render step via catalogThumbnailQueue) used to just
+// both `await uploadCatalogTemplateThumbnail(...)` and unconditionally
+// assign the result, so whichever response happened to land last — not
+// necessarily the one from the more recent render — won. A slow response
+// from a now-stale render could overwrite a newer one that already landed,
+// leaving template.imageUrl (and the server's own stored copy) pointing at
+// an outdated thumbnail. Same supersede-guard idiom as uploadFlowToken
+// above, just keyed per templateId since persistCatalogThumbnail calls for
+// different templates run independently and shouldn't block each other.
+const catalogThumbnailPersistTokens = new Map(); // templateId -> generation of the most recently started call
 async function persistCatalogThumbnail(template) {
+  const generation = (catalogThumbnailPersistTokens.get(template.templateId) || 0) + 1;
+  catalogThumbnailPersistTokens.set(template.templateId, generation);
   try {
     const dataUrl = await renderCatalogThumbnail(template);
     if (!dataUrl) return;
     const embedding = catalogThumbnailEmbeddingCache.get(template.templateId) || null;
-    template.imageUrl = await uploadCatalogTemplateThumbnail(template.templateId, { imageDataUrl: dataUrl, embedding });
+    const imageUrl = await uploadCatalogTemplateThumbnail(template.templateId, { imageDataUrl: dataUrl, embedding });
+    // A newer call already started (and may have already written its own,
+    // more current result) — don't let this now-stale response regress it.
+    if (catalogThumbnailPersistTokens.get(template.templateId) === generation) {
+      template.imageUrl = imageUrl;
+    }
   } catch (err) {
     console.error('persistCatalogThumbnail: could not persist a thumbnail for', template.templateId, err);
   }
