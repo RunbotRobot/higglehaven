@@ -5159,6 +5159,17 @@ async function handleWorld(request, db, route) {
     const existing = await getWorldSettings(db);
     const input = await readJson(request);
     const world = validateWorld({ ...worldFromRow(existing), ...input });
+    // #523: nothing here re-validates already-materialized/greenbelt land
+    // against a smaller radius, and expandWorldOnce (the only other writer
+    // of radius_m) only ever grows it — so a shrink here was the one path
+    // that could leave existing landlets sitting outside the world's own
+    // stated bounds. Owner direction (reply yyjnvw3ueii8zn0k5cs3): block
+    // shrinking outright; if the radius is ever wrong by accident, that's
+    // a one-time manual/engineered fix, not something this endpoint should
+    // allow as routine input.
+    if (world.radiusM < existing.radius_m) {
+      throw new HttpError('World radius cannot be decreased', 400);
+    }
     await db.prepare(`
       UPDATE world_settings
       SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
