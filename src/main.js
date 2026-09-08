@@ -1868,9 +1868,15 @@ const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
 // A template's appearance never changes after creation (there's no edit
-// flow for its color or model), so a thumbnail rendered once this session
-// is good for the rest of it — keyed by templateId rather than re-rendered
-// every time the picker reopens or a new upload rebuilds the whole grid.
+// flow for its color), so a thumbnail rendered once this session is good
+// for the rest of it — keyed by templateId rather than re-rendered every
+// time the picker reopens or a new upload rebuilds the whole grid. The one
+// exception is Save Size (#544): it can rescale/re-upload the model and
+// always changes template.dimensions, both of which change what
+// renderCatalogThumbnailNow's bounding-sphere framing actually renders —
+// its own success handler deletes this template's cache entry before
+// rebuilding the picker, so this cache would otherwise keep serving a
+// stale pre-resize thumbnail for the rest of the session.
 const catalogThumbnailCache = new Map();
 const CATALOG_THUMBNAIL_SIZE = 128;
 let catalogThumbnailCanvas = null;
@@ -3309,6 +3315,11 @@ function renderSellerList() {
         const updated = await updateCatalogTemplate(template.templateId, patch);
         Object.assign(template, updated);
         refreshDimsText();
+        // #544: dimensions changed (and possibly the model itself, if it
+        // was rescaled/re-uploaded above) — both affect what the catalog
+        // picker's thumbnail actually renders, so the cached one from
+        // before this save is stale.
+        catalogThumbnailCache.delete(template.templateId);
         buildCatalogPickerButtons();
         if (axisPreview?.templateId === template.templateId) {
           showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
