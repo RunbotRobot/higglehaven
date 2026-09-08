@@ -1809,6 +1809,10 @@ async function handleSellers(request, env, db, route) {
     return handleSellerStripeAccount(request, env, db);
   }
 
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'payouts') {
+    return handleSellerPayouts(request, env, db);
+  }
+
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     return handleMySeller(request, db);
   }
@@ -3506,12 +3510,18 @@ function flattenStripeParams(value, prefix) {
 // (client-side or a future automatic one) would otherwise hit. Reads and
 // updates against an already-known resource id don't need one; they're
 // naturally safe to repeat.
-async function stripeRequest(env, method, path, params, idempotencyKey) {
+// #454: stripeAccountId scopes a request to a connected Custom account
+// (the "Stripe-Account" header) — needed for a payout, which draws from
+// THAT account's own balance, not the platform's. Every existing caller
+// (checkout, refunds, onboarding) omits it and keeps acting as the
+// platform itself, exactly as before.
+async function stripeRequest(env, method, path, params, idempotencyKey, stripeAccountId) {
   const headers = {
     authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
     'content-type': 'application/x-www-form-urlencoded',
   };
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+  if (stripeAccountId) headers['stripe-account'] = stripeAccountId;
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method,
     headers,
@@ -3671,6 +3681,141 @@ async function handleSellerStripeAccount(request, env, db) {
       stripe_requirements_due: JSON.stringify(requirementsDue),
       stripe_updated_at: nowIso,
     }));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #454: real-money sale proceeds already sit in the seller's own Stripe
+// Custom-account balance the instant a sale is charged (#453's own
+// transfer_data) — this is purely a policy-driven gate on when
+// higglehaven lets the seller actually request payout of it. Owner-
+// confirmed policy (Control Room msg-q-issue-454-trust-tiers): a digital
+// good pays out instantly (delivered the moment it's bought — no
+// chargeback window where non-delivery is plausible); a physical good
+// holds until whichever comes first: the buyer confirms delivery (see
+// handlePurchaseConfirmDelivery), or this many days after the seller
+// marks it shipped (see handleMarkShipped) — a fallback for exactly the
+// case where confirmation never happens.
+const PHYSICAL_GOOD_HOLD_DAYS = 7;
+
+function purchaseSellerShareCents(purchase) {
+  return purchase.total_cents - purchase.commission_cents;
+}
+
+function isPurchaseEligibleForPayout(purchase) {
+  if (!purchase.payment_intent_id) return false; // simulated — no real Stripe balance to release
+  if (purchase.is_digital_good) return true;
+  if (purchase.delivery_confirmed_at) return true;
+  if (!purchase.shipped_at) return false; // still not shipped — always held
+  return Date.now() >= new Date(purchase.shipped_at).getTime() + PHYSICAL_GOOD_HOLD_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// Purchases still owed to this seller (a real-money sale, not yet
+// refunded or paid out) — capped generously rather than paginated, since
+// a seller's own backlog of unpaid sales should stay small in practice
+// (payouts drain it), the same "good enough for now" scale as this file's
+// other uncapped-in-practice lists.
+async function unpaidSellerPurchases(db, sellerId) {
+  const { results } = await db.prepare(`
+    SELECT * FROM purchases
+    WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND paid_out_at IS NULL AND refunded_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 500
+  `).bind(sellerId).all();
+  return results;
+}
+
+async function sellerPayoutSummaryJson(env, db, sessionSeller) {
+  const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
+  let availableCents = 0;
+  let heldCents = 0;
+  let nextEligibleAt = null;
+  for (const purchase of purchases) {
+    const share = purchaseSellerShareCents(purchase);
+    if (isPurchaseEligibleForPayout(purchase)) {
+      availableCents += share;
+      continue;
+    }
+    heldCents += share;
+    if (purchase.shipped_at) {
+      const eligibleAt = new Date(purchase.shipped_at).getTime() + PHYSICAL_GOOD_HOLD_DAYS * 24 * 60 * 60 * 1000;
+      if (nextEligibleAt === null || eligibleAt < nextEligibleAt) nextEligibleAt = eligibleAt;
+    }
+  }
+  return {
+    ...stripeAccountStatusJson(env, sessionSeller),
+    availableCents,
+    heldCents,
+    nextEligibleAt: nextEligibleAt === null ? null : new Date(nextEligibleAt).toISOString(),
+  };
+}
+
+// GET returns the seller's current held/available-for-cash-out balance
+// (folded into the same shape stripeAccountStatusJson already gives the
+// onboarding panel, so one call covers both); POST actually triggers a
+// Stripe payout for whatever's currently available. Stripe stays entirely
+// invisible to the seller (#452's own Custom-account mandate) — this is
+// the seller-facing surface for a concept ("my money, when can I get it")
+// that otherwise only exists as raw Stripe API state.
+async function handleSellerPayouts(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionSeller = await getOrCreateSellerForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json(await sellerPayoutSummaryJson(env, db, sessionSeller));
+  }
+
+  if (request.method === 'POST') {
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
+    }
+    const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
+    const eligible = purchases.filter(isPurchaseEligibleForPayout);
+    const availableCents = eligible.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
+    if (availableCents <= 0) {
+      throw new HttpError('Nothing is available to cash out yet.', 400);
+    }
+
+    // Our own hold is a policy gate layered on top of Stripe's own
+    // funds-availability delay (a transfer typically takes a couple of
+    // days before it even shows up as "available" on the connected
+    // account's own balance) — capping at Stripe's own reported available
+    // balance avoids requesting a payout Stripe would reject outright
+    // because the money technically hasn't cleared on their side yet,
+    // even though our own hold already lifted.
+    const balance = await stripeRequest(env, 'GET', 'balance', undefined, undefined, sessionSeller.stripe_account_id);
+    const stripeAvailableCents = (balance.available || []).find((b) => b.currency === 'usd')?.amount ?? 0;
+    const payoutCapCents = Math.min(availableCents, stripeAvailableCents);
+
+    // Payouts are per-whole-purchase, not fractional — only mark a
+    // purchase paid out if its own share genuinely fit inside what Stripe
+    // will actually let us withdraw right now; anything left over just
+    // stays "available" for the next cash-out request.
+    let payoutCents = 0;
+    const included = [];
+    for (const purchase of eligible) {
+      const share = purchaseSellerShareCents(purchase);
+      if (payoutCents + share > payoutCapCents) continue;
+      payoutCents += share;
+      included.push(purchase);
+    }
+    if (included.length === 0) {
+      throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
+    }
+
+    const payout = await stripeRequest(
+      env, 'POST', 'payouts', { amount: payoutCents, currency: 'usd' }, undefined, sessionSeller.stripe_account_id,
+    );
+    const nowIso = new Date().toISOString();
+    await db.batch(included.map((purchase) =>
+      db.prepare('UPDATE purchases SET paid_out_at = ?, stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind(nowIso, payout.id, purchase.purchase_id)));
+
+    return json({ payoutCents, purchaseCount: included.length, stripePayoutId: payout.id });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -5751,7 +5896,7 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input);
   }
-  return writePurchaseRow(db, instance, template, landlet, computePurchaseAmounts(template, input));
+  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input));
 }
 
 // Shared by the simulated path (handleInstancePurchase's own direct write)
@@ -5827,6 +5972,12 @@ function purchaseIdempotencyKey(instanceId, rawKey) {
 
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
   const amounts = computePurchaseAmounts(template, input);
+  // #454: locked in at checkout time, same reasoning as every other amount
+  // here — a digital good pays out instantly with no hold, so
+  // handlePurchaseFinalize (and the orphaned-purchase fallback, which has
+  // no live template row to re-check this against) both need this snapshot
+  // rather than re-deriving it from a template that might change or vanish.
+  const isDigitalGood = !!JSON.parse(template.metadata_json || '{}').digitalGoodDisclaimer;
 
   // Everything handlePurchaseFinalize needs to actually write the purchase
   // travels here, in Stripe's own metadata — set once, server-side, at
@@ -5852,6 +6003,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       commissionCents: String(amounts.commissionCents),
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
+      isDigitalGood: String(isDigitalGood),
     },
   }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
@@ -5919,9 +6071,10 @@ async function handlePurchaseFinalize(request, env) {
     builderShareCents: Number(meta.builderShareCents),
     platformShareCents: Number(meta.platformShareCents),
   };
+  const isDigitalGood = meta.isDigitalGood === 'true';
 
   if (instance && template && landlet?.owner_builder_id) {
-    return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -5940,10 +6093,26 @@ async function handlePurchaseFinalize(request, env) {
   // (auto-refund, manual review, ...) — that's a reconciliation-policy
   // call left for separate design/owner input; this only guarantees the
   // money is never unaccounted for.
-  return writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId);
+  return writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood);
 }
 
-async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
+// #454: a real-money physical purchase gets an unguessable token (only its
+// hash ever stored, same discipline as password_reset_tokens) so whoever
+// holds the link — the buyer, handed it once in their own checkout's
+// finalize response — can confirm delivery. There's no buyer account
+// anywhere in this app to authenticate a "my orders" view against instead
+// (see "Simulated purchases"). Digital goods and simulated (higgles)
+// purchases skip this entirely: nothing physical to deliver, and a
+// simulated purchase has no real Stripe balance to ever hold against.
+async function buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood) {
+  if (!paymentIntentId || isDigitalGood) return { tokenHash: null, deliveryConfirmUrl: null };
+  const rawToken = generateToken();
+  const tokenHash = await sha256Hex(rawToken);
+  return { tokenHash, deliveryConfirmUrl: `${appBaseUrl(env)}/?confirmDelivery=${rawToken}` };
+}
+
+async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
+  const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   // builder_id is a real foreign key (unlike instance_id/template_id) —
@@ -5957,15 +6126,18 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
     : null;
   const builderId = builderStillExists ? meta.builderId : null;
   const sellerId = meta.sellerId || null;
+  const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
 
   const statements = [
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
-      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
+      isDigitalGood ? 1 : 0, tokenHash),
   ];
   if (builderId) {
     statements.push(
@@ -5980,21 +6152,25 @@ async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
   await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  return json({ purchase: purchaseFromRow(row) }, 201);
+  return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
-async function writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId = null) {
+async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false) {
+  const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
+  const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
   await db.batch([
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
-         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
-      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
+      isDigitalGood ? 1 : 0, tokenHash),
     db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
@@ -6004,7 +6180,7 @@ async function writePurchaseRow(db, instance, template, landlet, amounts, paymen
   ]);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  return json({ purchase: purchaseFromRow(row) }, 201);
+  return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
 async function handlePurchases(request, env, route, url) {
@@ -6058,7 +6234,63 @@ async function handlePurchases(request, env, route, url) {
     return handlePurchaseRefund(request, env, route[1]);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'mark-shipped') {
+    return handleMarkShipped(request, env, route[1]);
+  }
+
+  // Unauthenticated on purpose — see buildDeliveryConfirmFields' own
+  // comment: there is no buyer account here to authenticate against, so
+  // the unguessable token itself (hashed before ever reaching the DB) is
+  // the only credential this needs, the same trust model a real
+  // guest-checkout tracking link already relies on.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-delivery') {
+    return handlePurchaseConfirmDelivery(request, env);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// #454: seller-initiated (there's no buyer/shipping-carrier integration to
+// do this automatically) — starts the 7-day fallback clock for a physical
+// real-money purchase's payout hold (see PHYSICAL_GOOD_HOLD_DAYS). A
+// digital good or a simulated (higgles) purchase has nothing to ship.
+async function handleMarkShipped(request, env, purchaseId) {
+  const db = env.DB;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) return json({ error: 'Purchase not found' }, 404);
+  if (!purchase.seller_id) throw new HttpError('This purchase has no seller to authorize the request', 400);
+  const sessionSeller = await requireSessionSeller(request, db);
+  assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  if (!purchase.payment_intent_id) {
+    throw new HttpError('Only real-money purchases can be marked shipped', 400);
+  }
+  if (purchase.is_digital_good) {
+    throw new HttpError('Digital goods have nothing to ship', 400);
+  }
+  if (purchase.shipped_at) {
+    throw new HttpError('This purchase is already marked shipped', 400);
+  }
+  await db.prepare('UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+    .bind(purchaseId).run();
+  const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(updated) });
+}
+
+async function handlePurchaseConfirmDelivery(request, env) {
+  const db = env.DB;
+  const input = await readJson(request);
+  const token = stringValue(input.token, 'token');
+  const tokenHash = await sha256Hex(token);
+  const purchase = await db.prepare('SELECT purchase_id, delivery_confirmed_at FROM purchases WHERE delivery_confirm_token_hash = ?')
+    .bind(tokenHash).first();
+  if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
+  // Idempotent — clicking an already-confirmed link again (a second visit,
+  // a bookmark) is a no-op, not an error.
+  if (!purchase.delivery_confirmed_at) {
+    await db.prepare('UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).run();
+  }
+  return json({ confirmed: true });
 }
 
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
@@ -6178,6 +6410,12 @@ function purchaseFromRow(row) {
     createdAt: row.created_at,
     refundedAt: row.refunded_at,
     paymentIntentId: row.payment_intent_id,
+    // #454: never expose delivery_confirm_token_hash itself — same
+    // discipline as password_reset_tokens never exposing its hash either.
+    isDigitalGood: !!row.is_digital_good,
+    shippedAt: row.shipped_at,
+    deliveryConfirmedAt: row.delivery_confirmed_at,
+    paidOutAt: row.paid_out_at,
   };
 }
 

@@ -2354,4 +2354,218 @@ describe('Simulated purchases', () => {
       expect(retried.response.status).toBe(503);
     });
   });
+
+  // #454: seller payout/cash-out hold policy. Same limitation as the
+  // "Real-money checkout"/"Real-money refunds" describes above — this
+  // suite never configures STRIPE_SECRET_KEY, so the actual Stripe
+  // balance/payout API calls can't be exercised here. What's fully
+  // testable without Stripe, and is the actual point of this feature, is
+  // the hold-eligibility logic itself: it's pure DB state (payment_intent_id/
+  // is_digital_good/shipped_at/delivery_confirmed_at/refunded_at), gated
+  // by handleSellerPayouts' GET summary, mark-shipped, and confirm-delivery
+  // — none of which touch Stripe at all.
+  describe('Seller payouts (#454)', () => {
+    async function sha256Hex(text) {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function createConnectedSeller(label) {
+      const seller = await signupSeller(label);
+      // Stands in for a completed #452 onboarding (a real Stripe Connect
+      // account create/verify round trip, never exercised in this suite)
+      // — the payout logic under test only cares that these columns say
+      // "connected and complete".
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_test_payout', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+      `).bind(seller.sellerId).run();
+      return seller;
+    }
+
+    // Same technique as "Real-money checkout"/"Real-money refunds" above:
+    // create the ordinary simulated purchase (Stripe isn't configured, so
+    // this is what /instances/:id/purchase actually does), then directly
+    // set the columns a real #453 finalize would have written.
+    async function makeRealMoneyPurchase(builder, seller, { isDigitalGood = false, deliveryConfirmToken } = {}) {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const landletId = `payout-landlet-${suffix}`;
+      const templateId = `payout-template-${suffix}`;
+      const instanceId = `payout-instance-${suffix}`;
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId,
+          name: `Payout product ${templateId}`,
+          color: '#654321',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 5000,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance(instanceId, landletId, templateId, builder);
+      const purchased = await api(`/instances/${instanceId}/purchase`, { method: 'POST' });
+      expect(purchased.response.status).toBe(201);
+      const { purchaseId } = purchased.body.purchase;
+      const tokenHash = deliveryConfirmToken ? await sha256Hex(deliveryConfirmToken) : null;
+      await env.DB.prepare(`
+        UPDATE purchases SET payment_intent_id = ?, is_digital_good = ?, delivery_confirm_token_hash = ? WHERE purchase_id = ?
+      `).bind(`pi_${suffix}`, isDigitalGood ? 1 : 0, tokenHash, purchaseId).run();
+      return purchaseId;
+    }
+
+    it('requires a session for the payout summary', async () => {
+      const got = await api('/sellers/me/payouts');
+      expect(got.response.status).toBe(401);
+    });
+
+    it('a digital good is available for payout immediately, with 2% commission excluded', async () => {
+      const builder = await signupBuilder('payout-digital-builder');
+      const seller = await createConnectedSeller('payout-digital-seller');
+      await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+
+      const summary = await api('/sellers/me/payouts', seller.session());
+      expect(summary.response.status).toBe(200);
+      expect(summary.body.availableCents).toBe(4900); // 5000 - 2% commission
+      expect(summary.body.heldCents).toBe(0);
+    });
+
+    it('a physical good stays held until shipped, and only its own seller can mark it shipped', async () => {
+      const builder = await signupBuilder('payout-physical-builder');
+      const seller = await createConnectedSeller('payout-physical-seller');
+      const stranger = await createConnectedSeller('payout-physical-stranger');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+
+      const heldSummary = await api('/sellers/me/payouts', seller.session());
+      expect(heldSummary.body.availableCents).toBe(0);
+      expect(heldSummary.body.heldCents).toBe(4900);
+      expect(heldSummary.body.nextEligibleAt).toBeNull(); // not shipped yet — no countdown started
+
+      const unauthenticated = await api(`/purchases/${purchaseId}/mark-shipped`, { method: 'POST' });
+      expect(unauthenticated.response.status).toBe(401);
+
+      const byStranger = await api(`/purchases/${purchaseId}/mark-shipped`, stranger.session({ method: 'POST' }));
+      expect(byStranger.response.status).toBe(403);
+
+      const shipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(shipped.response.status).toBe(200);
+      expect(shipped.body.purchase.shippedAt).toBeTruthy();
+
+      // Still held right after shipping — the 7-day fallback clock has
+      // only just started, and there's no delivery confirmation either.
+      const afterShip = await api('/sellers/me/payouts', seller.session());
+      expect(afterShip.body.availableCents).toBe(0);
+      expect(afterShip.body.heldCents).toBe(4900);
+      expect(afterShip.body.nextEligibleAt).toBeTruthy();
+
+      const reShipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(reShipped.response.status).toBe(400);
+    });
+
+    it('rejects marking a digital good or a simulated purchase as shipped', async () => {
+      const builder = await signupBuilder('payout-mark-shipped-reject-builder');
+      const seller = await createConnectedSeller('payout-mark-shipped-reject-seller');
+      const digitalPurchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+      const digitalRejected = await api(`/purchases/${digitalPurchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(digitalRejected.response.status).toBe(400);
+
+      // No payment_intent_id at all — an ordinary simulated (higgles) sale.
+      // A separate builder claims this one: `builder` above already holds
+      // its own claimed landlet from makeRealMoneyPurchase, and a builder
+      // can only ever hold one claimed landlet at a time.
+      const secondBuilder = await signupBuilder('payout-mark-shipped-reject-builder-2');
+      await createGreenbeltLandletWithArea('payout-simulated-landlet', 1000);
+      await claim('payout-simulated-landlet', secondBuilder);
+      const simTemplate = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'payout-simulated-template', name: 'Simulated product', color: '#111111',
+          dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 2000, sellerId: seller.sellerId,
+        }),
+      }));
+      expect(simTemplate.response.status).toBe(201);
+      await placeInstance('payout-simulated-instance', 'payout-simulated-landlet', 'payout-simulated-template', secondBuilder);
+      const simPurchased = await api('/instances/payout-simulated-instance/purchase', { method: 'POST' });
+      expect(simPurchased.response.status).toBe(201);
+      const simRejected = await api(`/purchases/${simPurchased.body.purchase.purchaseId}/mark-shipped`,
+        seller.session({ method: 'POST' }));
+      expect(simRejected.response.status).toBe(400);
+
+      // The simulated purchase never shows up in the payout summary at all
+      // — availableCents is exactly the earlier digital purchase's own
+      // share (4900), nothing added by the simulated one, and heldCents
+      // stays 0 since nothing real is held either.
+      const summary = await api('/sellers/me/payouts', seller.session());
+      expect(summary.body.availableCents).toBe(4900);
+      expect(summary.body.heldCents).toBe(0);
+    });
+
+    it('becomes available once the buyer confirms delivery via their own token link, idempotently', async () => {
+      const builder = await signupBuilder('payout-confirm-builder');
+      const seller = await createConnectedSeller('payout-confirm-seller');
+      const rawToken = `test-delivery-token-${crypto.randomUUID()}`;
+      await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
+
+      const badToken = await api('/purchases/confirm-delivery', {
+        method: 'POST', body: JSON.stringify({ token: 'this-token-does-not-exist' }),
+      });
+      expect(badToken.response.status).toBe(400);
+
+      const confirmed = await api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) });
+      expect(confirmed.response.status).toBe(200);
+      expect(confirmed.body.confirmed).toBe(true);
+
+      const summary = await api('/sellers/me/payouts', seller.session());
+      expect(summary.body.availableCents).toBe(4900);
+      expect(summary.body.heldCents).toBe(0);
+
+      // Idempotent — a second visit to the same link is a no-op, not an error.
+      const confirmedAgain = await api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) });
+      expect(confirmedAgain.response.status).toBe(200);
+    });
+
+    it('becomes available via the 7-day-after-shipped fallback even with no delivery confirmation', async () => {
+      const builder = await signupBuilder('payout-fallback-builder');
+      const seller = await createConnectedSeller('payout-fallback-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      const shipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(shipped.response.status).toBe(200);
+
+      // Back-dates shipped_at well past the hold window instead of waiting
+      // 7 real days — same technique this file's own auction/calendar
+      // tests already use to simulate elapsed time.
+      await env.DB.prepare('UPDATE purchases SET shipped_at = ? WHERE purchase_id = ?')
+        .bind('2000-01-01T00:00:00.000Z', purchaseId).run();
+
+      const summary = await api('/sellers/me/payouts', seller.session());
+      expect(summary.body.availableCents).toBe(4900);
+      expect(summary.body.heldCents).toBe(0);
+    });
+
+    it('a refunded purchase never counts toward held or available', async () => {
+      const builder = await signupBuilder('payout-refund-builder');
+      const seller = await createConnectedSeller('payout-refund-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+      await env.DB.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
+        .bind(purchaseId).run();
+
+      const summary = await api('/sellers/me/payouts', seller.session());
+      expect(summary.body.availableCents).toBe(0);
+      expect(summary.body.heldCents).toBe(0);
+    });
+
+    it('503s triggering a payout since this suite never configures Stripe, without touching any purchase', async () => {
+      const builder = await signupBuilder('payout-trigger-builder');
+      const seller = await createConnectedSeller('payout-trigger-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+
+      const triggered = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+      expect(triggered.response.status).toBe(503);
+
+      const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.paid_out_at).toBeNull();
+    });
+  });
 });

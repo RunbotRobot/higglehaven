@@ -894,6 +894,108 @@ or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
 
+### `GET /api/sellers/me/payouts`
+### `POST /api/sellers/me/payouts`
+
+Seller payout/cash-out (#454) — a real-money sale's proceeds
+(`totalCents - commissionCents`) already land in the seller's own Stripe
+Custom-account balance the instant it's charged, via the real-money
+checkout's own `transfer_data` (see "Real-money checkout" below). This is
+a policy-driven hold on top of that: higglehaven controls when the seller
+is actually allowed to request payout of it, since a Custom account
+doesn't get Stripe's own automatic payout scheduling.
+
+Hold policy (owner-confirmed): a digital good (`metadata.digitalGoodDisclaimer`
+set) pays out instantly, no hold at all — it's delivered the moment it's
+bought, so there's no chargeback window where non-delivery is plausible. A
+physical good holds until whichever comes first: the buyer confirms
+delivery (see "Purchase delivery confirmation" below), or 7 days after the
+seller marks it shipped (see "Mark purchase shipped" below) — a fallback
+for exactly the case where confirmation never happens. A simulated
+(higgles) purchase has no real Stripe balance at all and never appears
+here.
+
+Both require a session (`401` otherwise) and act on the calling account's
+own seller profile.
+
+`GET` response — folds in the same fields `GET .../stripe-account` returns,
+plus the payout-specific ones:
+
+```json
+{
+  "configured": true,
+  "connected": true,
+  "status": "complete",
+  "requirementsCurrentlyDue": [],
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "availableCents": 4900,
+  "heldCents": 9800,
+  "nextEligibleAt": "2026-01-08T00:00:00.000Z"
+}
+```
+
+`availableCents` is what a `POST` here would currently try to cash out;
+`heldCents` is everything else still on hold. `nextEligibleAt` is the
+earliest a currently-held, already-shipped purchase becomes eligible via
+the 7-day fallback (`null` if nothing held has shipped yet, or nothing is
+held at all) — informational only, since a buyer confirming delivery
+sooner can always unlock a purchase before this date.
+
+`POST` triggers an actual Stripe payout for whatever's currently
+available. Returns `503` if `STRIPE_SECRET_KEY` isn't configured, `400` if
+Stripe onboarding isn't `complete` yet, and `400` if nothing is available
+(either nothing eligible, or Stripe's own funds-availability delay hasn't
+cleared it on their side yet — this endpoint never requests more than
+Stripe's own reported available balance for the connected account, to
+avoid a payout Stripe would reject outright). Marks every purchase whose
+own share fit inside the actual payout amount as paid out; a purchase
+whose amount didn't fit stays available for the next request.
+
+```json
+{
+  "payoutCents": 4900,
+  "purchaseCount": 1,
+  "stripePayoutId": "po_..."
+}
+```
+
+### Mark purchase shipped
+
+`POST /api/purchases/:purchaseId/mark-shipped`
+
+Seller-initiated (there's no shipping-carrier integration to detect this
+automatically) — starts the 7-day payout-hold fallback clock described
+above. Requires a session logged in as this purchase's own seller (`403`
+otherwise). Returns `400` if the purchase isn't real-money
+(`paymentIntentId` unset), is a digital good (nothing to ship), or is
+already marked shipped.
+
+```json
+{ "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
+```
+
+### Purchase delivery confirmation
+
+`POST /api/purchases/confirm-delivery`
+
+Unauthenticated on purpose — there is no buyer account anywhere in this
+app (see "Simulated purchases" below) to authenticate a "my orders" view
+against. A real-money physical purchase gets an unguessable token the
+instant it's finalized; only its SHA-256 hash is ever stored (same
+discipline as password-reset tokens), and the raw token is handed to the
+buyer exactly once, in their own checkout's finalize response (see
+"Real-money checkout" below) — there's no way to retrieve it again later,
+by design, so losing it just means the purchase falls back to the 7-day
+post-shipping hold instead of an early release.
+
+```json
+{ "token": "..." }
+```
+
+Response: `{ "confirmed": true }`. Idempotent — confirming an
+already-confirmed purchase (a second visit to the same link) is a no-op,
+not an error. Returns `400` if the token doesn't match any purchase.
+
 ## Catalog templates
 
 Catalog templates describe product-like placeholders that can be placed into a
