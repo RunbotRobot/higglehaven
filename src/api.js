@@ -380,6 +380,22 @@ export async function deleteCatalogTemplate(templateId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }
 
+// #327: persists the flat thumbnail (a PNG data URL) rendered client-side
+// from this template's own 3D model, plus a cheap client-computed
+// embedding for it — see src/main.js's persistCatalogThumbnail. Best-
+// effort by every caller (this itself just does the request; each call
+// site decides how to handle a failure), same "don't block the real
+// action on this" posture as the note-numbering claim in the Control
+// Room's own artifact.
+export async function uploadCatalogTemplateThumbnail(templateId, { imageDataUrl, embedding } = {}) {
+  const { imageUrl } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/thumbnail`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ imageDataUrl, embedding }),
+  });
+  return imageUrl;
+}
+
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
 // dimensions. unreadOnly narrows the list server-side rather than filtering
