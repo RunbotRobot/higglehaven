@@ -1319,6 +1319,171 @@ describe('Shipping', () => {
   });
 });
 
+// #327 ("build the 3D Model > Flat image creation pathway") — a minimal,
+// real 1x1 transparent PNG, same idiom as glbFile's synthetic-but-valid
+// binary fixture, so these tests exercise the real base64-decode/R2-put
+// path rather than mocking it away.
+const ONE_PIXEL_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+describe('Product-image thumbnail (#327)', () => {
+  async function createOwnedTemplate(templateId, seller) {
+    return api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: 'Thumbnail test product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+  }
+
+  it('requires a session, and requires it to be the owning seller', async () => {
+    const owner = await signupSeller('thumbnail-owner');
+    const stranger = await signupSeller('thumbnail-stranger');
+    const created = await createOwnedTemplate('thumbnail-auth-template', owner);
+    expect(created.response.status).toBe(201);
+
+    const noSession = await api('/catalog/thumbnail-auth-template/thumbnail', {
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    });
+    expect(noSession.response.status).toBe(401);
+
+    const wrongSeller = await api('/catalog/thumbnail-auth-template/thumbnail', stranger.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(wrongSeller.response.status).toBe(403);
+  });
+
+  it('rejects a thumbnail for a template with no owning seller', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'thumbnail-unowned-template',
+        name: 'Unowned thumbnail test product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const owner = await signupSeller('thumbnail-unowned-attempt-seller');
+    const rejected = await api('/catalog/thumbnail-unowned-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(rejected.response.status).toBe(403);
+    expect(rejected.body.error).toMatch(/no owning seller/);
+  });
+
+  it('returns 404 for a nonexistent template', async () => {
+    const owner = await signupSeller('thumbnail-404-seller');
+    const missing = await api('/catalog/thumbnail-does-not-exist/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(missing.response.status).toBe(404);
+  });
+
+  it('rejects a malformed or oversized imageDataUrl', async () => {
+    const owner = await signupSeller('thumbnail-validation-seller');
+    await createOwnedTemplate('thumbnail-validation-template', owner);
+
+    const notADataUrl = await api('/catalog/thumbnail-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: 'https://example.com/cat.png' }),
+    }));
+    expect(notADataUrl.response.status).toBe(400);
+    expect(notADataUrl.body.error).toMatch(/data URL/);
+
+    const notBase64 = await api('/catalog/thumbnail-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: 'data:image/png;base64,not-valid-base64!!!' }),
+    }));
+    expect(notBase64.response.status).toBe(400);
+
+    // ~440KB of base64, comfortably over the 300KB decoded-byte cap.
+    const huge = 'data:image/png;base64,' + 'A'.repeat(600000);
+    const tooBig = await api('/catalog/thumbnail-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: huge }),
+    }));
+    expect(tooBig.response.status).toBe(413);
+  });
+
+  it('rejects a malformed embedding', async () => {
+    const owner = await signupSeller('thumbnail-embedding-validation-seller');
+    await createOwnedTemplate('thumbnail-embedding-validation-template', owner);
+
+    const notAnArray = await api('/catalog/thumbnail-embedding-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL, embedding: 'not-an-array' }),
+    }));
+    expect(notAnArray.response.status).toBe(400);
+
+    const nonNumeric = await api('/catalog/thumbnail-embedding-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL, embedding: [0.1, 'x', 0.3] }),
+    }));
+    expect(nonNumeric.response.status).toBe(400);
+  });
+
+  it('stores the image and embedding, and serves the image back from /uploads/', async () => {
+    const owner = await signupSeller('thumbnail-success-seller');
+    await createOwnedTemplate('thumbnail-success-template', owner);
+    const embedding = [0.1, 0.2, 0.3, 0.4];
+
+    const uploaded = await api('/catalog/thumbnail-success-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL, embedding }),
+    }));
+    expect(uploaded.response.status).toBe(200);
+    expect(uploaded.body.imageUrl).toMatch(/^\/uploads\/thumbnails\/.+\.png$/);
+
+    const fetched = await api('/catalog/thumbnail-success-template');
+    expect(fetched.body.template.imageUrl).toBe(uploaded.body.imageUrl);
+    expect(fetched.body.template.imageEmbedding).toEqual(embedding);
+
+    const served = await SELF.fetch(`https://higglehaven.test${uploaded.body.imageUrl}`);
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toBe('image/png');
+  });
+
+  it('does not persist an embedding when none is sent', async () => {
+    const owner = await signupSeller('thumbnail-no-embedding-seller');
+    await createOwnedTemplate('thumbnail-no-embedding-template', owner);
+
+    const uploaded = await api('/catalog/thumbnail-no-embedding-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(uploaded.response.status).toBe(200);
+
+    const fetched = await api('/catalog/thumbnail-no-embedding-template');
+    expect(fetched.body.template.imageEmbedding).toBeNull();
+  });
+
+  it('deduplicates identical thumbnail bytes under the same content-addressed key', async () => {
+    const owner = await signupSeller('thumbnail-dedup-seller');
+    await createOwnedTemplate('thumbnail-dedup-template-a', owner);
+    await createOwnedTemplate('thumbnail-dedup-template-b', owner);
+
+    const first = await api('/catalog/thumbnail-dedup-template-a/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    const second = await api('/catalog/thumbnail-dedup-template-b/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(first.body.imageUrl).toBe(second.body.imageUrl);
+  });
+});
+
 describe('Simulated purchases', () => {
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
     return api('/landlets', adminSession({

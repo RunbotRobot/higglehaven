@@ -916,6 +916,8 @@ landlet. They are not production commerce listings yet.
   "priceCents": null,
   "sellerId": "dev-seller",
   "modelUrl": null,
+  "imageUrl": null,
+  "imageEmbedding": null,
   "metadata": {
     "placeholder": true
   },
@@ -923,6 +925,10 @@ landlet. They are not production commerce listings yet.
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
 ```
+
+`imageUrl` and `imageEmbedding` are `null` until set via `POST
+/api/catalog/:templateId/thumbnail` below — every other endpoint on this
+object (create, update, batch) leaves them untouched.
 
 ### `GET /api/catalog`
 
@@ -972,6 +978,8 @@ Response:
       "priceCents": null,
       "sellerId": "dev-seller",
       "modelUrl": null,
+      "imageUrl": null,
+      "imageEmbedding": null,
       "metadata": {
         "placeholder": true
       },
@@ -1114,6 +1122,64 @@ Response:
   "deleted": true
 }
 ```
+
+### `POST /api/catalog/:templateId/thumbnail`
+
+Persists a flat product-image thumbnail for a template, plus an optional
+embedding for it (#327 — the owner's direction, after ruling out a second
+seller-provided photo upload and server-side 3D rendering, was to build a "3D
+Model > Flat image" pathway: the client renders a flat PNG from the seller's
+already-uploaded 3D model, using the same canvas render (`renderCatalogThumbnailNow`
+in `src/main.js`) the catalog picker already produces for display, and uploads
+it here). This is a separate endpoint from the ordinary create/update ones
+above — `image_url`/`image_embedding` are not accepted by `POST`/`PUT`/`PATCH
+/api/catalog` at all, only ever set through this endpoint.
+
+The template must have a non-null `sellerId` referencing a still-existing
+seller, and the request must be a session logged in as that seller — `403`
+otherwise (unlike `PATCH` above, this endpoint never falls open for an
+unowned/orphaned template, since it writes new bytes to storage rather than
+just editing a row). `404` if the template doesn't exist.
+
+Request body:
+
+```json
+{
+  "imageDataUrl": "data:image/png;base64,iVBORw0KGgo...",
+  "embedding": [0.12, 0.98, 0.5, "... more numbers ..."]
+}
+```
+
+- `imageDataUrl`: required. Must start with `data:image/png;base64,`. Decoded
+  bytes are capped at 300KB (`400`/`413` otherwise) — comfortably above what
+  the client's fixed 128x128 render produces.
+- `embedding`: optional. A non-empty array of at most 4096 finite numbers
+  (`400` otherwise), or omit/`null` to store no embedding. Opaque to the
+  server — today the client computes a cheap stand-in (a downsampled 8x8 grid
+  of normalized RGB averages sampled from the same rendered thumbnail, with no
+  embedding-model/provider dependency), matching this issue's own "reasonable
+  to stub with whatever's cheapest to get the pipeline working end-to-end
+  first... swap in a better model later" guidance — a future real embedding
+  model can replace it with no shape requirement to honor.
+
+The image is stored content-addressed (a SHA-256 hash of its bytes as the R2
+key under `thumbnails/`, deduplicating identical uploads), the same pattern
+`POST /api/models` already uses for `.glb` files — not a fixed
+`thumbnails/<templateId>.png` key, since `GET /uploads/:key` (see "Model
+uploads" below) serves every object with a permanent `immutable` cache-control
+header, which a fixed key would fight against on a legitimate re-render (a
+seller resizing their product, say).
+
+Response:
+
+```json
+{
+  "imageUrl": "/uploads/thumbnails/3f2a9c...ab.png"
+}
+```
+
+`imageUrl` and `imageEmbedding` (`null` if never set) are included on every
+catalog template response once set (see "Catalog template object" above).
 
 ### Extensible products (crop)
 
