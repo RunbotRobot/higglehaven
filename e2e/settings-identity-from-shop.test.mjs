@@ -42,7 +42,7 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // Land Cap: previously omitted entirely (renderLandCapField returned before
 // appending anything) whenever builderId was still null.
 const landCapText = await waitForText(page, '#settings-section .settings-field', 'You own');
-console.log('Land Cap field text for a fresh, already-logged-in visitor (should mention "You own 0m²" of a 1000m² starter cap):', landCapText);
+console.log('Land Cap field text for a fresh, already-logged-in visitor (should mention "You own 0m²" of a 1,000m² starter cap):', landCapText);
 
 // Auction section: previously stuck on the dead-end identity message even
 // though this visitor is logged in — should now reach the real
@@ -51,7 +51,7 @@ const auctionSectionText = await waitForText(page, '#settings-section', 'Claim a
 const stillShowsIdentityPrompt = auctionSectionText.includes('Choose a builder identity');
 console.log('Settings > Build section text (should mention "Claim a landlet first", must NOT still say "Choose a builder identity"):', auctionSectionText);
 
-const pass = landCapText.includes('You own 0m²') && landCapText.includes('1000m² cap') &&
+const pass = landCapText.includes('You own 0m²') && landCapText.includes('1,000m² cap') &&
   auctionSectionText.includes('Claim a landlet first to auction it off.') &&
   !stillShowsIdentityPrompt &&
   errors.length === 0;
