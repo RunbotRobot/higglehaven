@@ -1266,6 +1266,71 @@
         max-height: 55vh;
         overflow-y: auto;
       }
+      #seller-list[hidden],
+      #seller-list-view[hidden] {
+        display: none;
+      }
+      /* #541: a lighter, thumbnail-first alternative to the per-row
+         editor above — same tab-toggle look #settings-tabs already uses,
+         reused rather than inventing a new pattern. */
+      #seller-view-toggle {
+        display: flex;
+        gap: 6px;
+      }
+      .seller-view-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-view-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      /* Same grid idiom as #catalog-picker-grid's own tiles, just larger —
+         this is a browsing surface, not a compact picker. */
+      #seller-list-view {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+      .seller-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px;
+        border-radius: 10px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+        font: 12px/1.3 sans-serif;
+        cursor: pointer;
+      }
+      .seller-card-thumb {
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      .seller-card-name {
+        text-align: center;
+        overflow-wrap: anywhere;
+        font-weight: 600;
+      }
+      .seller-card-price {
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .seller-card-digital-good {
+        color: rgb(var(--ink-rgb) / 0.55);
+        font-size: 11px;
+      }
       .seller-row {
         display: flex;
         flex-direction: column;
@@ -2904,7 +2969,12 @@
           and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
+        <div id="seller-view-toggle">
+          <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
+          <button type="button" class="seller-view-btn" data-view="list">List view</button>
+        </div>
         <div id="seller-list"></div>
+        <div id="seller-list-view" hidden></div>
         <div id="seller-status"></div>
       </div>
     </div>
