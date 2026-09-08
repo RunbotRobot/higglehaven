@@ -4357,7 +4357,7 @@ function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🐦 (or double-press space) to fly.';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 }
