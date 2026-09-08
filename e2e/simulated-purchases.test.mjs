@@ -53,7 +53,7 @@ console.log('uploaded, priced product found in catalog (priceCents should be 250
 const { builders } = (await fetchJson('/api/builders')).body;
 const builder = builders.find((b) => b.label === LABEL);
 console.log('builder found by label:', !!builder);
-const balanceBefore = builder.dallersBalanceCents;
+const balanceBefore = builder.higglesBalanceCents;
 
 const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${builder.builderId}&limit=100`)).body;
 const landlet = landlets[0];
@@ -81,7 +81,7 @@ const { purchase } = purchased.body;
 
 const { builders: buildersAfter } = (await fetchJson('/api/builders')).body;
 const builderAfter = buildersAfter.find((b) => b.builderId === builder.builderId);
-console.log('builder\'s dállers balance before/after (should differ by 50):', balanceBefore, builderAfter.dallersBalanceCents);
+console.log('builder\'s higgles balance before/after (should differ by 50):', balanceBefore, builderAfter.higglesBalanceCents);
 
 const { purchases } = (await fetchJson(`/api/purchases?builderId=${builder.builderId}`)).body;
 console.log('purchase history for this builder (should list the one purchase):', purchases.map((p) => `${p.templateId} x${p.quantity}`));
@@ -95,7 +95,7 @@ const pass = template?.priceCents === 2500 &&
   purchase.builderShareCents === 50 &&
   purchase.platformShareCents === 50 &&
   purchase.buyerLabel === 'A Shopper' &&
-  builderAfter.dallersBalanceCents - balanceBefore === 50 &&
+  builderAfter.higglesBalanceCents - balanceBefore === 50 &&
   purchases.length === 1 &&
   purchases[0].templateId === template.templateId &&
   errors.length === 0;

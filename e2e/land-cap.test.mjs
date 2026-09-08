@@ -24,13 +24,16 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // which is exactly the class of flake fixed elsewhere in this suite
 // earlier this session (see e2e/helpers.mjs's waitForText) and which this
 // file's own fixed waitForTimeout(800) turned out to share.
-const landCapFieldText = await waitForText(page, '#settings-section .settings-field', 'You own 1,000 m²');
+// formatArea (src/settings.js) doesn't group thousands — matches
+// formatLength's own established, ungrouped style — so a whole-number
+// square-meter cap reads as "1000m²", not "1,000 m²".
+const landCapFieldText = await waitForText(page, '#settings-section .settings-field', 'You own 1000m²');
 const landCapFieldLabel = await page.locator('#settings-section .settings-field').first().locator('span').textContent();
 console.log('Land Cap field label (should be "Land Cap"):', landCapFieldLabel);
-console.log('Land Cap field full text (should mention "1,000 m²" twice — owned and cap):', landCapFieldText);
+console.log('Land Cap field full text (should mention "1000m²" twice — owned and cap):', landCapFieldText);
 
 const pass = landCapFieldLabel.trim() === 'Land Cap' &&
-  landCapFieldText.includes('You own 1,000 m²') &&
-  landCapFieldText.includes('your 1,000 m² cap') &&
+  landCapFieldText.includes('You own 1000m²') &&
+  landCapFieldText.includes('your 1000m² cap') &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Land cap: Settings > Build tab display', errors });

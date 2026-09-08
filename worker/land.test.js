@@ -944,13 +944,13 @@ describe('Land cap', () => {
     expect(bid.response.status).toBe(201);
   });
 
-  it('grows a builder\'s land cap from trailing dáller earnings, normalized per 1000 m² owned', async () => {
+  it('grows a builder\'s land cap from trailing higgles earnings, normalized per 1000 m² owned', async () => {
     const builderId = await createBuilder('Land Cap Formula Builder');
     // $40 of trailing earnings, normalized against zero owned (floored to
     // the 1000 m² baseline), at 100 m² per dollar per 1000 m² owned =>
     // +4000 m² -> candidate cap 5000.
     await env.DB.prepare(`
-      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('land-cap-formula-earning', builderId, 4000).run();
     expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
   });
@@ -958,7 +958,7 @@ describe('Land cap', () => {
   it('ratchets — a cap increase never reverts even after the earnings that produced it age out of the trailing window', async () => {
     const builderId = await createBuilder('Land Cap Ratchet Builder');
     await env.DB.prepare(`
-      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('land-cap-ratchet-earning', builderId, 4000).run();
     expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
 
@@ -967,7 +967,7 @@ describe('Land cap', () => {
     // down even though the earnings that grew it are now stale, matching
     // docs/SPEC.md §3's "ratcheting: once increased, never decreases."
     await env.DB.prepare(`
-      UPDATE daller_earnings_events SET created_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?
+      UPDATE higgles_earnings_events SET created_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?
     `).bind('land-cap-ratchet-earning').run();
     expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
   });
@@ -986,7 +986,7 @@ describe('Land cap', () => {
     await api(`/auctions/${auctionId}`); // GET resolves a due auction lazily
 
     const { results } = await env.DB.prepare(
-      'SELECT * FROM daller_earnings_events WHERE builder_id = ?',
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(500);
@@ -1166,7 +1166,7 @@ describe('Landlet levels', () => {
     // above gets from the same $40, proving the level's own area was
     // actually folded into the normalization.
     await env.DB.prepare(`
-      INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('levels-cap-earning', owner.builderId, 4000).run();
     const afterAdd = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId).landCapM2;
     const expectedIncrease = Math.floor((40 / ((1000 + levelCapM2) / 1000)) * 100);
