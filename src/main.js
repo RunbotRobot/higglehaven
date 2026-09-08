@@ -2875,22 +2875,24 @@ function renderSellerList() {
     row.dataset.templateId = String(template.templateId);
 
     // Every "Save X" panel below (Digital Good, Returns Policy, Shipping,
-    // Extensibility, Flooring) independently does
-    // `{ ...template.metadata, someKey: ... }` then PATCHes the whole
-    // metadata object back — the server replaces metadata wholesale rather
-    // than merging it (see the Extensibility save handler's own comment
-    // below), so two of these panels saved in overlapping in-flight
-    // windows would otherwise race: whichever response lands last
-    // silently discards the other panel's change, since its own
-    // `nextMetadata` snapshot was taken before the first save's
-    // `Object.assign(template, updated)` landed. One shared busy flag
-    // serializes them, the same idiom as undoRedoBusy/levelActionBusy
-    // elsewhere in this file — every metadata-editing button on this row
-    // registers itself here and is disabled while any one save is in
-    // flight. Backed by the module-level metadataSaveBusyByTemplateId map
-    // (see its own comment above) rather than a local variable, so the
-    // flag survives this row's own DOM/closures being thrown away by a
-    // modal close/reopen (#457) while an earlier save is still pending.
+    // Extensibility, Flooring, Size, Price) independently PATCHes this
+    // template via updateCatalogTemplate — the server does a full
+    // read-existing/merge/rewrite of the whole catalog_templates row rather
+    // than touching only the changed column(s) (see the Extensibility save
+    // handler's own comment below), so two of these panels saved in
+    // overlapping in-flight windows would otherwise race: whichever
+    // response lands last silently discards the other panel's change,
+    // since its own patch was built from a `template` snapshot taken
+    // before the first save's `Object.assign(template, updated)` landed.
+    // (Size and Price were originally left out of this guard despite
+    // hitting the same endpoint — #531.) One shared busy flag serializes
+    // them, the same idiom as undoRedoBusy/levelActionBusy elsewhere in
+    // this file — every save-triggering button on this row registers
+    // itself here and is disabled while any one save is in flight. Backed by the
+    // module-level metadataSaveBusyByTemplateId map (see its own comment
+    // above) rather than a local variable, so the flag survives this
+    // row's own DOM/closures being thrown away by a modal close/reopen
+    // (#457) while an earlier save is still pending.
     const isMetadataSaveBusy = () => metadataSaveBusyByTemplateId.get(template.templateId) === true;
     const setMetadataSaveBusy = (busy) => {
       if (busy) metadataSaveBusyByTemplateId.set(template.templateId, true);
@@ -3269,10 +3271,12 @@ function renderSellerList() {
     sizeStatus.className = 'seller-size-status';
 
     const sizeSaveBtn = document.createElement('button');
-    sizeSaveBtn.className = 'seller-size-save-btn';
+    sizeSaveBtn.className = 'seller-size-save-btn metadata-save-btn';
     sizeSaveBtn.type = 'button';
     sizeSaveBtn.textContent = 'Save Size';
+    metadataSaveButtons.push(sizeSaveBtn);
     sizeSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
       sizeStatus.textContent = '';
       sizeStatus.classList.remove('error');
       const nextDimensions = {
@@ -3289,7 +3293,8 @@ function renderSellerList() {
         sizeStatus.textContent = 'No change.';
         return;
       }
-      sizeSaveBtn.disabled = true;
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const patch = { dimensions: nextDimensions };
         if (template.modelUrl?.startsWith('/uploads/')) {
@@ -3313,7 +3318,8 @@ function renderSellerList() {
         sizeStatus.textContent = err.message || 'Could not resize.';
         sizeStatus.classList.add('error');
       } finally {
-        sizeSaveBtn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     sizePanel.appendChild(sizeSaveBtn);
@@ -3357,10 +3363,12 @@ function renderSellerList() {
     priceStatus.className = 'seller-price-status';
 
     const priceSaveBtn = document.createElement('button');
-    priceSaveBtn.className = 'seller-price-save-btn';
+    priceSaveBtn.className = 'seller-price-save-btn metadata-save-btn';
     priceSaveBtn.type = 'button';
     priceSaveBtn.textContent = 'Save Price';
+    metadataSaveButtons.push(priceSaveBtn);
     priceSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
       priceStatus.textContent = '';
       priceStatus.classList.remove('error');
       const trimmed = priceInput.value.trim();
@@ -3378,7 +3386,8 @@ function renderSellerList() {
         priceStatus.textContent = 'No change.';
         return;
       }
-      priceSaveBtn.disabled = true;
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
       try {
         const updated = await updateCatalogTemplate(template.templateId, { priceCents });
         Object.assign(template, updated);
@@ -3389,7 +3398,8 @@ function renderSellerList() {
         priceStatus.textContent = err.message || 'Could not save.';
         priceStatus.classList.add('error');
       } finally {
-        priceSaveBtn.disabled = false;
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId);
       }
     });
     pricePanel.appendChild(priceSaveBtn);
@@ -8897,6 +8907,11 @@ function shopPositionBlocked(x, y, z) {
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
+      // Flooring always renders flush with the ground (see isFlooringTemplate)
+      // — it's a walkable surface replacing the default grass, not an
+      // obstacle, so it never blocks the shopper the way a real object
+      // would (#530).
+      if (isFlooringTemplate(mesh.userData.template)) continue;
       const worldX = entry.group.position.x + mesh.position.x;
       const worldY = entry.group.position.y + mesh.position.y;
       const { height } = meshDimensions(mesh);
