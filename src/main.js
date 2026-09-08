@@ -4718,24 +4718,6 @@ function closeSettingsModal() {
 }
 settingsBtn.addEventListener('click', openSettingsModal);
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
-
-// Help: owner report — "I want the instructional note at the bottom of
-// the shop screen that explains the three controls... to go into a Help
-// section in Menu to clean up the interface." That note (walk/look/fly)
-// used to be an always-visible #shop-hint overlay in Shop mode; it now
-// lives here instead, available on demand rather than permanently taking
-// up screen space.
-const helpModalEl = document.getElementById('help-modal');
-const helpBtn = document.getElementById('help-btn');
-const helpCloseBtn = document.getElementById('help-close-btn');
-function openHelpModal() {
-  helpModalEl.classList.add('visible');
-}
-function closeHelpModal() {
-  helpModalEl.classList.remove('visible');
-}
-helpBtn.addEventListener('click', openHelpModal);
-helpCloseBtn.addEventListener('click', closeHelpModal);
 // Only the static unit suffix needs painting at load — updateTrimLengthInput()
 // depends on selectedMeshes, declared further below, and no-ops correctly
 // (there's nothing selected yet) once that's ready.

@@ -159,12 +159,10 @@
       /* Only shown while within SIGN_INTERACT_RADIUS_M of a community sign
          (see updateSignFade in src/main.js) — unlike shop-status above,
          this one is a real tappable button, so it doesn't inherit its
-         pointer-events: none. Stacked at bottom: 180px, well above where
-         the movement-controls hint text used to sit at the bottom center
-         before the owner asked to move it into Help (see #help-modal) to
-         clean up the shop screen (found via manual verification, not
-         caught by the e2e suite since raw Shop-mode camera movement isn't
-         automated — see docs/API.md's "Community signs"). */
+         pointer-events: none. Stacked well above the bottom-center movement
+         joysticks below (found via manual verification, not caught by the
+         e2e suite since raw Shop-mode camera movement isn't automated —
+         see docs/API.md's "Community signs"). */
       #shop-sign-hint {
         bottom: 180px;
         left: 50%;
@@ -1632,46 +1630,6 @@
         gap: 6px;
         flex-wrap: wrap;
       }
-      /* Same modal shell as #settings-modal. Owner: "I want the
-         instructional note at the bottom of the shop screen that
-         explains the three controls... to go into a Help section in
-         Menu to clean up the interface" — #shop-hint's old always-on
-         text lives here now instead, available on demand. */
-      #help-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 20;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        background: rgb(0 0 0 / 0.22);
-        padding: 16px;
-      }
-      #help-modal.visible {
-        display: flex;
-      }
-      #help-modal-content {
-        position: relative;
-        width: 100%;
-        max-width: 360px;
-        max-height: 90vh;
-        overflow-y: auto;
-        background: rgb(var(--panel-rgb) / 0.97);
-        border-radius: 14px;
-        padding: 18px;
-        color: var(--pill-text);
-        font: 14px/1.4 sans-serif;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      #help-modal-content h2 {
-        margin: 0;
-        font-size: 17px;
-      }
-      #help-modal-content p {
-        margin: 0;
-      }
       .settings-tab-btn {
         padding: 6px 14px;
         border-radius: 999px;
@@ -2739,7 +2697,6 @@
         <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
         <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
         <button id="settings-btn" type="button">Settings</button>
-        <button id="help-btn" type="button">Help</button>
       </div>
     </div>
     <div id="mode-nav">
@@ -2952,13 +2909,6 @@
           <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
         </div>
         <div id="settings-section"></div>
-      </div>
-    </div>
-    <div id="help-modal">
-      <div id="help-modal-content">
-        <button id="help-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Help</h2>
-        <p>Left stick to walk (push further to run) — right stick to look — double-tap &#9992;&#65039; (or double-press space) to fly.</p>
       </div>
     </div>
     <div id="auth-modal">
