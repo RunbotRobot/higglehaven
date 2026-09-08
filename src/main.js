@@ -3310,7 +3310,15 @@ function renderSellerList() {
         Object.assign(template, updated);
         refreshDimsText();
         buildCatalogPickerButtons();
-        if (axisPreview?.templateId === template.templateId) {
+        // #543: this row's own previewContainer can be stale by the time this
+        // slow (fetch → rescale → upload → save) chain resolves — the Seller
+        // modal may have been closed and reopened in the meantime, which
+        // rebuilds every row (and its previewContainer) from scratch while
+        // leaving this closure pointing at the old, now-detached node.
+        // Without this check, re-showing the preview here would yank the
+        // shared preview canvas out of whatever OTHER row currently has it
+        // open and re-mount it into this detached node instead.
+        if (axisPreview?.templateId === template.templateId && previewContainer.isConnected) {
           showAxisPreview(template, previewContainer, extensibilityPanel.hidden ? null : checkedAxes());
         }
         sizeStatus.textContent = 'Saved — any builder with this placed has been notified.';
