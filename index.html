@@ -1259,6 +1259,31 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
+      /* #542: search/filter/sort across a seller's own products. Lives as
+         its own row between the upload button and the list so it's always
+         visible without needing any row expanded — matches the
+         .seller-digital-good-select styling convention already used for
+         other seller-modal form controls. */
+      #seller-filter-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #seller-filter-controls[hidden] {
+        display: none;
+      }
+      .seller-filter-control {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #seller-search-input.seller-filter-control {
+        flex: 1 1 140px;
+        min-width: 0;
+      }
       #seller-list {
         display: flex;
         flex-direction: column;
@@ -2904,6 +2929,15 @@
           and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
+        <div id="seller-filter-controls">
+          <input type="text" id="seller-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off">
+          <select id="seller-category-filter" class="seller-filter-control"><option value="">All categories</option></select>
+          <select id="seller-sort-select" class="seller-filter-control">
+            <option value="name-asc">Name (A&ndash;Z)</option>
+            <option value="price-asc">Price (low to high)</option>
+            <option value="price-desc">Price (high to low)</option>
+          </select>
+        </div>
         <div id="seller-list"></div>
         <div id="seller-status"></div>
       </div>
