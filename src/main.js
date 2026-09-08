@@ -3952,6 +3952,10 @@ function renderSettingsSection() {
     renderGeneralSettingsSection();
     return;
   }
+  if (activeSettingsTab === 'shop') {
+    renderShopSettingsSection();
+    return;
+  }
   if (activeSettingsTab === 'build') {
     renderBuildSettingsSection();
     return;
@@ -3965,6 +3969,25 @@ function renderSettingsSection() {
   note.className = 'settings-empty-note';
   note.textContent = 'Nothing to configure here yet.';
   settingsSectionEl.appendChild(note);
+}
+
+// Owner: "I want the instructional note at the bottom of the shop screen
+// that explains the three controls... to go into a Help section in Menu
+// to clean up the interface." Moved out of the always-visible #shop-hint
+// overlay (removed from index.html/enterShopMode) into this Settings tab,
+// which already existed as an empty placeholder — reachable any time via
+// Menu → Settings → Shop, not just while actually standing in the world.
+function renderShopSettingsSection() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Controls';
+  field.appendChild(label);
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap ✈️ (or double-press space) to fly.';
+  field.appendChild(note);
+  settingsSectionEl.appendChild(field);
 }
 
 function renderGeneralSettingsSection() {
