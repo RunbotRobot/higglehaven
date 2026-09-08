@@ -4,6 +4,7 @@ import {
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
+import migrationsManifest from './migrations-manifest.json';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -239,8 +240,62 @@ export default {
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
+    ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
+      console.error('checkMigrationDrift failed', error);
+    }));
   },
 };
+
+// #499 (follow-up to #488): #488 was a real 4-day production outage where
+// `wrangler d1 migrations apply --remote` silently failed partway through a
+// batch and nothing noticed until an owner bug report. scripts/check-
+// migration-drift.mjs (#492) only catches this at deploy time, i.e. only if
+// someone actually runs `db:migrate:remote` — if nothing gets deployed for a
+// while, drift is invisible until the next one does. This runs on every
+// cron tick instead (wrangler.jsonc's */10 * * * * trigger), independent of
+// deploys, by comparing a live read of d1_migrations against
+// migrations-manifest.json — a list of migrations/*.sql filenames baked
+// into the Worker bundle at build time (see generate-migrations-
+// manifest.mjs; the Worker's scheduled() has no filesystem access to read
+// migrations/ directly). computeMissingMigrations is exported standalone so
+// the comparison logic itself has direct unit-test coverage without needing
+// a real D1 instance.
+export function computeMissingMigrations(appliedNames, manifest) {
+  const applied = new Set(appliedNames);
+  return manifest.filter((name) => !applied.has(name));
+}
+
+async function checkMigrationDrift(env) {
+  if (!env.DB) return;
+  let appliedNames;
+  try {
+    const { results } = await env.DB.prepare('SELECT name FROM d1_migrations').all();
+    appliedNames = results.map((row) => row.name);
+  } catch (error) {
+    console.error('checkMigrationDrift: failed to read d1_migrations', error);
+    return;
+  }
+
+  const missing = computeMissingMigrations(appliedNames, migrationsManifest);
+  if (missing.length === 0) return;
+
+  const message = `Production D1 is missing ${missing.length} migration(s) present in migrations/: `
+    + `${missing.join(', ')}. Run "npm run db:migrate:remote" to apply them (see issue #488).`;
+  console.error(`MIGRATION DRIFT DETECTED: ${message}`);
+
+  // OPS_ALERT_EMAIL is an optional Worker secret (same dev-mode-friendly
+  // pattern as RESEND_API_KEY itself) — with neither configured this still
+  // surfaces loudly in `wrangler tail`/dashboard logs via the console.error
+  // above, it just won't also land in anyone's inbox.
+  if (env.OPS_ALERT_EMAIL) {
+    await sendEmail(env, {
+      to: env.OPS_ALERT_EMAIL,
+      subject: 'higglehaven: production D1 migration drift detected',
+      text: message,
+      html: `<p>${message}</p>`,
+    }).catch((error) => console.error('checkMigrationDrift: failed to send alert email', error));
+  }
+}
 
 async function handleUploadedAsset(request, env) {
   if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
