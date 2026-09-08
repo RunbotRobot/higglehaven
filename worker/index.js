@@ -1364,7 +1364,11 @@ async function handleBuilders(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: this rename path used plain stringValue (no upper bound),
+    // unlike POST /api/builders' own create path just above (already
+    // labelValue) — a rename call could bypass the create-time cap
+    // entirely. Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?
     `).bind(label, route[1]).run();
@@ -1640,7 +1644,10 @@ async function handleSellers(request, env, db, route) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
     const input = await readJson(request);
-    const label = stringValue(input.label, 'label');
+    // #479: same gap as the builder-rename fix just above — this used
+    // plain stringValue (no upper bound), unlike POST /api/sellers' own
+    // create path (already labelValue). Same fix shape as #337/#358.
+    const label = labelValue(input.label, 'label');
     await db.prepare(`
       UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE seller_id = ?
     `).bind(label, route[1]).run();
@@ -3203,13 +3210,23 @@ function flattenStripeParams(value, prefix) {
   return pairs;
 }
 
-async function stripeRequest(env, method, path, params) {
+// #473: idempotencyKey is only meaningful (and only ever passed by a
+// caller) on a request that CREATES a resource — Stripe keys it for ~24h
+// and returns the original response for a repeated call with the same
+// key instead of creating a second one, closing the "network dropped the
+// response, but the create already went through" gap that a raw retry
+// (client-side or a future automatic one) would otherwise hit. Reads and
+// updates against an already-known resource id don't need one; they're
+// naturally safe to repeat.
+async function stripeRequest(env, method, path, params, idempotencyKey) {
+  const headers = {
+    authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
+    'content-type': 'application/x-www-form-urlencoded',
+  };
+  if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   const response = await fetch(`https://api.stripe.com/v1/${path}`, {
     method,
-    headers: {
-      authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
+    headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
   const data = await response.json();
@@ -3323,7 +3340,12 @@ async function handleSellerStripeAccount(request, env, db) {
       const { country, ...updateParams } = params;
       account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
     } else {
-      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params });
+      // #473: keyed on seller_id alone is safe here — this branch only
+      // ever runs while stripe_account_id is still null, and a successful
+      // create (or #474's own DB guard losing a concurrent race) means it
+      // never runs again for this seller, so there's no future "genuine
+      // second create" this key could wrongly dedupe against.
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `seller-account-create:${sessionSeller.seller_id}`);
       createdNewAccount = true;
     }
 
@@ -5488,6 +5510,24 @@ function computePurchaseAmounts(template, input) {
 // is still paid out as dállers — never real money, per the owner's own
 // #331 answer — only the remaining ~98% (totalCents - commissionCents)
 // transfers to the seller's connected account via transfer_data.
+// #473: the buyer's own client mints and persists idempotencyKey (see
+// purchaseInstance in src/api.js) across a retry of what THEY consider
+// the same attempt — most importantly, one where the initial request's
+// response never made it back (a network drop after Stripe already
+// created the PaymentIntent), which otherwise looks, client-side,
+// identical to the request never having reached us at all and invites an
+// innocent second "Buy" click. Namespaced with the instance id so a
+// buyer's own key can never collide across two different products, and
+// validated (fixed charset/length) before it ever reaches Stripe's own
+// header, since it arrives as arbitrary client input. A missing or
+// malformed key degrades to no idempotency protection for this one
+// request rather than failing the purchase outright — defense in depth,
+// not a hard requirement for a real purchase to go through.
+function purchaseIdempotencyKey(instanceId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `purchase:${instanceId}:${rawKey}`;
+}
+
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
   const amounts = computePurchaseAmounts(template, input);
 
@@ -5507,6 +5547,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       instanceId: instance.instance_id,
       templateId: template.template_id,
       builderId: landlet.owner_builder_id,
+      sellerId: template.seller_id || '',
       quantity: String(amounts.quantity),
       buyerLabel: amounts.buyerLabel || '',
       unitPriceCents: String(amounts.unitPriceCents),
@@ -5515,7 +5556,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
     },
-  });
+  }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
   // publishableKey is safe to hand to the browser by design (it's how
   // Stripe.js identifies which Stripe account to talk to) — the frontend
@@ -5567,11 +5608,10 @@ async function handlePurchaseFinalize(request, env) {
   }
   const meta = paymentIntent.metadata || {};
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(meta.instanceId).first();
-  if (!instance) throw new HttpError('The purchased instance no longer exists', 409);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(meta.templateId).first();
-  if (!template) throw new HttpError('The purchased catalog template no longer exists', 409);
-  const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
-  if (!landlet?.owner_builder_id) throw new HttpError('This instance is no longer on a claimed lándlet', 409);
+  const landlet = instance
+    ? await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first()
+    : null;
 
   const amounts = {
     quantity: Number(meta.quantity) || 1,
@@ -5582,7 +5622,68 @@ async function handlePurchaseFinalize(request, env) {
     builderShareCents: Number(meta.builderShareCents),
     platformShareCents: Number(meta.platformShareCents),
   };
-  return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+
+  if (instance && template && landlet?.owner_builder_id) {
+    return writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId);
+  }
+
+  // #472: the buyer has already been charged and the seller's connected
+  // account has already received its transfer via Stripe's own
+  // transfer_data — independent of anything in this app's DB — by the
+  // time this call runs. A concurrent delete of the instance/template, or
+  // the landlet's claim being wiped by an auction resolving mid-payment,
+  // used to throw a 409 here with the purchases row never written at
+  // all: real money moved with zero record of it, and no way to even
+  // find it again (the payment_intent_id idempotency check above has
+  // nothing to match against). This always writes a row instead, using
+  // only what's locked into the PaymentIntent's own metadata (no live
+  // lookups needed for what's already a permanent historical receipt —
+  // see purchases' own "not a live reference" design). Deliberately does
+  // NOT decide what happens next for an orphaned sale like this
+  // (auto-refund, manual review, ...) — that's a reconciliation-policy
+  // call left for separate design/owner input; this only guarantees the
+  // money is never unaccounted for.
+  return writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId);
+}
+
+async function writeOrphanedPurchaseRow(db, meta, amounts, paymentIntentId) {
+  const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
+  const purchaseId = `purchase-${crypto.randomUUID()}`;
+  // builder_id is a real foreign key (unlike instance_id/template_id) —
+  // the builder locked into this PaymentIntent's metadata at checkout
+  // time may have since self-deleted, so it's only usable here if it
+  // still resolves to a live row. NULL otherwise, the same state an
+  // ordinary purchase already reaches when its builder self-deletes
+  // *after* a normal purchase (migrations/0062) — nothing to credit.
+  const builderStillExists = meta.builderId
+    ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.builderId).first()
+    : null;
+  const builderId = builderStillExists ? meta.builderId : null;
+  const sellerId = meta.sellerId || null;
+
+  const statements = [
+    db.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
+         unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
+      unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId),
+  ];
+  if (builderId) {
+    statements.push(
+      db.prepare('UPDATE builders SET dallers_balance_cents = dallers_balance_cents + ? WHERE builder_id = ?')
+        .bind(builderShareCents, builderId),
+      db.prepare('INSERT INTO daller_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+      notificationStatement(db, builderId,
+        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission dállers.`),
+    );
+  }
+  await db.batch(statements);
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ purchase: purchaseFromRow(row) }, 201);
 }
 
 async function writePurchaseRow(db, instance, template, landlet, amounts, paymentIntentId = null) {

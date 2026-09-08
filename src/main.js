@@ -73,6 +73,7 @@ import {
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
+  clearPurchaseIdempotencyKey,
   finalizePurchase,
   fetchPurchases,
   refundPurchase,
@@ -6111,9 +6112,19 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 // alongside it.
 async function placeClipboardItems(items, x, y, supportZ) {
   const placed = [];
+  // #469: a saved bundle can outlive the catalog templates its items point
+  // at (deleting a template only checks for currently-*placed* instances,
+  // not a bundle's own items_json), so findTemplate returning null here is
+  // a real, reachable case, not just defensive coding — silently
+  // `continue`-ing past it made placing such a bundle either drop pieces
+  // with zero indication, or (if every item was affected) look completely
+  // indistinguishable from tapping empty sky. Counted and surfaced below
+  // instead, the same way syncBatchCreate already surfaces its own
+  // failures for this exact call site.
+  let skippedCount = 0;
   for (const item of items) {
     const template = findTemplate(item.templateId);
-    if (!template) continue;
+    if (!template) { skippedCount += 1; continue; }
     const mesh = await spawnInstanceAt(template, x + item.dx, y + item.dy, supportZ + item.dz, {
       rotationX: item.rotationX,
       rotationY: item.rotationY,
@@ -6133,6 +6144,9 @@ async function placeClipboardItems(items, x, y, supportZ) {
   // fire-and-forget request per pasted item — pasting a wall-sized group
   // is exactly the size of paste that used to risk losing a few silently.
   await syncBatchCreate(placed);
+  if (skippedCount > 0) {
+    alert(`${skippedCount} item${skippedCount === 1 ? '' : 's'} couldn't be placed — the product ${skippedCount === 1 ? 'it references' : 'they reference'} no longer exists in the catalog.`);
+  }
 }
 
 // Places whatever's pending (a fresh catalog template, or a copied group)
@@ -9684,12 +9698,20 @@ shopBuyHintEl.addEventListener('click', async () => {
   const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}?`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
+  const instanceId = review.mesh.userData.instanceId;
   try {
-    const result = await purchaseInstance(review.mesh.userData.instanceId);
+    const result = await purchaseInstance(instanceId);
     if (result.requiresPayment) {
       await runCheckoutFlow(result, { name, totalCents: priceCents });
+      // #473: only clear the persisted idempotency key (see purchaseInstance
+      // in src/api.js) once the purchase has genuinely finalized — a
+      // network failure anywhere before this point should leave it in
+      // place so a retried "Buy" click reuses the same key instead of
+      // risking a second real PaymentIntent for the same attempt.
+      clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase complete — thank you!');
     } else {
+      clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase simulated — the seller has been credited.');
     }
   } catch (err) {
