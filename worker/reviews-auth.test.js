@@ -386,6 +386,39 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // Found via backlog audit (#520): DELETE on a seller-less template — both
+  // single-item and batch — required no session (worker-api.test.js already
+  // confirms an unauthenticated single DELETE on an unowned template
+  // succeeds) and had no rate limit at all, unlike its PATCH sibling above.
+  // Same synthetic cf-connecting-ip approach as the PATCH test.
+  it('rate-limits repeated unauthenticated DELETEs on seller-less templates', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createTemplate(`catalog-delete-rate-limit-${i}`);
+      const attempt = await api(`/catalog/${templateId}`, { method: 'DELETE', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const extraTemplateId = await createTemplate('catalog-delete-rate-limit-extra');
+    const limited = await api(`/catalog/${extraTemplateId}`, { method: 'DELETE', headers });
+    expect(limited.response.status).toBe(429);
+  });
+
+  it('rate-limits repeated unauthenticated batch DELETEs on seller-less templates', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createTemplate(`catalog-batch-delete-rate-limit-${i}`);
+      const attempt = await api('/catalog/batch', {
+        method: 'DELETE', headers, body: JSON.stringify({ templateIds: [templateId] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const extraTemplateId = await createTemplate('catalog-batch-delete-rate-limit-extra');
+    const limited = await api('/catalog/batch', {
+      method: 'DELETE', headers, body: JSON.stringify({ templateIds: [extraTemplateId] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');

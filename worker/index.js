@@ -727,6 +727,12 @@ function formatBytes(bytes) {
 // SIGN_POST_RATE_LIMIT_MAX/PURCHASE_RATE_LIMIT_MAX elsewhere in this file.
 const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 
+// See the single-item and batch DELETE handlers below (issue #520) — same
+// "no owning seller to gate this behind a session" shape as
+// CATALOG_PATCH_RATE_LIMIT_MAX above, and the same limit, since it's the
+// same sibling endpoint pair (PATCH/DELETE) on the same unowned templates.
+const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
+
 // #362 flagged catalog template creation for the same missing-rate-limit
 // gap as builders/sellers below, but unlike those two, an IP-keyed limit
 // here isn't safe to add at any size a real automated flood would
@@ -764,6 +770,12 @@ async function handleCatalog(request, db, route, url, models) {
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller among any of the requested templates to gate this
+      // batch DELETE behind a session (see the single-item DELETE handler
+      // below for the same shape) — cap the request rate the same way the
+      // PATCH handler's own unauthenticated-write path does (issue #520).
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
@@ -1021,6 +1033,13 @@ async function handleCatalog(request, db, route, url, models) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    } else {
+      // No owning seller to gate this DELETE behind a session (a system/
+      // placeholder template, or one whose seller has since deleted their
+      // account — see sellerExists' own comment above) — cap the request
+      // rate the same way the PATCH handler above does for its own
+      // unauthenticated-write path (issue #520).
+      await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
     return json({ deleted: true });
