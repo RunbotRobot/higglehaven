@@ -450,7 +450,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'builders') {
-    return handleBuilders(request, env.DB, route);
+    return handleBuilders(request, env, env.DB, route);
   }
 
   if (route[0] === 'sellers') {
@@ -1625,13 +1625,22 @@ async function getVersion(db, landletId, versionId) {
 const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 
-async function handleBuilders(request, db, route) {
+async function handleBuilders(request, env, db, route) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
   // but so a reader hits "my own profile" before the generic CRUD story —
   // see handleMyBuilder's own comment for why this exists at all.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     return handleMyBuilder(request, db);
+  }
+
+  // #624 (sub-issue of #349/#324): builder-side Stripe Connect onboarding,
+  // the prerequisite for #625's higgles-to-cash redemption — mirrors
+  // handleSellerStripeAccount below almost exactly (same Custom-account
+  // create/update/status logic, same "no PII persisted here" property),
+  // just against the builders table/getOrCreateBuilderForUser instead.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
+    return handleBuilderStripeAccount(request, env, db);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -4080,7 +4089,7 @@ function boundedIntegerValue(value, field, min, max) {
 // (business name, EIN, representative/owner info) and is deliberately
 // left for a fast-follow once an actual seller needs it, per #452's own
 // "not in scope" note on document-verification UI.
-function buildStripeIndividualParams(input, userEmail, request) {
+function buildStripeIndividualParams(input, userEmail, request, productDescription = 'higglehaven marketplace seller') {
   const individual = input.individual || {};
   const externalAccount = input.externalAccount || {};
   const country = stringValue(individual.addressCountry, 'individual.addressCountry').toUpperCase();
@@ -4091,7 +4100,7 @@ function buildStripeIndividualParams(input, userEmail, request) {
     country,
     email: userEmail,
     business_type: 'individual',
-    business_profile: { product_description: 'higglehaven marketplace seller' },
+    business_profile: { product_description: productDescription },
     capabilities: { transfers: { requested: 'true' }, card_payments: { requested: 'true' } },
     individual: {
       first_name: stringValue(individual.firstName, 'individual.firstName'),
@@ -4197,6 +4206,64 @@ async function handleSellerStripeAccount(request, env, db) {
       // submission's own state instead of this one's.
       await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
       const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      return json(stripeAccountStatusJson(env, winner));
+    }
+
+    return json(stripeAccountStatusJson(env, {
+      stripe_account_id: account.id,
+      stripe_onboarding_status: status,
+      stripe_requirements_due: JSON.stringify(requirementsDue),
+      stripe_updated_at: nowIso,
+    }));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #624 (sub-issue of #349/#324): a builder's own Stripe Connect Custom
+// account, so higgles-redeemed cash (#625) has somewhere real to land —
+// same shape as handleSellerStripeAccount just above (same Custom-account
+// create/update/status flow, same #473/#474 race guard on first-time
+// creation), against the builders table instead of sellers. productDescription
+// distinguishes the two roles in Stripe's own dashboard/compliance view
+// only — nothing here is seller-specific in practice.
+async function handleBuilderStripeAccount(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionBuilder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json(stripeAccountStatusJson(env, sessionBuilder));
+  }
+
+  if (request.method === 'POST') {
+    const input = await readJson(request);
+    const params = buildStripeIndividualParams(input, user.email, request, 'higglehaven marketplace builder');
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+
+    let account;
+    let createdNewAccount = false;
+    if (sessionBuilder.stripe_account_id) {
+      const { country, ...updateParams } = params;
+      account = await stripeRequest(env, 'POST', `accounts/${sessionBuilder.stripe_account_id}`, updateParams);
+    } else {
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `builder-account-create:${sessionBuilder.builder_id}`);
+      createdNewAccount = true;
+    }
+
+    const status = deriveStripeOnboardingStatus(account);
+    const requirementsDue = account.requirements?.currently_due || [];
+    const nowIso = new Date().toISOString();
+    const result = await db.prepare(`
+      UPDATE builders
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      WHERE builder_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
+    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionBuilder.builder_id).run();
+
+    if (createdNewAccount && result.meta.changes === 0) {
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      const winner = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
       return json(stripeAccountStatusJson(env, winner));
     }
 
