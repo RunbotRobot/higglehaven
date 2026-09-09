@@ -44,6 +44,15 @@ await page.waitForTimeout(500);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
 
+// #540 made Sell a genuine currentMode (a real reload + bootstrap() on
+// entry) rather than a modal overlay, so closing it leaves the seller
+// looking at their own showcase array, not a live Build-mode scene
+// underneath — switch back explicitly, same as seller-upload-and-resize.test.mjs.
+await page.click('.mode-nav-btn[data-mode="build"]');
+await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await page.waitForSelector('#add-item-btn', { timeout: 15000 });
+await page.waitForTimeout(500);
+
 async function placeCrateAt(x, y) {
   await page.click('#add-item-btn');
   await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });

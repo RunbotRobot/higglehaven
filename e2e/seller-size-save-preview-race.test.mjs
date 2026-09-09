@@ -69,10 +69,13 @@ await page.waitForFunction(
 );
 
 // Real user behavior — nothing in-flight is canceled by this (closeSellerModal
-// only toggles a CSS class), same as seller-modal-reopen-race.test.mjs.
+// only toggles a CSS class), same as seller-modal-reopen-race.test.mjs. #540
+// made Sell a genuine currentMode (a real reload on entry), so re-clicking
+// the Sell nav tab while already in Sell mode is now a no-op — reopening
+// goes through the showcase's own "Manage Products" button instead.
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await page.click('#seller-showcase-manage-btn');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 
