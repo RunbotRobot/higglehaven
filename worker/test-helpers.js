@@ -145,8 +145,24 @@ export async function createGreenbeltLandletAs(adminSession, landletId, center) 
   }));
 }
 
-export function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
-  const encoded = new TextEncoder().encode(json);
+export function glbFile({
+  version = 2, declaredLength, json = '{}', mergeAsset = true,
+} = {}) {
+  // #601: validateGlb now requires a spec-conformant asset.version field
+  // (glTF 2.0 §3.9.2), not just syntactically valid JSON -- merge it into
+  // whatever the caller passed so every existing call site's own
+  // distinguishing content (e.g. `{"a":1}`, used purely to make two
+  // uploads hash differently) still produces an otherwise-valid GLB. A
+  // caller deliberately testing malformed JSON (invalid syntax), or the
+  // missing-asset.version rejection itself, passes `mergeAsset: false` to
+  // get its own `json` through verbatim instead.
+  let payload = json;
+  if (mergeAsset) {
+    try {
+      payload = JSON.stringify({ asset: { version: '2.0' }, ...JSON.parse(json) });
+    } catch { /* malformed on purpose -- let the caller's own bytes through */ }
+  }
+  const encoded = new TextEncoder().encode(payload);
   const chunkLength = Math.ceil(encoded.length / 4) * 4;
   const bytes = new Uint8Array(20 + chunkLength);
   const view = new DataView(bytes.buffer);

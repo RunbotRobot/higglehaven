@@ -42,9 +42,11 @@ const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 // actual current contents on every upload — so a new upload gets rejected
 // before it would ever push real usage into paid territory, independent
 // of whatever Cloudflare's own billing dashboard does or doesn't warn
-// about. Only counts what's actually in R2 (this bucket only ever holds
-// builder-uploaded custom models — the built-in catalog's models ship as
-// static assets, not R2 objects, so they never count against this).
+// about. Only counts what's actually in R2 — the built-in catalog's models
+// ship as static assets, not R2 objects, so they never count against this.
+// The two writers that do live in this bucket and count against it:
+// builder-uploaded custom models (handleModelUpload) and generated concept
+// images (concept-image, #602) — both go through reserveStorageBudget.
 const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
 
 // Generous bound on how long a model_upload_reservations row can outlive
@@ -67,54 +69,40 @@ async function getStorageUsage(bucket) {
   return { usedBytes, objectCount };
 }
 
-// #602: shared by every writer into the MODELS bucket that needs to respect
-// MAX_TOTAL_STORAGE_BYTES (model uploads, concept-image generation) — R2 has
-// no primitive for "put only if some byte budget elsewhere still allows it,"
-// so the actual cap enforcement happens in D1 instead: prune any reservation
-// old enough to be an abandoned one (a crashed request that never reached
-// its own cleanup), then fold this write's own reservation into one atomic
-// INSERT ... WHERE, same idiom checkRateLimit uses for its check-then-act
-// race. `usage.usedBytes` is a snapshot (R2 can't be read inside the same
-// atomic statement), but any other write racing this one reads its own
-// snapshot at essentially the same real R2 state, so the SUM of
-// not-yet-landed reservations — computed atomically alongside this insert —
-// is what actually closes the race between concurrent requests (#264).
-// Returns a reservationId the caller must pass to releaseStorageReservation
-// once its own R2 put settles (success or failure) — a bare `model_upload_`
-// prefix survives from when this was model-upload-only; the table itself
-// (migrations/0065_model_upload_reservations.sql) has no upload-type column
-// to rename it around.
-async function reserveStorageBudget(env, sizeBytes) {
-  const usage = await getStorageUsage(env.MODELS);
+// The atomic reservation dance MAX_TOTAL_STORAGE_BYTES enforcement needs
+// (see model_upload_reservations' own migration comment), shared between
+// handleModelUpload and concept-image generation (#602) — both write into
+// the same MODELS bucket and can each add a meaningfully large object, so
+// both need to close the same concurrent-upload race against the same cap.
+// Concept-image can't reserve before its own R2 write the way a multipart
+// upload does (its size isn't known until the image is actually generated),
+// so it calls this right before the put instead of before the request body
+// is even read — same atomicity where it matters (nothing else can land
+// between this reservation and its own put), just later in that one
+// request's own timeline. Returns a reservation id the caller must delete
+// (in a finally) once its own R2 write lands or fails.
+async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
   const reservationId = `reservation-${crypto.randomUUID()}`;
   const now = Date.now();
-  await env.DB.prepare(`
+  await db.prepare(`
     DELETE FROM model_upload_reservations WHERE created_at < ?
   `).bind(now - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS).run();
-  const reserved = await env.DB.prepare(`
+  const reserved = await db.prepare(`
     INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at)
     SELECT ?, ?, ?
     WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
   `).bind(reservationId, sizeBytes, now, usage.usedBytes, sizeBytes, MAX_TOTAL_STORAGE_BYTES).run();
   if (reserved.meta.changes === 0) {
-    const reservedBytes = await env.DB.prepare(`
+    const reservedBytes = await db.prepare(`
       SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
     `).first();
     const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
     throw new HttpError(
-      `This would use ${formatBytes(sizeBytes)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
+      `${sizeLabel} is ${formatBytes(sizeBytes)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
       507,
     );
   }
   return reservationId;
-}
-
-async function releaseStorageReservation(env, reservationId) {
-  // The reservation's job is done either way: on success it's now reflected
-  // in R2 itself (the next getStorageUsage will see it); on failure the
-  // budget it held should be freed back up immediately rather than waiting
-  // out MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
-  await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
 }
 
 // Private-preview gate: when ACCESS_PASSPHRASE is configured (a Worker
@@ -583,11 +571,28 @@ async function handleModelUpload(request, env) {
     });
   }
 
-  const reservationId = await reserveStorageBudget(env, file.size);
+  const usage = await getStorageUsage(env.MODELS);
+
+  // R2 has no primitive for "put only if some byte budget elsewhere still
+  // allows it," so the actual cap enforcement has to happen in D1 instead —
+  // see reserveStorageBudget's own comment for the atomic-reservation idiom
+  // this shares with concept-image generation (#602), the other writer into
+  // this same bucket. `usage.usedBytes` is a snapshot (R2 can't be read
+  // inside the same atomic statement), but any other upload racing this one
+  // reads its own snapshot at essentially the same real R2 state, so the SUM
+  // of not-yet-landed reservations — computed atomically alongside this
+  // insert — is what actually closes the race between concurrent requests
+  // (#264).
+  const reservationId = await reserveStorageBudget(env.DB, usage, file.size, 'File');
+
   try {
     await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
   } finally {
-    await releaseStorageReservation(env, reservationId);
+    // The reservation's job is done either way: on success it's now
+    // reflected in R2 itself (the next getStorageUsage will see it); on
+    // failure the budget it held should be freed back up immediately
+    // rather than waiting out MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
+    await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
   }
   return json({
     modelUrl: `/uploads/${key}`,
@@ -753,10 +758,22 @@ function validateGlb(bytes) {
     }
     if (chunkIndex === 0) {
       if (chunkType !== GLB_JSON_CHUNK) throw new HttpError('GLB must begin with a JSON chunk', 400);
+      let json;
       try {
-        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
+        json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
       } catch {
         throw new HttpError('GLB contains invalid JSON metadata', 400);
+      }
+      // Found via backlog audit: syntactically valid JSON (even `{}`) used
+      // to pass this check outright, storing an unusable "model" that only
+      // fails later wherever it's actually loaded (client preview, catalog
+      // thumbnailing, in-world rendering). asset.version is the one
+      // top-level field the glTF 2.0 spec itself requires of every valid
+      // asset (§3.9.2) — checking for it closes the gap with the same kind
+      // of format-conformance check this function already does for the
+      // magic number/version/chunk type, not a new app-specific rule.
+      if (typeof json?.asset?.version !== 'string') {
+        throw new HttpError('GLB is missing the required asset.version field', 400);
       }
     }
     offset = chunkEnd;
@@ -989,17 +1006,17 @@ async function handleCatalog(request, db, route, url, models, env) {
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     const key = `concept-images/${hash}.png`;
     if (!(await models.head(key))) {
-      // #602: this writes into the exact same shared bucket/cap
-      // handleModelUpload's own reservation dance protects — an unbounded
-      // stream of distinct-prompt generations (each one a new, never-
-      // deduplicated object) could otherwise grow it past
-      // MAX_TOTAL_STORAGE_BYTES with nothing but the per-builder rate
-      // limit above to slow it down.
-      const reservationId = await reserveStorageBudget(env, bytes.byteLength);
+      // #602: this writes into the same MODELS bucket handleModelUpload's
+      // own MAX_TOTAL_STORAGE_BYTES cap protects, so it needs the same
+      // reservation dance — just after generation rather than before it,
+      // since (unlike a multipart upload) the byte size isn't known until
+      // the image actually exists. See reserveStorageBudget's own comment.
+      const usage = await getStorageUsage(models);
+      const reservationId = await reserveStorageBudget(db, usage, bytes.byteLength, 'Concept image');
       try {
         await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
       } finally {
-        await releaseStorageReservation(env, reservationId);
+        await db.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
       }
     }
     return json({ imageUrl: `/uploads/${key}` }, 201);
