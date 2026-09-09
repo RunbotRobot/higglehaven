@@ -4377,12 +4377,15 @@ function closeSellerModal() {
   // showing whatever was true when the modal opened, stale until the
   // builder reselected something.
   updateSelectionUI();
-  // Sell never actually changes currentMode (see #mode-nav's own click
-  // handler below — it's a modal overlay on top of Build/Shop, not a real
-  // mode transition), so leaving it needs to explicitly restore whichever
-  // of Shop/Build's nav buttons was really active underneath, rather than
-  // leaving Sell looking active forever once its own highlight (also set
-  // there) was the last thing to touch these buttons.
+  // #540: closing this modal is what actually reveals the showcase behind
+  // it — rebuild its meshes now if a product was created/duplicated/deleted
+  // while the modal was open (refreshSellerShowcase only updated the pager
+  // label at the time, deferring this heavier fetch-and-load work so it
+  // doesn't compete with whatever save was still in flight).
+  if (currentMode === 'sell' && sellerShowcaseMeshesStale) {
+    sellerShowcaseMeshesStale = false;
+    loadSellerShowcasePage(sellerShowcasePageIndex);
+  }
   updateModeNavUI();
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
@@ -10815,11 +10818,24 @@ sellerShowcaseNextBtn.addEventListener('click', () => {
 // showing stale page data once closed. A no-op when the modal was opened
 // from Build/Shop, since sellerShowcasePages/the `landlet` ground swap
 // only matter once actually in Sell mode.
+//
+// Only the (cheap, synchronous) pager label/page count is refreshed right
+// away — the actual mesh rebuild (loadSellerShowcasePage, a real
+// fetch-and-load per model) is deferred to closeSellerModal, since the
+// showcase sits behind the still-open modal and isn't visible yet anyway.
+// Doing it eagerly here used to compete for the main thread/network with
+// whatever save the seller was still mid-flight on inside the modal — a
+// real regression a save-serialization race test caught (rebuilding a
+// showcase mesh right after this row's own upload delayed the very next
+// button's disabled-while-saving state past that test's own timing
+// window).
+let sellerShowcaseMeshesStale = false;
 function refreshSellerShowcase() {
   sellerShowcasePages = computeSellerShowcasePages(myProducts());
   if (currentMode !== 'sell') return;
-  const clampedIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
-  loadSellerShowcasePage(clampedIndex);
+  sellerShowcasePageIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
+  updateSellerShowcasePagerUI();
+  sellerShowcaseMeshesStale = true;
 }
 
 // findRootProduct's own counterpart for the showcase array — a showcase
