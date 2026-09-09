@@ -347,6 +347,20 @@ cost when it happens anyway:
   over a free-text tag in the first place — it's the one the board
   actually renders a live, self-updating badge for.
 
+  Owner follow-up (gz9kt9d7l0qoaveiboga): "Do we need separate 'NEEDS
+  OWNER' and 'WAITING ON: OWNER' statuses? It seems like it would be
+  clean to consolidate them into a single 'WAITING ON: OWNER' state." Yes
+  — done. The board's own badge (`waitingOnHtml`) used to only render on
+  `queued` cards, on the theory that `in_progress` already means someone's
+  on it; it now also renders on `in_progress` when `waitingOn` is
+  explicitly set (never the default "Ready for Claude" there — only an
+  actual explicit wait — so an ordinary in-progress card stays quiet).
+  That makes `waitingOn` the single, live-updating home for "is this
+  blocked on the owner" across every non-done status, so a status-like
+  `tag` like `"needs owner"` no longer has a job to do at all — don't
+  write one; set `waitingOn: "owner"` instead, whatever `status` the task
+  is currently in.
+
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
