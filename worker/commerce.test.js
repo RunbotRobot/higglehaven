@@ -2692,5 +2692,31 @@ describe('Simulated purchases', () => {
       const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(row.paid_out_at).toBeTruthy();
     });
+
+    // #599: once paid_out_at is set, this purchase's seller-share has
+    // actually left the platform via a real Stripe payout — refunding it
+    // would call Stripe's reverse_transfer against whatever balance
+    // currently sits in the connected account (not funds earmarked to
+    // this specific transfer), silently pulling money that's supposed to
+    // back other, still-unpaid sales. This suite never configures Stripe
+    // (see stripe-connect.test.js's own comment), so the pre-fix behavior
+    // for this exact scenario would have been a 503 from the
+    // stripeConfigured guard further down handlePurchaseRefund, not the
+    // real risk this fix guards against — but 409 vs 503 still proves the
+    // paid_out_at check fires first, before the refund does anything else.
+    it('rejects refunding a purchase that has already been paid out', async () => {
+      const builder = await signupBuilder('refund-after-payout-builder');
+      const seller = await createConnectedSeller('refund-after-payout-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+      const purchase = await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      await claimPurchasesForPayout(env.DB, [purchase], '2026-01-01T00:00:00.000Z');
+
+      const refunded = await api(`/purchases/${purchaseId}/refund`, seller.session({ method: 'POST' }));
+      expect(refunded.response.status).toBe(409);
+      expect(refunded.body.error).toMatch(/already been paid out/i);
+
+      const row = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.refunded_at).toBeNull();
+    });
   });
 });

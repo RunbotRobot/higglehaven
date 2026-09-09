@@ -4304,6 +4304,15 @@ function renderSellerList() {
           refundedLabel.className = 'product-sale-row-refunded';
           refundedLabel.textContent = 'Refunded';
           saleRow.appendChild(refundedLabel);
+        } else if (purchase.paidOutAt) {
+          // #599: the backend now rejects a refund once paid_out_at is
+          // set (that seller-share has already left the platform via a
+          // real payout) — mirror that here instead of showing an active
+          // button that would just 409.
+          const paidOutLabel = document.createElement('div');
+          paidOutLabel.className = 'product-sale-row-refunded';
+          paidOutLabel.textContent = 'Paid out — contact support for a refund';
+          saleRow.appendChild(paidOutLabel);
         } else {
           const refundBtn = document.createElement('button');
           refundBtn.className = 'product-sale-row-refund-btn';

@@ -6971,6 +6971,21 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
   }
+  // Found via backlog audit: migrations/0072's own comment establishes
+  // paid_out_at as meaning this purchase's seller-share has actually left
+  // the platform via a triggered Stripe payout. Stripe's reverse_transfer
+  // below debits whatever balance currently sits in the connected
+  // account, not funds earmarked to this specific transfer — so refunding
+  // a purchase that's already been paid out would silently pull money
+  // that's supposed to be backing other, still-unpaid sales in that same
+  // balance. Rejecting outright (rather than deciding what should happen
+  // next — a separate chargeback? docked from the seller's next payout?)
+  // matches this file's existing "guarantee money is never unaccounted
+  // for, leave the policy call to a human" approach elsewhere (see
+  // writeOrphanedPurchaseRow's own comment).
+  if (purchase.paid_out_at) {
+    throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+  }
   const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
