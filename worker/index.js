@@ -439,7 +439,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'catalog') {
-    return handleCatalog(request, env.DB, route, url, env.MODELS);
+    return handleCatalog(request, env.DB, route, url, env.MODELS, env);
   }
 
   if (route[0] === 'landlets') {
@@ -779,7 +779,7 @@ const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 // documented on Land cap below for why a hard block there got reverted.
 // Length-capping name/category/subcategory/color (see labelValue below)
 // still lands here; only the rate limit is deliberately left out.
-async function handleCatalog(request, db, route, url, models) {
+async function handleCatalog(request, db, route, url, models, env) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.templateIds)) throw new HttpError('templateIds must be an array', 400);
@@ -856,13 +856,14 @@ async function handleCatalog(request, db, route, url, models) {
         color = excluded.color, width_m = excluded.width_m, depth_m = excluded.depth_m,
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
+        model_size_bytes = excluded.model_size_bytes,
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(template))));
     const placeholders = templates.map(() => '?').join(', ');
@@ -910,6 +911,40 @@ async function handleCatalog(request, db, route, url, models) {
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, limit);
     return json({ templates: ranked.map((r) => ({ ...r.template, similarity: r.similarity })) });
+  }
+
+  // #328: given a builder's free-text prompt, generates a concept image via
+  // OpenAI (see generateConceptImageBytes' own comment for the provider
+  // choice) and stores it content-addressed the same way POST .../thumbnail
+  // does — a fixed key would fight the immutable cache-control header on
+  // GET /uploads/:key once a second prompt happens to produce identical
+  // bytes (astronomically unlikely for a generative model, but the
+  // dedup is free either way). Out of scope here (#328's own text):
+  // embedding the result and running it through similarity-search (#329,
+  // already merged) or the placement UI (#330) — this endpoint only ever
+  // turns a prompt into a stored image URL.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'concept-image') {
+    // Session-gated (not anonymous, unlike similarity-search's read-only
+    // query above) and rate-limited per builder — unlike everything else
+    // in this file that calls an external API, this is a real, non-trivial
+    // per-call cost, so an unthrottled or anonymous caller could run up a
+    // real bill.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const input = await readJson(request);
+    const prompt = stringValue(input.prompt, 'prompt');
+    if (prompt.length > 2000) throw new HttpError('prompt must be 2000 characters or fewer', 400);
+    await checkRateLimit(db, `concept-image:${sessionBuilder.builder_id}`, CONCEPT_IMAGE_RATE_LIMIT_MAX);
+    if (!openaiConfigured(env)) {
+      throw new HttpError('Concept-image generation is not configured on this server yet.', 503);
+    }
+    const bytes = await generateConceptImageBytes(env, prompt);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const key = `concept-images/${hash}.png`;
+    if (!(await models.head(key))) {
+      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    }
+    return json({ imageUrl: `/uploads/${key}` }, 201);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -1093,8 +1128,8 @@ async function handleCatalog(request, db, route, url, models) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     return json({ template }, 201);
   }
@@ -1132,9 +1167,9 @@ async function handleCatalog(request, db, route, url, models) {
     await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
     await notifyBuildersOfDimensionChange(db, template, {
       width: existing.width_m,
       depth: existing.depth_m,
@@ -3552,6 +3587,46 @@ async function sendEmail(env, { to, subject, html, text }) {
     return false;
   }
   return true;
+}
+
+// ---- Prompt-mode concept-image generation (#328, sub-issue of #323) —
+// given a builder's free-text prompt, calls an external image-gen API to
+// produce a concept image that a later step (#329's similarity search,
+// already merged) embeds and matches against the catalog. Owner-confirmed
+// provider (#328's own GitHub thread): OpenAI's gpt-image-1, picked over
+// the cheaper Cloudflare Workers AI option because the owner's own stated
+// priority is generation quality, not minimizing per-call cost. Same
+// guarded-secret shape as RESEND_API_KEY/STRIPE_SECRET_KEY above — with
+// env.OPENAI_API_KEY unset (never configured in local dev or the automated
+// test suite), openaiConfigured(env) is false and the route handler below
+// returns a real 503 rather than attempting a live network call, so this
+// stays fully testable without a real OpenAI account.
+function openaiConfigured(env) {
+  return !!env.OPENAI_API_KEY;
+}
+
+// A real, non-trivial per-call cost (unlike every other rate-limited
+// action in this file) — kept well below the general-purpose 20/15min
+// shape used elsewhere so a runaway loop can't run up a real bill before
+// this kicks in.
+const CONCEPT_IMAGE_RATE_LIMIT_MAX = 10;
+
+// gpt-image-1 only ever returns base64-encoded image bytes (b64_json) —
+// unlike dall-e-2/3, it has no url response-format option — so there's no
+// separate "download the generated image" round trip; the bytes are
+// already in hand from this one call.
+async function generateConceptImageBytes(env, prompt) {
+  const response = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
+    throw new HttpError('Concept-image generation failed — please try again', 502);
+  }
+  return Uint8Array.from(atob(data.data[0].b64_json), (character) => character.charCodeAt(0));
 }
 
 // ---- Stripe Connect (Custom accounts) — #452, first leaf under #347's
@@ -6947,6 +7022,14 @@ function validateTemplate(input, fallbackId) {
     priceCents: optionalInteger(input.priceCents, 'priceCents'),
     sellerId: input.sellerId || null,
     modelUrl: input.modelUrl || null,
+    // #540: the seller's own "faux lándlet" 3D array paginates by a
+    // cumulative model-file-size cap, not a fixed item count — this is the
+    // one place that size (already computed and returned by
+    // handleModelUpload, previously discarded by every client-side caller)
+    // gets persisted so later pagination doesn't need to re-fetch every
+    // model just to plan pages. NULL for a template with no model, or one
+    // uploaded before this field existed.
+    modelSizeBytes: optionalModelSizeBytes(input.modelSizeBytes),
     metadata: input.metadata || {},
   };
   // Found via backlog audit (#375): modelUrl went straight through with no
@@ -7069,7 +7152,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata)];
 }
 
 function instanceParams(instance) {
@@ -7094,6 +7177,7 @@ function templateFromRow(row) {
     priceCents: row.price_cents,
     sellerId: row.seller_id,
     modelUrl: row.model_url,
+    modelSizeBytes: row.model_size_bytes,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
@@ -7339,6 +7423,19 @@ function optionalInteger(value, field) {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
     throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
+  return number;
+}
+
+// #540: bounded against MAX_MODEL_BYTES (the same real upload-size limit
+// handleModelUpload itself enforces), not MAX_MONEY_CENTS like
+// optionalInteger above — a model's size is never actually money-sized, and
+// reusing that cap here would just be the wrong bound wearing the right shape.
+function optionalModelSizeBytes(value) {
+  if (value === undefined || value === null) return null;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MODEL_BYTES) {
+    throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
   }
   return number;
 }

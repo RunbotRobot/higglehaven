@@ -1,0 +1,12 @@
+-- #540 (Sell mode's "faux lándlet" 3D array): the owner wants the array
+-- paginated by a cumulative *model file size* cap, not a fixed item count,
+-- so a page never gets so heavy loading it that performance suffers even
+-- though products vary wildly in model complexity. Nothing durable tracked
+-- a template's own model size before this — handleModelUpload
+-- (worker/index.js) already computes and returns sizeBytes to the client,
+-- it was just never persisted anywhere. NULL for every template uploaded
+-- before this column existed; callers summing this for pagination treat a
+-- NULL as 0 (can't retroactively know a pre-existing model's real size
+-- without re-fetching it from R2, not worth doing for a paginate-by-weight
+-- estimate).
+ALTER TABLE catalog_templates ADD COLUMN model_size_bytes INTEGER;
