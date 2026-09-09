@@ -4846,7 +4846,25 @@ async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
     db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
     db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
   ]);
-  const existingFootprints = [...existingLandlets.results, ...existingCandidates.results].map(landletFootprint);
+  // Only a landlet with a real polygon represents genuinely-positioned land
+  // here -- landletWorldPolygon's own comment already treats a polygon-less
+  // row as "the plain-square fallback landlets predating procedural
+  // generation," not real geometry to defend. POST /landlets' own comment
+  // ("existing test/dev-tooling usage relies on it") confirms this is a
+  // real, ongoing shape: an unowned/self-owned landlet can be created there
+  // with no polygon and no spatial check at all, purely as scaffolding for
+  // whatever the test actually cares about (an instance, a version, ...),
+  // often left at the coordinate default (0,0). Falling back to a circle
+  // footprint for those too (as the new incoming candidates below still do)
+  // would make every one of them permanently block any future land-
+  // candidate generation near the origin -- not the invariant this check is
+  // meant to enforce. landlet_candidates rows keep full circle-fallback
+  // treatment regardless: those exist specifically to reserve real future
+  // land, polygon or not.
+  const existingFootprints = [
+    ...existingLandlets.results.filter((row) => landletWorldPolygon(row).length >= 3),
+    ...existingCandidates.results,
+  ].map(landletFootprint);
   const newFootprints = newRows.map(landletFootprint);
   const conflict = newFootprints.some((footprint) => existingFootprints.some((other) => footprintsOverlap(footprint, other)));
   if (conflict) throw new HttpError(message, 409);
