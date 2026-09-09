@@ -427,6 +427,35 @@ export async function uploadCatalogTemplateThumbnail(templateId, { imageDataUrl,
   return imageUrl;
 }
 
+// #328: turns a builder's free-text prompt into a stored concept image.
+// Session-gated and rate-limited server-side (see worker/index.js's own
+// comment) — a 503 here means concept-image generation isn't configured on
+// this server yet (no OPENAI_API_KEY, same dev-mode-friendly pattern as
+// Stripe/Resend elsewhere in this file), and a 429 means this builder has
+// hit the per-builder rate limit; both surface as an ordinary thrown Error
+// for the caller to show.
+export async function generateConceptImage(prompt) {
+  const { imageUrl } = await requestJson('/catalog/concept-image', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+  return imageUrl;
+}
+
+// #329: ranks the catalog's own stored embeddings (see uploadCatalogTemplateThumbnail
+// above) by cosine similarity against a query embedding and returns the
+// closest matches, each with a `similarity` score merged in. Unauthenticated
+// — read-only over already-public catalog data.
+export async function searchCatalogBySimilarity(embedding, limit) {
+  const { templates } = await requestJson('/catalog/similarity-search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ embedding, limit }),
+  });
+  return templates;
+}
+
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
 // dimensions. unreadOnly narrows the list server-side rather than filtering

@@ -27,6 +27,8 @@ import {
   updateCatalogTemplate,
   deleteCatalogTemplate,
   uploadCatalogTemplateThumbnail,
+  generateConceptImage,
+  searchCatalogBySimilarity,
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
@@ -1921,6 +1923,20 @@ const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
 const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
+// #329/#330: "Prompt mode" — a second way into the exact same
+// enterPlacementMode({type:'template',...}) flow manual mode's own tiles
+// use above, just arrived at via a generated concept image and a
+// similarity search instead of browsing/searching the catalog directly.
+const catalogModeTabButtons = [...document.querySelectorAll('.catalog-mode-tab-btn')];
+const catalogManualModeEl = document.getElementById('catalog-manual-mode');
+const catalogPromptModeEl = document.getElementById('catalog-prompt-mode');
+const promptModeInputEl = document.getElementById('prompt-mode-input');
+const promptModeGenerateBtn = document.getElementById('prompt-mode-generate-btn');
+const promptModeStatusEl = document.getElementById('prompt-mode-status');
+const promptModeGridEl = document.getElementById('prompt-mode-grid');
+const promptModeEmptyEl = document.getElementById('prompt-mode-empty');
+let activeCatalogMode = 'manual';
+
 // A template's appearance never changes after creation (there's no edit
 // flow for its color), so a thumbnail rendered once this session is good
 // for the rest of it — keyed by templateId rather than re-rendered every
@@ -2024,12 +2040,16 @@ async function renderCatalogThumbnailNow(template) {
 // stand-in like color/category/dimensions alone (which docs/API.md's own
 // discussion on #327 treated as a worse fallback, not the goal).
 const THUMBNAIL_EMBEDDING_GRID = 8;
-function computeThumbnailEmbedding(sourceCanvas) {
+// Takes anything drawImage accepts (a canvas for a just-rendered catalog
+// thumbnail, or an <img> for #328's downloaded concept image below) so
+// prompt mode's search query is computed the exact same way a product's own
+// stored embedding was, rather than a second, subtly different formula.
+function computeThumbnailEmbedding(source) {
   const grid = document.createElement('canvas');
   grid.width = THUMBNAIL_EMBEDDING_GRID;
   grid.height = THUMBNAIL_EMBEDDING_GRID;
   const ctx = grid.getContext('2d');
-  ctx.drawImage(sourceCanvas, 0, 0, THUMBNAIL_EMBEDDING_GRID, THUMBNAIL_EMBEDDING_GRID);
+  ctx.drawImage(source, 0, 0, THUMBNAIL_EMBEDDING_GRID, THUMBNAIL_EMBEDDING_GRID);
   const { data } = ctx.getImageData(0, 0, THUMBNAIL_EMBEDDING_GRID, THUMBNAIL_EMBEDDING_GRID);
   const embedding = [];
   for (let i = 0; i < data.length; i += 4) {
@@ -2116,37 +2136,46 @@ function filterCatalogTiles() {
 }
 catalogSearchInputEl.addEventListener('input', filterCatalogTiles);
 
+// Shared by manual mode's own grid below and prompt mode's search-result
+// grid (#329/#330) — both list catalog template objects and both arm the
+// exact same enterPlacementMode({type:'template',...}) flow on click, so
+// neither needs its own copy of this tile's look or click behavior.
+function buildCatalogTemplateTile(template) {
+  const tile = document.createElement('button');
+  tile.type = 'button';
+  tile.className = 'catalog-tile';
+  tile.dataset.name = template.name.toLowerCase();
+
+  const thumb = document.createElement('img');
+  thumb.className = 'catalog-thumb';
+  thumb.alt = '';
+  // #327: a persisted image_url (once one exists) is a real, already-
+  // rendered image straight from storage — cheaper than the client
+  // re-rendering this template's full GLTF model just to redraw the
+  // same picture the live render already produced once before. The
+  // in-session cache still wins when both exist since it's already in
+  // memory (no network round trip) and, right after a fresh upload,
+  // may be more current than a not-yet-finished persistCatalogThumbnail
+  // call.
+  thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+  tile.appendChild(thumb);
+
+  const name = document.createElement('span');
+  name.className = 'catalog-tile-name';
+  name.textContent = template.name;
+  tile.appendChild(name);
+
+  tile.addEventListener('click', () => {
+    catalogPickerEl.classList.remove('visible');
+    enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
+  });
+  return { tile, thumb };
+}
+
 function buildCatalogPickerButtons() {
   catalogPickerGridEl.replaceChildren();
   for (const template of activeCatalog) {
-    const tile = document.createElement('button');
-    tile.type = 'button';
-    tile.className = 'catalog-tile';
-    tile.dataset.name = template.name.toLowerCase();
-
-    const thumb = document.createElement('img');
-    thumb.className = 'catalog-thumb';
-    thumb.alt = '';
-    // #327: a persisted image_url (once one exists) is a real, already-
-    // rendered image straight from storage — cheaper than the client
-    // re-rendering this template's full GLTF model just to redraw the
-    // same picture the live render already produced once before. The
-    // in-session cache still wins when both exist since it's already in
-    // memory (no network round trip) and, right after a fresh upload,
-    // may be more current than a not-yet-finished persistCatalogThumbnail
-    // call.
-    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
-    tile.appendChild(thumb);
-
-    const name = document.createElement('span');
-    name.className = 'catalog-tile-name';
-    name.textContent = template.name;
-    tile.appendChild(name);
-
-    tile.addEventListener('click', () => {
-      catalogPickerEl.classList.remove('visible');
-      enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
-    });
+    const { tile, thumb } = buildCatalogTemplateTile(template);
     catalogPickerGridEl.appendChild(tile);
 
     if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
@@ -2157,6 +2186,80 @@ function buildCatalogPickerButtons() {
   }
   filterCatalogTiles();
 }
+
+// #329/#330: "Prompt mode" — a builder types a free-text description, an
+// AI-generated concept image stands in for a product photo, and the
+// catalog's own stored embeddings (see uploadCatalogTemplateThumbnail
+// above) are searched for the closest visual matches. A hit is placed the
+// exact same way a manual-mode tile is (buildCatalogTemplateTile above)
+// — this mode only changes how candidates are *found*, not how one ends
+// up in the world.
+function renderCatalogMode() {
+  const promptActive = activeCatalogMode === 'prompt';
+  catalogManualModeEl.hidden = promptActive;
+  catalogPromptModeEl.hidden = !promptActive;
+  for (const btn of catalogModeTabButtons) {
+    btn.classList.toggle('active', btn.dataset.catalogMode === activeCatalogMode);
+  }
+}
+for (const btn of catalogModeTabButtons) {
+  btn.addEventListener('click', () => {
+    activeCatalogMode = btn.dataset.catalogMode;
+    renderCatalogMode();
+  });
+}
+
+function setPromptModeStatus(text) {
+  promptModeStatusEl.textContent = text;
+  promptModeStatusEl.hidden = !text;
+}
+
+function renderPromptModeResults(templates) {
+  promptModeGridEl.replaceChildren();
+  promptModeEmptyEl.hidden = templates.length > 0;
+  for (const template of templates) {
+    const { tile } = buildCatalogTemplateTile(template);
+    promptModeGridEl.appendChild(tile);
+  }
+}
+
+// Loads a same-origin image URL (the concept-image endpoint's own
+// response, always a /uploads/... path) into a real <img> so
+// computeThumbnailEmbedding can drawImage it the same way it draws a
+// just-rendered catalog thumbnail's canvas.
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load the generated concept image.'));
+    img.src = src;
+  });
+}
+
+promptModeGenerateBtn.addEventListener('click', async () => {
+  const prompt = promptModeInputEl.value.trim();
+  if (!prompt) {
+    setPromptModeStatus('Describe what you’re looking for first.');
+    return;
+  }
+  promptModeGenerateBtn.disabled = true;
+  promptModeEmptyEl.hidden = true;
+  try {
+    setPromptModeStatus('Generating a concept image…');
+    const imageUrl = await generateConceptImage(prompt);
+    setPromptModeStatus('Finding similar products…');
+    const image = await loadImageElement(imageUrl);
+    const embedding = computeThumbnailEmbedding(image);
+    const templates = await searchCatalogBySimilarity(embedding, 20);
+    renderPromptModeResults(templates);
+    setPromptModeStatus('');
+  } catch (err) {
+    console.warn('Prompt mode search failed:', err);
+    setPromptModeStatus(err.message || 'Something went wrong. Please try again.');
+  } finally {
+    promptModeGenerateBtn.disabled = false;
+  }
+});
 
 // Bundles (see migrations/0039_bundles.sql, 0040_bundle_sharing.sql) — no
 // thumbnail, just a name and item count; tapping one arms placement mode
