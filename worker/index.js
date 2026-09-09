@@ -1606,6 +1606,27 @@ async function handleBuilders(request, db, route) {
     // guard blocks the delete, none of the land-release side effects below
     // take hold either, exactly as if the whole request had been rejected
     // up front instead of partially applied.
+    //
+    // A second race, found via a later backlog audit: resolveAuction's own
+    // "active" -> "ended" status flip commits as its own separate .run()
+    // call, before the batch that actually transfers the landlet/credits
+    // the seller/notifies both sides runs. `a.status = 'active'` alone
+    // stops blocking the instant that flip lands, even though the payout
+    // for that exact auction hasn't happened yet — so a self-delete by
+    // either side landing in that gap used to slip through, then made
+    // resolveAuction's own payout batch fail outright (its notification
+    // insert has a NOT NULL FK to builders) and roll back in its entirety,
+    // permanently stranding the auction at status='ended' with no payout
+    // and no way to ever re-resolve it (nothing re-triggers a resolve on
+    // an already-'ended' row). Closed without a new column: while a
+    // winning payout is genuinely still pending, the landlet's current
+    // owner hasn't been updated to reflect it yet either — the bidder's
+    // side stays owned by whoever had it before (not yet the bidder), and
+    // the seller's side is still owned by the seller (not yet released) —
+    // so checking that directly, alongside the existing 'active' checks,
+    // reuses signal the payout batch itself will flip the moment it
+    // actually lands, closing the window exactly when the real transfer
+    // completes rather than on an arbitrary timer.
     const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
     const statements = [
       db.prepare(`
@@ -1619,10 +1640,23 @@ async function handleBuilders(request, db, route) {
           )
           AND NOT EXISTS (
             SELECT 1 FROM auctions a
+            JOIN auction_bids b ON b.auction_id = a.auction_id
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+              AND l.owner_builder_id != ?
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
             WHERE a.seller_builder_id = ? AND a.status = 'active'
               AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
           )
-      `).bind(route[1], route[1], route[1]),
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
+              AND l.owner_builder_id = ?
+          )
+      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       ...landletIds.flatMap((landletId) => [
         db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
         db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
@@ -1661,7 +1695,27 @@ async function handleBuilders(request, db, route) {
       if (leadingBid) {
         throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
       }
-      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      const pendingWin = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        JOIN auction_bids b ON b.auction_id = a.auction_id
+        JOIN landlets l ON l.landlet_id = a.landlet_id
+        WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+          AND l.owner_builder_id != ?
+        LIMIT 1
+      `).bind(route[1], route[1]).first();
+      if (pendingWin) {
+        throw new HttpError('Cannot delete this builder while their auction win is still being paid out', 409);
+      }
+      const sellingWithBids = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        WHERE a.seller_builder_id = ? AND a.status = 'active'
+          AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+        LIMIT 1
+      `).bind(route[1]).first();
+      if (sellingWithBids) {
+        throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      }
+      throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
