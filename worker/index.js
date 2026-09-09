@@ -4319,6 +4319,36 @@ async function handleSellerPayouts(request, env, db) {
 // Refunded purchases are excluded (never a completed transaction to
 // report); simulated (non-Stripe) purchases are excluded via the
 // payment_intent_id check, same as unpaidSellerPurchases above.
+
+// #613: the federal 1099-K reporting threshold, post-OBBBA-rollback
+// ($20,000; the $600 ARPA threshold was reversed) — see #350's own
+// research comment. Applied here to the *combined* higgles+real-money
+// total per the owner's own Control Room direction ("if builders' higgles
+// and sellers' earned dollars get lumped into the same taxation category,
+// it makes sense for them to share a reporting pipeline"), even though the
+// real 1099-K threshold technically has a second leg (200 transactions)
+// that only applies to the card-settled seller side, and the correct
+// threshold/form for the higgles side specifically still needs a tax
+// professional's confirmation (also per #350's comment). This is
+// deliberately just a soft, non-blocking notice signal (see #615 for
+// actual gating) — not itself a legal determination of when paperwork is
+// required, so approximating with one combined dollar figure is an
+// acceptable simplification here even though it wouldn't be for #616's
+// actual form generation.
+const TAX_REPORTING_THRESHOLD_CENTS = 20_000_00;
+
+// Three progressive, non-blocking breakpoints (#613's own "50%/80%/100%"
+// scope) — 'crossed' doesn't gate anything by itself (see #615), it's
+// just the highest notice level.
+function taxNoticeLevel(totalCents, thresholdCents) {
+  if (thresholdCents <= 0) return 'none';
+  const ratio = totalCents / thresholdCents;
+  if (ratio >= 1) return 'crossed';
+  if (ratio >= 0.8) return 'approaching';
+  if (ratio >= 0.5) return 'early';
+  return 'none';
+}
+
 async function annualGrossIncome(db, { builderId, sellerId }, year) {
   const yearStart = `${year}-01-01T00:00:00.000Z`;
   const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
@@ -4335,11 +4365,14 @@ async function annualGrossIncome(db, { builderId, sellerId }, year) {
         `).bind(sellerId, yearStart, yearEnd).first()
       : Promise.resolve({ total: 0 }),
   ]);
+  const totalCents = higglesRow.total + payoutRow.total;
   return {
     year,
     builderHigglesCents: higglesRow.total,
     sellerPayoutCents: payoutRow.total,
-    totalCents: higglesRow.total + payoutRow.total,
+    totalCents,
+    thresholdCents: TAX_REPORTING_THRESHOLD_CENTS,
+    noticeLevel: taxNoticeLevel(totalCents, TAX_REPORTING_THRESHOLD_CENTS),
   };
 }
 

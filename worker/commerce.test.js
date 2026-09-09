@@ -2735,6 +2735,7 @@ describe('Simulated purchases', () => {
         expect(got.response.status).toBe(200);
         expect(got.body).toMatchObject({
           year: new Date().getUTCFullYear(), builderHigglesCents: 0, sellerPayoutCents: 0, totalCents: 0,
+          thresholdCents: 2000000, noticeLevel: 'none',
         });
       });
 
@@ -2810,6 +2811,37 @@ describe('Simulated purchases', () => {
         const builder = await signupBuilder('tax-summary-bad-year-builder');
         const got = await api('/tax/summary?year=not-a-year', builder.session());
         expect(got.response.status).toBe(400);
+      });
+
+      // #613: progressive, non-blocking notice levels at 50%/80%/100% of
+      // the combined-income threshold. Uses the admin land-cap-grants
+      // escape hatch (a real higgles_earnings_events row, not a fabricated
+      // column) to push a builder's own combined total across each
+      // breakpoint in turn.
+      it('reports progressive notice levels as combined income approaches the reporting threshold', async () => {
+        const builder = await signupBuilder('tax-summary-notice-builder');
+        async function grantHiggles(amountCents) {
+          const granted = await api(`/builders/${builder.builderId}/land-cap-grants`, adminSession({
+            method: 'POST',
+            body: JSON.stringify({ amountCents }),
+          }));
+          expect(granted.response.status).toBe(201);
+        }
+
+        const initial = await api('/tax/summary', builder.session());
+        expect(initial.body.noticeLevel).toBe('none');
+
+        await grantHiggles(1000000); // 50% of the $20,000 threshold
+        const early = await api('/tax/summary', builder.session());
+        expect(early.body.noticeLevel).toBe('early');
+
+        await grantHiggles(600000); // now 80%
+        const approaching = await api('/tax/summary', builder.session());
+        expect(approaching.body.noticeLevel).toBe('approaching');
+
+        await grantHiggles(400000); // now 100%
+        const crossed = await api('/tax/summary', builder.session());
+        expect(crossed.body.noticeLevel).toBe('crossed');
       });
     });
   });

@@ -220,6 +220,14 @@ export async function requestSellerPayout() {
   return requestJson('/sellers/me/payouts', { method: 'POST' });
 }
 
+// Tax reporting (#350/#612) — the calling account's gross income for the
+// current calendar year, split by source (higgles commissions vs.
+// real-money seller payouts), plus how close that combined total is to
+// the tax-reporting threshold (#613).
+export async function fetchTaxSummary() {
+  return requestJson('/tax/summary');
+}
+
 // Seller-initiated once a physical real-money order has actually been
 // shipped — starts the 7-day payout-hold fallback clock (see #454).
 export async function markPurchaseShipped(purchaseId) {
