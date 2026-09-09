@@ -1287,10 +1287,12 @@ catalog template response once set (see "Catalog template object" above).
 
 The backend half of #329 — see that issue's own text: it depends on both the
 embedding index (#327, above) **and** the prompt→concept-image endpoint
-(#328, below). Only the frontend "Prompt mode" entry point (#330) genuinely
-needs both to exist together; the similarity-search half is independently
-buildable and testable today by passing any embedding directly, so it's
-shipped ahead of the frontend piece. No UI calls this endpoint yet.
+(#328, below). The similarity-search half was independently buildable and
+testable by passing any embedding directly, so it shipped ahead of the
+frontend piece; #329's own frontend half (Prompt mode's actual entry point
+in the Add Item picker, alongside Manual mode) and #330 (wiring a picked
+result into the existing placement/transform-gizmo flow) now call this
+directly from `src/main.js`.
 
 Given an embedding (the same shape `POST .../thumbnail` above stores), ranks
 every catalog template that has one by cosine similarity and returns the
@@ -1343,11 +1345,14 @@ per-request.
 
 #328 — given a builder's free-text prompt, generates a concept image via an
 external image-generation API and stores it. Out of scope here (#328's own
-text): embedding the result and running it through similarity-search above
-(#329, already merged) or the placement UI (#330) — this endpoint only ever
-turns a prompt into a stored image URL. Provider: OpenAI's `gpt-image-1`,
-picked over the cheaper Cloudflare Workers AI option per the owner's own
-stated priority (generation quality over minimizing per-call cost).
+text): embedding the result and running it through similarity-search above,
+or the placement UI — this endpoint only ever turns a prompt into a stored
+image URL; Prompt mode's own frontend (#329/#330, `src/main.js`) does the
+embedding (client-side, the same `computeThumbnailEmbedding` stand-in every
+catalog thumbnail already uses) and the similarity-search call itself.
+Provider: OpenAI's `gpt-image-1`, picked over the cheaper Cloudflare
+Workers AI option per the owner's own stated priority (generation quality
+over minimizing per-call cost).
 
 Requires a session (`requireSessionBuilder`) and is rate-limited per builder
 — unlike everything else this file calls out to externally, this is a real,

@@ -427,6 +427,33 @@ export async function uploadCatalogTemplateThumbnail(templateId, { imageDataUrl,
   return imageUrl;
 }
 
+// #328/#329: Prompt mode's own two calls — a builder's free-text prompt
+// becomes a stored concept image, which the frontend then embeds
+// client-side (the same computeThumbnailEmbedding stand-in every catalog
+// thumbnail already uses — see src/main.js) and hands to similarity-search
+// to find real placeable candidates. Requires a builder session
+// (requireSessionBuilder) and is rate-limited server-side; a 503 here means
+// OPENAI_API_KEY isn't configured (always true in local dev/tests — see
+// docs/API.md's own testing note on this endpoint), not a real failure the
+// caller should treat as unexpected.
+export async function createConceptImage(prompt) {
+  const { imageUrl } = await requestJson('/catalog/concept-image', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+  return imageUrl;
+}
+
+export async function similaritySearch(embedding, limit) {
+  const { templates } = await requestJson('/catalog/similarity-search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ embedding, limit }),
+  });
+  return templates;
+}
+
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
 // dimensions. unreadOnly narrows the list server-side rather than filtering

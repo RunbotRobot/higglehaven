@@ -1083,6 +1083,87 @@
         font-size: 14px;
         line-height: 1;
       }
+      /* #329/#330: Prompt mode — a second top-level way into this same
+         picker, alongside the ordinary Manual (search/bundles) one above.
+         Own tab-button class, same reasoning as .bundle-tab-btn/
+         .settings-tab-btn already being separate near-duplicates rather
+         than one shared class: a selector for one tab group should never
+         accidentally hit another. */
+      #catalog-picker-mode-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .catalog-picker-mode-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .catalog-picker-mode-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #prompt-mode-section[hidden],
+      #catalog-picker-manual-section[hidden] {
+        display: none;
+      }
+      #prompt-mode-input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        resize: vertical;
+        min-height: 48px;
+      }
+      #prompt-mode-generate-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #prompt-mode-status {
+        margin-top: 6px;
+        color: rgb(var(--ink-rgb) / 0.65);
+        font: 12px/1.4 sans-serif;
+      }
+      #prompt-mode-status.error {
+        color: rgb(255 180 168 / 0.9);
+      }
+      #prompt-mode-concept-image {
+        display: block;
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.1);
+        margin-top: 8px;
+      }
+      #prompt-mode-concept-image[hidden] {
+        display: none;
+      }
+      /* Same tile look as #catalog-picker-grid's own .catalog-tile above —
+         these results genuinely are catalog templates, just a
+         similarity-ranked subset instead of the full list. */
+      #prompt-mode-results-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+        max-height: calc(50vh - 220px);
+        overflow-y: auto;
+      }
       #upload-model-btn,
       #toggle-multiselect,
       #toggle-measure,
@@ -3038,16 +3119,29 @@
       <button id="paste-btn" type="button" disabled>Paste</button>
       <div id="catalog-picker">
         <button id="catalog-picker-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <input id="catalog-search-input" type="text" placeholder="Search products…" />
-        <div id="catalog-picker-grid"></div>
-        <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
-        <div id="bundle-picker-section" hidden>
-          <div id="bundle-picker-tabs">
-            <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My Bundles</button>
-            <button class="bundle-tab-btn" type="button" data-bundle-tab="community">Community</button>
+        <div id="catalog-picker-mode-tabs">
+          <button class="catalog-picker-mode-btn active" type="button" data-picker-mode="manual">Manual</button>
+          <button class="catalog-picker-mode-btn" type="button" data-picker-mode="prompt">Prompt</button>
+        </div>
+        <div id="catalog-picker-manual-section">
+          <input id="catalog-search-input" type="text" placeholder="Search products…" />
+          <div id="catalog-picker-grid"></div>
+          <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
+          <div id="bundle-picker-section" hidden>
+            <div id="bundle-picker-tabs">
+              <button class="bundle-tab-btn active" type="button" data-bundle-tab="mine">My Bundles</button>
+              <button class="bundle-tab-btn" type="button" data-bundle-tab="community">Community</button>
+            </div>
+            <div id="bundle-picker-grid"></div>
+            <div id="bundle-picker-empty" hidden></div>
           </div>
-          <div id="bundle-picker-grid"></div>
-          <div id="bundle-picker-empty" hidden></div>
+        </div>
+        <div id="prompt-mode-section" hidden>
+          <textarea id="prompt-mode-input" placeholder="Describe what you're looking for, e.g. a cozy wooden park bench"></textarea>
+          <button id="prompt-mode-generate-btn" type="button">Generate</button>
+          <div id="prompt-mode-status"></div>
+          <img id="prompt-mode-concept-image" alt="Generated concept" hidden />
+          <div id="prompt-mode-results-grid"></div>
         </div>
       </div>
     </div>

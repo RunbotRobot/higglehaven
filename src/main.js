@@ -82,6 +82,8 @@ import {
   requestSellerPayout,
   markPurchaseShipped,
   confirmPurchaseDelivery,
+  createConceptImage,
+  similaritySearch,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -1921,6 +1923,17 @@ const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
 const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
+// #329/#330: Prompt mode — a second top-level way into this same picker,
+// alongside the ordinary Manual (search/bundles) one above.
+const catalogPickerModeButtons = [...document.querySelectorAll('.catalog-picker-mode-btn')];
+const catalogPickerManualSectionEl = document.getElementById('catalog-picker-manual-section');
+const promptModeSectionEl = document.getElementById('prompt-mode-section');
+const promptModeInputEl = document.getElementById('prompt-mode-input');
+const promptModeGenerateBtn = document.getElementById('prompt-mode-generate-btn');
+const promptModeStatusEl = document.getElementById('prompt-mode-status');
+const promptModeConceptImageEl = document.getElementById('prompt-mode-concept-image');
+const promptModeResultsGridEl = document.getElementById('prompt-mode-results-grid');
+
 // A template's appearance never changes after creation (there's no edit
 // flow for its color), so a thumbnail rendered once this session is good
 // for the rest of it — keyed by templateId rather than re-rendered every
@@ -2304,6 +2317,21 @@ for (const btn of bundleTabButtons) {
     renderBundlePicker();
   });
 }
+let activeCatalogPickerMode = 'manual';
+function updateCatalogPickerModeUI() {
+  for (const btn of catalogPickerModeButtons) {
+    btn.classList.toggle('active', btn.dataset.pickerMode === activeCatalogPickerMode);
+  }
+  catalogPickerManualSectionEl.hidden = activeCatalogPickerMode !== 'manual';
+  promptModeSectionEl.hidden = activeCatalogPickerMode !== 'prompt';
+}
+for (const btn of catalogPickerModeButtons) {
+  btn.addEventListener('click', () => {
+    activeCatalogPickerMode = btn.dataset.pickerMode;
+    updateCatalogPickerModeUI();
+  });
+}
+
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
     cancelPlacementMode();
@@ -2314,13 +2342,94 @@ addItemBtn.addEventListener('click', () => {
   if (opening) {
     // Fresh search each time the picker opens, rather than carrying over
     // whatever was last typed — the same "reset on open" pattern the
-    // upload modal's own file step uses.
+    // upload modal's own file step uses. Always reopens on Manual, same
+    // as #541's own "always opens back on Manage" reasoning for the
+    // Seller modal's view toggle — a builder's last Prompt-mode session
+    // (concept image, results) doesn't need to survive a close/reopen.
     catalogSearchInputEl.value = '';
     filterCatalogTiles();
+    activeCatalogPickerMode = 'manual';
+    updateCatalogPickerModeUI();
   }
 });
 catalogPickerCloseBtn.addEventListener('click', () => {
   catalogPickerEl.classList.remove('visible');
+});
+
+// #329/#330: Prompt mode — a builder's free-text prompt becomes a stored
+// concept image (#328), which this then embeds client-side (the same
+// cheap stand-in every catalog thumbnail already uses — computeThumbnailEmbedding
+// below works against any canvas-like image source, a rendered 3D
+// thumbnail or this plain 2D concept image alike) and hands to
+// similarity-search (#329's own backend half, PR #550) to find real
+// placeable candidates. Picking one arms placement mode through the exact
+// same enterPlacementMode call a Manual-mode tile's own click handler
+// uses (#330) — no separate placement logic for this mode.
+function loadImageElement(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load the generated concept image.'));
+    img.src = url;
+  });
+}
+
+function setPromptModeStatus(text, isError = false) {
+  promptModeStatusEl.textContent = text;
+  promptModeStatusEl.classList.toggle('error', isError);
+}
+
+function renderPromptModeResults(templates) {
+  promptModeResultsGridEl.replaceChildren();
+  for (const template of templates) {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'catalog-tile';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'catalog-thumb';
+    thumb.alt = '';
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    tile.appendChild(thumb);
+
+    const name = document.createElement('span');
+    name.className = 'catalog-tile-name';
+    name.textContent = template.name;
+    tile.appendChild(name);
+
+    tile.addEventListener('click', () => {
+      catalogPickerEl.classList.remove('visible');
+      enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
+    });
+    promptModeResultsGridEl.appendChild(tile);
+  }
+}
+
+promptModeGenerateBtn.addEventListener('click', async () => {
+  const prompt = promptModeInputEl.value.trim();
+  if (!prompt) {
+    setPromptModeStatus('Describe what you’re looking for first.', true);
+    return;
+  }
+  promptModeGenerateBtn.disabled = true;
+  promptModeConceptImageEl.hidden = true;
+  promptModeResultsGridEl.replaceChildren();
+  try {
+    setPromptModeStatus('Generating concept image…');
+    const imageUrl = await createConceptImage(prompt);
+    promptModeConceptImageEl.src = imageUrl;
+    promptModeConceptImageEl.hidden = false;
+    setPromptModeStatus('Finding similar products…');
+    const conceptImage = await loadImageElement(imageUrl);
+    const embedding = computeThumbnailEmbedding(conceptImage);
+    const templates = await similaritySearch(embedding, 10);
+    renderPromptModeResults(templates);
+    setPromptModeStatus(templates.length > 0 ? `${templates.length} match${templates.length === 1 ? '' : 'es'} found.` : 'No matching products yet.');
+  } catch (err) {
+    setPromptModeStatus(err.message || 'Something went wrong.', true);
+  } finally {
+    promptModeGenerateBtn.disabled = false;
+  }
 });
 
 // Custom product upload: a builder's own model (photogrammetry scan,
