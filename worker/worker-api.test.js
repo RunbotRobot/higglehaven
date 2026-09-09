@@ -2,7 +2,7 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker from './index.js';
+import worker, { reserveStorageBudget } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -138,6 +138,80 @@ describe('Worker API', () => {
     const winner = first.status === 201 ? first : second;
     const { modelUrl } = await winner.json();
     await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+  });
+
+  // #602: concept-image generation used to write straight to R2 with no
+  // MAX_TOTAL_STORAGE_BYTES check at all, unlike POST /api/models above —
+  // fixed by routing it through the same reserveStorageBudget() helper
+  // handleModelUpload itself now calls. There's no way to exercise the
+  // concept-image route end-to-end here (OPENAI_API_KEY is never
+  // configured in this test environment, so it 503s before ever reaching
+  // R2 — see commerce.test.js's own comment on that), so these test the
+  // shared helper directly instead, the same way claimPurchasesForPayout
+  // and checkMigrationDrift are tested directly elsewhere in this suite
+  // rather than only through their own HTTP routes.
+  describe('reserveStorageBudget (#264, generalized for #602)', () => {
+    it('reserves under the cap and release() frees the row again', async () => {
+      const reservation = await reserveStorageBudget(env.DB, env.MODELS, 1024);
+      expect(reservation.ok).toBe(true);
+      const held = await env.DB.prepare(
+        'SELECT COUNT(*) AS count FROM model_upload_reservations WHERE size_bytes = ?',
+      ).bind(1024).first();
+      expect(held.count).toBe(1);
+
+      await reservation.release();
+      const releasedRow = await env.DB.prepare(
+        'SELECT COUNT(*) AS count FROM model_upload_reservations WHERE size_bytes = ?',
+      ).bind(1024).first();
+      expect(releasedRow.count).toBe(0);
+    });
+
+    it('rejects a write that would overrun the cap and reports real remaining headroom', async () => {
+      const storage = await api('/models/storage', adminSession());
+      const usedBytes = storage.body.usedBytes;
+      const capBytes = 8 * 1024 * 1024 * 1024;
+      const headroomBytes = 100;
+      // Same fake-reservation seeding trick as the concurrent-uploads test
+      // above — leaves just enough real headroom to size this test without
+      // needing to actually fill the 8GB cap.
+      const seededId = `test-reservation-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES (?, ?, ?)
+      `).bind(seededId, capBytes - usedBytes - headroomBytes, Date.now()).run();
+
+      const reservation = await reserveStorageBudget(env.DB, env.MODELS, headroomBytes + 1);
+      expect(reservation.ok).toBe(false);
+      expect(reservation.remainingBytes).toBe(headroomBytes);
+
+      await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(seededId).run();
+    });
+
+    // The whole point of #602's fix: a concept-image write and a model
+    // upload now draw from the exact same budget, so a reservation held by
+    // one genuinely blocks the other from overrunning the shared cap —
+    // not just two calls to the same endpoint racing each other, which is
+    // all the concurrent-uploads test above already covered.
+    it('a reservation held by one writer (simulating concept-image) blocks a real model upload from overrunning the shared cap', async () => {
+      const storage = await api('/models/storage', adminSession());
+      const usedBytes = storage.body.usedBytes;
+      const capBytes = 8 * 1024 * 1024 * 1024;
+      const headroomBytes = 20;
+      const conceptImageReservation = await reserveStorageBudget(
+        env.DB, env.MODELS, capBytes - usedBytes - headroomBytes,
+      );
+      expect(conceptImageReservation.ok).toBe(true);
+
+      const form = new FormData();
+      form.set('file', glbFile({ json: '{"blockedByConceptImage":1}' }));
+      const blocked = await SELF.fetch('https://higglehaven.test/api/models', {
+        method: 'POST',
+        body: form,
+        headers: { 'cf-connecting-ip': `concept-image-shared-cap-${crypto.randomUUID()}` },
+      });
+      expect(blocked.status).toBe(507);
+
+      await conceptImageReservation.release();
+    });
   });
 
   it('deletes only unreferenced uploaded models', async () => {
