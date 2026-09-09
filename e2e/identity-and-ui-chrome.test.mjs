@@ -40,6 +40,7 @@ await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', LABEL);
 await page.fill('#auth-signup-email', EMAIL);
 await page.fill('#auth-signup-password', PASSWORD);
+await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();

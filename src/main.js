@@ -8152,9 +8152,10 @@ authForms.signup.addEventListener('submit', async (event) => {
   const email = document.getElementById('auth-signup-email').value;
   const password = document.getElementById('auth-signup-password').value;
   const username = document.getElementById('auth-signup-username').value.trim();
+  const ageAttested = document.getElementById('auth-signup-age-attest').checked;
   setAuthStatus('');
   try {
-    const result = await signUp({ email, password, username });
+    const result = await signUp({ email, password, username, ageAttested });
     currentAuthUser = result.user;
     refreshAccountAuthUI();
     authForms.signup.reset();

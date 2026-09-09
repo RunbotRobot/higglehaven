@@ -73,7 +73,7 @@ async function signUp(email, username) {
       'content-type': 'application/json',
       ...(ACCESS_COOKIE ? { cookie: ACCESS_COOKIE } : {}),
     },
-    body: JSON.stringify({ email, password: PASSWORD, username }),
+    body: JSON.stringify({ email, password: PASSWORD, username, ageAttested: true }),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`signup ${email} -> ${response.status}: ${body.error}`);

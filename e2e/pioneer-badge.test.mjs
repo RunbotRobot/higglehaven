@@ -60,7 +60,7 @@ const secondBuilderId = await secondPage.evaluate(async (label) => {
   await fetch('/api/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password: 'e2e-test-password-123', username: label }),
+    body: JSON.stringify({ email, password: 'e2e-test-password-123', username: label, ageAttested: true }),
   });
   const me = await fetch('/api/builders/me');
   return (await me.json()).builder.builderId;
