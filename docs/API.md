@@ -205,8 +205,17 @@ login → reset flow fully testable without a real email provider.
 ### `POST /api/auth/signup`
 
 ```json
-{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada" }
+{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada", "ageAttested": true }
 ```
+
+`ageAttested` must be exactly `true` — `400` otherwise (#556, docs/SPEC.md
+§6's registration gate). A plain attestation checkbox, not a birthdate
+collection or age verification; the account's `trustTier` (below) is what
+actually gates real-money/social-feature access, raised separately via
+`POST /api/auth/confirm-card` or (once government-ID verification exists)
+its own endpoint. Counted against the rate limit below the same as every
+other rejection on this endpoint — a cheap validation failure isn't a free
+way to probe past the limiter.
 
 `email` is normalized (trimmed, lowercased) and validated against a
 deliberately permissive pattern — "does this look roughly like an email,"
@@ -240,13 +249,39 @@ email verification:
 
 ```json
 {
-  "user": { "userId": "user-...", "email": "ada@example.com", "username": "Ada", "emailVerified": false, "createdAt": "...", "updatedAt": "..." },
+  "user": { "userId": "user-...", "email": "ada@example.com", "username": "Ada", "emailVerified": false, "ageAttested": true, "trustTier": "none", "cardFunding": null, "createdAt": "...", "updatedAt": "..." },
   "verificationEmailSent": true
 }
 ```
 
 `verificationEmailSent` is `false` (with a `devVerifyUrl` field added
 instead) whenever the dev-mode fallback above kicks in.
+
+### `POST /api/auth/card-setup-intent` and `POST /api/auth/confirm-card`
+
+Session-gated (`401` without one). #556's credit-card half of the
+registration gate: collecting a card and reading Stripe's own
+`card.funding` costs nothing beyond the Stripe account this app already
+has for seller Connect payouts and checkout — no charge is ever created.
+
+`POST /api/auth/card-setup-intent` takes no body and creates a Stripe
+`SetupIntent`, returning `{ "clientSecret": "seti_..._secret_..." }` for
+the frontend to confirm client-side with Stripe.js Elements. `503` if
+Stripe isn't configured on this deployment (`STRIPE_SECRET_KEY` unset —
+same guarded-secret shape as `STRIPE_SECRET_KEY`'s other uses).
+
+```json
+{ "paymentMethodId": "pm_..." }
+```
+
+`POST /api/auth/confirm-card` reads back the PaymentMethod the frontend
+just confirmed and checks its `card.funding`: `"credit"` raises the
+account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"` is
+rejected with `400` (SPEC §6's own reasoning: those are too accessible to
+minors to serve as an age signal). `cardFunding` is recorded on the
+account either way, so a rejected attempt is still visible on the
+account rather than a silent no-op. Also `503` if Stripe isn't
+configured.
 
 ### `POST /api/auth/login`
 
