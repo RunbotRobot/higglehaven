@@ -2230,6 +2230,47 @@ describe('Worker API', () => {
     });
   });
 
+  // #523: nothing previously stopped an admin PUT/PATCH from setting
+  // radiusM below its current value, with no re-validation of
+  // already-materialized land that could then sit outside the new,
+  // smaller bound. Owner direction: block shrinking outright, no
+  // cascade-cleanup option.
+  it('rejects PUT/PATCH /world setting radiusM below its current value, but allows an equal or larger one', async () => {
+    const current = await api('/world');
+    const currentRadiusM = current.body.world.radiusM;
+
+    const shrunkPatch = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM - 1 }),
+    }));
+    expect(shrunkPatch.response.status).toBe(400);
+    expect(shrunkPatch.body).toEqual({ error: 'World radius cannot be decreased' });
+
+    const shrunkPut = await api('/world', adminSession({
+      method: 'PUT',
+      body: JSON.stringify({ radiusM: currentRadiusM - 1 }),
+    }));
+    expect(shrunkPut.response.status).toBe(400);
+    expect(shrunkPut.body).toEqual({ error: 'World radius cannot be decreased' });
+
+    const unchanged = await api('/world');
+    expect(unchanged.body.world.radiusM).toBe(currentRadiusM);
+
+    const sameRadius = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM }),
+    }));
+    expect(sameRadius.response.status).toBe(200);
+    expect(sameRadius.body.world.radiusM).toBe(currentRadiusM);
+
+    const grown = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM + 1 }),
+    }));
+    expect(grown.response.status).toBe(200);
+    expect(grown.body.world.radiusM).toBe(currentRadiusM + 1);
+  });
+
   // The scheduled() export (see wrangler.jsonc's triggers.crons) is what
   // actually keeps the world growing now — the old player-triggered "Grow
   // the world" button is gone. Invoked directly against the worker module
