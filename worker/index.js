@@ -4791,6 +4791,25 @@ async function handleLandletDraft(request, db, landletId) {
   return json({ error: 'Not found' }, 404);
 }
 
+// Owner (issue-570, 2026-09-09 -- picked option (a), "apply unconditionally
+// like generate-mosaic"): the manual/bulk-import creation endpoints below
+// (single POST and POST .../batch) used to skip the spatial overlap check
+// generate-mosaic and generate-ring already enforce procedurally, so an
+// admin-supplied candidate could silently overlap already-claimed,
+// already-rendered land. Shared here so generate-mosaic and both of these
+// endpoints all enforce the exact same check instead of duplicating it.
+async function assertLandCandidatesDontOverlapExisting(db, newPolygons, message) {
+  const [existingLandlets, existingCandidates] = await Promise.all([
+    db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+    db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
+  ]);
+  const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
+    .map(landletWorldPolygon)
+    .filter((polygon) => polygon.length >= 3);
+  const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
     await requireAdmin(request, db);
@@ -4830,16 +4849,8 @@ async function handleLandCandidates(request, db, route, url) {
     // a mosaic call landing near existing ring-generated land) would
     // otherwise silently overlap, since this generator has no radial
     // structure for a band-based check like generate-ring's to work with.
-    const [existingLandlets, existingCandidates] = await Promise.all([
-      db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-      db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
-    ]);
-    const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
-      .map(landletWorldPolygon)
-      .filter((polygon) => polygon.length >= 3);
     const newPolygons = [...rows, centralRow].map(landletWorldPolygon);
-    const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
-    if (conflict) throw new HttpError('Generated mosaic would overlap existing land', 409);
+    await assertLandCandidatesDontOverlapExisting(db, newPolygons, 'Generated mosaic would overlap existing land');
 
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
@@ -5057,6 +5068,9 @@ async function handleLandCandidates(request, db, route, url) {
     }
 
     const rows = landlets.map(candidateRowFromLandlet);
+    await assertLandCandidatesDontOverlapExisting(
+      db, rows.map(landletWorldPolygon), 'One or more candidates would overlap existing land',
+    );
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
@@ -5081,6 +5095,7 @@ async function handleLandCandidates(request, db, route, url) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
+    await assertLandCandidatesDontOverlapExisting(db, [landletWorldPolygon(row)], 'Candidate would overlap existing land');
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
