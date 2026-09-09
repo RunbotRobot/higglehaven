@@ -14,6 +14,8 @@ import {
   resetPassword,
   verifyEmail,
   resendVerificationEmail,
+  startDiditVerification,
+  fetchDiditVerificationStatus,
   fetchCatalog,
   fetchInstances,
   createInstanceRemote,
@@ -7962,6 +7964,8 @@ const authStatusEl = document.getElementById('auth-status');
 const authAccountEmailEl = document.getElementById('auth-account-email');
 const authAccountVerifiedEl = document.getElementById('auth-account-verified');
 const authAccountPioneerEl = document.getElementById('auth-account-pioneer');
+const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier');
+const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
 const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
 const authLogoutBtn = document.getElementById('auth-logout-btn');
 
@@ -8017,6 +8021,14 @@ function refreshAccountAuthUI() {
     authAccountVerifiedEl.textContent = currentAuthUser.emailVerified ? '✓ Email verified' : 'Email not verified yet';
     authAccountVerifiedEl.classList.toggle('verified', currentAuthUser.emailVerified);
     authResendVerifyBtn.hidden = currentAuthUser.emailVerified;
+    // docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
+    // verification via Didit is the higher trust tier, above the
+    // credit-card tier — only offer the button while there's still
+    // somewhere to go (not yet id_verified).
+    const trustTierLabels = { none: 'Not ID-verified', credit_card: 'Credit-card verified', id_verified: '✓ ID-verified' };
+    authAccountTrustTierEl.textContent = trustTierLabels[currentAuthUser.trustTier] || '';
+    authAccountTrustTierEl.classList.toggle('verified', currentAuthUser.trustTier === 'id_verified');
+    authVerifyIdBtn.hidden = currentAuthUser.trustTier === 'id_verified';
     // Founding/pioneer recognition (docs/SPEC.md §3) — this app has no
     // separate profile page, so the account panel is the closest fit (the
     // old dev-mode identity roster used to show this — see
@@ -8233,7 +8245,68 @@ authResendVerifyBtn.addEventListener('click', async () => {
   }
 });
 
+// docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
+// via Didit is a hosted flow in a separate tab, not an in-page form — this
+// tab has no way to know when the builder finishes it there except by
+// asking. Polls a bounded number of times rather than forever, so an
+// abandoned verification (tab closed, never finished) doesn't leave a
+// background timer running indefinitely; reopening the account panel and
+// clicking the button again always starts a fresh poll regardless.
+let diditPollTimer = null;
+
+function stopDiditPoll() {
+  if (diditPollTimer !== null) {
+    clearTimeout(diditPollTimer);
+    diditPollTimer = null;
+  }
+}
+
+async function pollDiditVerificationStatus() {
+  stopDiditPoll();
+  const intervalMs = 3000;
+  const deadline = Date.now() + 5 * 60 * 1000;
+  const tick = async () => {
+    diditPollTimer = null;
+    try {
+      const { status } = await fetchDiditVerificationStatus();
+      if (status === 'approved') {
+        await refreshCurrentUser();
+        setAuthStatus('Government-ID verification approved!', 'success');
+        return;
+      }
+      if (status === 'declined') {
+        setAuthStatus('Government-ID verification was declined — you can try again.', 'error');
+        return;
+      }
+    } catch (err) {
+      // A transient failure here shouldn't give up outright — keep
+      // polling until the deadline, the same "best-effort background
+      // refresh" spirit as refreshAccountAuthUI's own pioneer-badge fetch.
+      console.warn('Could not check Didit verification status:', err);
+    }
+    if (Date.now() >= deadline) {
+      setAuthStatus('Still waiting on verification — this will pick up automatically next time you open your account.', '');
+      return;
+    }
+    diditPollTimer = setTimeout(tick, intervalMs);
+  };
+  await tick();
+}
+
+authVerifyIdBtn.addEventListener('click', async () => {
+  setAuthStatus('');
+  try {
+    const { url } = await startDiditVerification();
+    window.open(url, '_blank', 'noopener');
+    setAuthStatus('Complete verification in the new tab, then come back here.');
+    pollDiditVerificationStatus();
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not start government-ID verification.', 'error');
+  }
+});
+
 authLogoutBtn.addEventListener('click', async () => {
+  stopDiditPoll();
   // The button gave zero feedback while the request was in flight —
   // nothing to distinguish a slow network from an unregistered click.
   // Mirrors claimConfirmBtn's own disable-plus-status-text pattern. Reset
@@ -8323,7 +8396,10 @@ const authInitPromise = (async () => {
   const params = new URLSearchParams(location.search);
   const verifyToken = params.get('verifyEmail');
   const resetToken = params.get('resetPassword');
-  if (!verifyToken && !resetToken) {
+  // #589: the return leg of the Didit-hosted verification flow — Didit
+  // redirects back here once a builder finishes (or abandons) it there.
+  const diditReturn = params.get('diditReturn');
+  if (!verifyToken && !resetToken && !diditReturn) {
     await refreshCurrentUser();
     return;
   }
@@ -8341,6 +8417,13 @@ const authInitPromise = (async () => {
       openAuthModal('login');
       setAuthStatus(err.message || 'That verification link is invalid or has expired.', 'error');
     }
+  } else if (diditReturn) {
+    // refreshCurrentUser() above already re-rendered the account panel if
+    // this browser has an active session; openAuthModal only needs to
+    // actually show it (a fresh page load starts with the modal closed).
+    openAuthModal();
+    setAuthStatus('Checking verification status…');
+    await pollDiditVerificationStatus();
   } else if (resetToken) {
     pendingResetToken = resetToken;
     // Forced to the logged-out form view even if this browser happens to
