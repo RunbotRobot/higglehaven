@@ -1662,6 +1662,66 @@ describe('Embedding similarity search (#329)', () => {
   });
 });
 
+// #328: OPENAI_API_KEY is never configured in this test environment (see
+// worker/index.js's own comment on openaiConfigured, matching the
+// established RESEND_API_KEY/STRIPE_SECRET_KEY testing convention), so a
+// real generation call is never attempted here — these tests cover
+// everything reachable without one: auth gating, validation, ordering,
+// rate limiting, and the 503 path itself.
+describe('Prompt-mode concept-image generation (#328)', () => {
+  it('requires a session', async () => {
+    const rejected = await api('/catalog/concept-image', {
+      method: 'POST',
+      body: JSON.stringify({ prompt: 'a cozy wooden bench' }),
+    });
+    expect(rejected.response.status).toBe(401);
+  });
+
+  it('rejects a missing or oversized prompt before checking configuration', async () => {
+    const builder = await signupBuilder('concept-image-validation-builder');
+
+    const missing = await api('/catalog/concept-image', builder.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
+    expect(missing.response.status).toBe(400);
+
+    const oversized = await api('/catalog/concept-image', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ prompt: 'x'.repeat(2001) }),
+    }));
+    expect(oversized.response.status).toBe(400);
+  });
+
+  it('returns 503 once past validation, since OPENAI_API_KEY is never configured in tests', async () => {
+    const builder = await signupBuilder('concept-image-503-builder');
+    const rejected = await api('/catalog/concept-image', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ prompt: 'a cozy wooden bench' }),
+    }));
+    expect(rejected.response.status).toBe(503);
+  });
+
+  it('rate-limits repeated requests from the same builder', async () => {
+    const builder = await signupBuilder('concept-image-rate-limit-builder');
+    for (let i = 0; i < 10; i++) {
+      const attempt = await api('/catalog/concept-image', builder.session({
+        method: 'POST',
+        body: JSON.stringify({ prompt: `attempt ${i}` }),
+      }));
+      // Every attempt still 503s (no key configured) rather than 429 —
+      // this loop is only spending the rate-limit budget, not asserting
+      // success.
+      expect(attempt.response.status).toBe(503);
+    }
+    const limited = await api('/catalog/concept-image', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ prompt: 'one more' }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+});
+
 describe('Simulated purchases', () => {
   async function createGreenbeltLandletWithArea(landletId, areaM2) {
     return api('/landlets', adminSession({

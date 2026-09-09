@@ -1287,12 +1287,10 @@ catalog template response once set (see "Catalog template object" above).
 
 The backend half of #329 — see that issue's own text: it depends on both the
 embedding index (#327, above) **and** the prompt→concept-image endpoint
-(#328), and #328 is still blocked on the owner picking an image-gen provider.
-Only the frontend "Prompt mode" entry point genuinely needs #328 (there's
-nothing yet to call it with); the similarity-search half is independently
+(#328, below). Only the frontend "Prompt mode" entry point (#330) genuinely
+needs both to exist together; the similarity-search half is independently
 buildable and testable today by passing any embedding directly, so it's
-shipped ahead of the frontend piece rather than waiting on an unrelated
-decision. No UI calls this endpoint yet.
+shipped ahead of the frontend piece. No UI calls this endpoint yet.
 
 Given an embedding (the same shape `POST .../thumbnail` above stores), ranks
 every catalog template that has one by cosine similarity and returns the
@@ -1340,6 +1338,54 @@ Each entry is a full catalog template object (see "Catalog template object"
 above) plus `similarity` (this query's own cosine similarity score, highest
 first) — `similarity` is not itself persisted anywhere, only computed
 per-request.
+
+### `POST /api/catalog/concept-image`
+
+#328 — given a builder's free-text prompt, generates a concept image via an
+external image-generation API and stores it. Out of scope here (#328's own
+text): embedding the result and running it through similarity-search above
+(#329, already merged) or the placement UI (#330) — this endpoint only ever
+turns a prompt into a stored image URL. Provider: OpenAI's `gpt-image-1`,
+picked over the cheaper Cloudflare Workers AI option per the owner's own
+stated priority (generation quality over minimizing per-call cost).
+
+Requires a session (`requireSessionBuilder`) and is rate-limited per builder
+— unlike everything else this file calls out to externally, this is a real,
+non-trivial per-call cost, so this can't be left anonymous or unthrottled the
+way similarity-search's read-only query above is.
+
+Request body:
+
+```json
+{ "prompt": "a cozy wooden park bench with wrought-iron armrests" }
+```
+
+- `prompt`: required, 1 to 2000 characters (`400` otherwise). Validated
+  before the "is this configured" check below, so a malformed request always
+  gets a real, specific `400` rather than being masked by a `503`.
+
+Response (`201`):
+
+```json
+{ "imageUrl": "/uploads/concept-images/<sha256>.png" }
+```
+
+Stored content-addressed in the same `MODELS` R2 bucket as uploaded models
+and catalog thumbnails (a hash of the generated image's own bytes as the R2
+key) — `GET /uploads/:key` serves every object with a permanent, immutable
+cache-control header, so a fixed key wouldn't survive two different prompts
+that happen to hash-collide... which in practice never happens; the real
+reason for content-addressing here is consistency with the thumbnail
+endpoint above, not because two prompts are likely to produce identical
+bytes.
+
+#### Testing note
+
+Same shape as `STRIPE_SECRET_KEY`/`RESEND_API_KEY` elsewhere in this file: a
+Worker secret (`OPENAI_API_KEY`) that's never configured in local dev or the
+automated test suite, so a real OpenAI call is never attempted during tests
+— covered up to the `503` this endpoint returns when unconfigured, not
+beyond it.
 
 ### Extensible products (crop)
 
