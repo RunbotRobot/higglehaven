@@ -109,7 +109,23 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # Retries once on failure, same rationale/shape as the shard retry
+      # below. Confirmed via job logs (PR #611, all 4 shards, run 34384027836
+      # and its rerun) that this step's own apt-get install can fail with a
+      # "Hash Sum mismatch" fetching Google's Chrome apt repo — an external
+      # CDN-propagation hiccup on dl.google.com's own end, not anything in
+      # this repo, and not something the later per-shard test retry below
+      # ever gets a chance to cover since it dies before any test runs.
+      - run: |
+          for attempt in 1 2; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
+            sleep 10
+          done
+          echo "playwright install failed twice — treating as a real failure, not a transient one." >&2
+          exit 1
       # .dev.vars is gitignored (wrangler's standard local-only-override
       # mechanism — see docs/API.md's own note on it), so CI recreates the
       # one value e2e/run-all.mjs's own wrangler dev needs. Not a real
