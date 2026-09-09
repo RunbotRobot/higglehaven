@@ -108,11 +108,14 @@ await page.click('#auth-login-form button[type="submit"]');
 const btnLabelAfterNewPasswordLogin = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after logging in with the NEW password (should be "Ada Suite"):', btnLabelAfterNewPasswordLogin);
 
-// --- #432: logging out while staying in Shop mode must not leave a stale
-// sellerId cached for the next account that logs in ---
-// Sell is a modal overlay, not a currentMode change (see #mode-nav's own
-// comment), so this logout — still in Shop mode from the whole test above —
-// takes the no-reload path that #432 found didn't clear builderId/sellerId.
+// --- #432: logging out must not leave a stale sellerId cached for the
+// next account that logs in ---
+// #540 made Sell a genuine currentMode (a real reload + bootstrap() on
+// entry, like Build/Shop always had) rather than a modal overlay with no
+// mode transition at all — so this logout, right after visiting Sell,
+// takes the reload-into-Shop path (see authLogoutBtn's own comment)
+// rather than #432's original no-reload Shop-mode case. Either way the
+// same identity-reset guarantee is what's under test here.
 const firstSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET');
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await firstSellerFetch;

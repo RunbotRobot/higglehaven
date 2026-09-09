@@ -2725,6 +2725,7 @@ async function handleUploadDimensionsStep() {
     persistCatalogThumbnail(template);
     activeCatalog.push(template);
     buildCatalogPickerButtons();
+    refreshSellerShowcase();
     closeUploadModal();
     // Back to the Seller modal it was opened from, with the new product
     // showing up right away — not straight into a Build-mode tap-to-place
@@ -3695,6 +3696,7 @@ function renderSellerList() {
         });
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
+        refreshSellerShowcase();
         renderSellerList();
       } catch (err) {
         rowStatus.textContent = err.message || 'Could not duplicate.';
@@ -3725,6 +3727,7 @@ function renderSellerList() {
         await deleteCatalogTemplate(template.templateId);
         activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
         buildCatalogPickerButtons();
+        refreshSellerShowcase();
         renderSellerList();
       } catch (err) {
         rowStatus.textContent = err.message?.includes('still in use')
@@ -8079,14 +8082,15 @@ authLogoutBtn.addEventListener('click', async () => {
   sellerId = null;
   builderIdentityFlowPromise = null;
   sellerIdentityFlowPromise = null;
-  // Build mode requires a real, logged-in account (ensureBuilderIdentity's
-  // own login wall) — staying on it post-logout would just immediately
-  // reprompt the login modal over whatever was on screen, stranding the
-  // builder mid-edit with no identity behind it. A reload into Shop
-  // instead is the same clean-slate escape hatch #mode-nav's own Shop<->
-  // Build switching already uses (see its own comment), and Shop needs no
+  // Build and Sell both require a real, logged-in account
+  // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) —
+  // staying on either post-logout would just immediately reprompt the
+  // login modal over whatever was on screen (or, for Sell, strand the
+  // now-stale showcase/modal with no identity behind it). A reload into
+  // Shop instead is the same clean-slate escape hatch #mode-nav's own
+  // mode switching already uses (see its own comment), and Shop needs no
   // account at all, so it's always a safe place to land after logging out.
-  if (currentMode === 'build') {
+  if (currentMode === 'build' || currentMode === 'sell') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return;
@@ -10756,6 +10760,20 @@ sellerShowcasePrevBtn.addEventListener('click', () => {
 sellerShowcaseNextBtn.addEventListener('click', () => {
   if (sellerShowcasePageIndex < sellerShowcasePages.length - 1) loadSellerShowcasePage(sellerShowcasePageIndex + 1);
 });
+
+// enterSellMode() only computes sellerShowcasePages once, on entry — a
+// product created/duplicated/deleted afterward (openSellerModal() is
+// reachable from any mode, not just Sell, via the account menu's own "My
+// Products" entry) would otherwise leave the showcase behind the modal
+// showing stale page data once closed. A no-op when the modal was opened
+// from Build/Shop, since sellerShowcasePages/the `landlet` ground swap
+// only matter once actually in Sell mode.
+function refreshSellerShowcase() {
+  sellerShowcasePages = computeSellerShowcasePages(myProducts());
+  if (currentMode !== 'sell') return;
+  const clampedIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
+  loadSellerShowcasePage(clampedIndex);
+}
 
 // findRootProduct's own counterpart for the showcase array — a showcase
 // mesh's clicked-on geometry can sit on a nested child node the same way a
