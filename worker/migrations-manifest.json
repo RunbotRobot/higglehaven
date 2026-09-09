@@ -70,5 +70,9 @@
   "0070_higgles_rename.sql",
   "0071_catalog_template_image.sql",
   "0072_purchase_payouts.sql",
-  "0073_catalog_template_model_size.sql"
+  "0073_catalog_template_model_size.sql",
+  "0074_signup_trust_tier.sql",
+  "0075_didit_verification.sql",
+  "0076_didit_session_url.sql",
+  "0077_tax_id_form.sql"
 ]

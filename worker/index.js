@@ -1,5 +1,6 @@
 import {
-  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, polygonsOverlap,
+  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
+  polygonsOverlap, sameAreaRadius,
 } from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
@@ -41,9 +42,11 @@ const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 // actual current contents on every upload — so a new upload gets rejected
 // before it would ever push real usage into paid territory, independent
 // of whatever Cloudflare's own billing dashboard does or doesn't warn
-// about. Only counts what's actually in R2 (this bucket only ever holds
-// builder-uploaded custom models — the built-in catalog's models ship as
-// static assets, not R2 objects, so they never count against this).
+// about. Only counts what's actually in R2 — the built-in catalog's models
+// ship as static assets, not R2 objects, so they never count against this.
+// The two writers that do live in this bucket and count against it:
+// builder-uploaded custom models (handleModelUpload) and generated concept
+// images (concept-image, #602) — both go through reserveStorageBudget.
 const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
 
 // Generous bound on how long a model_upload_reservations row can outlive
@@ -64,6 +67,42 @@ async function getStorageUsage(bucket) {
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (cursor);
   return { usedBytes, objectCount };
+}
+
+// The atomic reservation dance MAX_TOTAL_STORAGE_BYTES enforcement needs
+// (see model_upload_reservations' own migration comment), shared between
+// handleModelUpload and concept-image generation (#602) — both write into
+// the same MODELS bucket and can each add a meaningfully large object, so
+// both need to close the same concurrent-upload race against the same cap.
+// Concept-image can't reserve before its own R2 write the way a multipart
+// upload does (its size isn't known until the image is actually generated),
+// so it calls this right before the put instead of before the request body
+// is even read — same atomicity where it matters (nothing else can land
+// between this reservation and its own put), just later in that one
+// request's own timeline. Returns a reservation id the caller must delete
+// (in a finally) once its own R2 write lands or fails.
+async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
+  const reservationId = `reservation-${crypto.randomUUID()}`;
+  const now = Date.now();
+  await db.prepare(`
+    DELETE FROM model_upload_reservations WHERE created_at < ?
+  `).bind(now - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS).run();
+  const reserved = await db.prepare(`
+    INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at)
+    SELECT ?, ?, ?
+    WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
+  `).bind(reservationId, sizeBytes, now, usage.usedBytes, sizeBytes, MAX_TOTAL_STORAGE_BYTES).run();
+  if (reserved.meta.changes === 0) {
+    const reservedBytes = await db.prepare(`
+      SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
+    `).first();
+    const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
+    throw new HttpError(
+      `${sizeLabel} is ${formatBytes(sizeBytes)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
+      507,
+    );
+  }
+  return reservationId;
 }
 
 // Private-preview gate: when ACCESS_PASSPHRASE is configured (a Worker
@@ -227,7 +266,7 @@ export default {
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url).catch((error) => {
         const httpError = error instanceof HttpError ? error : databaseHttpError(error);
-        if (httpError) return json({ error: httpError.message }, httpError.status);
+        if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
         console.error(error);
         return json({ error: 'Internal server error' }, 500);
       });
@@ -418,6 +457,10 @@ async function handleApi(request, env, url) {
     return handleSellers(request, env, env.DB, route);
   }
 
+  if (route[0] === 'tax') {
+    return handleTax(request, env, env.DB, route, url);
+  }
+
   if (route[0] === 'notifications') {
     return handleNotifications(request, env.DB, route, url);
   }
@@ -535,36 +578,16 @@ async function handleModelUpload(request, env) {
   const usage = await getStorageUsage(env.MODELS);
 
   // R2 has no primitive for "put only if some byte budget elsewhere still
-  // allows it," so the actual cap enforcement has to happen in D1 instead:
-  // prune any reservation old enough to be an abandoned one (a crashed
-  // request that never reached its own cleanup below), then fold this
-  // upload's own reservation into one atomic INSERT ... WHERE, same idiom
-  // checkRateLimit uses for its check-then-act race. `usage.usedBytes` is
-  // a snapshot (R2 can't be read inside the same atomic statement), but
-  // any other upload racing this one reads its own snapshot at essentially
-  // the same real R2 state, so the SUM of not-yet-landed reservations —
-  // computed atomically alongside this insert — is what actually closes
-  // the race between concurrent requests (#264).
-  const reservationId = `reservation-${crypto.randomUUID()}`;
-  const now = Date.now();
-  await env.DB.prepare(`
-    DELETE FROM model_upload_reservations WHERE created_at < ?
-  `).bind(now - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS).run();
-  const reserved = await env.DB.prepare(`
-    INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at)
-    SELECT ?, ?, ?
-    WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
-  `).bind(reservationId, file.size, now, usage.usedBytes, file.size, MAX_TOTAL_STORAGE_BYTES).run();
-  if (reserved.meta.changes === 0) {
-    const reservedBytes = await env.DB.prepare(`
-      SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
-    `).first();
-    const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
-    throw new HttpError(
-      `File is ${formatBytes(file.size)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
-      507,
-    );
-  }
+  // allows it," so the actual cap enforcement has to happen in D1 instead —
+  // see reserveStorageBudget's own comment for the atomic-reservation idiom
+  // this shares with concept-image generation (#602), the other writer into
+  // this same bucket. `usage.usedBytes` is a snapshot (R2 can't be read
+  // inside the same atomic statement), but any other upload racing this one
+  // reads its own snapshot at essentially the same real R2 state, so the SUM
+  // of not-yet-landed reservations — computed atomically alongside this
+  // insert — is what actually closes the race between concurrent requests
+  // (#264).
+  const reservationId = await reserveStorageBudget(env.DB, usage, file.size, 'File');
 
   try {
     await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
@@ -739,10 +762,22 @@ function validateGlb(bytes) {
     }
     if (chunkIndex === 0) {
       if (chunkType !== GLB_JSON_CHUNK) throw new HttpError('GLB must begin with a JSON chunk', 400);
+      let json;
       try {
-        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
+        json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
       } catch {
         throw new HttpError('GLB contains invalid JSON metadata', 400);
+      }
+      // Found via backlog audit: syntactically valid JSON (even `{}`) used
+      // to pass this check outright, storing an unusable "model" that only
+      // fails later wherever it's actually loaded (client preview, catalog
+      // thumbnailing, in-world rendering). asset.version is the one
+      // top-level field the glTF 2.0 spec itself requires of every valid
+      // asset (§3.9.2) — checking for it closes the gap with the same kind
+      // of format-conformance check this function already does for the
+      // magic number/version/chunk type, not a new app-specific rule.
+      if (typeof json?.asset?.version !== 'string') {
+        throw new HttpError('GLB is missing the required asset.version field', 400);
       }
     }
     offset = chunkEnd;
@@ -849,7 +884,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
-      SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
+      SELECT template_id, seller_id, width_m, depth_m, height_m FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
     // sellerIds (the templates' own requested sellerId values) already went
     // through assertReferencesExist above, so they're live by construction.
@@ -881,6 +916,23 @@ async function handleCatalog(request, db, route, url, models, env) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(template))));
+    // The single-item PATCH/PUT sibling above always calls
+    // notifyBuildersOfDimensionChange on a dimension change — this batch
+    // upsert performs the identical column update per template but was
+    // missing the same call, so a seller resizing several products at once
+    // through this endpoint silently never warned any builder hosting a
+    // placed instance of them. existingOwnerRows (fetched before the
+    // INSERT/upsert above) already holds every batch templateId's
+    // pre-existing row, if any — a POST id with no matching row here is a
+    // genuinely new template, not a resize, so nothing to notify about.
+    if (request.method === 'PUT') {
+      const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
+        [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
+      for (const template of templates) {
+        const oldDimensions = oldDimensionsById.get(template.templateId);
+        if (oldDimensions) await notifyBuildersOfDimensionChange(db, template, oldDimensions);
+      }
+    }
     const placeholders = templates.map(() => '?').join(', ');
     const stored = await db.prepare(`
       SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})
@@ -958,7 +1010,18 @@ async function handleCatalog(request, db, route, url, models, env) {
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     const key = `concept-images/${hash}.png`;
     if (!(await models.head(key))) {
-      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+      // #602: this writes into the same MODELS bucket handleModelUpload's
+      // own MAX_TOTAL_STORAGE_BYTES cap protects, so it needs the same
+      // reservation dance — just after generation rather than before it,
+      // since (unlike a multipart upload) the byte size isn't known until
+      // the image actually exists. See reserveStorageBudget's own comment.
+      const usage = await getStorageUsage(models);
+      const reservationId = await reserveStorageBudget(db, usage, bytes.byteLength, 'Concept image');
+      try {
+        await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+      } finally {
+        await db.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
+      }
     }
     return json({ imageUrl: `/uploads/${key}` }, 201);
   }
@@ -1877,6 +1940,27 @@ async function handleMyBuilder(request, db) {
   return json({ builder: builderFromRow(row) });
 }
 
+// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
+// government-ID, #589) verification gates every builder/seller-owned
+// action from here on, not just newly created accounts. Owner decision
+// (Control Room, 2026-09-09): "force everyone through the new gates, no
+// grandfathering in" — deliberately applied to every session, including
+// ones that signed up before this existed. Scoped to requireSessionBuilder/
+// requireSessionSeller below (the ones that actually gate world/shop-
+// selling activity), not requireCurrentUser itself, so an unverified
+// session can still reach its own account state (GET /api/builders|
+// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
+// needed to clear this gate in the first place.
+function assertVerified(user) {
+  if (user.age_attested_at === null || user.trust_tier === 'none') {
+    throw new HttpError(
+      'Age attestation and credit-card (or government-ID) verification are required to continue.',
+      403,
+      { verificationRequired: true },
+    );
+  }
+}
+
 // The authorization workhorse for every builder-owned mutation below:
 // resolves *your own* builder profile from the session (never a
 // client-supplied builderId — that field is exactly what let anyone act
@@ -1884,6 +1968,7 @@ async function handleMyBuilder(request, db) {
 // handler can compare it against whatever it's about to modify.
 async function requireSessionBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
+  assertVerified(user);
   // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
   // now, not here — see that function's own comment.
   return getOrCreateBuilderForUser(db, user);
@@ -3270,6 +3355,7 @@ async function handleMySeller(request, db) {
 // Same reasoning as requireSessionBuilder above, for seller-owned mutations.
 async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
+  assertVerified(user);
   return getOrCreateSellerForUser(db, user);
 }
 
@@ -3497,6 +3583,11 @@ function userFromRow(row) {
     username: row.username,
     emailVerified: row.email_verified_at !== null,
     isAdmin: Boolean(row.is_admin),
+    ageAttested: row.age_attested_at !== null,
+    trustTier: row.trust_tier,
+    cardFunding: row.card_funding,
+    taxFormType: row.tax_form_type,
+    taxFormCompletedAt: row.tax_form_completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3716,6 +3807,260 @@ function deriveStripeOnboardingStatus(account) {
   if ((account.requirements?.currently_due || []).length > 0) return 'requirements_due';
   if (account.charges_enabled && account.payouts_enabled) return 'complete';
   return 'pending';
+}
+
+// ---- W-9/W-8BEN tax-ID collection (#614, sub-issue of #350) — the
+// submitted form's sensitive identifying data (SSN/EIN, foreign tax ID,
+// name, address) is encrypted as one JSON blob before it ever reaches D1,
+// so a database dump alone can't expose it. Same guarded-secret shape as
+// STRIPE_SECRET_KEY/DIDIT_API_KEY above: with env.TAX_ID_ENCRYPTION_KEY
+// unset (never configured in local dev or the automated test suite),
+// taxIdEncryptionConfigured(env) is false and the route handler below
+// returns a real 503 rather than silently storing plaintext.
+function taxIdEncryptionConfigured(env) {
+  return !!env.TAX_ID_ENCRYPTION_KEY;
+}
+
+// The key is a 256-bit value given as 64 hex characters (the same "just a
+// long random secret" shape an operator would generate for any other
+// guarded Worker secret) — imported fresh per call rather than cached,
+// since Workers don't share module-scope state reliably across requests
+// anyway and this is only ever called once per tax-form submission.
+async function importTaxIdEncryptionKey(env) {
+  return crypto.subtle.importKey('raw', hexToBytes(env.TAX_ID_ENCRYPTION_KEY), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+// Self-describing `aesgcm$<ivHex>$<ciphertextHex>` format, the same idiom
+// hashPassword's own `pbkdf2$...` string above uses — a fresh random IV
+// per encryption (AES-GCM requires this; reusing an IV with the same key
+// breaks its confidentiality guarantee) stored alongside the ciphertext
+// since decryption needs it back.
+async function encryptTaxIdPayload(env, payload) {
+  const key = await importTaxIdEncryptionKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
+  return `aesgcm$${bytesToHex(iv)}$${bytesToHex(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptTaxIdPayload(env, stored) {
+  const parts = stored.split('$');
+  if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500);
+  const [, ivHex, ciphertextHex] = parts;
+  const key = await importTaxIdEncryptionKey(env);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: hexToBytes(ivHex) }, key, hexToBytes(ciphertextHex));
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+// W-9 (US persons) needs a US taxpayer ID (SSN or EIN) and a US address;
+// W-8BEN (non-US persons) needs a country of citizenship, a foreign tax
+// ID, and a permanent residence address instead — genuinely different
+// required fields, not just a relabeled copy of the same form.
+function validateTaxIdForm(input) {
+  const formType = input.formType;
+  if (formType !== 'w9' && formType !== 'w8ben') throw new HttpError('formType must be "w9" or "w8ben"', 400);
+  const legalName = stringValue(input.legalName, 'legalName');
+  const addressLine1 = stringValue(input.addressLine1, 'addressLine1');
+  const city = stringValue(input.city, 'city');
+  if (formType === 'w9') {
+    return {
+      formType, legalName, addressLine1, city,
+      state: stringValue(input.state, 'state'),
+      postalCode: stringValue(input.postalCode, 'postalCode'),
+      taxIdNumber: stringValue(input.taxIdNumber, 'taxIdNumber'),
+    };
+  }
+  return {
+    formType, legalName, addressLine1, city,
+    country: stringValue(input.country, 'country'),
+    countryOfCitizenship: stringValue(input.countryOfCitizenship, 'countryOfCitizenship'),
+    foreignTaxId: stringValue(input.foreignTaxId, 'foreignTaxId'),
+  };
+}
+
+// A builder/seller can resubmit (e.g. a corrected SSN, or upgrading from
+// an already-filed W-8BEN to a W-9 after becoming a US person) — this
+// isn't gated on anything yet (#615 is the later sub-issue that actually
+// restricts access based on whether this is on file), so overwriting a
+// prior submission outright is the right default rather than rejecting a
+// resubmission as a conflict.
+async function handleTaxIdForm(request, env, db, user) {
+  if (!taxIdEncryptionConfigured(env)) {
+    throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
+  }
+  const input = await readJson(request);
+  const form = validateTaxIdForm(input);
+  const encrypted = await encryptTaxIdPayload(env, form);
+  const completedAt = new Date().toISOString();
+  await db.prepare(`
+    UPDATE users SET tax_form_type = ?, tax_form_completed_at = ?, tax_id_encrypted = ?,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(form.formType, completedAt, encrypted, user.user_id).run();
+  return json({ taxFormType: form.formType, taxFormCompletedAt: completedAt });
+}
+
+// ---- Government-ID verification via Didit (#589, sub-issue of #556,
+// docs/SPEC.md §6) — the higher trust tier that gates full social
+// features, above the credit-card tier card-setup-intent/confirm-card
+// establish. Same guarded-secret shape as STRIPE_SECRET_KEY/
+// OPENAI_API_KEY above: with env.DIDIT_API_KEY unset (never configured in
+// local dev or the automated test suite), diditConfigured(env) is false
+// and the route handlers below return a real 503 rather than attempting a
+// live network call.
+function diditConfigured(env) {
+  return !!env.DIDIT_API_KEY;
+}
+
+// Didit's Verification Session API (https://docs.didit.me/) — a plain
+// bearer-style API-key header and a JSON body, simpler than Stripe's
+// Basic-auth-with-empty-password + form-encoded shape above.
+async function diditRequest(env, method, path, body) {
+  const response = await fetch(`https://verification.didit.me/${path}`, {
+    method,
+    headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
+  }
+  return data;
+}
+
+// A real (if small — $0.33/verification beyond Didit's 500/month free
+// tier, per #589's own research) per-call cost, same reasoning as
+// CONCEPT_IMAGE_RATE_LIMIT_MAX above — bucketed per-user since this is a
+// session-gated action, not a public/anonymous endpoint an IP-based
+// bucket would need to cover.
+const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
+
+// Shared by handleDiditVerificationSession (dedup an already-pending
+// session rather than starting a real-cost new one) and
+// handleDiditVerificationStatus (poll the current one) — both need the
+// same "most recent session row for this user" lookup.
+export async function latestDiditSession(db, userId) {
+  return db.prepare(`
+    SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+  `).bind(userId).first();
+}
+
+// Starts a fresh Didit-hosted verification session for the requesting
+// builder and records it so the webhook/status-poll below have a row to
+// resolve against.
+async function handleDiditVerificationSession(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.trust_tier === 'id_verified') {
+    throw new HttpError('This account is already ID-verified.', 400);
+  }
+  if (!diditConfigured(env)) {
+    throw new HttpError('Government-ID verification is not configured on this server yet.', 503);
+  }
+  // #607: idx_didit_verification_sessions_user_id's own migration comment
+  // says this table is "looked up by user_id when starting a new session
+  // (to reuse/report an already-pending one)" — that lookup never
+  // actually happened, so a re-click of "Verify ID" (or two open tabs)
+  // started a brand new, real-cost Didit session every time instead of
+  // handing back the one still in flight.
+  const latest = await latestDiditSession(db, user.user_id);
+  if (latest && latest.processed_at === null) {
+    return json({ sessionId: latest.session_id, url: latest.url });
+  }
+  await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
+  const session = await diditRequest(env, 'POST', 'v3/session/', {
+    vendor_data: user.user_id,
+    callback: `${appBaseUrl(env)}/?diditReturn=1`,
+  });
+  await db.prepare(`
+    INSERT INTO didit_verification_sessions (session_id, user_id, status, url) VALUES (?, ?, 'pending', ?)
+  `).bind(session.session_id, user.user_id, session.url).run();
+  return json({ sessionId: session.session_id, url: session.url });
+}
+
+// Didit's own decision statuses (https://docs.didit.me/): 'Approved' is
+// the only one that raises trust_tier; every other terminal status
+// ('Declined', 'Abandoned', 'Expired', 'Kyc Expired') is recorded as
+// declined so a stuck 'pending' row doesn't linger forever — a builder can
+// always just start a fresh session afterward. 'In Review'/'In Progress'
+// leave the row pending (absent from this map, handled by callers as
+// "nothing to resolve yet").
+const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: false, Expired: false, 'Kyc Expired': false };
+
+// Shared by the webhook and the status-poll fallback below, so "a builder
+// finishes verification but the webhook is slow or never arrives" doesn't
+// leave them stuck. The atomic `processed_at IS NULL` guard is the same
+// idiom this file already uses for purchases.paid_out_at — whichever of
+// the webhook or a poll gets there first applies the change; the other is
+// a safe no-op, so this can't double-apply from a race or a repeat
+// webhook delivery.
+async function applyDiditDecision(db, sessionId, userId, approved) {
+  const result = await db.prepare(`
+    UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE session_id = ? AND processed_at IS NULL
+  `).bind(approved ? 'approved' : 'declined', sessionId).run();
+  if (result.meta.changes === 0) return;
+  if (approved) {
+    await db.prepare(`
+      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?
+    `).bind(userId).run();
+  }
+}
+
+// Polling fallback for the frontend after a builder returns from Didit's
+// hosted verification UI: reconciles directly against Didit's own session
+// endpoint whenever a builder's latest session is still locally pending,
+// rather than requiring the webhook to have already landed.
+async function handleDiditVerificationStatus(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.trust_tier === 'id_verified') return json({ status: 'approved' });
+  const latest = await latestDiditSession(db, user.user_id);
+  if (!latest) return json({ status: 'none' });
+  if (latest.processed_at !== null || !diditConfigured(env)) {
+    return json({ status: latest.status });
+  }
+  const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
+  const overallStatus = decision.status;
+  if (Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
+    const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
+    await applyDiditDecision(db, latest.session_id, user.user_id, approved);
+    return json({ status: approved ? 'approved' : 'declined' });
+  }
+  return json({ status: 'pending' });
+}
+
+// Didit signs its webhook deliveries with an HMAC-SHA256 of the raw body,
+// keyed by a webhook-specific secret configured in the Didit dashboard —
+// verified here via a constant-time hex comparison (timingSafeEqual,
+// already used elsewhere in this file for password/token checks), never a
+// plain ===, so response timing can't leak how close a forged signature
+// got. Reads the raw body text (not readJson) because the signature is
+// computed over the exact bytes Didit sent, not this codebase's own
+// re-serialization of a parsed object.
+async function handleDiditWebhook(request, env, db) {
+  if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503);
+  const rawBody = await request.text();
+  const signatureHeader = request.headers.get('x-signature') || '';
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.DIDIT_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody))));
+  if (!timingSafeEqual(signatureHeader, expectedSignature)) {
+    throw new HttpError('Invalid webhook signature', 401);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    throw new HttpError('Webhook body is not valid JSON', 400);
+  }
+  const sessionId = payload.session_id;
+  const overallStatus = payload.status;
+  if (!sessionId || !Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
+    return json({ received: true });
+  }
+  const session = await db.prepare('SELECT * FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+  if (!session) return json({ received: true });
+  await applyDiditDecision(db, sessionId, session.user_id, DIDIT_TERMINAL_STATUSES[overallStatus]);
+  return json({ received: true });
 }
 
 function boundedIntegerValue(value, field, min, max) {
@@ -4048,6 +4393,113 @@ async function handleSellerPayouts(request, env, db) {
   return json({ error: 'Not found' }, 404);
 }
 
+// #612 (sub-issue of #350): foundational annual gross-income aggregation
+// for the eventual 1099-K/1099-NEC tax-reporting pipeline (docs/SPEC.md
+// §7) — reads two ledgers that already exist rather than introducing new
+// storage: the higgles commission a builder earns (higgles_earnings_events,
+// migrations/0050) and the real-money side of `purchases`
+// (migrations/0051/0072). No PII lives here at all — W-9/W-8BEN collection
+// (#614), the earnings gate (#615), and actual form generation (#616) are
+// later sub-issues that build on this.
+//
+// sellerPayoutCents sums total_cents (the full buyer-paid amount), not the
+// seller's own net share after commission — Form 1099-K's own "gross
+// amount" instructions define gross as the full transaction amount
+// "without regard to any adjustments... for fees" (see #350's own
+// scoping comment), so the commission this platform keeps is not netted
+// out here even though it never reaches the seller's own balance.
+// Refunded purchases are excluded (never a completed transaction to
+// report); simulated (non-Stripe) purchases are excluded via the
+// payment_intent_id check, same as unpaidSellerPurchases above.
+
+// #613: the federal 1099-K reporting threshold, post-OBBBA-rollback
+// ($20,000; the $600 ARPA threshold was reversed) — see #350's own
+// research comment. Applied here to the *combined* higgles+real-money
+// total per the owner's own Control Room direction ("if builders' higgles
+// and sellers' earned dollars get lumped into the same taxation category,
+// it makes sense for them to share a reporting pipeline"), even though the
+// real 1099-K threshold technically has a second leg (200 transactions)
+// that only applies to the card-settled seller side, and the correct
+// threshold/form for the higgles side specifically still needs a tax
+// professional's confirmation (also per #350's comment). This is
+// deliberately just a soft, non-blocking notice signal (see #615 for
+// actual gating) — not itself a legal determination of when paperwork is
+// required, so approximating with one combined dollar figure is an
+// acceptable simplification here even though it wouldn't be for #616's
+// actual form generation.
+const TAX_REPORTING_THRESHOLD_CENTS = 20_000_00;
+
+// Three progressive, non-blocking breakpoints (#613's own "50%/80%/100%"
+// scope) — 'crossed' doesn't gate anything by itself (see #615), it's
+// just the highest notice level.
+function taxNoticeLevel(totalCents, thresholdCents) {
+  if (thresholdCents <= 0) return 'none';
+  const ratio = totalCents / thresholdCents;
+  if (ratio >= 1) return 'crossed';
+  if (ratio >= 0.8) return 'approaching';
+  if (ratio >= 0.5) return 'early';
+  return 'none';
+}
+
+async function annualGrossIncome(db, { builderId, sellerId }, year) {
+  const yearStart = `${year}-01-01T00:00:00.000Z`;
+  const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
+  const [higglesRow, payoutRow] = await Promise.all([
+    db.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
+      WHERE builder_id = ? AND created_at >= ? AND created_at < ?
+    `).bind(builderId, yearStart, yearEnd).first(),
+    sellerId
+      ? db.prepare(`
+          SELECT COALESCE(SUM(total_cents), 0) AS total FROM purchases
+          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
+            AND created_at >= ? AND created_at < ?
+        `).bind(sellerId, yearStart, yearEnd).first()
+      : Promise.resolve({ total: 0 }),
+  ]);
+  const totalCents = higglesRow.total + payoutRow.total;
+  return {
+    year,
+    builderHigglesCents: higglesRow.total,
+    sellerPayoutCents: payoutRow.total,
+    totalCents,
+    thresholdCents: TAX_REPORTING_THRESHOLD_CENTS,
+    noticeLevel: taxNoticeLevel(totalCents, TAX_REPORTING_THRESHOLD_CENTS),
+  };
+}
+
+function queryTaxYear(value) {
+  if (value === null) return new Date().getUTCFullYear();
+  if (!/^\d{4}$/.test(value)) throw new HttpError('year must be a 4-digit year', 400);
+  const year = Number(value);
+  if (year < 2000 || year > 2100) throw new HttpError('year must be a 4-digit year', 400);
+  return year;
+}
+
+// GET returns the current user's combined gross-income summary (higgles
+// commissions from their builder profile, real-money payouts from their
+// seller profile if they have one) for a given calendar year, defaulting
+// to the current one — the account-level "two sources, shown separately
+// with a total" view #350's own Control Room direction asked for. A user
+// with no seller profile yet just gets sellerPayoutCents: 0, the same as
+// any other builder who's never sold anything.
+async function handleTax(request, env, db, route, url) {
+  const user = await requireCurrentUser(request, db);
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'summary') {
+    const builder = await getOrCreateBuilderForUser(db, user);
+    const seller = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+    const year = queryTaxYear(url.searchParams.get('year'));
+    const summary = await annualGrossIncome(
+      db, { builderId: builder.builder_id, sellerId: seller?.seller_id ?? null }, year,
+    );
+    return json(summary);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'id-form') {
+    return handleTaxIdForm(request, env, db, user);
+  }
+  return json({ error: 'Not found' }, 404);
+}
+
 async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
@@ -4064,7 +4516,119 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
     return handleAdminBootstrap(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
+    return handleCardSetupIntent(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-card') {
+    return handleConfirmCard(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'age-attest') {
+    return handleAgeAttest(request, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-verification-session') {
+    return handleDiditVerificationSession(request, env, db);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'didit-verification-status') {
+    return handleDiditVerificationStatus(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-webhook') {
+    return handleDiditWebhook(request, env, db);
+  }
   return json({ error: 'Not found' }, 404);
+}
+
+// #556 (docs/SPEC.md §6): credit-card-type detection at signup, the
+// zero-new-vendor half of the registration gate (the other half, real
+// government-ID verification via Didit, is #589). A SetupIntent collects
+// and confirms a card without charging it — Stripe doesn't bill for
+// creating one, only for an actual payment_intent charge — so this tier
+// costs nothing beyond the Stripe account this app already has for seller
+// Connect payouts and checkout.
+//
+// Now that assertVerified above actually gates real activity on this tier
+// (owner: "force everyone through the new gates, no grandfathering in"),
+// a deployment that never sets STRIPE_SECRET_KEY (local dev, this test
+// suite, or a fresh install before the platform owner adds real keys)
+// would otherwise lock every builder/seller action out entirely with no
+// way to clear the gate. Same silent simulated-fallback convention this
+// file already uses for real-money purchases and seller-payout onboarding
+// when Stripe isn't configured (see handleInstancePurchase's own comment)
+// — `simulated: true` tells the frontend to skip loading Stripe.js/
+// collecting a card at all and go straight to confirm-card.
+async function handleCardSetupIntent(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (!stripeConfigured(env)) {
+    return json({ clientSecret: null, publishableKey: null, simulated: true });
+  }
+  const setupIntent = await stripeRequest(env, 'POST', 'setup_intents', {
+    'payment_method_types[]': 'card',
+    metadata: { userId: user.user_id },
+  });
+  return json({ clientSecret: setupIntent.client_secret, publishableKey: env.STRIPE_PUBLISHABLE_KEY });
+}
+
+// Reads back the card the frontend just collected/confirmed against the
+// SetupIntent above and checks Stripe's own card.funding field — "credit"
+// (not "debit"/"prepaid", per SPEC §6's own reasoning that those are too
+// accessible to minors to serve as an age signal) is the only path this
+// tier accepts. card_funding is recorded either way so a rejected
+// debit/prepaid attempt is still visible on the account, not a silent
+// no-op the builder has no way to explain to themselves later.
+//
+// Mirrors handleCardSetupIntent's own simulated fallback when Stripe isn't
+// configured — no real card to check, so this tier is granted directly
+// (the same "no real Stripe balance to ever hold against" reasoning
+// simulated purchases already document) rather than the 400/503 a real
+// deployment would ever actually see.
+async function handleConfirmCard(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (!stripeConfigured(env)) {
+    await db.prepare(`
+      UPDATE users SET card_funding = 'credit', trust_tier = 'credit_card',
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(user.user_id).run();
+    const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    return json({ user: userFromRow(updated) });
+  }
+  const input = await readJson(request);
+  const paymentMethodId = stringValue(input.paymentMethodId, 'paymentMethodId');
+  const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(paymentMethodId)}`);
+  const funding = paymentMethod.card?.funding || null;
+  const accepted = funding === 'credit';
+  await db.prepare(`
+    UPDATE users SET card_funding = ?, trust_tier = CASE WHEN ? THEN 'credit_card' ELSE trust_tier END,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(funding, accepted ? 1 : 0, user.user_id).run();
+  if (!accepted) {
+    throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
+  }
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
+}
+
+// #556: lets an existing session attest age after the fact. Signup's own
+// ageAttested checkbox (handleSignup above) only covers brand-new
+// accounts — every account created before that existed, plus the owner's
+// "force everyone through, no grandfathering" decision on trust_tier
+// (Control Room, 2026-09-09), needs a way to clear the same bar without
+// re-signing-up. Idempotent: attesting again on an already-attested
+// account is a no-op, not an error.
+async function handleAgeAttest(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const input = await readJson(request);
+  if (input.ageAttested !== true) {
+    throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
+  }
+  if (user.age_attested_at === null) {
+    await db.prepare(`
+      UPDATE users SET age_attested_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(new Date().toISOString(), user.user_id).run();
+  }
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
 }
 
 // The only way to become an admin (see migrations/0055_admin_role.sql) —
@@ -4104,7 +4668,19 @@ async function handleSignup(request, env, db, url) {
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
 
+  // Counted against the rate limit the same as every other rejection below
+  // (see the duplicate-email 409's own comment on why) before checking it —
+  // a cheap validation failure shouldn't be a free, unlimited way to probe
+  // past the limiter.
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
+
+  // docs/SPEC.md §6, #556: registration requires age attestation. A plain
+  // boolean checkbox, not a birthdate collection — the spec's own bar here
+  // is attestation, not age verification (that's what the credit-card/
+  // government-ID tier immediately below is for).
+  if (input.ageAttested !== true) {
+    throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
+  }
 
   // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
   // registered address the same way a literal duplicate is caught —
@@ -4123,12 +4699,13 @@ async function handleSignup(request, env, db, url) {
   // specifically meant to prevent.
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
+  const ageAttestedAt = new Date().toISOString();
   const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical)
-    SELECT ?, ?, ?, ?, ?
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
+    SELECT ?, ?, ?, ?, ?, ?
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
   `).bind(
-    userId, email, passwordHash, username, emailCanonical,
+    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
     email, emailCanonical, username,
   ).run();
   if (inserted.meta.changes === 0) {
@@ -4791,6 +5368,83 @@ async function handleLandletDraft(request, db, landletId) {
   return json({ error: 'Not found' }, 404);
 }
 
+// Owner (issue-570, 2026-09-09 -- picked option (a), "apply unconditionally
+// like generate-mosaic"): the manual/bulk-import creation endpoints below
+// (single POST and POST .../batch) used to skip the spatial overlap check
+// generate-mosaic and generate-ring already enforce procedurally, so an
+// admin-supplied candidate could silently overlap already-claimed,
+// already-rendered land. Shared here so generate-mosaic and both of these
+// endpoints all enforce the exact same check instead of duplicating it.
+//
+// Takes full rows (not pre-extracted polygons): a row with no explicit
+// polygon (the plain manual-candidate shape — just center+areaM2) isn't a
+// degenerate zero-area shape to skip. Everywhere else that reads such a row
+// (landletMinWorldRadius/landletMaxWorldRadius above) treats it as a circle
+// of radius sameAreaRadius(areaM2) around its center, so this represents
+// both shapes rather than letting polygonsOverlap silently see an empty
+// polygon and report no conflict.
+function landletFootprint(row) {
+  const polygon = landletWorldPolygon(row);
+  if (polygon.length >= 3) return { polygon };
+  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
+}
+
+function footprintsOverlap(a, b) {
+  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
+  if (a.circle && b.circle) {
+    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
+  }
+  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
+  if (pointInPolygon(circle, polygon)) return true;
+  return polygon.some((point, index) =>
+    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
+}
+
+async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
+  const [existingLandlets, existingCandidates] = await Promise.all([
+    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
+  ]);
+  // Only a landlet with a real polygon represents genuinely-positioned land
+  // here -- landletWorldPolygon's own comment already treats a polygon-less
+  // row as "the plain-square fallback landlets predating procedural
+  // generation," not real geometry to defend. POST /landlets' own comment
+  // ("existing test/dev-tooling usage relies on it") confirms this is a
+  // real, ongoing shape: an unowned/self-owned landlet can be created there
+  // with no polygon and no spatial check at all, purely as scaffolding for
+  // whatever the test actually cares about (an instance, a version, ...),
+  // often left at the coordinate default (0,0). Falling back to a circle
+  // footprint for those too (as the new incoming candidates below still do)
+  // would make every one of them permanently block any future land-
+  // candidate generation near the origin -- not the invariant this check is
+  // meant to enforce. landlet_candidates rows keep full circle-fallback
+  // treatment regardless: those exist specifically to reserve real future
+  // land, polygon or not.
+  const existingFootprints = [
+    ...existingLandlets.results.filter((row) => landletWorldPolygon(row).length >= 3),
+    ...existingCandidates.results,
+  ].map(landletFootprint);
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint) => existingFootprints.some((other) => footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
+// Only for the manual/batch endpoints below, not generate-mosaic/-ring:
+// those generators' own output is already structurally self-consistent (by
+// construction, adjacent cells only ever share an edge, never overlap), so
+// checking their cells against each other here would risk a false-positive
+// conflict from the same float-noise-at-a-shared-edge case polygonsOverlap's
+// own TOUCH_EPSILON_M exists to absorb -- one degenerate reading of that
+// noise for a many-cell batch is more exposure than a manually-submitted
+// batch (never guaranteed internally non-overlapping in the first place)
+// needs to accept just to get the same protection.
+async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint, index) =>
+    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
     await requireAdmin(request, db);
@@ -4830,16 +5484,7 @@ async function handleLandCandidates(request, db, route, url) {
     // a mosaic call landing near existing ring-generated land) would
     // otherwise silently overlap, since this generator has no radial
     // structure for a band-based check like generate-ring's to work with.
-    const [existingLandlets, existingCandidates] = await Promise.all([
-      db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-      db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
-    ]);
-    const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
-      .map(landletWorldPolygon)
-      .filter((polygon) => polygon.length >= 3);
-    const newPolygons = [...rows, centralRow].map(landletWorldPolygon);
-    const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
-    if (conflict) throw new HttpError('Generated mosaic would overlap existing land', 409);
+    await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
 
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
@@ -5057,6 +5702,8 @@ async function handleLandCandidates(request, db, route, url) {
     }
 
     const rows = landlets.map(candidateRowFromLandlet);
+    await assertLandCandidatesDontOverlapExisting(db, rows, 'One or more candidates would overlap existing land');
+    await assertLandCandidatesDontOverlapEachOther(rows, 'One or more candidates would overlap each other');
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
@@ -5081,6 +5728,7 @@ async function handleLandCandidates(request, db, route, url) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
+    await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land');
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
@@ -5645,9 +6293,30 @@ async function handleInstances(request, env, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
-    await assertCropWithinTemplateBounds(db, instances);
-    await assertInstanceZWithinLevels(db, instances);
     const existingInstances = await getInstancesById(db, instanceIds);
+    // Found via backlog audit: this batch endpoint re-validated crop/z
+    // unconditionally for every instance, even ones already stored
+    // unchanged — exactly the bug #338 already fixed for the single-
+    // instance PUT/PATCH handler below (see its own comment). PUT
+    // /instances/batch is what a multi-item group move or an undo/redo
+    // snapshot restore uses (src/api.js's upsertInstancesRemote), and both
+    // resend every affected instance's full current state, untouched ones
+    // included — so a template shrunk (or a landlet level removed) after
+    // an instance's crop/z was already validated would brick that
+    // instance on its next unrelated group move, the same bricking #338
+    // fixed for a single-instance edit. An instance with no existing row
+    // (a genuinely new one, or POST's case where none can exist yet)
+    // always gets validated, same as before.
+    const instancesNeedingCropCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
+    });
+    await assertCropWithinTemplateBounds(db, instancesNeedingCropCheck);
+    const instancesNeedingZCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
+    });
+    await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
@@ -5930,6 +6599,17 @@ function signPostFromRow(row) {
 // authorLabel comes from their real builder profile, not client input —
 // otherwise anyone could post a "confetti-cannon" trigger (or any other
 // event) on someone else's shop under that builder's own name.
+// Found via backlog audit: unlike every other repeatable write in this
+// file — including the structurally near-identical sign-post POST above
+// (SIGN_POST_RATE_LIMIT_MAX, itself found via #337 for this exact class
+// of gap) and friend requests (FRIEND_REQUEST_RATE_LIMIT_MAX) — posting a
+// calendar event had no checkRateLimit call at all, letting an
+// authenticated landlet owner insert unlimited calendar_events rows in a
+// tight loop. Bucketed by builder id, not IP, since this is an
+// authenticated action gating a real account's own request volume (same
+// reasoning FRIEND_REQUEST_RATE_LIMIT_MAX's own comment gives).
+const CALENDAR_EVENT_RATE_LIMIT_MAX = 20;
+
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -5955,6 +6635,7 @@ async function handleCalendarEvents(request, db, route) {
     }
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
+    await checkRateLimit(db, `calendar-event:${sessionBuilder.builder_id}`, CALENDAR_EVENT_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
@@ -6563,6 +7244,21 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
+  }
+  // Found via backlog audit: migrations/0072's own comment establishes
+  // paid_out_at as meaning this purchase's seller-share has actually left
+  // the platform via a triggered Stripe payout. Stripe's reverse_transfer
+  // below debits whatever balance currently sits in the connected
+  // account, not funds earmarked to this specific transfer — so refunding
+  // a purchase that's already been paid out would silently pull money
+  // that's supposed to be backing other, still-unpaid sales in that same
+  // balance. Rejecting outright (rather than deciding what should happen
+  // next — a separate chargeback? docked from the seller's next payout?)
+  // matches this file's existing "guarantee money is never unaccounted
+  // for, leave the policy call to a human" approach elsewhere (see
+  // writeOrphanedPurchaseRow's own comment).
+  if (purchase.paid_out_at) {
+    throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
   }
   const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
@@ -7564,8 +8260,9 @@ function json(payload, status = 200, extraHeaders) {
 }
 
 class HttpError extends Error {
-  constructor(message, status) {
+  constructor(message, status, extra) {
     super(message);
     this.status = status;
+    this.extra = extra;
   }
 }

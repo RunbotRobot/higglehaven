@@ -205,8 +205,17 @@ login → reset flow fully testable without a real email provider.
 ### `POST /api/auth/signup`
 
 ```json
-{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada" }
+{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada", "ageAttested": true }
 ```
+
+`ageAttested` must be exactly `true` — `400` otherwise (#556, docs/SPEC.md
+§6's registration gate). A plain attestation checkbox, not a birthdate
+collection or age verification; the account's `trustTier` (below) is what
+actually gates real-money/social-feature access, raised separately via
+`POST /api/auth/confirm-card` or (once government-ID verification exists)
+its own endpoint. Counted against the rate limit below the same as every
+other rejection on this endpoint — a cheap validation failure isn't a free
+way to probe past the limiter.
 
 `email` is normalized (trimmed, lowercased) and validated against a
 deliberately permissive pattern — "does this look roughly like an email,"
@@ -240,13 +249,114 @@ email verification:
 
 ```json
 {
-  "user": { "userId": "user-...", "email": "ada@example.com", "username": "Ada", "emailVerified": false, "createdAt": "...", "updatedAt": "..." },
+  "user": { "userId": "user-...", "email": "ada@example.com", "username": "Ada", "emailVerified": false, "ageAttested": true, "trustTier": "none", "cardFunding": null, "createdAt": "...", "updatedAt": "..." },
   "verificationEmailSent": true
 }
 ```
 
 `verificationEmailSent` is `false` (with a `devVerifyUrl` field added
 instead) whenever the dev-mode fallback above kicks in.
+
+### `POST /api/auth/age-attest`
+
+```json
+{ "ageAttested": true }
+```
+
+Session-gated (`401` without one). Lets an existing account attest age
+after the fact — signup's own `ageAttested` checkbox only covers brand-new
+accounts; every account created before #556 existed has `ageAttestedAt:
+null` and no other way to clear it. `ageAttested` must be exactly `true`
+— `400` otherwise. Idempotent: attesting again on an already-attested
+account is a no-op, not an error. Returns `{ "user": { ... } }`, same
+shape as signup's.
+
+### `POST /api/auth/card-setup-intent` and `POST /api/auth/confirm-card`
+
+Session-gated (`401` without one). #556's credit-card half of the
+registration gate: collecting a card and reading Stripe's own
+`card.funding` costs nothing beyond the Stripe account this app already
+has for seller Connect payouts and checkout — no charge is ever created.
+
+`POST /api/auth/card-setup-intent` takes no body and creates a Stripe
+`SetupIntent`, returning
+`{ "clientSecret": "seti_..._secret_...", "publishableKey": "pk_...", "simulated": false }`
+for the frontend to confirm client-side with Stripe.js Elements. If Stripe
+isn't configured on this deployment (`STRIPE_SECRET_KEY` unset), returns
+`{ "clientSecret": null, "publishableKey": null, "simulated": true }`
+instead of `503` — see below.
+
+```json
+{ "paymentMethodId": "pm_..." }
+```
+
+`POST /api/auth/confirm-card` reads back the PaymentMethod the frontend
+just confirmed and checks its `card.funding`: `"credit"` raises the
+account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"` is
+rejected with `400` (SPEC §6's own reasoning: those are too accessible to
+minors to serve as an age signal). `cardFunding` is recorded on the
+account either way, so a rejected attempt is still visible on the
+account rather than a silent no-op.
+
+**Simulated fallback when Stripe isn't configured:** every builder/seller
+action now requires `trustTier != "none"` (see "Builders"/"Sellers"
+below), not just newly created accounts (owner decision, Control Room
+2026-09-09: "force everyone through the new gates, no grandfathering
+in"). A deployment with no Stripe keys at all (local dev, the test suite,
+or a fresh install before the platform owner adds real keys) would
+otherwise have no way to ever clear that gate. Same silent
+simulated-fallback convention this app already uses for real-money
+purchases and seller-payout onboarding when Stripe isn't configured:
+`card-setup-intent` returns `simulated: true` with nothing to collect, and
+`confirm-card` (called with no `paymentMethodId`, or any body at all) sets
+`trustTier` to `"credit_card"` directly, no real card ever checked. A real
+deployment with `STRIPE_SECRET_KEY` set never sees this path.
+
+### Age/credit-card verification gates builder and seller actions
+
+Every builder-owned or seller-owned mutation (claiming a landlet, placing
+an instance, creating a product, etc. — see "Builders"/"Sellers" sections
+below) requires the session's account to have both `ageAttestedAt` set and
+`trustTier != "none"`, not just a valid session. An account that hasn't
+cleared this gate gets `403` with
+`{ "error": "...", "verificationRequired": true }` — the extra field lets
+the frontend distinguish this from an ordinary ownership/permission `403`.
+Account-level endpoints stay reachable regardless (`GET
+/api/builders|sellers/me`, `age-attest`, `card-setup-intent`,
+`confirm-card`, logout) since a session needs them to clear the gate in
+the first place. Shopping (browsing, buying, reviewing, sign-posts) needs
+no account at all, so it's unaffected either way.
+
+### `POST /api/auth/didit-verification-session`, `GET /api/auth/didit-verification-status`, `POST /api/auth/didit-webhook`
+
+#589 (sub-issue of #556)'s government-ID verification tier, via
+[Didit](https://didit.me/): the higher trust tier above `"credit_card"`,
+raising `trustTier` to `"id_verified"`.
+
+`POST /api/auth/didit-verification-session` is session-gated (`401`
+without one), takes no body, and starts a fresh Didit-hosted verification
+session for the requesting builder, returning
+`{ "sessionId": "...", "url": "https://verify.didit.me/..." }` — the
+frontend opens `url` for the builder to complete verification there.
+`400` if the account is already `"id_verified"`. `503` if Didit isn't
+configured on this deployment (`DIDIT_API_KEY` unset).
+
+`GET /api/auth/didit-verification-status` is session-gated and returns
+`{ "status": "none" | "pending" | "approved" | "declined" }` for the
+requesting builder's most recent verification session. While still
+`pending` and Didit is configured, this reconciles directly against
+Didit's own session-decision endpoint (rather than only trusting the
+webhook below to have already landed), so a builder who already finished
+verification isn't stuck reading "pending" if the webhook is slow.
+
+`POST /api/auth/didit-webhook` is Didit's own server-to-server delivery
+of a verification result — unauthenticated (no session cookie to check),
+verified instead via an HMAC-SHA256 signature over the raw request body
+(`x-signature` header, keyed by `DIDIT_WEBHOOK_SECRET`), `401` on a
+missing or wrong signature. `503` if `DIDIT_WEBHOOK_SECRET` isn't
+configured. Idempotent against a repeat delivery for the same session —
+only the first delivery (webhook or a status poll, whichever gets there
+first) applies the resulting `trustTier` change.
 
 ### `POST /api/auth/login`
 
@@ -1111,7 +1221,11 @@ creates missing IDs, returning `200`; it supports idempotently synchronizing a
 bounded catalog batch. Both modes avoid one D1 request per product. Any
 template in the batch that has (or already has, for a `PUT` that touches an
 existing row) a non-null `sellerId` requires a session logged in as that
-seller — `403` if any one of them isn't yours.
+seller — `403` if any one of them isn't yours. A `PUT` that changes an
+existing template's dimensions triggers `notifyBuildersOfDimensionChange`
+per template (see "Notifications" above), the same as the single-item
+`PATCH /api/catalog/:templateId` — a seller batch-resizing several products
+at once still warns every builder hosting a placed instance of one of them.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
@@ -1379,13 +1493,26 @@ reason for content-addressing here is consistency with the thumbnail
 endpoint above, not because two prompts are likely to produce identical
 bytes.
 
+Counts against the same `MAX_TOTAL_STORAGE_BYTES` cap `POST /api/models`
+enforces (#602) — both are writes into the shared `MODELS` bucket, so both
+go through the same atomic reservation (`reserveStorageBudget` in
+`worker/index.js`) before their own R2 `put`, closing the same
+concurrent-write race #264 already closes for model uploads. The one
+difference: a model upload reserves *before* reading the request body (its
+size is known upfront), while this endpoint reserves right before its own
+`put` instead, since a generated image's size isn't known until generation
+actually finishes.
+
 #### Testing note
 
 Same shape as `STRIPE_SECRET_KEY`/`RESEND_API_KEY` elsewhere in this file: a
 Worker secret (`OPENAI_API_KEY`) that's never configured in local dev or the
 automated test suite, so a real OpenAI call is never attempted during tests
 — covered up to the `503` this endpoint returns when unconfigured, not
-beyond it.
+beyond it. That also means the storage-cap check above (which only runs
+after a real generation succeeds) isn't exercised end-to-end by this
+endpoint's own tests; its shared `reserveStorageBudget` logic is the same
+code path `POST /api/models`'s own storage-cap race test already covers.
 
 ### Extensible products (crop)
 
@@ -2015,6 +2142,15 @@ Otherwise it remains lightweight until a later expansion first overlaps it.
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
 
+Rejects with `409` if the candidate's footprint would overlap any existing
+landlet or land candidate (#570) — the same check `generate-mosaic` already
+applies to its own generated cells, extended here since this endpoint takes
+arbitrary admin input rather than a self-consistent generator's output. A
+candidate with no explicit `polygon` is treated as a circle of radius
+`sqrt(areaM2 / π)` around its `center`, matching how the rest of the backend
+(`landletMinWorldRadius`/`landletMaxWorldRadius`) already reads such a row —
+not an unchecked zero-area point.
+
 ### `POST /api/land-candidates/batch`
 
 Atomically queues between 1 and 100 candidates for efficient world-generation
@@ -2040,6 +2176,12 @@ Candidates already overlapping the current world circle are materialized as
 generating landlets in the same batch. The `201` response returns all created
 `candidates` and a `landlets` array containing only those materialized
 immediately.
+
+Rejects the whole batch with `409` (#570) under the same overlap rule as the
+single-create endpoint above — checked against existing land *and* against
+the other candidates in the same batch request, since a manually-submitted
+batch (unlike `generate-mosaic`'s own output) isn't guaranteed internally
+non-overlapping.
 
 ## Landlets
 
@@ -4354,6 +4496,165 @@ the Edit Returns Policy panel through the real UI — the no-returns
 *rejection* path isn't covered there for the same reason prohibited-content
 rejection isn't in `e2e/digital-goods.test.mjs`: a real 400 trips the
 shared `errors.length === 0` check.
+
+## Tax reporting
+
+docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
+reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
+income into the same taxable-income framework as real-money seller
+payouts. Tracked as issue #350 (sub-issue of #324), broken into
+sub-issues #612-#616 per the owner's Control Room direction (build
+in-house; don't block app usage on paperwork until a payee actually
+crosses the reporting threshold; block only earnings above the threshold
+once crossed; one shared reporting pipeline showing the two income
+sources — real-money seller payouts and higgles commissions — separately,
+with a combined total). The foundational aggregation layer (#612),
+progressive threshold-crossing notices (#613), and W-9/W-8BEN collection
+with encrypted-at-rest storage (#614) are built so far — no gating on
+submission (#615) and no actual 1099 generation (#616) exist yet.
+
+### `GET /api/tax/summary`
+
+Requires a session (`401` otherwise). Returns the calling account's gross
+income for one calendar year, split by source:
+
+```json
+{
+  "year": 2026,
+  "builderHigglesCents": 15000,
+  "sellerPayoutCents": 42000,
+  "totalCents": 57000,
+  "thresholdCents": 2000000,
+  "noticeLevel": "early"
+}
+```
+
+`year` defaults to the current UTC calendar year; pass `?year=2025` for a
+past one (`400` if it isn't a plain 4-digit year between 2000 and 2100).
+
+`builderHigglesCents` sums `higgles_earnings_events.amount_cents`
+(migrations/0050) for the account's own builder profile — every account
+has one (see "Builders"), so this is never absent, just possibly `0`.
+
+`sellerPayoutCents` sums `purchases.total_cents` — the full buyer-paid
+transaction amount, **not** the seller's own net share after commission —
+for every non-refunded, real-money (`payment_intent_id NOT NULL`) purchase
+of the account's own seller profile, if it has one (`0` if it doesn't).
+This is deliberate, not an oversight: Form 1099-K's own "gross amount"
+instructions define gross as the full transaction total "without regard to
+any adjustments ... for fees," so the commission higglehaven keeps is not
+netted out here even though it never reaches the seller's own Stripe
+balance (contrast with `GET /api/sellers/me/payouts`'s `availableCents`
+above, which *is* the net, post-commission share — a different question:
+"what can I withdraw" vs. "what does the IRS say I grossed").
+
+Both totals key off `purchases.created_at`/`higgles_earnings_events.created_at`
+(the transaction date), not `paid_out_at` — this may need revisiting once
+#616 (actual 1099 generation) settles the precise IRS-correct date to
+report against, per that sub-issue's own open questions.
+
+`thresholdCents` is the federal 1099-K reporting threshold as of the OBBBA
+rollback ($20,000 — the $600 ARPA threshold was reversed; see #350's own
+research comment), applied here to the *combined* `totalCents` per the
+owner's own "share a reporting pipeline" direction, even though the real
+1099-K threshold technically has a second leg (200 transactions) that only
+applies to the card-settled seller side, and the correct threshold/form for
+the higgles side specifically still needs a tax professional's confirmation.
+`noticeLevel` is a purely informational, non-blocking signal (#613) — one
+of `"none"` (below 50% of `thresholdCents`), `"early"` (50-79%),
+`"approaching"` (80-99%), or `"crossed"` (100%+). Nothing in the API
+actually gates on this yet — see #615 for the not-yet-built earnings gate.
+
+The account menu (`#account-menu-tax-notice`, next to the existing land-cap
+line — see "Frontend-only account menu") shows a plain-text notice matching
+`noticeLevel` whenever it isn't `"none"`, refreshed the same "on menu open,
+no live polling" way the land-cap line already is; `"crossed"` renders in
+`--danger` for visibility. Nothing about this notice blocks any action.
+
+### `POST /api/tax/id-form`
+
+Requires a session (`401` otherwise). Submits a W-9 (US persons) or W-8BEN
+(non-US persons) tax-identification form for the calling account. `503` if
+`TAX_ID_ENCRYPTION_KEY` isn't configured on the server — same guarded-secret
+shape as `STRIPE_SECRET_KEY`/`DIDIT_API_KEY` (see "Real-money purchases" and
+"Government-ID verification"), never configured in local dev or the
+automated test suite.
+
+Body:
+
+```json
+{
+  "formType": "w9",
+  "legalName": "Ada Lovelace",
+  "addressLine1": "1 Analytical Engine Way",
+  "city": "London",
+  "state": "CA",
+  "postalCode": "90210",
+  "taxIdNumber": "123-45-6789"
+}
+```
+
+`formType` must be `"w9"` or `"w8ben"` (`400` otherwise) — they genuinely
+require different fields, not just a relabeled copy of the same form.
+`legalName`, `addressLine1`, and `city` are required for both. A `"w9"`
+submission additionally requires `state`, `postalCode`, and `taxIdNumber`
+(the SSN or EIN). A `"w8ben"` submission instead requires `country`,
+`countryOfCitizenship`, and `foreignTaxId`. Any missing required field is a
+`400` naming the field.
+
+Returns `{ "taxFormType": "w9", "taxFormCompletedAt": "<ISO timestamp>" }`.
+A later resubmission (e.g. a corrected SSN, or switching from an
+already-filed W-8BEN to a W-9 after becoming a US person) overwrites the
+prior submission outright — this isn't gated on anything yet, since #615
+(the sub-issue that actually restricts access based on whether a form is on
+file) doesn't exist yet, so there's nothing a resubmission could conflict
+with.
+
+The entire submitted form (name, address, and the SSN/EIN or foreign tax
+ID) is encrypted as one JSON blob with AES-256-GCM before it ever reaches
+D1 — a database dump alone can't expose it. The key is `TAX_ID_ENCRYPTION_KEY`,
+a 256-bit value given as 64 hex characters, imported fresh per call via
+Workers' native `crypto.subtle` (no dependency needed). Storage format is
+self-describing — `` aesgcm$<ivHex>$<ciphertextHex> `` — the same idiom
+`hashPassword`'s own `` pbkdf2$<iterations>$<saltHex>$<hashHex> `` string
+uses elsewhere in this codebase; the IV is freshly random per encryption,
+since reusing one with the same key breaks AES-GCM's confidentiality
+guarantee. Only the form type and completion timestamp are stored in plain
+`users` columns (`tax_form_type`, `tax_form_completed_at` — migrations/0077)
+since #615's future gating logic and the account view need those without
+ever decrypting anything; nothing currently decrypts the stored blob back
+(no admin/export endpoint exists yet — that's out of scope for #614).
+
+`GET /api/auth/me` also now returns `taxFormType`/`taxFormCompletedAt` on
+the `user` object (`null`/`null` until a form is submitted), so the account
+view can show submission status without a separate endpoint.
+
+#### Testing note
+
+`worker/commerce.test.js`'s "Tax summary (#612)" describe block (nested
+inside "Seller payouts", reusing its `createConnectedSeller`/
+`makeRealMoneyPurchase` helpers) covers the `401`, the all-zeros default,
+higgles-commission counting, the seller's gross-vs-net distinction, excluding
+a refunded purchase, year filtering, the malformed-`year` `400`, and (#613)
+the `noticeLevel` progression through all four breakpoints via the admin
+land-cap-grants escape hatch. `e2e/land-cap.test.mjs` covers the account
+menu notice staying hidden for a fresh builder with no earnings, alongside
+its existing land-cap display check — the actual notice text for a
+nonzero `noticeLevel` isn't covered there, since reaching it needs more
+real income than that suite's fixture setup produces.
+
+`worker/tax-id-form.test.js` is its own file, not nested in
+`commerce.test.js`, specifically so it can set `env.TAX_ID_ENCRYPTION_KEY`
+(each `worker/*.test.js` file gets its own isolated D1/worker instance —
+see `worker/test-helpers.js`'s own comment) without that leaking into
+`commerce.test.js`'s own "Tax summary (#612)" describe block, which relies
+on the key staying unset to cover the `503`-unconfigured path for this same
+endpoint instead. Between the two files: the `401`, the `503` when
+unconfigured, `formType` validation (rejecting neither-w9-nor-w8ben and
+each form's own missing required field), a successful W-9 and W-8BEN
+submission each, the stored ciphertext never containing the plaintext SSN
+or address, resubmission overwriting a prior submission, and
+`taxFormType`/`taxFormCompletedAt` showing up on `GET /api/auth/me`.
 
 ## D1 schema overview
 

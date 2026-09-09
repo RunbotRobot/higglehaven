@@ -73,7 +73,7 @@ async function signUp(email, username) {
       'content-type': 'application/json',
       ...(ACCESS_COOKIE ? { cookie: ACCESS_COOKIE } : {}),
     },
-    body: JSON.stringify({ email, password: PASSWORD, username }),
+    body: JSON.stringify({ email, password: PASSWORD, username, ageAttested: true }),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`signup ${email} -> ${response.status}: ${body.error}`);
@@ -83,6 +83,12 @@ async function signUp(email, username) {
 async function makeAccount(label) {
   const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@mockup.local`;
   const { cookie } = await signUp(email, label);
+  // #556: claiming/selling now requires trust_tier != 'none', not just a
+  // session (see requireSessionBuilder/requireSessionSeller's own
+  // assertVerified in worker/index.js). A local mockup run never has
+  // STRIPE_SECRET_KEY configured, so confirm-card takes its simulated
+  // fallback (handleConfirmCard's own comment) — no real card needed.
+  await api('/auth/confirm-card', cookie, { method: 'POST' });
   const { builder } = await api('/builders/me', cookie);
   return { label, email, cookie, builderId: builder.builderId };
 }

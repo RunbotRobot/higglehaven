@@ -20,11 +20,11 @@ async function requestJson(path, options) {
 // Returns the full response body, not just `user` — verificationEmailSent/
 // devVerifyUrl (see docs/API.md's "Authentication") matter to the signup
 // UI too, unlike logIn below where nothing but the user is ever relevant.
-export async function signUp({ email, password, username }) {
+export async function signUp({ email, password, username, ageAttested }) {
   return requestJson('/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password, username }),
+    body: JSON.stringify({ email, password, username, ageAttested }),
   });
 }
 
@@ -82,6 +82,50 @@ export async function verifyEmail(token) {
 
 export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
+}
+
+// #556 (docs/SPEC.md §6): lets an existing session attest age after the
+// fact — for accounts created before this requirement existed, since
+// signup's own ageAttested checkbox only covers brand-new ones.
+export async function ageAttest() {
+  const { user } = await requestJson('/auth/age-attest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ageAttested: true }),
+  });
+  return user;
+}
+
+// Returns `{ clientSecret, publishableKey, simulated }` — `simulated: true`
+// (Stripe not configured on this deployment) means there's no card to
+// collect at all; the caller should skip straight to confirmCard() with no
+// paymentMethodId (see handleCardSetupIntent's own comment in worker/index.js).
+export async function cardSetupIntent() {
+  return requestJson('/auth/card-setup-intent', { method: 'POST' });
+}
+
+export async function confirmCard(paymentMethodId) {
+  const { user } = await requestJson('/auth/confirm-card', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paymentMethodId }),
+  });
+  return user;
+}
+
+// docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
+// via Didit — the higher trust tier, above the credit-card tier. Starts a
+// fresh Didit-hosted verification session; the frontend opens the
+// returned `url` for the builder to complete it there.
+export async function startDiditVerification() {
+  return requestJson('/auth/didit-verification-session', { method: 'POST' });
+}
+
+// Polled by the frontend after a builder returns from Didit's hosted UI
+// (the backend itself reconciles against Didit directly here, not just
+// reporting a possibly-stale local row — see handleDiditVerificationStatus).
+export async function fetchDiditVerificationStatus() {
+  return requestJson('/auth/didit-verification-status');
 }
 
 // Paginated server-side (100 per request, same as instances/landlets) —
@@ -174,6 +218,14 @@ export async function fetchSellerPayouts() {
 
 export async function requestSellerPayout() {
   return requestJson('/sellers/me/payouts', { method: 'POST' });
+}
+
+// Tax reporting (#350/#612) — the calling account's gross income for the
+// current calendar year, split by source (higgles commissions vs.
+// real-money seller payouts), plus how close that combined total is to
+// the tax-reporting threshold (#613).
+export async function fetchTaxSummary() {
+  return requestJson('/tax/summary');
 }
 
 // Seller-initiated once a physical real-money order has actually been

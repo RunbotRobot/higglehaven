@@ -133,6 +133,6 @@ function worldPoints(row, polygon) {
   return polygon.map((point) => ({ x: row.center_x_m + point.x, y: row.center_y_m + point.y }));
 }
 
-function sameAreaRadius(areaM2) {
+export function sameAreaRadius(areaM2) {
   return Math.sqrt(areaM2 / Math.PI);
 }

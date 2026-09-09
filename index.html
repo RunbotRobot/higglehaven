@@ -580,6 +580,16 @@
         color: var(--pill-text);
         opacity: 0.75;
       }
+      #account-menu-tax-notice {
+        padding: 7px 12px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
+      #account-menu-tax-notice.crossed {
+        color: var(--danger);
+        opacity: 1;
+      }
       #notifications-badge,
       #friends-badge {
         display: inline-block;
@@ -1393,6 +1403,85 @@
       }
       #checkout-pay-btn:disabled {
         opacity: 0.5;
+      }
+      /* docs/SPEC.md §6 / #556: same modal shell as #checkout-modal, but
+         with no close button — this one is not optional once it's shown
+         (see openVerifyModal's own comment in src/main.js), the one
+         escape hatch being "log out instead," which never gets you into
+         Build/Sell without clearing it on a later login either. */
+      #verify-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.35);
+        padding: 16px;
+      }
+      #verify-modal.visible {
+        display: flex;
+      }
+      #verify-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #verify-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #verify-modal-intro {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+        margin: 0;
+      }
+      #verify-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #verify-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #verify-status.error {
+        color: #b3402c;
+      }
+      #verify-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #verify-age-continue-btn, #verify-card-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #verify-age-continue-btn:disabled, #verify-card-submit-btn:disabled {
+        opacity: 0.5;
+      }
+      #verify-logout-btn {
+        align-self: center;
+        background: none;
+        border: none;
+        color: rgb(var(--ink-rgb) / 0.6);
+        font: 13px/1.4 sans-serif;
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 0;
       }
       /* Same modal shell as #upload-modal, just wider — each row needs
          room for an axis picker, a minimum-length field, and a Save
@@ -2225,6 +2314,13 @@
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.85);
       }
+      /* Checkbox + its own text side by side, unlike the stacked
+         label-above-input layout every other .auth-form field uses. */
+      .auth-form label.auth-checkbox-label {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+      }
       #auth-modal-content input[type='email'],
       #auth-modal-content input[type='password'],
       #auth-modal-content input[type='text'] {
@@ -3040,6 +3136,7 @@
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
+          <div id="account-menu-tax-notice" hidden></div>
         </div>
       </div>
     </div>
@@ -3204,6 +3301,33 @@
         </div>
       </div>
     </div>
+    <div id="verify-modal">
+      <div id="verify-modal-content">
+        <h2>Verify to continue</h2>
+        <p id="verify-modal-intro">
+          Building and selling on higglehaven requires confirming you're at least 18, plus a credit card (or
+          government-ID verification) to back that up — never charged, only checked.
+        </p>
+        <div id="verify-age-step">
+          <label class="auth-checkbox-label">
+            <input type="checkbox" id="verify-age-attest" />
+            I confirm I am at least 18 years old
+          </label>
+        </div>
+        <div id="verify-card-step" hidden>
+          <p id="verify-card-intro">
+            Add a credit card (not debit or prepaid) to verify your age. This only checks the card type — it is
+            never charged.
+          </p>
+          <div id="verify-card-element"></div>
+        </div>
+        <div id="verify-status"></div>
+        <div id="verify-modal-actions">
+          <button id="verify-continue-btn" type="button">Continue</button>
+        </div>
+        <button id="verify-logout-btn" type="button">Log out instead</button>
+      </div>
+    </div>
     <div id="seller-modal">
       <div id="seller-modal-content">
         <button id="seller-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
@@ -3321,6 +3445,14 @@
                 <button type="button" id="auth-signup-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
             </label>
+            <!-- docs/SPEC.md §6: "Registration requires age attestation" --
+                 a plain checkbox (not a birthdate collection), matching the
+                 backend's own ageAttested boolean (worker/index.js's
+                 handleSignup, #556). -->
+            <label class="auth-checkbox-label">
+              <input type="checkbox" id="auth-signup-age-attest" required />
+              I confirm I am at least 18 years old
+            </label>
             <button type="submit">Sign Up</button>
           </form>
 
@@ -3342,6 +3474,11 @@
           <div id="auth-account-email"></div>
           <div id="auth-account-verified"></div>
           <div id="auth-account-pioneer"></div>
+          <!-- docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
+               verification via Didit — the higher trust tier that gates
+               full social features, above the credit-card tier. -->
+          <div id="auth-account-trust-tier"></div>
+          <button id="auth-verify-id-btn" type="button" hidden>Verify with Government ID</button>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
           <button id="auth-logout-btn" type="button">Log Out</button>
         </div>

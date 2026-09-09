@@ -63,8 +63,28 @@ export function withSession(token, options = {}) {
 // by default rather than needing to invent one at every call site; `extra`
 // can still override it for the tests that do care.
 export async function signup(email, password, extra = {}) {
-  const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ...extra };
-  return api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
+  // #556: signup now requires age attestation — every test account signs up
+  // as an adult by default so this doesn't need repeating at every call
+  // site; a test specifically exercising the attestation requirement itself
+  // overrides it via `extra`.
+  const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true, ...extra };
+  const result = await api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
+  // #556: requireSessionBuilder/requireSessionSeller (worker/index.js's own
+  // assertVerified) now reject any session whose trust_tier is still
+  // 'none' — the owner's "force everyone through, no grandfathering"
+  // decision applies to every account. Stripe is never configured in this
+  // test suite (see stripeConfigured's own comment), so the real
+  // card-setup-intent/confirm-card round trip can't be used to clear that
+  // bar here the way a real signup would. Test accounts get trust_tier
+  // stamped directly instead, the same shortcut ageAttested above already
+  // takes, so the hundreds of existing builder/seller-action tests don't
+  // each need their own bypass — a test that specifically exercises the
+  // unverified-session gate itself signs up its own account and skips this
+  // (see worker/reviews-auth.test.js's "Authentication" describe block).
+  if (result.response.ok) {
+    await env.DB.prepare("UPDATE users SET trust_tier = 'credit_card' WHERE email = ?").bind(email).run();
+  }
+  return result;
 }
 
 // Signs up a fresh account and returns its auto-provisioned builder profile
@@ -107,7 +127,12 @@ export async function signupSeller(label) {
 // parameter rather than closing over a shared one. Every call site keeps
 // its original `createGreenbeltLandlet(landletId)` shape via a one-line
 // local wrapper in each file: `(id) => createGreenbeltLandletAs(adminSession, id)`.
-export async function createGreenbeltLandletAs(adminSession, landletId) {
+// `center` is optional (omitted, every caller before #570 gets the same
+// origin-default body as always) — worker-api.test.js's own land-candidates
+// tests are the one caller that now needs its fixture landlets spread out
+// in space, since #570's new overlap check means a real landlet sitting at
+// the literal world origin is no longer a neutral position.
+export async function createGreenbeltLandletAs(adminSession, landletId, center) {
   return api('/landlets', adminSession({
     method: 'POST',
     body: JSON.stringify({
@@ -115,12 +140,29 @@ export async function createGreenbeltLandletAs(adminSession, landletId) {
       name: `Test ${landletId}`,
       areaM2: 1000,
       status: 'greenbelt',
+      ...(center ? { center } : {}),
     }),
   }));
 }
 
-export function glbFile({ version = 2, declaredLength, json = '{}' } = {}) {
-  const encoded = new TextEncoder().encode(json);
+export function glbFile({
+  version = 2, declaredLength, json = '{}', mergeAsset = true,
+} = {}) {
+  // #601: validateGlb now requires a spec-conformant asset.version field
+  // (glTF 2.0 §3.9.2), not just syntactically valid JSON -- merge it into
+  // whatever the caller passed so every existing call site's own
+  // distinguishing content (e.g. `{"a":1}`, used purely to make two
+  // uploads hash differently) still produces an otherwise-valid GLB. A
+  // caller deliberately testing malformed JSON (invalid syntax), or the
+  // missing-asset.version rejection itself, passes `mergeAsset: false` to
+  // get its own `json` through verbatim instead.
+  let payload = json;
+  if (mergeAsset) {
+    try {
+      payload = JSON.stringify({ asset: { version: '2.0' }, ...JSON.parse(json) });
+    } catch { /* malformed on purpose -- let the caller's own bytes through */ }
+  }
+  const encoded = new TextEncoder().encode(payload);
   const chunkLength = Math.ceil(encoded.length / 4) * 4;
   const bytes = new Uint8Array(20 + chunkLength);
   const view = new DataView(bytes.buffer);
