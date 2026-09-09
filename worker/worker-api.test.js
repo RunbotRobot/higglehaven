@@ -694,6 +694,57 @@ describe('Worker API', () => {
     })).response.status).toBe(400);
   });
 
+  // Found via backlog exploration: the single-item PATCH /api/catalog/:id
+  // (see notifyBuildersOfDimensionChange in worker/index.js) always warns
+  // every builder hosting a placed instance when a template's dimensions
+  // change. This batch PUT performs the identical column update per
+  // template but was missing that same call — a seller resizing several
+  // products at once through this endpoint silently never triggered the
+  // notification any of their hosting builders would get resizing one at a
+  // time via the single-item endpoint.
+  it('notifies hosting builders when a batch PUT changes an existing template\'s dimensions', async () => {
+    const referenced = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-batch-resize-referenced', name: 'Catalog batch resize referenced',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(referenced.response.status).toBe(201);
+    const hostingBuilder = await signupBuilder('catalog-batch-resize-builder');
+    await api('/landlets', hostingBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'catalog-batch-resize-landlet', name: 'Catalog batch resize landlet', areaM2: 100,
+        status: 'claimed', ownerBuilderId: hostingBuilder.builderId,
+      }),
+    }));
+    const placed = await api('/instances', hostingBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'catalog-batch-resize-instance', landletId: 'catalog-batch-resize-landlet',
+        templateId: 'catalog-batch-resize-referenced', x: 0, y: 0,
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const resized = await api('/catalog/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        // Alongside a genuinely new template in the same batch — nothing to
+        // notify about there, since it never had an old size to compare against.
+        { templateId: 'catalog-batch-resize-new', name: 'New in same batch', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 } },
+        { templateId: 'catalog-batch-resize-referenced', name: 'Catalog batch resize referenced', color: '#123456', dimensions: { width: 2, depth: 2, height: 2 } },
+      ] }),
+    });
+    expect(resized.response.status).toBe(200);
+
+    const notices = await api('/notifications', hostingBuilder.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('was resized by its seller');
+    expect(notices.body.notifications[0].templateId).toBe('catalog-batch-resize-referenced');
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
