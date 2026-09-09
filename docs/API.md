@@ -4508,9 +4508,10 @@ in-house; don't block app usage on paperwork until a payee actually
 crosses the reporting threshold; block only earnings above the threshold
 once crossed; one shared reporting pipeline showing the two income
 sources — real-money seller payouts and higgles commissions — separately,
-with a combined total). The foundational aggregation layer (#612) and
-progressive threshold-crossing notices (#613) are built so far — no
-W-9/W-8BEN collection, no gating, and no actual 1099 generation exist yet.
+with a combined total). The foundational aggregation layer (#612),
+progressive threshold-crossing notices (#613), and W-9/W-8BEN collection
+with encrypted-at-rest storage (#614) are built so far — no gating on
+submission (#615) and no actual 1099 generation (#616) exist yet.
 
 ### `GET /api/tax/summary`
 
@@ -4570,6 +4571,64 @@ line — see "Frontend-only account menu") shows a plain-text notice matching
 no live polling" way the land-cap line already is; `"crossed"` renders in
 `--danger` for visibility. Nothing about this notice blocks any action.
 
+### `POST /api/tax/id-form`
+
+Requires a session (`401` otherwise). Submits a W-9 (US persons) or W-8BEN
+(non-US persons) tax-identification form for the calling account. `503` if
+`TAX_ID_ENCRYPTION_KEY` isn't configured on the server — same guarded-secret
+shape as `STRIPE_SECRET_KEY`/`DIDIT_API_KEY` (see "Real-money purchases" and
+"Government-ID verification"), never configured in local dev or the
+automated test suite.
+
+Body:
+
+```json
+{
+  "formType": "w9",
+  "legalName": "Ada Lovelace",
+  "addressLine1": "1 Analytical Engine Way",
+  "city": "London",
+  "state": "CA",
+  "postalCode": "90210",
+  "taxIdNumber": "123-45-6789"
+}
+```
+
+`formType` must be `"w9"` or `"w8ben"` (`400` otherwise) — they genuinely
+require different fields, not just a relabeled copy of the same form.
+`legalName`, `addressLine1`, and `city` are required for both. A `"w9"`
+submission additionally requires `state`, `postalCode`, and `taxIdNumber`
+(the SSN or EIN). A `"w8ben"` submission instead requires `country`,
+`countryOfCitizenship`, and `foreignTaxId`. Any missing required field is a
+`400` naming the field.
+
+Returns `{ "taxFormType": "w9", "taxFormCompletedAt": "<ISO timestamp>" }`.
+A later resubmission (e.g. a corrected SSN, or switching from an
+already-filed W-8BEN to a W-9 after becoming a US person) overwrites the
+prior submission outright — this isn't gated on anything yet, since #615
+(the sub-issue that actually restricts access based on whether a form is on
+file) doesn't exist yet, so there's nothing a resubmission could conflict
+with.
+
+The entire submitted form (name, address, and the SSN/EIN or foreign tax
+ID) is encrypted as one JSON blob with AES-256-GCM before it ever reaches
+D1 — a database dump alone can't expose it. The key is `TAX_ID_ENCRYPTION_KEY`,
+a 256-bit value given as 64 hex characters, imported fresh per call via
+Workers' native `crypto.subtle` (no dependency needed). Storage format is
+self-describing — `` aesgcm$<ivHex>$<ciphertextHex> `` — the same idiom
+`hashPassword`'s own `` pbkdf2$<iterations>$<saltHex>$<hashHex> `` string
+uses elsewhere in this codebase; the IV is freshly random per encryption,
+since reusing one with the same key breaks AES-GCM's confidentiality
+guarantee. Only the form type and completion timestamp are stored in plain
+`users` columns (`tax_form_type`, `tax_form_completed_at` — migrations/0077)
+since #615's future gating logic and the account view need those without
+ever decrypting anything; nothing currently decrypts the stored blob back
+(no admin/export endpoint exists yet — that's out of scope for #614).
+
+`GET /api/auth/me` also now returns `taxFormType`/`taxFormCompletedAt` on
+the `user` object (`null`/`null` until a form is submitted), so the account
+view can show submission status without a separate endpoint.
+
 #### Testing note
 
 `worker/commerce.test.js`'s "Tax summary (#612)" describe block (nested
@@ -4583,6 +4642,19 @@ menu notice staying hidden for a fresh builder with no earnings, alongside
 its existing land-cap display check — the actual notice text for a
 nonzero `noticeLevel` isn't covered there, since reaching it needs more
 real income than that suite's fixture setup produces.
+
+`worker/tax-id-form.test.js` is its own file, not nested in
+`commerce.test.js`, specifically so it can set `env.TAX_ID_ENCRYPTION_KEY`
+(each `worker/*.test.js` file gets its own isolated D1/worker instance —
+see `worker/test-helpers.js`'s own comment) without that leaking into
+`commerce.test.js`'s own "Tax summary (#612)" describe block, which relies
+on the key staying unset to cover the `503`-unconfigured path for this same
+endpoint instead. Between the two files: the `401`, the `503` when
+unconfigured, `formType` validation (rejecting neither-w9-nor-w8ben and
+each form's own missing required field), a successful W-9 and W-8BEN
+submission each, the stored ciphertext never containing the plaintext SSN
+or address, resubmission overwriting a prior submission, and
+`taxFormType`/`taxFormCompletedAt` showing up on `GET /api/auth/me`.
 
 ## D1 schema overview
 
