@@ -88,6 +88,7 @@ import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, for
 import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
+import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -136,18 +137,19 @@ let currentLandletId = 'starter-landlet';
 let sellerId = null;
 
 // Shop, Build, and Sell are the three peer top-level views (#mode-nav in
-// index.html) — Sell is really just a modal reachable from either of the
-// other two (see ensureBuilderIdentity/the Sell nav handler below), but
-// Shop and Build are two fundamentally different full-screen scene setups
-// (per-world absolute coordinates + flight controls vs. one landlet's local
-// coordinates + build gizmos) that bootstrap() builds fresh each time,
-// so switching between them goes through a reload rather than a live
-// in-place teardown/rebuild, deliberately: this codebase already rejected
-// that path once (see enterShopMode's own comment on why it re-fetches/
-// rebuilds rather than trying to reuse Build's leftover state). sessionStorage
-// (not localStorage) carries the *next* mode across that reload — it's
-// gone once bootstrap() reads it, and a plain fresh tab with nothing set
-// always lands on Shop, the product's chosen default landing view.
+// index.html) — genuine currentMode values now (#540 gave Sell the real
+// mode-architecture plumbing #539 was closed without ever landing), each a
+// fundamentally different full-screen scene setup (per-world absolute
+// coordinates + flight controls; one landlet's local coordinates + build
+// gizmos; a paginated showcase of the seller's own products) that
+// bootstrap() builds fresh each time, so switching between any of the
+// three goes through a reload rather than a live in-place teardown/
+// rebuild, deliberately: this codebase already rejected that path once
+// (see enterShopMode's own comment on why it re-fetches/rebuilds rather
+// than trying to reuse Build's leftover state). sessionStorage (not
+// localStorage) carries the *next* mode across that reload — it's gone
+// once bootstrap() reads it, and a plain fresh tab with nothing set always
+// lands on Shop, the product's chosen default landing view.
 const START_MODE_KEY = 'higglehaven.startMode';
 let currentMode = 'shop';
 
@@ -2361,6 +2363,10 @@ const uploadDimensionUnitEls = [...document.querySelectorAll('.upload-dimension-
 // 'dimensions' needs them and the R2 upload shouldn't happen twice.
 let uploadStep = 'file';
 let uploadModelUrl = null;
+// #540: the seller's own "faux lándlet" 3D array paginates by a cumulative
+// model-file-size cap — this is what step 'dimensions' passes through to
+// createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
+let uploadModelSizeBytes = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
@@ -2413,6 +2419,7 @@ function resetUploadModalToFileStep() {
   uploadFlowToken++; // invalidate any in-flight handleUploadFileStep call
   uploadStep = 'file';
   uploadModelUrl = null;
+  uploadModelSizeBytes = null;
   uploadOriginalDimensions = null;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
@@ -2645,13 +2652,14 @@ async function handleUploadFileStep() {
       setUploadStatus('Could not auto-reduce the model — uploading as-is…');
     }
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
-    const { modelUrl } = await uploadModelFile(uploadable);
+    const { modelUrl, sizeBytes } = await uploadModelFile(uploadable);
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
 
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while measuring
     uploadModelUrl = modelUrl;
+    uploadModelSizeBytes = sizeBytes;
     uploadOriginalDimensions = dimensions;
     setUploadDimensionInputs(dimensions);
     refreshUploadDimensionUnits();
@@ -2730,7 +2738,9 @@ async function handleUploadDimensionsStep() {
       const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
       if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while rescaling
       setUploadStatus('Uploading resized model…');
-      finalModelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+      const rescaled = await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }));
+      finalModelUrl = rescaled.modelUrl;
+      uploadModelSizeBytes = rescaled.sizeBytes;
       if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading the resized model
     }
 
@@ -2749,6 +2759,7 @@ async function handleUploadDimensionsStep() {
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
+      modelSizeBytes: uploadModelSizeBytes,
       sellerId: uploaderSellerId,
       priceCents,
       metadata,
@@ -2761,6 +2772,7 @@ async function handleUploadDimensionsStep() {
     persistCatalogThumbnail(template);
     activeCatalog.push(template);
     buildCatalogPickerButtons();
+    refreshSellerShowcase();
     closeUploadModal();
     // Back to the Seller modal it was opened from, with the new product
     // showing up right away — not straight into a Build-mode tap-to-place
@@ -3518,7 +3530,9 @@ function renderSellerList() {
           const originalBlob = await fetch(template.modelUrl).then((res) => res.blob());
           const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
           sizeStatus.textContent = 'Uploading resized model…';
-          patch.modelUrl = (await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }))).modelUrl;
+          const rescaled = await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }));
+          patch.modelUrl = rescaled.modelUrl;
+          patch.modelSizeBytes = rescaled.sizeBytes;
         }
         sizeStatus.textContent = 'Saving…';
         const updated = await updateCatalogTemplate(template.templateId, patch);
@@ -3717,6 +3731,9 @@ function renderSellerList() {
           dimensions: template.dimensions,
           color: template.color,
           modelUrl: template.modelUrl,
+          // modelUrl is copied by reference (see this button's own comment
+          // above) — the underlying file, and so its size, is identical.
+          modelSizeBytes: template.modelSizeBytes,
           priceCents: template.priceCents,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only
@@ -3726,6 +3743,7 @@ function renderSellerList() {
         });
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
+        refreshSellerShowcase();
         renderSellerList();
       } catch (err) {
         rowStatus.textContent = err.message || 'Could not duplicate.';
@@ -3756,6 +3774,7 @@ function renderSellerList() {
         await deleteCatalogTemplate(template.templateId);
         activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
         buildCatalogPickerButtons();
+        refreshSellerShowcase();
         renderSellerList();
       } catch (err) {
         rowStatus.textContent = err.message?.includes('still in use')
@@ -4263,18 +4282,27 @@ function renderSellerListView() {
       card.appendChild(digitalGood);
     }
 
-    card.addEventListener('click', () => {
-      sellerActiveView = 'manage';
-      updateSellerViewToggleUI();
-      renderActiveSellerView();
-      const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(template.templateId))}"]`);
-      if (row) {
-        row.classList.add('expanded');
-        row.scrollIntoView({ block: 'nearest' });
-      }
-    });
+    card.addEventListener('click', () => focusSellerManageRow(template.templateId));
 
     sellerListViewEl.appendChild(card);
+  }
+}
+
+// Shared by every "browse here, edit there" view (List view's own cards
+// above, and #540's 3D showcase array) — switches back to Manage with the
+// clicked product's row already expanded and scrolled into view, so
+// browsing and editing stay one tap apart regardless of which view found
+// the product. sellerModalEl itself is not opened here — a caller entering
+// this from the 3D array (which can be visible with the modal closed)
+// needs to show it first.
+function focusSellerManageRow(templateId) {
+  sellerActiveView = 'manage';
+  updateSellerViewToggleUI();
+  renderActiveSellerView();
+  const row = sellerListEl.querySelector(`.seller-row[data-template-id="${CSS.escape(String(templateId))}"]`);
+  if (row) {
+    row.classList.add('expanded');
+    row.scrollIntoView({ block: 'nearest' });
   }
 }
 
@@ -4349,12 +4377,15 @@ function closeSellerModal() {
   // showing whatever was true when the modal opened, stale until the
   // builder reselected something.
   updateSelectionUI();
-  // Sell never actually changes currentMode (see #mode-nav's own click
-  // handler below — it's a modal overlay on top of Build/Shop, not a real
-  // mode transition), so leaving it needs to explicitly restore whichever
-  // of Shop/Build's nav buttons was really active underneath, rather than
-  // leaving Sell looking active forever once its own highlight (also set
-  // there) was the last thing to touch these buttons.
+  // #540: closing this modal is what actually reveals the showcase behind
+  // it — rebuild its meshes now if a product was created/duplicated/deleted
+  // while the modal was open (refreshSellerShowcase only updated the pager
+  // label at the time, deferring this heavier fetch-and-load work so it
+  // doesn't compete with whatever save was still in flight).
+  if (currentMode === 'sell' && sellerShowcaseMeshesStale) {
+    sellerShowcaseMeshesStale = false;
+    loadSellerShowcasePage(sellerShowcasePageIndex);
+  }
   updateModeNavUI();
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
@@ -6750,6 +6781,22 @@ renderer.domElement.addEventListener('click', (event) => {
   catalogPickerEl.classList.remove('visible');
   raycaster.setFromCamera(ndcFromEvent(event), camera);
 
+  // #540: Sell mode's showcase array is read-only browsing, not editing —
+  // no measure/placement/gizmo modes ever run here (those are Build-only
+  // flows never triggered while currentMode is 'sell'), so this branches
+  // off before any of that rather than needing each of those checks below
+  // to separately account for it. A hit jumps straight to Manage with that
+  // product's row focused (see focusSellerManageRow); a miss does nothing.
+  if (currentMode === 'sell') {
+    const hits = raycaster.intersectObjects(sellerShowcaseMeshes, true);
+    const hitRoot = hits.length > 0 ? findRootSellerShowcaseMesh(hits[0].object) : null;
+    if (hitRoot) {
+      sellerModalEl.classList.add('visible');
+      focusSellerManageRow(hitRoot.userData.template.templateId);
+    }
+    return;
+  }
+
   if (measureMode) {
     // A drag that grabbed and moved an endpoint (see the pointerdown/
     // pointermove handlers above) can still land under CLICK_DRAG_THRESHOLD_PX
@@ -8085,14 +8132,15 @@ authLogoutBtn.addEventListener('click', async () => {
   sellerId = null;
   builderIdentityFlowPromise = null;
   sellerIdentityFlowPromise = null;
-  // Build mode requires a real, logged-in account (ensureBuilderIdentity's
-  // own login wall) — staying on it post-logout would just immediately
-  // reprompt the login modal over whatever was on screen, stranding the
-  // builder mid-edit with no identity behind it. A reload into Shop
-  // instead is the same clean-slate escape hatch #mode-nav's own Shop<->
-  // Build switching already uses (see its own comment), and Shop needs no
+  // Build and Sell both require a real, logged-in account
+  // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) —
+  // staying on either post-logout would just immediately reprompt the
+  // login modal over whatever was on screen (or, for Sell, strand the
+  // now-stale showcase/modal with no identity behind it). A reload into
+  // Shop instead is the same clean-slate escape hatch #mode-nav's own
+  // mode switching already uses (see its own comment), and Shop needs no
   // account at all, so it's always a safe place to land after logging out.
-  if (currentMode === 'build') {
+  if (currentMode === 'build' || currentMode === 'sell') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return;
@@ -10659,27 +10707,242 @@ async function enterShopMode() {
   shopActive = true;
 }
 
-// The persistent Shop/Build/Sell switcher (#mode-nav) — see START_MODE_KEY's
-// own comment for why Shop<->Build goes through a reload while Sell doesn't.
+// #540: Sell mode's own "faux lándlet" — the seller's own products,
+// scrolled through in pages, each page its own ground plane sized to fit
+// just that page's items. Owner-confirmed design (Control Room): real
+// placed-instance meshes (not thumbnails), paginated by a cumulative
+// model-file-size cap (not a fixed item count), reusing the lándlet ground
+// mesh rendering path, click-through to Edit Size/Price. The pure
+// pagination/grid-layout math lives in src/sellerShowcase.js (unit-tested
+// there) — everything below is just wiring it against the live scene.
+
+// Real Object3Ds currently standing on the showcase ground plane — a
+// separate array from productMeshes (a genuine builder-owned landlet's
+// content, driven by persistLayout/sync) since these are read-only,
+// unowned-by-any-landlet display copies that never get saved anywhere.
+let sellerShowcaseMeshes = [];
+// Array of arrays of catalog templates, computed once per Sell-mode entry
+// (or catalog refresh) by computeSellerShowcasePages — index 0 is always
+// the first page shown.
+let sellerShowcasePages = [];
+let sellerShowcasePageIndex = 0;
+
+const sellerShowcasePagerEl = document.getElementById('seller-showcase-pager');
+const sellerShowcasePageLabelEl = document.getElementById('seller-showcase-page-label');
+const sellerShowcasePrevBtn = document.getElementById('seller-showcase-prev-btn');
+const sellerShowcaseNextBtn = document.getElementById('seller-showcase-next-btn');
+const sellerShowcaseManageBtn = document.getElementById('seller-showcase-manage-btn');
+sellerShowcaseManageBtn.addEventListener('click', openSellerModal);
+
+function disposeSellerShowcaseMeshes() {
+  for (const mesh of sellerShowcaseMeshes) {
+    scene.remove(mesh);
+    disposeObject(mesh);
+  }
+  sellerShowcaseMeshes = [];
+}
+
+function updateSellerShowcasePagerUI() {
+  const totalPages = sellerShowcasePages.length;
+  sellerShowcasePagerEl.classList.toggle('visible', totalPages > 0);
+  sellerShowcasePageLabelEl.textContent = `Page ${totalPages === 0 ? 0 : sellerShowcasePageIndex + 1} of ${totalPages}`;
+  sellerShowcasePrevBtn.disabled = sellerShowcasePageIndex <= 0;
+  sellerShowcaseNextBtn.disabled = sellerShowcasePageIndex >= totalPages - 1;
+}
+
+// (Re)builds the ground plane (reusing the same `landlet` mesh Build mode's
+// own placeholder/real-landlet ground uses — applyLandletShape does the
+// same geometry swap for a real landlet's polygon) and places every
+// template in `sellerShowcasePages[pageIndex]` on it as its actual
+// placed-instance mesh, laid out in a square-ish grid sized off that
+// page's own largest item so nothing overlaps regardless of how big any
+// one product's declared dimensions are.
+let sellerShowcaseLoadToken = 0;
+async function loadSellerShowcasePage(pageIndex) {
+  const myToken = ++sellerShowcaseLoadToken;
+  disposeSellerShowcaseMeshes();
+  sellerShowcasePageIndex = pageIndex;
+  updateSellerShowcasePagerUI();
+
+  const templates = sellerShowcasePages[pageIndex] || [];
+  if (templates.length === 0) {
+    // Nothing to show — leave the ground as whatever plain placeholder
+    // square it already was rather than building a zero-size shape.
+    return;
+  }
+  const { groundWidth, groundDepth, placements } = layoutSellerShowcasePage(templates);
+
+  const oldGeometry = landlet.geometry;
+  const groundShape = new THREE.Shape([
+    new THREE.Vector2(-groundWidth / 2, -groundDepth / 2),
+    new THREE.Vector2(groundWidth / 2, -groundDepth / 2),
+    new THREE.Vector2(groundWidth / 2, groundDepth / 2),
+    new THREE.Vector2(-groundWidth / 2, groundDepth / 2),
+  ]);
+  landlet.geometry = new THREE.ShapeGeometry(groundShape);
+  curveGroundGeometry(landlet.geometry);
+  oldGeometry.dispose();
+
+  const meshes = await Promise.all(placements.map(({ template, x, y }) => createMeshForInstance({
+    instanceId: `sell-showcase-${template.templateId}`,
+    templateId: template.templateId,
+    x,
+    y,
+    z: template.dimensions.height / 2,
+    rotationX: 0,
+    rotationY: 0,
+    rotationZ: 0,
+    crop: {},
+    scale: 1,
+  })));
+  if (myToken !== sellerShowcaseLoadToken) return; // a newer page load superseded this one while models were loading
+
+  for (const mesh of meshes) {
+    if (!mesh) continue;
+    scene.add(mesh);
+    sellerShowcaseMeshes.push(mesh);
+  }
+}
+
+sellerShowcasePrevBtn.addEventListener('click', () => {
+  if (sellerShowcasePageIndex > 0) loadSellerShowcasePage(sellerShowcasePageIndex - 1);
+});
+sellerShowcaseNextBtn.addEventListener('click', () => {
+  if (sellerShowcasePageIndex < sellerShowcasePages.length - 1) loadSellerShowcasePage(sellerShowcasePageIndex + 1);
+});
+
+// enterSellMode() only computes sellerShowcasePages once, on entry — a
+// product created/duplicated/deleted afterward (openSellerModal() is
+// reachable from any mode, not just Sell, via the account menu's own "My
+// Products" entry) would otherwise leave the showcase behind the modal
+// showing stale page data once closed. A no-op when the modal was opened
+// from Build/Shop, since sellerShowcasePages/the `landlet` ground swap
+// only matter once actually in Sell mode.
+//
+// Only the (cheap, synchronous) pager label/page count is refreshed right
+// away — the actual mesh rebuild (loadSellerShowcasePage, a real
+// fetch-and-load per model) is deferred to closeSellerModal, since the
+// showcase sits behind the still-open modal and isn't visible yet anyway.
+// Doing it eagerly here used to compete for the main thread/network with
+// whatever save the seller was still mid-flight on inside the modal — a
+// real regression a save-serialization race test caught (rebuilding a
+// showcase mesh right after this row's own upload delayed the very next
+// button's disabled-while-saving state past that test's own timing
+// window).
+let sellerShowcaseMeshesStale = false;
+function refreshSellerShowcase() {
+  sellerShowcasePages = computeSellerShowcasePages(myProducts());
+  if (currentMode !== 'sell') return;
+  sellerShowcasePageIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
+  updateSellerShowcasePagerUI();
+  sellerShowcaseMeshesStale = true;
+}
+
+// findRootProduct's own counterpart for the showcase array — a showcase
+// mesh's clicked-on geometry can sit on a nested child node the same way a
+// real placed instance's does (see loadModelInstance), not directly on the
+// Object3D pushed into sellerShowcaseMeshes.
+function findRootSellerShowcaseMesh(object) {
+  let current = object;
+  while (current && !sellerShowcaseMeshes.includes(current)) {
+    current = current.parent;
+  }
+  return current;
+}
+
+// Sell's own equivalent of SHOP_HIDDEN_BUILDER_UI_IDS — none of Build's
+// editing tools (gizmo, level controls, add-item, undo/redo) apply to this
+// read-only showcase array, and Sell has no per-instance selection to
+// support anyway (clicking a product jumps straight to Manage, see the
+// showcase click handling in the main renderer click listener). Unlike
+// Shop's own list, notifications/friends stay reachable — Sell (unlike
+// Shop) always runs under a real logged-in account, which those features
+// are genuinely useful for.
+const SELL_HIDDEN_BUILDER_UI_IDS = [
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
+];
+
+// #539/#540: makes Sell a genuine currentMode (the mode-architecture
+// plumbing #539 itself was closed without ever landing — see #540's own
+// GitHub thread) rather than a modal shown over whatever Build/Shop scene
+// happened to already be running. Parallels enterShopMode's own shape:
+// hide the builder chrome that doesn't apply, clear out whatever the
+// placeholder/real landlet scene had, load this seller's own content.
+async function enterSellMode() {
+  for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+  sellerShowcaseManageBtn.classList.add('visible');
+  clearSelection();
+  translateControls.detach();
+  rotateControls.detach();
+  for (const mesh of productMeshes) {
+    scene.remove(mesh);
+    disposeObject(mesh);
+  }
+  productMeshes.length = 0;
+
+  const id = await ensureSellerIdentity();
+  if (!id) {
+    // Declined to log in — Sell needs a real seller identity the same way
+    // Build needs a builder one (see bootstrap()'s own Build-mode
+    // fallback just below). Nothing left to show here.
+    currentMode = 'shop';
+    updateModeNavUI();
+    await enterShopMode();
+    return;
+  }
+
+  // Notifications/friends stay reachable from Sell mode (unlike Shop's own
+  // hidden-UI list) — both are builder-scoped concepts (a builder gets
+  // notified when a product they placed gets resized; see
+  // notifyBuildersOfDimensionChange), so showing a real badge count for
+  // them needs a real builderId, not just the sellerId Sell mode otherwise
+  // only needs. ensureBuilderIdentity reuses the login ensureSellerIdentity
+  // just confirmed (never re-prompts) and lazily provisions a builder
+  // profile the same way visiting Build mode for the first time would —
+  // the natural cost of this app's "every account can hold both roles"
+  // model, not a new one Sell mode introduces on its own.
+  builderId = await ensureBuilderIdentity();
+  refreshNotificationsBadge();
+  refreshFriendsBadge();
+
+  try {
+    activeCatalog = await fetchCatalog();
+  } catch {
+    activeCatalog = FALLBACK_CATALOG;
+  }
+  sellerShowcasePages = computeSellerShowcasePages(myProducts());
+  await loadSellerShowcasePage(0);
+
+  // Preserves today's default: Sell has always opened straight into the
+  // product-management modal — the showcase array behind it (semi-
+  // transparent backdrop, see #seller-modal's own CSS) is new, not a
+  // replacement for that entry behavior. Deliberately not calling
+  // openSellerModal() itself here: its own `await bootstrapPromise` exists
+  // for the *old* no-reload mode-nav path (Sell reachable while some other
+  // mode's bootstrap() call might still be resolving) — this function only
+  // ever runs from inside this very page's own bootstrap() now, so
+  // awaiting that same promise here would deadlock (it can't resolve
+  // until this call returns).
+  sellerActiveView = 'manage';
+  updateSellerViewToggleUI();
+  renderActiveSellerView();
+  sellerModalEl.classList.add('visible');
+}
+
+// The persistent Shop/Build/Sell switcher (#mode-nav). All three are real
+// currentMode transitions now (#540) — each goes through the same reload +
+// bootstrap() dance, so there's exactly one way any mode ever gets entered,
+// not a special no-reload case for Sell alongside the other two.
 const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
 function updateModeNavUI() {
   for (const btn of modeNavButtons) btn.classList.toggle('active', btn.dataset.mode === currentMode);
 }
 for (const btn of modeNavButtons) {
-  btn.addEventListener('click', async () => {
+  btn.addEventListener('click', () => {
     const target = btn.dataset.mode;
-    if (target === 'sell') {
-      // Sell is a modal overlay, not a real mode transition (currentMode
-      // never becomes 'sell' — see updateModeNavUI's own comment), so its
-      // nav button needs to be marked active here explicitly rather than
-      // through the usual currentMode-driven highlighting; closeSellerModal
-      // restores the real Shop/Build highlighting once it closes.
-      for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === 'sell');
-      // openSellerModal() itself ensures a seller identity — no builder
-      // identity or claimed landlet needed to sell, only to build.
-      openSellerModal();
-      return;
-    }
     if (target === currentMode) return;
     sessionStorage.setItem(START_MODE_KEY, target);
     location.reload();
@@ -11215,6 +11478,14 @@ async function bootstrap() {
   // its way to render instantly without waiting on the network) is never
   // held up by it.
   await authInitPromise;
+
+  if (startMode === 'sell') {
+    currentMode = 'sell';
+    updateModeNavUI();
+    await enterSellMode();
+    return;
+  }
+
   currentMode = 'build';
   updateModeNavUI();
   builderId = await ensureBuilderIdentity();
@@ -11271,9 +11542,10 @@ async function bootstrap() {
 
 }
 // Captured so openSellerModal() (see its own comment) can await whichever
-// bootstrap this page load is running before trusting activeCatalog — a
-// dead 'sell' startMode branch used to live here for the same reason
-// (nothing ever actually set START_MODE_KEY to 'sell', so it never ran),
-// removed since awaiting this promise from inside bootstrap() itself,
-// while bootstrap() is still running towards producing it, would deadlock.
+// bootstrap this page load is running before trusting activeCatalog. #540
+// gave 'sell' a real bootstrap() branch of its own (enterSellMode) — that
+// branch must never itself await this promise (it can't resolve until
+// bootstrap() — which is what's currently running enterSellMode — returns);
+// enterSellMode's own comment covers why it opens the modal directly
+// instead of going through openSellerModal() for that reason.
 const bootstrapPromise = bootstrap();

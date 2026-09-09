@@ -82,10 +82,17 @@ console.log('persisted thumbnail is fetchable as a real PNG (should be 200/image
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
 
-// Place it via Build's ordinary Add Item flow. Sell is a modal overlay, not
-// a real mode transition (#mode-nav's own click handler never changes
-// currentMode for it), so Build mode — entered once, at the top of this
-// test — is still live underneath; no need to re-pick a builder identity.
+// Place it via Build's ordinary Add Item flow. #540 made Sell a genuine
+// currentMode (a real reload + bootstrap() on entry, like Build/Shop
+// always had) rather than a modal overlay with no mode transition at
+// all — closing it leaves the seller looking at their own showcase array,
+// not a live Build-mode scene underneath, so switching back to Build is
+// now an explicit nav click + reload rather than something already true.
+// No need to re-pick a builder identity either way — that identity is
+// already active this session.
+await page.click('.mode-nav-btn[data-mode="build"]');
+await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await page.waitForSelector('#add-item-btn', { timeout: 15000 });
 await page.waitForTimeout(500);
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
@@ -97,9 +104,11 @@ await page.waitForTimeout(1000);
 // Back to Sell: expand the row, open Edit Size, double the width, Save.
 // The seller identity is already active this session (ensureSellerIdentity
 // short-circuits once sellerId is set), so the identity picker doesn't
-// reopen at all this time — just the nav click straight into the modal.
+// reopen at all this time — just the nav click (now a reload, see above)
+// straight into the modal once bootstrap() lands.
 await page.click('.mode-nav-btn[data-mode="sell"]');
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
 await page.waitForTimeout(300);
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
 await row().locator('.seller-row-toggle').click();
