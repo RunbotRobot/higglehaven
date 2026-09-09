@@ -324,6 +324,26 @@ cost when it happens anyway:
   itself, not just discoverable by reading every thread. And say "Ready
   for Claude" (the board's own label), not "Waiting on Claude" — the
   owner corrected this phrasing on issue-556 as backwards-sounding.
+- **Set `waitingOn` in the same write that creates a new card, if it
+  isn't immediately actionable — don't rely on fixing it afterward.**
+  A brand-new `tasks` doc with no `waitingOn` field renders as the
+  default "Ready for Claude" badge, same as an explicit `waitingOn:
+  "claude"` — there's no third, unset state the board distinguishes.
+  Found via a backlog audit (higglehaven10, 2026-09-09): several freshly
+  filed `kind: "issue"` cards (#610, #616, and briefly #614/#615) had a
+  `note` explicitly saying "needs owner"/"not self-assignable" while
+  `waitingOn` sat unset — a false "Ready for Claude" green light from
+  the moment of creation, not a later drift. This isn't a Control Room
+  bug to fix with more page code: a GitHub-issue-backed card like these
+  is created by a session's own direct `db` write when filing the issue,
+  never touching the page's JS at all (unlike an owner's own note, which
+  goes through the compose form — see that flow's own comment in the
+  page source for why it's correct to leave `waitingOn` unset there, an
+  owner-posted note should default to actionable). If your own new card
+  needs the owner's judgment or is blocked on another item before any
+  session can act on it, set `waitingOn: "owner"` or the blocking id in
+  that exact same `add`/`set` call — same discipline as the bullet
+  above, just applied one write earlier.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the

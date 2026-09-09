@@ -2844,5 +2844,19 @@ describe('Simulated purchases', () => {
         expect(crossed.body.noticeLevel).toBe('crossed');
       });
     });
+
+    // #614 (sub-issue of #350): W-9/W-8BEN collection. This suite
+    // deliberately never configures TAX_ID_ENCRYPTION_KEY (worker/tax-id-form.test.js
+    // is a separate file for that reason — see its own comment), so this is
+    // only the unconfigured-503 path; the real submit/validate/encrypt
+    // behavior lives in that other file.
+    it('rejects a tax-ID form submission when TAX_ID_ENCRYPTION_KEY is not configured', async () => {
+      const builder = await signupBuilder('tax-id-form-unconfigured');
+      const got = await api('/tax/id-form', builder.session({
+        method: 'POST',
+        body: JSON.stringify({ formType: 'w9', legalName: 'Ada Lovelace' }),
+      }));
+      expect(got.response.status).toBe(503);
+    });
   });
 });
