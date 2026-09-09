@@ -4325,17 +4325,53 @@ async function handleSellerPayouts(request, env, db) {
   }
 
   if (request.method === 'POST') {
-    if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
-    }
-    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
-      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
-    }
     const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
     const eligible = purchases.filter(isPurchaseEligibleForPayout);
     const availableCents = eligible.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to cash out yet.', 400);
+    }
+
+    // #615 (sub-issue of #350): once this account's combined higgles +
+    // real-money gross income for the year crosses the #613 reporting
+    // threshold with no W-9/W-8BEN on file (#614), block access to the
+    // *excess* above the line — not the whole balance, per the owner's own
+    // Control Room framing. A real-money payout is the only existing
+    // "access" endpoint this actually applies to today: higgles themselves
+    // are never gated here because nothing in this codebase yet lets a
+    // builder spend or withdraw a higgles balance at all (an auction win
+    // never debits the winning bidder's own balance — see resolveAuction's
+    // own comment — and #349's higgle-to-cash redemption isn't built), so
+    // there's no higgles "access" action to block yet. Computed before the
+    // Stripe-configuration/onboarding checks below so a caller who's
+    // already fully over the line without paperwork gets this specific
+    // error rather than an unrelated 503/400 masking it.
+    const builder = await getOrCreateBuilderForUser(db, user);
+    const taxYear = new Date().getUTCFullYear();
+    const grossIncome = await annualGrossIncome(
+      db, { builderId: builder.builder_id, sellerId: sessionSeller.seller_id }, taxYear,
+    );
+    const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
+    // annualGrossIncome's own sellerPayoutCents sums total_cents for every
+    // real-money purchase this year regardless of paid_out_at, so it
+    // already includes this exact `eligible` pool's own gross — subtract
+    // that back out to isolate everything this payout would be stacked on
+    // top of (higgles, held/ineligible purchases, and anything already
+    // paid out this year).
+    const eligibleGrossCents = eligible.reduce((sum, p) => sum + p.total_cents, 0);
+    const otherEarnedCents = grossIncome.totalCents - eligibleGrossCents;
+    const taxBudgetCents = hasTaxPaperworkOnFile
+      ? Infinity
+      : Math.max(0, TAX_REPORTING_THRESHOLD_CENTS - otherEarnedCents);
+    if (taxBudgetCents <= 0) {
+      throw taxThresholdPayoutBlockedError();
+    }
+
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
     }
 
     // Our own hold is a policy gate layered on top of Stripe's own
@@ -4351,17 +4387,24 @@ async function handleSellerPayouts(request, env, db) {
 
     // Payouts are per-whole-purchase, not fractional — only mark a
     // purchase paid out if its own share genuinely fit inside what Stripe
-    // will actually let us withdraw right now; anything left over just
-    // stays "available" for the next cash-out request.
+    // will actually let us withdraw right now, and its own gross still
+    // fits inside the tax-threshold headroom computed above; anything left
+    // over just stays "available" for a later cash-out request (once more
+    // Stripe balance clears, or once paperwork is filed).
     let payoutCents = 0;
+    let grossIncludedCents = 0;
+    let skippedForTax = false;
     const included = [];
     for (const purchase of eligible) {
       const share = purchaseSellerShareCents(purchase);
       if (payoutCents + share > payoutCapCents) continue;
+      if (grossIncludedCents + purchase.total_cents > taxBudgetCents) { skippedForTax = true; continue; }
       payoutCents += share;
+      grossIncludedCents += purchase.total_cents;
       included.push(purchase);
     }
     if (included.length === 0) {
+      if (skippedForTax) throw taxThresholdPayoutBlockedError();
       throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
     }
 
@@ -4434,6 +4477,18 @@ async function handleSellerPayouts(request, env, db) {
 // acceptable simplification here even though it wouldn't be for #616's
 // actual form generation.
 const TAX_REPORTING_THRESHOLD_CENTS = 20_000_00;
+
+// #615's own payout-blocked error, shared by both places handleSellerPayouts
+// can hit it (fully over the line before ever building a payout, or the
+// tax-budget cap leaving nothing includable once Stripe's own cap is also
+// applied) — see that function's own comment.
+function taxThresholdPayoutBlockedError() {
+  return new HttpError(
+    `Your combined earnings this year have reached the ${formatCents(TAX_REPORTING_THRESHOLD_CENTS)} tax-reporting `
+    + 'threshold. Submit your W-9/W-8BEN tax paperwork (POST /api/tax/id-form) before withdrawing further earnings.',
+    403,
+  );
+}
 
 // Three progressive, non-blocking breakpoints (#613's own "50%/80%/100%"
 // scope) — 'crossed' doesn't gate anything by itself (see #615), it's

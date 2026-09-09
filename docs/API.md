@@ -1061,6 +1061,30 @@ avoid a payout Stripe would reject outright). Marks every purchase whose
 own share fit inside the actual payout amount as paid out; a purchase
 whose amount didn't fit stays available for the next request.
 
+**Tax-reporting gate (#615, sub-issue of #350):** once this account's
+combined gross income for the calendar year — higgles commissions plus
+real-money sales, the same combined total `GET /api/tax/summary` (#612)
+reports and `noticeLevel` (#613) warns about — reaches the
+`thresholdCents` reporting threshold with no W-9/W-8BEN on file (`POST
+/api/tax/id-form`, #614), this endpoint blocks access to the *excess*
+above that line rather than the whole balance: a payout is capped to
+whatever headroom is still under the threshold (higgles earnings consume
+that headroom first, since nothing in this codebase lets a builder
+spend/withdraw a higgles balance at all yet — see the next paragraph),
+and returns `403` once no headroom is left, checked before the
+`STRIPE_SECRET_KEY`/onboarding checks above so a caller already over the
+line gets this specific error rather than an unrelated `503`/`400`
+masking it. Filing paperwork removes the cap entirely, including
+retroactively over past-threshold earnings already sitting unpaid.
+
+This is a real-money-only gate for now — higgles are never gated here,
+because no endpoint in this codebase currently lets a builder spend or
+withdraw a higgles balance at all (an auction win never debits the
+winning bidder's own balance, and #349's higgle-to-cash redemption isn't
+built yet), so there's no higgles "access" action to block. `#615`'s own
+scoping left this as an explicit open question to resolve once one of
+those exists.
+
 ```json
 {
   "payoutCents": 4900,
