@@ -740,10 +740,22 @@ function validateGlb(bytes) {
     }
     if (chunkIndex === 0) {
       if (chunkType !== GLB_JSON_CHUNK) throw new HttpError('GLB must begin with a JSON chunk', 400);
+      let json;
       try {
-        JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
+        json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
       } catch {
         throw new HttpError('GLB contains invalid JSON metadata', 400);
+      }
+      // Found via backlog audit: syntactically valid JSON (even `{}`) used
+      // to pass this check outright, storing an unusable "model" that only
+      // fails later wherever it's actually loaded (client preview, catalog
+      // thumbnailing, in-world rendering). asset.version is the one
+      // top-level field the glTF 2.0 spec itself requires of every valid
+      // asset (§3.9.2) — checking for it closes the gap with the same kind
+      // of format-conformance check this function already does for the
+      // magic number/version/chunk type, not a new app-specific rule.
+      if (typeof json?.asset?.version !== 'string') {
+        throw new HttpError('GLB is missing the required asset.version field', 400);
       }
     }
     offset = chunkEnd;
