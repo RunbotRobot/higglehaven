@@ -900,6 +900,88 @@ describe('Extensibility (crop floor)', () => {
     }));
     expect(templateSwap.response.status).toBe(400);
   });
+
+  // #597: same fix as directly above, but for PUT /instances/batch, which
+  // never got it -- src/api.js's upsertInstancesRemote uses this endpoint
+  // for a multi-item group move or an undo/redo snapshot restore, both of
+  // which resend every affected instance's full current state (crop
+  // included), untouched ones alongside whatever the request actually
+  // meant to change. Unconditionally re-validating crop there would brick
+  // the *entire batch* the moment it included an instance whose template
+  // was shrunk after its crop was already set -- the same bricking #338
+  // fixed for the single-instance endpoint just above.
+  it('does not re-validate an unchanged crop value in a batch that also moves an unrelated instance', async () => {
+    const builder = await signupBuilder('batch-crop-revalidation-builder');
+    await createGreenbeltLandlet('batch-crop-revalidation-landlet');
+    await api('/landlets/batch-crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'batch-crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/instances/batch', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'batch-crop-revalidation-instance',
+          landletId: 'batch-crop-revalidation-landlet',
+          templateId: 'batch-crop-revalidation-template',
+          x: 1, y: 1,
+          crop: { x: 2 },
+        }],
+      }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    // Shrink the template — the stale crop.x=2 no longer fits (width 4 -> 1.5).
+    const shrunk = await api('/catalog/batch-crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // A group move that resends this instance's full current state (crop
+    // included, unchanged) must still succeed, same as the single-instance
+    // case above — a presence-only check would wrongly re-reject it.
+    const moved = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'batch-crop-revalidation-instance',
+          landletId: 'batch-crop-revalidation-landlet',
+          templateId: 'batch-crop-revalidation-template',
+          x: 5, y: 5,
+          crop: { x: 2 },
+        }],
+      }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instances[0].crop).toEqual({ x: 2 });
+    expect(moved.body.instances[0]).toMatchObject({ x: 5, y: 5 });
+
+    // But actually changing the crop value in a batch still correctly 400s
+    // — 1.6 is above the shrunk template's own width (1.5).
+    const realCropChange = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'batch-crop-revalidation-instance',
+          landletId: 'batch-crop-revalidation-landlet',
+          templateId: 'batch-crop-revalidation-template',
+          x: 5, y: 5,
+          crop: { x: 1.6 },
+        }],
+      }),
+    }));
+    expect(realCropChange.response.status).toBe(400);
+  });
 });
 
 describe('Land cap', () => {

@@ -6031,9 +6031,30 @@ async function handleInstances(request, env, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
-    await assertCropWithinTemplateBounds(db, instances);
-    await assertInstanceZWithinLevels(db, instances);
     const existingInstances = await getInstancesById(db, instanceIds);
+    // Found via backlog audit: this batch endpoint re-validated crop/z
+    // unconditionally for every instance, even ones already stored
+    // unchanged — exactly the bug #338 already fixed for the single-
+    // instance PUT/PATCH handler below (see its own comment). PUT
+    // /instances/batch is what a multi-item group move or an undo/redo
+    // snapshot restore uses (src/api.js's upsertInstancesRemote), and both
+    // resend every affected instance's full current state, untouched ones
+    // included — so a template shrunk (or a landlet level removed) after
+    // an instance's crop/z was already validated would brick that
+    // instance on its next unrelated group move, the same bricking #338
+    // fixed for a single-instance edit. An instance with no existing row
+    // (a genuinely new one, or POST's case where none can exist yet)
+    // always gets validated, same as before.
+    const instancesNeedingCropCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
+    });
+    await assertCropWithinTemplateBounds(db, instancesNeedingCropCheck);
+    const instancesNeedingZCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
+    });
+    await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
