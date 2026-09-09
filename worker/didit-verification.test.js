@@ -1,5 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { latestDiditSession } from './index.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -134,5 +135,44 @@ describe('Didit verification webhook (#589)', () => {
     expect(user.trust_tier).toBe('credit_card');
     const session = await env.DB.prepare('SELECT status FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
     expect(session.status).toBe('declined');
+  });
+
+  // #607: idx_didit_verification_sessions_user_id's own migration comment
+  // says this table is looked up by user_id "to reuse/report an already-
+  // pending one" when starting a new session -- handleDiditVerificationSession
+  // never actually did that lookup. Testing the extracted latestDiditSession
+  // helper directly, the same way concept-image's reserveStorageBudget is
+  // tested directly (#602/#605) rather than through the real HTTP endpoint
+  // -- DIDIT_API_KEY is never configured in any test file (deliberately,
+  // per this file's own top comment), so handleDiditVerificationSession
+  // itself always 503s before ever reaching this lookup here.
+  describe('latestDiditSession (#607)', () => {
+    it('returns null for a user with no session ever started', async () => {
+      const builder = await signupBuilder('didit-latest-none');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+      const latest = await latestDiditSession(env.DB, userId);
+      expect(latest).toBeNull();
+    });
+
+    it('returns the most recent session, including its url, for reuse -- not an older processed one', async () => {
+      const builder = await signupBuilder('didit-latest-reuse');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const olderSessionId = await insertPendingSession(builder.email);
+      await env.DB.prepare(`
+        UPDATE didit_verification_sessions SET status = 'declined', processed_at = '2026-01-01T00:00:00.000Z' WHERE session_id = ?
+      `).bind(olderSessionId).run();
+
+      const newerSessionId = `sess-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO didit_verification_sessions (session_id, user_id, status, url, created_at)
+        VALUES (?, ?, 'pending', ?, ?)
+      `).bind(newerSessionId, userId, 'https://verify.didit.me/session/newer', new Date(Date.now() + 1000).toISOString()).run();
+
+      const latest = await latestDiditSession(env.DB, userId);
+      expect(latest.session_id).toBe(newerSessionId);
+      expect(latest.processed_at).toBeNull();
+      expect(latest.url).toBe('https://verify.didit.me/session/newer');
+    });
   });
 });
