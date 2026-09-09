@@ -3835,14 +3835,20 @@ async function importTaxIdEncryptionKey(env) {
 // per encryption (AES-GCM requires this; reusing an IV with the same key
 // breaks its confidentiality guarantee) stored alongside the ciphertext
 // since decryption needs it back.
-async function encryptTaxIdPayload(env, payload) {
+// Exported (like latestDiditSession below) so a test can verify the round
+// trip actually reconstructs the original payload, not just that the
+// stored format looks plausible -- nothing in this codebase yet calls
+// decryptTaxIdPayload for real (no export/admin endpoint exists), so
+// without a direct test its correctness would otherwise go unverified
+// until #616 needs it.
+export async function encryptTaxIdPayload(env, payload) {
   const key = await importTaxIdEncryptionKey(env);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
   return `aesgcm$${bytesToHex(iv)}$${bytesToHex(new Uint8Array(ciphertext))}`;
 }
 
-async function decryptTaxIdPayload(env, stored) {
+export async function decryptTaxIdPayload(env, stored) {
   const parts = stored.split('$');
   if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500);
   const [, ivHex, ciphertextHex] = parts;

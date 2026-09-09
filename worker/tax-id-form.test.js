@@ -1,5 +1,6 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { decryptTaxIdPayload, encryptTaxIdPayload } from './index.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on why
@@ -18,6 +19,28 @@ afterAll(() => {
 });
 
 describe('Tax-ID form (#614)', () => {
+  // Nothing in the API decrypts a stored blob back (no export/admin
+  // endpoint exists yet), so without this direct test decryptTaxIdPayload's
+  // correctness would go entirely unverified until #616 needs it.
+  it('decrypts back to exactly the original payload, with a fresh IV each call', async () => {
+    const payload = { formType: 'w9', legalName: 'Ada Lovelace', taxIdNumber: '123-45-6789' };
+    const encryptedOnce = await encryptTaxIdPayload(env, payload);
+    const encryptedTwice = await encryptTaxIdPayload(env, payload);
+    expect(encryptedOnce).not.toBe(encryptedTwice); // fresh random IV each call
+
+    expect(await decryptTaxIdPayload(env, encryptedOnce)).toEqual(payload);
+    expect(await decryptTaxIdPayload(env, encryptedTwice)).toEqual(payload);
+  });
+
+  it('rejects a corrupted or tampered stored value rather than returning wrong data', async () => {
+    const encrypted = await encryptTaxIdPayload(env, { formType: 'w9', legalName: 'Ada Lovelace' });
+    await expect(decryptTaxIdPayload(env, 'not-the-right-format')).rejects.toThrow(/corrupt/i);
+
+    const [, ivHex, ciphertextHex] = encrypted.split('$');
+    const flippedCiphertext = (ciphertextHex.slice(0, -2) + (ciphertextHex.slice(-2) === '00' ? '01' : '00'));
+    await expect(decryptTaxIdPayload(env, `aesgcm$${ivHex}$${flippedCiphertext}`)).rejects.toThrow();
+  });
+
   it('requires a session', async () => {
     const got = await api('/tax/id-form', {
       method: 'POST',
