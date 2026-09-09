@@ -4497,6 +4497,93 @@ the Edit Returns Policy panel through the real UI — the no-returns
 rejection isn't in `e2e/digital-goods.test.mjs`: a real 400 trips the
 shared `errors.length === 0` check.
 
+## Tax reporting
+
+docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
+reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
+income into the same taxable-income framework as real-money seller
+payouts. Tracked as issue #350 (sub-issue of #324), broken into
+sub-issues #612-#616 per the owner's Control Room direction (build
+in-house; don't block app usage on paperwork until a payee actually
+crosses the reporting threshold; block only earnings above the threshold
+once crossed; one shared reporting pipeline showing the two income
+sources — real-money seller payouts and higgles commissions — separately,
+with a combined total). The foundational aggregation layer (#612) and
+progressive threshold-crossing notices (#613) are built so far — no
+W-9/W-8BEN collection, no gating, and no actual 1099 generation exist yet.
+
+### `GET /api/tax/summary`
+
+Requires a session (`401` otherwise). Returns the calling account's gross
+income for one calendar year, split by source:
+
+```json
+{
+  "year": 2026,
+  "builderHigglesCents": 15000,
+  "sellerPayoutCents": 42000,
+  "totalCents": 57000,
+  "thresholdCents": 2000000,
+  "noticeLevel": "early"
+}
+```
+
+`year` defaults to the current UTC calendar year; pass `?year=2025` for a
+past one (`400` if it isn't a plain 4-digit year between 2000 and 2100).
+
+`builderHigglesCents` sums `higgles_earnings_events.amount_cents`
+(migrations/0050) for the account's own builder profile — every account
+has one (see "Builders"), so this is never absent, just possibly `0`.
+
+`sellerPayoutCents` sums `purchases.total_cents` — the full buyer-paid
+transaction amount, **not** the seller's own net share after commission —
+for every non-refunded, real-money (`payment_intent_id NOT NULL`) purchase
+of the account's own seller profile, if it has one (`0` if it doesn't).
+This is deliberate, not an oversight: Form 1099-K's own "gross amount"
+instructions define gross as the full transaction total "without regard to
+any adjustments ... for fees," so the commission higglehaven keeps is not
+netted out here even though it never reaches the seller's own Stripe
+balance (contrast with `GET /api/sellers/me/payouts`'s `availableCents`
+above, which *is* the net, post-commission share — a different question:
+"what can I withdraw" vs. "what does the IRS say I grossed").
+
+Both totals key off `purchases.created_at`/`higgles_earnings_events.created_at`
+(the transaction date), not `paid_out_at` — this may need revisiting once
+#616 (actual 1099 generation) settles the precise IRS-correct date to
+report against, per that sub-issue's own open questions.
+
+`thresholdCents` is the federal 1099-K reporting threshold as of the OBBBA
+rollback ($20,000 — the $600 ARPA threshold was reversed; see #350's own
+research comment), applied here to the *combined* `totalCents` per the
+owner's own "share a reporting pipeline" direction, even though the real
+1099-K threshold technically has a second leg (200 transactions) that only
+applies to the card-settled seller side, and the correct threshold/form for
+the higgles side specifically still needs a tax professional's confirmation.
+`noticeLevel` is a purely informational, non-blocking signal (#613) — one
+of `"none"` (below 50% of `thresholdCents`), `"early"` (50-79%),
+`"approaching"` (80-99%), or `"crossed"` (100%+). Nothing in the API
+actually gates on this yet — see #615 for the not-yet-built earnings gate.
+
+The account menu (`#account-menu-tax-notice`, next to the existing land-cap
+line — see "Frontend-only account menu") shows a plain-text notice matching
+`noticeLevel` whenever it isn't `"none"`, refreshed the same "on menu open,
+no live polling" way the land-cap line already is; `"crossed"` renders in
+`--danger` for visibility. Nothing about this notice blocks any action.
+
+#### Testing note
+
+`worker/commerce.test.js`'s "Tax summary (#612)" describe block (nested
+inside "Seller payouts", reusing its `createConnectedSeller`/
+`makeRealMoneyPurchase` helpers) covers the `401`, the all-zeros default,
+higgles-commission counting, the seller's gross-vs-net distinction, excluding
+a refunded purchase, year filtering, the malformed-`year` `400`, and (#613)
+the `noticeLevel` progression through all four breakpoints via the admin
+land-cap-grants escape hatch. `e2e/land-cap.test.mjs` covers the account
+menu notice staying hidden for a fresh builder with no earnings, alongside
+its existing land-cap display check — the actual notice text for a
+nonzero `noticeLevel` isn't covered there, since reaching it needs more
+real income than that suite's fixture setup produces.
+
 ## D1 schema overview
 
 The migrations currently create seventeen main backend tables:

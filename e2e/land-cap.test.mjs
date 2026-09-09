@@ -20,6 +20,13 @@ await openAccountMenu(page);
 // every menu open, independent of Settings/Build mode.
 const menuLandCapText = await waitForText(page, '#account-menu-landcap', '/');
 console.log('Account menu land cap text (should read "Land cap: 1,000m² / 1,000m²"):', menuLandCapText);
+
+// #613: same "refresh on open" wiring, right next to the land cap line —
+// a fresh builder has earned nothing yet, so this stays hidden rather than
+// showing a 0%-of-threshold notice nobody needs to see.
+const taxNoticeHidden = await page.locator('#account-menu-tax-notice').isHidden();
+console.log('Tax notice hidden for a fresh builder with no earnings (should be true):', taxNoticeHidden);
+
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
@@ -38,6 +45,7 @@ console.log('Land Cap field label (should be "Land Cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1,000m²" twice — owned and cap):', landCapFieldText);
 
 const pass = menuLandCapText === 'Land cap: 1,000m² / 1,000m²' &&
+  taxNoticeHidden &&
   landCapFieldLabel.trim() === 'Land Cap' &&
   landCapFieldText.includes('You own 1,000m²') &&
   landCapFieldText.includes('your 1,000m² cap') &&
