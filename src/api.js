@@ -84,6 +84,35 @@ export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
 }
 
+// #556 (docs/SPEC.md §6): lets an existing session attest age after the
+// fact — for accounts created before this requirement existed, since
+// signup's own ageAttested checkbox only covers brand-new ones.
+export async function ageAttest() {
+  const { user } = await requestJson('/auth/age-attest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ageAttested: true }),
+  });
+  return user;
+}
+
+// Returns `{ clientSecret, publishableKey, simulated }` — `simulated: true`
+// (Stripe not configured on this deployment) means there's no card to
+// collect at all; the caller should skip straight to confirmCard() with no
+// paymentMethodId (see handleCardSetupIntent's own comment in worker/index.js).
+export async function cardSetupIntent() {
+  return requestJson('/auth/card-setup-intent', { method: 'POST' });
+}
+
+export async function confirmCard(paymentMethodId) {
+  const { user } = await requestJson('/auth/confirm-card', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paymentMethodId }),
+  });
+  return user;
+}
+
 // Paginated server-side (100 per request, same as instances/landlets) —
 // pages through everything rather than silently keeping only the first
 // 100 templates once the catalog grows past that.

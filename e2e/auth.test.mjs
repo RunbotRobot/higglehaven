@@ -16,7 +16,9 @@
 // whether the app itself handled it gracefully) — the same reasoning
 // other rejection-path tests already document avoiding elsewhere in this
 // suite.
-import { launchPage, finish, waitForText } from './helpers.mjs';
+import {
+  launchPage, finish, waitForText, clearVerifyModalIfShown,
+} from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Auth Suite' });
 const email = `auth-suite-${Date.now()}@example.com`;
@@ -119,6 +121,10 @@ console.log('account button after logging in with the NEW password (should be "A
 // same identity-reset guarantee is what's under test here.
 const firstSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET');
 await page.click('.mode-nav-btn[data-mode="sell"]');
+// #556: this account signed up through the auth modal directly above, not
+// through chooseIdentity — clear the age/credit-card verify gate the same
+// way that helper does, or the /sellers/me fetch below never fires.
+await clearVerifyModalIfShown(page);
 await firstSellerFetch;
 const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No custom products yet');
 console.log('seller status for the first account (should say no products yet):', sellerStatusForFirstAccount);
@@ -144,8 +150,18 @@ await page.waitForTimeout(200);
 
 // If sellerId were still cached from the first account, ensureSellerIdentity
 // would short-circuit and this second GET would never fire at all.
-const secondSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET', { timeout: 5000 });
+// Registered before the click (not after clearVerifyModalIfShown) so
+// there's no gap where the real fetch could fire before this is listening
+// — #556's verify-modal round trip (confirmCard() resolving, then
+// notifyVerifyResult letting ensureSellerIdentity's own fetchMySeller()
+// proceed) happens between page.click() returning and the modal actually
+// closing, entirely inside clearVerifyModalIfShown, so a promise
+// registered only after it returns could already have missed the fetch.
+// Timeout bumped from the original 5000ms to comfortably cover that round
+// trip on top of the fetch itself.
+const secondSellerFetch = page.waitForResponse((r) => r.url().includes('/api/sellers/me') && r.request().method() === 'GET', { timeout: 10000 });
 await page.click('.mode-nav-btn[data-mode="sell"]');
+await clearVerifyModalIfShown(page);
 let sellerRefetchedForSecondAccount = true;
 try {
   await secondSellerFetch;

@@ -68,7 +68,23 @@ export async function signup(email, password, extra = {}) {
   // site; a test specifically exercising the attestation requirement itself
   // overrides it via `extra`.
   const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true, ...extra };
-  return api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
+  const result = await api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
+  // #556: requireSessionBuilder/requireSessionSeller (worker/index.js's own
+  // assertVerified) now reject any session whose trust_tier is still
+  // 'none' — the owner's "force everyone through, no grandfathering"
+  // decision applies to every account. Stripe is never configured in this
+  // test suite (see stripeConfigured's own comment), so the real
+  // card-setup-intent/confirm-card round trip can't be used to clear that
+  // bar here the way a real signup would. Test accounts get trust_tier
+  // stamped directly instead, the same shortcut ageAttested above already
+  // takes, so the hundreds of existing builder/seller-action tests don't
+  // each need their own bypass — a test that specifically exercises the
+  // unverified-session gate itself signs up its own account and skips this
+  // (see worker/reviews-auth.test.js's "Authentication" describe block).
+  if (result.response.ok) {
+    await env.DB.prepare("UPDATE users SET trust_tier = 'credit_card' WHERE email = ?").bind(email).run();
+  }
+  return result;
 }
 
 // Signs up a fresh account and returns its auto-provisioned builder profile

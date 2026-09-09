@@ -12,7 +12,9 @@
 // themselves when a session already exists (requireLogin's own
 // `if (currentAuthUser) return currentAuthUser` guarantees this never pops
 // a login prompt) instead of leaving the visitor looking logged out.
-import { launchPage, finish, waitForText } from './helpers.mjs';
+import {
+  launchPage, finish, waitForText, clearVerifyModalIfShown,
+} from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Settings Identity Suite' });
 const email = `settings-identity-shop-${Date.now()}@example.com`;
@@ -39,6 +41,13 @@ await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+
+// #556: renderLandCapField's own silent ensureBuilderIdentity() call above
+// now also runs into the age-attestation/credit-card gate (requireLogin's
+// "never pops a login prompt" guarantee this test's own file comment
+// describes doesn't extend to this separate, later gate) — clear it the
+// same way chooseIdentity does, or the Land Cap field below never renders.
+await clearVerifyModalIfShown(page);
 
 // Land Cap: previously omitted entirely (renderLandCapField returned before
 // appending anything) whenever builderId was still null.

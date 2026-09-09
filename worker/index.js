@@ -228,7 +228,7 @@ export default {
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url).catch((error) => {
         const httpError = error instanceof HttpError ? error : databaseHttpError(error);
-        if (httpError) return json({ error: httpError.message }, httpError.status);
+        if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
         console.error(error);
         return json({ error: 'Internal server error' }, 500);
       });
@@ -1895,6 +1895,27 @@ async function handleMyBuilder(request, db) {
   return json({ builder: builderFromRow(row) });
 }
 
+// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
+// government-ID, #589) verification gates every builder/seller-owned
+// action from here on, not just newly created accounts. Owner decision
+// (Control Room, 2026-09-09): "force everyone through the new gates, no
+// grandfathering in" — deliberately applied to every session, including
+// ones that signed up before this existed. Scoped to requireSessionBuilder/
+// requireSessionSeller below (the ones that actually gate world/shop-
+// selling activity), not requireCurrentUser itself, so an unverified
+// session can still reach its own account state (GET /api/builders|
+// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
+// needed to clear this gate in the first place.
+function assertVerified(user) {
+  if (user.age_attested_at === null || user.trust_tier === 'none') {
+    throw new HttpError(
+      'Age attestation and credit-card (or government-ID) verification are required to continue.',
+      403,
+      { verificationRequired: true },
+    );
+  }
+}
+
 // The authorization workhorse for every builder-owned mutation below:
 // resolves *your own* builder profile from the session (never a
 // client-supplied builderId — that field is exactly what let anyone act
@@ -1902,6 +1923,7 @@ async function handleMyBuilder(request, db) {
 // handler can compare it against whatever it's about to modify.
 async function requireSessionBuilder(request, db) {
   const user = await requireCurrentUser(request, db);
+  assertVerified(user);
   // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
   // now, not here — see that function's own comment.
   return getOrCreateBuilderForUser(db, user);
@@ -3288,6 +3310,7 @@ async function handleMySeller(request, db) {
 // Same reasoning as requireSessionBuilder above, for seller-owned mutations.
 async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
+  assertVerified(user);
   return getOrCreateSellerForUser(db, user);
 }
 
@@ -4091,6 +4114,9 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-card') {
     return handleConfirmCard(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'age-attest') {
+    return handleAgeAttest(request, db);
+  }
   return json({ error: 'Not found' }, 404);
 }
 
@@ -4101,16 +4127,27 @@ async function handleAuth(request, env, db, route, url) {
 // creating one, only for an actual payment_intent charge — so this tier
 // costs nothing beyond the Stripe account this app already has for seller
 // Connect payouts and checkout.
+//
+// Now that assertVerified above actually gates real activity on this tier
+// (owner: "force everyone through the new gates, no grandfathering in"),
+// a deployment that never sets STRIPE_SECRET_KEY (local dev, this test
+// suite, or a fresh install before the platform owner adds real keys)
+// would otherwise lock every builder/seller action out entirely with no
+// way to clear the gate. Same silent simulated-fallback convention this
+// file already uses for real-money purchases and seller-payout onboarding
+// when Stripe isn't configured (see handleInstancePurchase's own comment)
+// — `simulated: true` tells the frontend to skip loading Stripe.js/
+// collecting a card at all and go straight to confirm-card.
 async function handleCardSetupIntent(request, env, db) {
   const user = await requireCurrentUser(request, db);
   if (!stripeConfigured(env)) {
-    throw new HttpError('Card verification is not configured on this server yet.', 503);
+    return json({ clientSecret: null, publishableKey: null, simulated: true });
   }
   const setupIntent = await stripeRequest(env, 'POST', 'setup_intents', {
     'payment_method_types[]': 'card',
     metadata: { userId: user.user_id },
   });
-  return json({ clientSecret: setupIntent.client_secret });
+  return json({ clientSecret: setupIntent.client_secret, publishableKey: env.STRIPE_PUBLISHABLE_KEY });
 }
 
 // Reads back the card the frontend just collected/confirmed against the
@@ -4120,10 +4157,22 @@ async function handleCardSetupIntent(request, env, db) {
 // tier accepts. card_funding is recorded either way so a rejected
 // debit/prepaid attempt is still visible on the account, not a silent
 // no-op the builder has no way to explain to themselves later.
+//
+// Mirrors handleCardSetupIntent's own simulated fallback when Stripe isn't
+// configured — no real card to check, so this tier is granted directly
+// (the same "no real Stripe balance to ever hold against" reasoning
+// simulated purchases already document) rather than the 400/503 a real
+// deployment would ever actually see.
 async function handleConfirmCard(request, env, db) {
   const user = await requireCurrentUser(request, db);
   if (!stripeConfigured(env)) {
-    throw new HttpError('Card verification is not configured on this server yet.', 503);
+    await db.prepare(`
+      UPDATE users SET card_funding = 'credit', trust_tier = 'credit_card',
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(user.user_id).run();
+    const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    return json({ user: userFromRow(updated) });
   }
   const input = await readJson(request);
   const paymentMethodId = stringValue(input.paymentMethodId, 'paymentMethodId');
@@ -4137,6 +4186,29 @@ async function handleConfirmCard(request, env, db) {
   `).bind(funding, accepted ? 1 : 0, user.user_id).run();
   if (!accepted) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
+  }
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
+}
+
+// #556: lets an existing session attest age after the fact. Signup's own
+// ageAttested checkbox (handleSignup above) only covers brand-new
+// accounts — every account created before that existed, plus the owner's
+// "force everyone through, no grandfathering" decision on trust_tier
+// (Control Room, 2026-09-09), needs a way to clear the same bar without
+// re-signing-up. Idempotent: attesting again on an already-attested
+// account is a no-op, not an error.
+async function handleAgeAttest(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const input = await readJson(request);
+  if (input.ageAttested !== true) {
+    throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
+  }
+  if (user.age_attested_at === null) {
+    await db.prepare(`
+      UPDATE users SET age_attested_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
   return json({ user: userFromRow(updated) });
@@ -7723,8 +7795,9 @@ function json(payload, status = 200, extraHeaders) {
 }
 
 class HttpError extends Error {
-  constructor(message, status) {
+  constructor(message, status, extra) {
     super(message);
     this.status = status;
+    this.extra = extra;
   }
 }
