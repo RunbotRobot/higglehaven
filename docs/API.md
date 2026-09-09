@@ -1004,6 +1004,20 @@ or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
 
+### `GET /api/builders/me/stripe-account`
+### `POST /api/builders/me/stripe-account`
+
+Stripe Connect (Custom account) onboarding for a **builder** (#624,
+sub-issue of #349/#324) — the prerequisite for redeeming a higgles balance
+for real cash (see the not-yet-built #625). Identical contract to
+`GET`/`POST /api/sellers/me/stripe-account` just above in every respect
+(same request/response shapes, same KYC validation, same "no PII persisted
+on the row itself" property, same `STRIPE_SECRET_KEY` requirement) —
+acts on the calling account's own **builder** profile instead of its
+seller one. A builder and a seller profile on the same account have
+completely independent Stripe Connect accounts; submitting one's
+onboarding never touches the other's.
+
 ### `GET /api/sellers/me/payouts`
 ### `POST /api/sellers/me/payouts`
 

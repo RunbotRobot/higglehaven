@@ -74,5 +74,6 @@
   "0074_signup_trust_tier.sql",
   "0075_didit_verification.sql",
   "0076_didit_session_url.sql",
-  "0077_tax_id_form.sql"
+  "0077_tax_id_form.sql",
+  "0078_builder_stripe_connect.sql"
 ]
