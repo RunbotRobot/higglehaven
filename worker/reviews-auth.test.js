@@ -725,6 +725,72 @@ describe('Authentication', () => {
     expect(confirmNotConfigured.response.status).toBe(503);
   });
 
+  // #589 (sub-issue of #556): government-ID verification via Didit, the
+  // higher trust tier. Same never-configured-in-tests shape as Stripe
+  // above — DIDIT_API_KEY/DIDIT_WEBHOOK_SECRET are never set in this
+  // suite, so every path that would make a real Didit call instead 503s
+  // before attempting one.
+  it('gates didit-verification-session behind a session, then 503s once past that since Didit is never configured in this test suite', async () => {
+    const noSession = await api('/auth/didit-verification-session', { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+
+    const builder = await signupBuilder('didit-session-503');
+    const notConfigured = await api('/auth/didit-verification-session', builder.session({ method: 'POST' }));
+    expect(notConfigured.response.status).toBe(503);
+  });
+
+  it('rejects starting a new didit-verification-session for an already ID-verified account, even with Didit unconfigured', async () => {
+    const builder = await signupBuilder('didit-already-verified');
+    await env.DB.prepare('UPDATE users SET trust_tier = \'id_verified\' WHERE email = ?').bind(builder.email).run();
+    const rejected = await api('/auth/didit-verification-session', builder.session({ method: 'POST' }));
+    expect(rejected.response.status).toBe(400);
+  });
+
+  it('reports "none" for didit-verification-status with no session ever started, and "approved" once trust_tier is id_verified — without ever needing Didit configured', async () => {
+    const builder = await signupBuilder('didit-status');
+    const noSession = await api('/auth/didit-verification-status');
+    expect(noSession.response.status).toBe(401);
+
+    const none = await api('/auth/didit-verification-status', builder.session());
+    expect(none.response.status).toBe(200);
+    expect(none.body).toEqual({ status: 'none' });
+
+    await env.DB.prepare('UPDATE users SET trust_tier = \'id_verified\' WHERE email = ?').bind(builder.email).run();
+    const approved = await api('/auth/didit-verification-status', builder.session());
+    expect(approved.response.status).toBe(200);
+    expect(approved.body).toEqual({ status: 'approved' });
+  });
+
+  it('reports the recorded status for a processed (non-pending) didit_verification_sessions row without calling out to Didit', async () => {
+    const builder = await signupBuilder('didit-status-declined');
+    await env.DB.prepare(`
+      INSERT INTO didit_verification_sessions (session_id, user_id, status, processed_at)
+      VALUES (?, (SELECT user_id FROM users WHERE email = ?), 'declined', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    `).bind(`sess-${crypto.randomUUID()}`, builder.email).run();
+    const declined = await api('/auth/didit-verification-status', builder.session());
+    expect(declined.response.status).toBe(200);
+    expect(declined.body).toEqual({ status: 'declined' });
+  });
+
+  it('reports "pending" for a still-pending session when Didit is unconfigured, rather than attempting a reconciliation call', async () => {
+    const builder = await signupBuilder('didit-status-pending');
+    await env.DB.prepare(`
+      INSERT INTO didit_verification_sessions (session_id, user_id, status)
+      VALUES (?, (SELECT user_id FROM users WHERE email = ?), 'pending')
+    `).bind(`sess-${crypto.randomUUID()}`, builder.email).run();
+    const pending = await api('/auth/didit-verification-status', builder.session());
+    expect(pending.response.status).toBe(200);
+    expect(pending.body).toEqual({ status: 'pending' });
+  });
+
+  it('gates the didit-webhook endpoint behind a configured secret', async () => {
+    const unconfigured = await api('/auth/didit-webhook', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: 'sess_does_not_exist', status: 'Approved' }),
+    });
+    expect(unconfigured.response.status).toBe(503);
+  });
+
   it('normalizes email casing between signup and login', async () => {
     const email = `Auth-Case-${crypto.randomUUID()}@Example.com`;
     await signup(email, 'a fine long password');

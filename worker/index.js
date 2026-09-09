@@ -3739,6 +3739,152 @@ function deriveStripeOnboardingStatus(account) {
   return 'pending';
 }
 
+// ---- Government-ID verification via Didit (#589, sub-issue of #556,
+// docs/SPEC.md §6) — the higher trust tier that gates full social
+// features, above the credit-card tier card-setup-intent/confirm-card
+// establish. Same guarded-secret shape as STRIPE_SECRET_KEY/
+// OPENAI_API_KEY above: with env.DIDIT_API_KEY unset (never configured in
+// local dev or the automated test suite), diditConfigured(env) is false
+// and the route handlers below return a real 503 rather than attempting a
+// live network call.
+function diditConfigured(env) {
+  return !!env.DIDIT_API_KEY;
+}
+
+// Didit's Verification Session API (https://docs.didit.me/) — a plain
+// bearer-style API-key header and a JSON body, simpler than Stripe's
+// Basic-auth-with-empty-password + form-encoded shape above.
+async function diditRequest(env, method, path, body) {
+  const response = await fetch(`https://verification.didit.me/${path}`, {
+    method,
+    headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
+  }
+  return data;
+}
+
+// A real (if small — $0.33/verification beyond Didit's 500/month free
+// tier, per #589's own research) per-call cost, same reasoning as
+// CONCEPT_IMAGE_RATE_LIMIT_MAX above — bucketed per-user since this is a
+// session-gated action, not a public/anonymous endpoint an IP-based
+// bucket would need to cover.
+const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
+
+// Starts a fresh Didit-hosted verification session for the requesting
+// builder and records it so the webhook/status-poll below have a row to
+// resolve against.
+async function handleDiditVerificationSession(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.trust_tier === 'id_verified') {
+    throw new HttpError('This account is already ID-verified.', 400);
+  }
+  if (!diditConfigured(env)) {
+    throw new HttpError('Government-ID verification is not configured on this server yet.', 503);
+  }
+  await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
+  const session = await diditRequest(env, 'POST', 'v3/session/', {
+    vendor_data: user.user_id,
+    callback: `${appBaseUrl(env)}/?diditReturn=1`,
+  });
+  await db.prepare(`
+    INSERT INTO didit_verification_sessions (session_id, user_id, status) VALUES (?, ?, 'pending')
+  `).bind(session.session_id, user.user_id).run();
+  return json({ sessionId: session.session_id, url: session.url });
+}
+
+// Didit's own decision statuses (https://docs.didit.me/): 'Approved' is
+// the only one that raises trust_tier; every other terminal status
+// ('Declined', 'Abandoned', 'Expired', 'Kyc Expired') is recorded as
+// declined so a stuck 'pending' row doesn't linger forever — a builder can
+// always just start a fresh session afterward. 'In Review'/'In Progress'
+// leave the row pending (absent from this map, handled by callers as
+// "nothing to resolve yet").
+const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: false, Expired: false, 'Kyc Expired': false };
+
+// Shared by the webhook and the status-poll fallback below, so "a builder
+// finishes verification but the webhook is slow or never arrives" doesn't
+// leave them stuck. The atomic `processed_at IS NULL` guard is the same
+// idiom this file already uses for purchases.paid_out_at — whichever of
+// the webhook or a poll gets there first applies the change; the other is
+// a safe no-op, so this can't double-apply from a race or a repeat
+// webhook delivery.
+async function applyDiditDecision(db, sessionId, userId, approved) {
+  const result = await db.prepare(`
+    UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE session_id = ? AND processed_at IS NULL
+  `).bind(approved ? 'approved' : 'declined', sessionId).run();
+  if (result.meta.changes === 0) return;
+  if (approved) {
+    await db.prepare(`
+      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?
+    `).bind(userId).run();
+  }
+}
+
+// Polling fallback for the frontend after a builder returns from Didit's
+// hosted verification UI: reconciles directly against Didit's own session
+// endpoint whenever a builder's latest session is still locally pending,
+// rather than requiring the webhook to have already landed.
+async function handleDiditVerificationStatus(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (user.trust_tier === 'id_verified') return json({ status: 'approved' });
+  const latest = await db.prepare(`
+    SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+  `).bind(user.user_id).first();
+  if (!latest) return json({ status: 'none' });
+  if (latest.processed_at !== null || !diditConfigured(env)) {
+    return json({ status: latest.status });
+  }
+  const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
+  const overallStatus = decision.status;
+  if (Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
+    const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
+    await applyDiditDecision(db, latest.session_id, user.user_id, approved);
+    return json({ status: approved ? 'approved' : 'declined' });
+  }
+  return json({ status: 'pending' });
+}
+
+// Didit signs its webhook deliveries with an HMAC-SHA256 of the raw body,
+// keyed by a webhook-specific secret configured in the Didit dashboard —
+// verified here via a constant-time hex comparison (timingSafeEqual,
+// already used elsewhere in this file for password/token checks), never a
+// plain ===, so response timing can't leak how close a forged signature
+// got. Reads the raw body text (not readJson) because the signature is
+// computed over the exact bytes Didit sent, not this codebase's own
+// re-serialization of a parsed object.
+async function handleDiditWebhook(request, env, db) {
+  if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503);
+  const rawBody = await request.text();
+  const signatureHeader = request.headers.get('x-signature') || '';
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.DIDIT_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody))));
+  if (!timingSafeEqual(signatureHeader, expectedSignature)) {
+    throw new HttpError('Invalid webhook signature', 401);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    throw new HttpError('Webhook body is not valid JSON', 400);
+  }
+  const sessionId = payload.session_id;
+  const overallStatus = payload.status;
+  if (!sessionId || !Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
+    return json({ received: true });
+  }
+  const session = await db.prepare('SELECT * FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+  if (!session) return json({ received: true });
+  await applyDiditDecision(db, sessionId, session.user_id, DIDIT_TERMINAL_STATUSES[overallStatus]);
+  return json({ received: true });
+}
+
 function boundedIntegerValue(value, field, min, max) {
   const number = integerValue(value, field);
   if (number < min || number > max) throw new HttpError(`${field} must be between ${min} and ${max}`, 400);
@@ -4090,6 +4236,15 @@ async function handleAuth(request, env, db, route, url) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-card') {
     return handleConfirmCard(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-verification-session') {
+    return handleDiditVerificationSession(request, env, db);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'didit-verification-status') {
+    return handleDiditVerificationStatus(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-webhook') {
+    return handleDiditWebhook(request, env, db);
   }
   return json({ error: 'Not found' }, 404);
 }

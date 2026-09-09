@@ -71,5 +71,6 @@
   "0071_catalog_template_image.sql",
   "0072_purchase_payouts.sql",
   "0073_catalog_template_model_size.sql",
-  "0074_signup_trust_tier.sql"
+  "0074_signup_trust_tier.sql",
+  "0075_didit_verification.sql"
 ]

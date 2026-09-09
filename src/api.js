@@ -84,6 +84,21 @@ export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
 }
 
+// docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
+// via Didit — the higher trust tier, above the credit-card tier. Starts a
+// fresh Didit-hosted verification session; the frontend opens the
+// returned `url` for the builder to complete it there.
+export async function startDiditVerification() {
+  return requestJson('/auth/didit-verification-session', { method: 'POST' });
+}
+
+// Polled by the frontend after a builder returns from Didit's hosted UI
+// (the backend itself reconciles against Didit directly here, not just
+// reporting a possibly-stale local row — see handleDiditVerificationStatus).
+export async function fetchDiditVerificationStatus() {
+  return requestJson('/auth/didit-verification-status');
+}
+
 // Paginated server-side (100 per request, same as instances/landlets) —
 // pages through everything rather than silently keeping only the first
 // 100 templates once the catalog grows past that.
