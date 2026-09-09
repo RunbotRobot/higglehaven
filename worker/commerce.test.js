@@ -1660,6 +1660,35 @@ describe('Embedding similarity search (#329)', () => {
     });
     expect(searched.body.templates.length).toBe(3);
   });
+
+  // Backlog audit: unauthenticated + a real per-call cost (full scan +
+  // cosine-similarity over every embedded template) is exactly the shape
+  // every other unauthenticated, non-trivial-cost endpoint in this file
+  // is IP-rate-limited for (catalog delete/patch, sign-post, purchase,
+  // builder/seller create) — this one wasn't. Same style as the
+  // concept-image rate-limit test just below: spend the budget, then
+  // assert the next call 429s. All these calls share one IP on purpose
+  // (an explicit cf-connecting-ip header) so they land in the same
+  // rate-limit bucket — every other call in this describe block gets its
+  // own random IP by default (see api()'s own comment in test-helpers.js)
+  // specifically so it's unaffected by this test spending its budget.
+  it('rate-limits similarity-search by IP', async () => {
+    const ip = `similarity-search-rate-limit-${crypto.randomUUID()}`;
+    for (let i = 0; i < 30; i++) {
+      const attempt = await api('/catalog/similarity-search', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': ip },
+        body: JSON.stringify({ embedding: [1, 0, 0] }),
+      });
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api('/catalog/similarity-search', {
+      method: 'POST',
+      headers: { 'cf-connecting-ip': ip },
+      body: JSON.stringify({ embedding: [1, 0, 0] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 // #328: OPENAI_API_KEY is never configured in this test environment (see

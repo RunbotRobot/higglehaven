@@ -768,6 +768,21 @@ const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 // dozens of times over), so this can be a plain, low ceiling.
 const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 
+// Backlog audit: POST .../similarity-search (#329) is unauthenticated
+// (deliberately — a read over already-public catalog data, see
+// searchCatalogBySimilarity's own comment in src/api.js) AND does real,
+// non-trivial per-call work: a full SELECT over every catalog_templates
+// row with an embedding, a JSON.parse of each, and an O(rows × embedding
+// length) cosine-similarity scan — unlike an ordinary indexed listing
+// query. Every other unauthenticated endpoint in this file with a real
+// per-call cost (catalog-delete/patch's anonymous path just above,
+// sign-post, purchase, builder/seller create) is rate-limited by IP; this
+// one wasn't, despite matching that exact shape. IP-keyed like those, not
+// per-builder like concept-image (there's no session here to key on),
+// with headroom for a legitimate Prompt-mode session to run this once per
+// concept image it generates.
+const SIMILARITY_SEARCH_RATE_LIMIT_MAX = 30;
+
 // #362 flagged catalog template creation for the same missing-rate-limit
 // gap as builders/sellers below, but unlike those two, an IP-keyed limit
 // here isn't safe to add at any size a real automated flood would
@@ -887,6 +902,7 @@ async function handleCatalog(request, db, route, url, models, env) {
   // real thing later" pattern; a real vector index is a swap-in later,
   // not something this endpoint's callers need to know about.
   if (request.method === 'POST' && route.length === 2 && route[1] === 'similarity-search') {
+    await checkRateLimit(db, `similarity-search:${clientIp(request)}`, SIMILARITY_SEARCH_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const embedding = validateThumbnailEmbedding(input.embedding);
     if (!embedding) throw new HttpError('embedding is required', 400);
@@ -1642,6 +1658,27 @@ async function handleBuilders(request, db, route) {
     // guard blocks the delete, none of the land-release side effects below
     // take hold either, exactly as if the whole request had been rejected
     // up front instead of partially applied.
+    //
+    // A second race, found via a later backlog audit: resolveAuction's own
+    // "active" -> "ended" status flip commits as its own separate .run()
+    // call, before the batch that actually transfers the landlet/credits
+    // the seller/notifies both sides runs. `a.status = 'active'` alone
+    // stops blocking the instant that flip lands, even though the payout
+    // for that exact auction hasn't happened yet — so a self-delete by
+    // either side landing in that gap used to slip through, then made
+    // resolveAuction's own payout batch fail outright (its notification
+    // insert has a NOT NULL FK to builders) and roll back in its entirety,
+    // permanently stranding the auction at status='ended' with no payout
+    // and no way to ever re-resolve it (nothing re-triggers a resolve on
+    // an already-'ended' row). Closed without a new column: while a
+    // winning payout is genuinely still pending, the landlet's current
+    // owner hasn't been updated to reflect it yet either — the bidder's
+    // side stays owned by whoever had it before (not yet the bidder), and
+    // the seller's side is still owned by the seller (not yet released) —
+    // so checking that directly, alongside the existing 'active' checks,
+    // reuses signal the payout batch itself will flip the moment it
+    // actually lands, closing the window exactly when the real transfer
+    // completes rather than on an arbitrary timer.
     const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
     const statements = [
       db.prepare(`
@@ -1655,10 +1692,23 @@ async function handleBuilders(request, db, route) {
           )
           AND NOT EXISTS (
             SELECT 1 FROM auctions a
+            JOIN auction_bids b ON b.auction_id = a.auction_id
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+              AND l.owner_builder_id != ?
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
             WHERE a.seller_builder_id = ? AND a.status = 'active'
               AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
           )
-      `).bind(route[1], route[1], route[1]),
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
+              AND l.owner_builder_id = ?
+          )
+      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       ...landletIds.flatMap((landletId) => [
         db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
         db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
@@ -1697,7 +1747,27 @@ async function handleBuilders(request, db, route) {
       if (leadingBid) {
         throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
       }
-      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      const pendingWin = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        JOIN auction_bids b ON b.auction_id = a.auction_id
+        JOIN landlets l ON l.landlet_id = a.landlet_id
+        WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+          AND l.owner_builder_id != ?
+        LIMIT 1
+      `).bind(route[1], route[1]).first();
+      if (pendingWin) {
+        throw new HttpError('Cannot delete this builder while their auction win is still being paid out', 409);
+      }
+      const sellingWithBids = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        WHERE a.seller_builder_id = ? AND a.status = 'active'
+          AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+        LIMIT 1
+      `).bind(route[1]).first();
+      if (sellingWithBids) {
+        throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      }
+      throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
@@ -4722,6 +4792,65 @@ async function handleLandletDraft(request, db, landletId) {
   return json({ error: 'Not found' }, 404);
 }
 
+// Owner (issue-570, 2026-09-09 -- picked option (a), "apply unconditionally
+// like generate-mosaic"): the manual/bulk-import creation endpoints below
+// (single POST and POST .../batch) used to skip the spatial overlap check
+// generate-mosaic and generate-ring already enforce procedurally, so an
+// admin-supplied candidate could silently overlap already-claimed,
+// already-rendered land. Shared here so generate-mosaic and both of these
+// endpoints all enforce the exact same check instead of duplicating it.
+//
+// Takes full rows (not pre-extracted polygons): a row with no explicit
+// polygon (the plain manual-candidate shape — just center+areaM2) isn't a
+// degenerate zero-area shape to skip. Everywhere else that reads such a row
+// (landletMinWorldRadius/landletMaxWorldRadius above) treats it as a circle
+// of radius sameAreaRadius(areaM2) around its center, so this represents
+// both shapes rather than letting polygonsOverlap silently see an empty
+// polygon and report no conflict.
+function landletFootprint(row) {
+  const polygon = landletWorldPolygon(row);
+  if (polygon.length >= 3) return { polygon };
+  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
+}
+
+function footprintsOverlap(a, b) {
+  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
+  if (a.circle && b.circle) {
+    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
+  }
+  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
+  if (pointInPolygon(circle, polygon)) return true;
+  return polygon.some((point, index) =>
+    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
+}
+
+async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
+  const [existingLandlets, existingCandidates] = await Promise.all([
+    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
+  ]);
+  const existingFootprints = [...existingLandlets.results, ...existingCandidates.results].map(landletFootprint);
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint) => existingFootprints.some((other) => footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
+// Only for the manual/batch endpoints below, not generate-mosaic/-ring:
+// those generators' own output is already structurally self-consistent (by
+// construction, adjacent cells only ever share an edge, never overlap), so
+// checking their cells against each other here would risk a false-positive
+// conflict from the same float-noise-at-a-shared-edge case polygonsOverlap's
+// own TOUCH_EPSILON_M exists to absorb -- one degenerate reading of that
+// noise for a many-cell batch is more exposure than a manually-submitted
+// batch (never guaranteed internally non-overlapping in the first place)
+// needs to accept just to get the same protection.
+async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint, index) =>
+    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
     await requireAdmin(request, db);
@@ -4761,16 +4890,7 @@ async function handleLandCandidates(request, db, route, url) {
     // a mosaic call landing near existing ring-generated land) would
     // otherwise silently overlap, since this generator has no radial
     // structure for a band-based check like generate-ring's to work with.
-    const [existingLandlets, existingCandidates] = await Promise.all([
-      db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-      db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
-    ]);
-    const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
-      .map(landletWorldPolygon)
-      .filter((polygon) => polygon.length >= 3);
-    const newPolygons = [...rows, centralRow].map(landletWorldPolygon);
-    const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
-    if (conflict) throw new HttpError('Generated mosaic would overlap existing land', 409);
+    await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
 
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
@@ -4988,7 +5108,8 @@ async function handleLandCandidates(request, db, route, url) {
     }
 
     const rows = landlets.map(candidateRowFromLandlet);
-    await assertLandCandidatesDontOverlap(db, rows);
+    await assertLandCandidatesDontOverlapExisting(db, rows, 'One or more candidates would overlap existing land');
+    await assertLandCandidatesDontOverlapEachOther(rows, 'One or more candidates would overlap each other');
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
@@ -5013,7 +5134,7 @@ async function handleLandCandidates(request, db, route, url) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
-    await assertLandCandidatesDontOverlap(db, [row]);
+    await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land');
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
@@ -5159,48 +5280,6 @@ function candidateInsertStatement(db, row) {
     row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
     row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
-}
-
-// A row with no explicit polygon (the plain manual-candidate shape — see
-// the existing 'starts generation immediately...' test, which only sends
-// center+areaM2) isn't a degenerate zero-area shape: everywhere else that
-// reads such a row (landletMinWorldRadius/landletMaxWorldRadius above)
-// treats it as a circle of radius sameAreaRadius(areaM2) around its center.
-// polygonsOverlap alone would silently see an empty polygon and report no
-// conflict, so the overlap check below needs to represent both shapes.
-function landletFootprint(row) {
-  const polygon = landletWorldPolygon(row);
-  if (polygon.length >= 3) return { polygon };
-  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
-}
-
-function footprintsOverlap(a, b) {
-  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
-  if (a.circle && b.circle) {
-    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
-  }
-  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
-  if (pointInPolygon(circle, polygon)) return true;
-  return polygon.some((point, index) =>
-    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
-}
-
-// Same overlap guard generate-mosaic already applies to its own generated
-// cells (#570), extended to the manual single/batch POST endpoints, whose
-// candidates come from arbitrary admin input rather than a generator that's
-// already structurally self-consistent — so this also checks the new rows
-// against each other, not just against what's already stored.
-async function assertLandCandidatesDontOverlap(db, newRows) {
-  const [existingLandlets, existingCandidates] = await Promise.all([
-    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
-  ]);
-  const existingFootprints = [...existingLandlets.results, ...existingCandidates.results].map(landletFootprint);
-  const newFootprints = newRows.map(landletFootprint);
-  const conflict = newFootprints.some((footprint, index) =>
-    existingFootprints.some((other) => footprintsOverlap(footprint, other)) ||
-    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
-  if (conflict) throw new HttpError('Land candidate would overlap existing land', 409);
 }
 
 // The actual generation + persistence half of POST /land-candidates/
