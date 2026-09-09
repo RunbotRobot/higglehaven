@@ -1493,13 +1493,26 @@ reason for content-addressing here is consistency with the thumbnail
 endpoint above, not because two prompts are likely to produce identical
 bytes.
 
+Counts against the same `MAX_TOTAL_STORAGE_BYTES` cap `POST /api/models`
+enforces (#602) — both are writes into the shared `MODELS` bucket, so both
+go through the same atomic reservation (`reserveStorageBudget` in
+`worker/index.js`) before their own R2 `put`, closing the same
+concurrent-write race #264 already closes for model uploads. The one
+difference: a model upload reserves *before* reading the request body (its
+size is known upfront), while this endpoint reserves right before its own
+`put` instead, since a generated image's size isn't known until generation
+actually finishes.
+
 #### Testing note
 
 Same shape as `STRIPE_SECRET_KEY`/`RESEND_API_KEY` elsewhere in this file: a
 Worker secret (`OPENAI_API_KEY`) that's never configured in local dev or the
 automated test suite, so a real OpenAI call is never attempted during tests
 — covered up to the `503` this endpoint returns when unconfigured, not
-beyond it.
+beyond it. That also means the storage-cap check above (which only runs
+after a real generation succeeds) isn't exercised end-to-end by this
+endpoint's own tests; its shared `reserveStorageBudget` logic is the same
+code path `POST /api/models`'s own storage-cap race test already covers.
 
 ### Extensible products (crop)
 
