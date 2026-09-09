@@ -1111,7 +1111,11 @@ creates missing IDs, returning `200`; it supports idempotently synchronizing a
 bounded catalog batch. Both modes avoid one D1 request per product. Any
 template in the batch that has (or already has, for a `PUT` that touches an
 existing row) a non-null `sellerId` requires a session logged in as that
-seller — `403` if any one of them isn't yours.
+seller — `403` if any one of them isn't yours. A `PUT` that changes an
+existing template's dimensions triggers `notifyBuildersOfDimensionChange`
+per template (see "Notifications" above), the same as the single-item
+`PATCH /api/catalog/:templateId` — a seller batch-resizing several products
+at once still warns every builder hosting a placed instance of one of them.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns

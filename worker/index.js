@@ -849,7 +849,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
-      SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
+      SELECT template_id, seller_id, width_m, depth_m, height_m FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
     // sellerIds (the templates' own requested sellerId values) already went
     // through assertReferencesExist above, so they're live by construction.
@@ -881,6 +881,23 @@ async function handleCatalog(request, db, route, url, models, env) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(template))));
+    // The single-item PATCH/PUT sibling above always calls
+    // notifyBuildersOfDimensionChange on a dimension change — this batch
+    // upsert performs the identical column update per template but was
+    // missing the same call, so a seller resizing several products at once
+    // through this endpoint silently never warned any builder hosting a
+    // placed instance of them. existingOwnerRows (fetched before the
+    // INSERT/upsert above) already holds every batch templateId's
+    // pre-existing row, if any — a POST id with no matching row here is a
+    // genuinely new template, not a resize, so nothing to notify about.
+    if (request.method === 'PUT') {
+      const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
+        [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
+      for (const template of templates) {
+        const oldDimensions = oldDimensionsById.get(template.templateId);
+        if (oldDimensions) await notifyBuildersOfDimensionChange(db, template, oldDimensions);
+      }
+    }
     const placeholders = templates.map(() => '?').join(', ');
     const stored = await db.prepare(`
       SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})
