@@ -1,5 +1,6 @@
 import {
-  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, polygonsOverlap,
+  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
+  polygonsOverlap, sameAreaRadius,
 } from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
@@ -4798,15 +4799,55 @@ async function handleLandletDraft(request, db, landletId) {
 // admin-supplied candidate could silently overlap already-claimed,
 // already-rendered land. Shared here so generate-mosaic and both of these
 // endpoints all enforce the exact same check instead of duplicating it.
-async function assertLandCandidatesDontOverlapExisting(db, newPolygons, message) {
+//
+// Takes full rows (not pre-extracted polygons): a row with no explicit
+// polygon (the plain manual-candidate shape — just center+areaM2) isn't a
+// degenerate zero-area shape to skip. Everywhere else that reads such a row
+// (landletMinWorldRadius/landletMaxWorldRadius above) treats it as a circle
+// of radius sameAreaRadius(areaM2) around its center, so this represents
+// both shapes rather than letting polygonsOverlap silently see an empty
+// polygon and report no conflict.
+function landletFootprint(row) {
+  const polygon = landletWorldPolygon(row);
+  if (polygon.length >= 3) return { polygon };
+  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
+}
+
+function footprintsOverlap(a, b) {
+  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
+  if (a.circle && b.circle) {
+    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
+  }
+  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
+  if (pointInPolygon(circle, polygon)) return true;
+  return polygon.some((point, index) =>
+    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
+}
+
+async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
   const [existingLandlets, existingCandidates] = await Promise.all([
-    db.prepare("SELECT center_x_m, center_y_m, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-    db.prepare('SELECT center_x_m, center_y_m, polygon_json FROM landlet_candidates').all(),
+    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
   ]);
-  const existingPolygons = [...existingLandlets.results, ...existingCandidates.results]
-    .map(landletWorldPolygon)
-    .filter((polygon) => polygon.length >= 3);
-  const conflict = newPolygons.some((polygon) => existingPolygons.some((other) => polygonsOverlap(polygon, other)));
+  const existingFootprints = [...existingLandlets.results, ...existingCandidates.results].map(landletFootprint);
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint) => existingFootprints.some((other) => footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError(message, 409);
+}
+
+// Only for the manual/batch endpoints below, not generate-mosaic/-ring:
+// those generators' own output is already structurally self-consistent (by
+// construction, adjacent cells only ever share an edge, never overlap), so
+// checking their cells against each other here would risk a false-positive
+// conflict from the same float-noise-at-a-shared-edge case polygonsOverlap's
+// own TOUCH_EPSILON_M exists to absorb -- one degenerate reading of that
+// noise for a many-cell batch is more exposure than a manually-submitted
+// batch (never guaranteed internally non-overlapping in the first place)
+// needs to accept just to get the same protection.
+async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint, index) =>
+    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
   if (conflict) throw new HttpError(message, 409);
 }
 
@@ -4849,8 +4890,7 @@ async function handleLandCandidates(request, db, route, url) {
     // a mosaic call landing near existing ring-generated land) would
     // otherwise silently overlap, since this generator has no radial
     // structure for a band-based check like generate-ring's to work with.
-    const newPolygons = [...rows, centralRow].map(landletWorldPolygon);
-    await assertLandCandidatesDontOverlapExisting(db, newPolygons, 'Generated mosaic would overlap existing land');
+    await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
 
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
@@ -5068,9 +5108,8 @@ async function handleLandCandidates(request, db, route, url) {
     }
 
     const rows = landlets.map(candidateRowFromLandlet);
-    await assertLandCandidatesDontOverlapExisting(
-      db, rows.map(landletWorldPolygon), 'One or more candidates would overlap existing land',
-    );
+    await assertLandCandidatesDontOverlapExisting(db, rows, 'One or more candidates would overlap existing land');
+    await assertLandCandidatesDontOverlapEachOther(rows, 'One or more candidates would overlap each other');
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
@@ -5095,7 +5134,7 @@ async function handleLandCandidates(request, db, route, url) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
-    await assertLandCandidatesDontOverlapExisting(db, [landletWorldPolygon(row)], 'Candidate would overlap existing land');
+    await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land');
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
