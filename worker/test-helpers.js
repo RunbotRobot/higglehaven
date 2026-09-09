@@ -63,7 +63,11 @@ export function withSession(token, options = {}) {
 // by default rather than needing to invent one at every call site; `extra`
 // can still override it for the tests that do care.
 export async function signup(email, password, extra = {}) {
-  const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ...extra };
+  // #556: signup now requires age attestation — every test account signs up
+  // as an adult by default so this doesn't need repeating at every call
+  // site; a test specifically exercising the attestation requirement itself
+  // overrides it via `extra`.
+  const body = { email, password, username: `user-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true, ...extra };
   return api('/auth/signup', { method: 'POST', body: JSON.stringify(body) });
 }
 

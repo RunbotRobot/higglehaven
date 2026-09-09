@@ -35,6 +35,7 @@ await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', 'Ada Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', password);
+await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
 const signupStatus = await waitForText(page, '#auth-status', 'dev mode');
 
@@ -134,6 +135,7 @@ await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', 'Bea Suite');
 await page.fill('#auth-signup-email', secondEmail);
 await page.fill('#auth-signup-password', 'a different fine password');
+await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
 const btnLabelAfterSecondSignup = await waitForText(page, '#account-auth-btn', 'Bea Suite');
 console.log('account button after the second account signs up (should be "Bea Suite"):', btnLabelAfterSecondSignup);

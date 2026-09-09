@@ -2225,6 +2225,13 @@
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.85);
       }
+      /* Checkbox + its own text side by side, unlike the stacked
+         label-above-input layout every other .auth-form field uses. */
+      .auth-form label.auth-checkbox-label {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+      }
       #auth-modal-content input[type='email'],
       #auth-modal-content input[type='password'],
       #auth-modal-content input[type='text'] {
@@ -3320,6 +3327,14 @@
                 <input type="password" id="auth-signup-password" required autocomplete="new-password" minlength="8" />
                 <button type="button" id="auth-signup-password-toggle" class="auth-password-toggle-btn"></button>
               </div>
+            </label>
+            <!-- docs/SPEC.md §6: "Registration requires age attestation" --
+                 a plain checkbox (not a birthdate collection), matching the
+                 backend's own ageAttested boolean (worker/index.js's
+                 handleSignup, #556). -->
+            <label class="auth-checkbox-label">
+              <input type="checkbox" id="auth-signup-age-attest" required />
+              I confirm I am at least 18 years old
             </label>
             <button type="submit">Sign Up</button>
           </form>

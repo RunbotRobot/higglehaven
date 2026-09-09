@@ -684,6 +684,47 @@ describe('Authentication', () => {
     expect(shortPassword.response.status).toBe(400);
   });
 
+  // #556 (docs/SPEC.md §6): registration requires age attestation, and a
+  // fresh account starts at trust_tier 'none' until a credit card (or,
+  // once #589 lands, government-ID verification) raises it.
+  it('rejects signup without age attestation, and records the default trust tier', async () => {
+    const unattested = await api('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: `auth-noage-${crypto.randomUUID()}@example.com`,
+        password: 'a fine long password',
+        username: `user-${crypto.randomUUID().slice(0, 8)}`,
+        ageAttested: false,
+      }),
+    });
+    expect(unattested.response.status).toBe(400);
+
+    const attested = await signup(`auth-age-${crypto.randomUUID()}@example.com`, 'a fine long password');
+    expect(attested.response.status).toBe(201);
+    expect(attested.body.user).toMatchObject({ ageAttested: true, trustTier: 'none', cardFunding: null });
+  });
+
+  it('gates card-setup-intent/confirm-card behind a session, then 503s once past that since Stripe is never configured in this test suite', async () => {
+    const noSession = await api('/auth/card-setup-intent', { method: 'POST' });
+    expect(noSession.response.status).toBe(401);
+
+    const builder = await signupBuilder('card-setup-503');
+    const notConfigured = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
+    expect(notConfigured.response.status).toBe(503);
+
+    const confirmNoSession = await api('/auth/confirm-card', {
+      method: 'POST',
+      body: JSON.stringify({ paymentMethodId: 'pm_does_not_exist' }),
+    });
+    expect(confirmNoSession.response.status).toBe(401);
+
+    const confirmNotConfigured = await api('/auth/confirm-card', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ paymentMethodId: 'pm_does_not_exist' }),
+    }));
+    expect(confirmNotConfigured.response.status).toBe(503);
+  });
+
   it('normalizes email casing between signup and login', async () => {
     const email = `Auth-Case-${crypto.randomUUID()}@Example.com`;
     await signup(email, 'a fine long password');

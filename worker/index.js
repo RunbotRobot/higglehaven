@@ -3515,6 +3515,9 @@ function userFromRow(row) {
     username: row.username,
     emailVerified: row.email_verified_at !== null,
     isAdmin: Boolean(row.is_admin),
+    ageAttested: row.age_attested_at !== null,
+    trustTier: row.trust_tier,
+    cardFunding: row.card_funding,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -4082,7 +4085,61 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
     return handleAdminBootstrap(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
+    return handleCardSetupIntent(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'confirm-card') {
+    return handleConfirmCard(request, env, db);
+  }
   return json({ error: 'Not found' }, 404);
+}
+
+// #556 (docs/SPEC.md §6): credit-card-type detection at signup, the
+// zero-new-vendor half of the registration gate (the other half, real
+// government-ID verification via Didit, is #589). A SetupIntent collects
+// and confirms a card without charging it — Stripe doesn't bill for
+// creating one, only for an actual payment_intent charge — so this tier
+// costs nothing beyond the Stripe account this app already has for seller
+// Connect payouts and checkout.
+async function handleCardSetupIntent(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (!stripeConfigured(env)) {
+    throw new HttpError('Card verification is not configured on this server yet.', 503);
+  }
+  const setupIntent = await stripeRequest(env, 'POST', 'setup_intents', {
+    'payment_method_types[]': 'card',
+    metadata: { userId: user.user_id },
+  });
+  return json({ clientSecret: setupIntent.client_secret });
+}
+
+// Reads back the card the frontend just collected/confirmed against the
+// SetupIntent above and checks Stripe's own card.funding field — "credit"
+// (not "debit"/"prepaid", per SPEC §6's own reasoning that those are too
+// accessible to minors to serve as an age signal) is the only path this
+// tier accepts. card_funding is recorded either way so a rejected
+// debit/prepaid attempt is still visible on the account, not a silent
+// no-op the builder has no way to explain to themselves later.
+async function handleConfirmCard(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  if (!stripeConfigured(env)) {
+    throw new HttpError('Card verification is not configured on this server yet.', 503);
+  }
+  const input = await readJson(request);
+  const paymentMethodId = stringValue(input.paymentMethodId, 'paymentMethodId');
+  const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(paymentMethodId)}`);
+  const funding = paymentMethod.card?.funding || null;
+  const accepted = funding === 'credit';
+  await db.prepare(`
+    UPDATE users SET card_funding = ?, trust_tier = CASE WHEN ? THEN 'credit_card' ELSE trust_tier END,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(funding, accepted ? 1 : 0, user.user_id).run();
+  if (!accepted) {
+    throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
+  }
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
 }
 
 // The only way to become an admin (see migrations/0055_admin_role.sql) —
@@ -4122,7 +4179,19 @@ async function handleSignup(request, env, db, url) {
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
 
+  // Counted against the rate limit the same as every other rejection below
+  // (see the duplicate-email 409's own comment on why) before checking it —
+  // a cheap validation failure shouldn't be a free, unlimited way to probe
+  // past the limiter.
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
+
+  // docs/SPEC.md §6, #556: registration requires age attestation. A plain
+  // boolean checkbox, not a birthdate collection — the spec's own bar here
+  // is attestation, not age verification (that's what the credit-card/
+  // government-ID tier immediately below is for).
+  if (input.ageAttested !== true) {
+    throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
+  }
 
   // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
   // registered address the same way a literal duplicate is caught —
@@ -4141,12 +4210,13 @@ async function handleSignup(request, env, db, url) {
   // specifically meant to prevent.
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
+  const ageAttestedAt = new Date().toISOString();
   const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical)
-    SELECT ?, ?, ?, ?, ?
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
+    SELECT ?, ?, ?, ?, ?, ?
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
   `).bind(
-    userId, email, passwordHash, username, emailCanonical,
+    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
     email, emailCanonical, username,
   ).run();
   if (inserted.meta.changes === 0) {

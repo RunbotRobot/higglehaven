@@ -56,7 +56,10 @@ async function ensureAdminSession() {
     const email = `e2e-admin-${crypto.randomUUID()}@e2e.test`;
     const signedUp = await adminApi('/auth/signup', null, {
       method: 'POST',
-      body: JSON.stringify({ email, password: 'e2e-admin-password-123', username: `e2e-admin-${crypto.randomUUID().slice(0, 8)}` }),
+      body: JSON.stringify({
+        email, password: 'e2e-admin-password-123', username: `e2e-admin-${crypto.randomUUID().slice(0, 8)}`,
+        ageAttested: true,
+      }),
     });
     const cookie = extractSessionCookie(signedUp.response);
     const bootstrapped = await adminApi('/auth/admin-bootstrap', cookie, {
@@ -218,6 +221,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   await page.fill('#auth-signup-username', label);
   await page.fill('#auth-signup-email', email);
   await page.fill('#auth-signup-password', 'e2e-test-password-123');
+  await page.check('#auth-signup-age-attest');
   await page.click('#auth-signup-form button[type="submit"]');
   // The signup handler only auto-closes the modal once there's no dev-mode
   // verify-link status to show (see its own comment) — the test env never

@@ -26,6 +26,7 @@ await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', 'Settings Identity Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', 'a fine long password');
+await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
 const btnLabelAfterSignup = await waitForText(page, '#account-auth-btn', 'Settings Identity Suite');
 console.log('account button after signup, still in Shop mode (should be "Settings Identity Suite"):', btnLabelAfterSignup);

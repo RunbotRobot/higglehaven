@@ -20,11 +20,11 @@ async function requestJson(path, options) {
 // Returns the full response body, not just `user` — verificationEmailSent/
 // devVerifyUrl (see docs/API.md's "Authentication") matter to the signup
 // UI too, unlike logIn below where nothing but the user is ever relevant.
-export async function signUp({ email, password, username }) {
+export async function signUp({ email, password, username, ageAttested }) {
   return requestJson('/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password, username }),
+    body: JSON.stringify({ email, password, username, ageAttested }),
   });
 }
 
