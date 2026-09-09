@@ -767,6 +767,21 @@ const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 // dozens of times over), so this can be a plain, low ceiling.
 const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 
+// Backlog audit: POST .../similarity-search (#329) is unauthenticated
+// (deliberately — a read over already-public catalog data, see
+// searchCatalogBySimilarity's own comment in src/api.js) AND does real,
+// non-trivial per-call work: a full SELECT over every catalog_templates
+// row with an embedding, a JSON.parse of each, and an O(rows × embedding
+// length) cosine-similarity scan — unlike an ordinary indexed listing
+// query. Every other unauthenticated endpoint in this file with a real
+// per-call cost (catalog-delete/patch's anonymous path just above,
+// sign-post, purchase, builder/seller create) is rate-limited by IP; this
+// one wasn't, despite matching that exact shape. IP-keyed like those, not
+// per-builder like concept-image (there's no session here to key on),
+// with headroom for a legitimate Prompt-mode session to run this once per
+// concept image it generates.
+const SIMILARITY_SEARCH_RATE_LIMIT_MAX = 30;
+
 // #362 flagged catalog template creation for the same missing-rate-limit
 // gap as builders/sellers below, but unlike those two, an IP-keyed limit
 // here isn't safe to add at any size a real automated flood would
@@ -886,6 +901,7 @@ async function handleCatalog(request, db, route, url, models, env) {
   // real thing later" pattern; a real vector index is a swap-in later,
   // not something this endpoint's callers need to know about.
   if (request.method === 'POST' && route.length === 2 && route[1] === 'similarity-search') {
+    await checkRateLimit(db, `similarity-search:${clientIp(request)}`, SIMILARITY_SEARCH_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const embedding = validateThumbnailEmbedding(input.embedding);
     if (!embedding) throw new HttpError('embedding is required', 400);
