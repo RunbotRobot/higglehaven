@@ -706,6 +706,40 @@ describe('Community calendar', () => {
     const triggeredFlags = [first.body.triggered, second.body.triggered];
     expect(triggeredFlags.filter(Boolean)).toHaveLength(1);
   });
+
+  // Found via backlog audit (#609): unlike the structurally near-identical
+  // sign-post POST ("rate-limits repeated posts from the same client" above,
+  // #337) and friend requests (FRIEND_REQUEST_RATE_LIMIT_MAX), posting a
+  // calendar event had no checkRateLimit call at all. A dedicated
+  // builder+landlet, not calendarBuilder/calendarLandlet, so this test's own
+  // bucket doesn't collide with the other calendar tests' own event posts.
+  it('rate-limits repeated event postings from the same builder', async () => {
+    const rateLimitBuilder = await signupBuilder('calendar-rate-limit-builder');
+    await createGreenbeltLandlet('calendar-rate-limit-landlet');
+    await api('/landlets/calendar-rate-limit-landlet/claim', rateLimitBuilder.session({ method: 'POST' }));
+    await api('/instances', rateLimitBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-rate-limit-instance',
+        landletId: 'calendar-rate-limit-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/instances/calendar-rate-limit-instance/events', rateLimitBuilder.session({
+        method: 'POST', body: JSON.stringify({ text: `Event ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/instances/calendar-rate-limit-instance/events', rateLimitBuilder.session({
+      method: 'POST', body: JSON.stringify({ text: 'One too many' }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Extensibility (crop floor)', () => {

@@ -6396,6 +6396,17 @@ function signPostFromRow(row) {
 // authorLabel comes from their real builder profile, not client input —
 // otherwise anyone could post a "confetti-cannon" trigger (or any other
 // event) on someone else's shop under that builder's own name.
+// Found via backlog audit: unlike every other repeatable write in this
+// file — including the structurally near-identical sign-post POST above
+// (SIGN_POST_RATE_LIMIT_MAX, itself found via #337 for this exact class
+// of gap) and friend requests (FRIEND_REQUEST_RATE_LIMIT_MAX) — posting a
+// calendar event had no checkRateLimit call at all, letting an
+// authenticated landlet owner insert unlimited calendar_events rows in a
+// tight loop. Bucketed by builder id, not IP, since this is an
+// authenticated action gating a real account's own request volume (same
+// reasoning FRIEND_REQUEST_RATE_LIMIT_MAX's own comment gives).
+const CALENDAR_EVENT_RATE_LIMIT_MAX = 20;
+
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -6421,6 +6432,7 @@ async function handleCalendarEvents(request, db, route) {
     }
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
+    await checkRateLimit(db, `calendar-event:${sessionBuilder.builder_id}`, CALENDAR_EVENT_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
