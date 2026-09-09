@@ -1736,6 +1736,32 @@ function setServerReachable(reachable) {
   connectivityIndicatorEl.hidden = reachable;
 }
 
+// Backlog audit: the six sync* functions below all fire fire-and-forget
+// (never awaited by their own callers — see spawnInstanceAt's own `if
+// (sync) syncCreate(mesh)`), so several can be in flight at once, and
+// nothing guarantees they RESOLVE in the order they were ISSUED —
+// especially not during the exact connectivity blip this indicator exists
+// to show. A request sent right as the connection drops can sit retrying
+// long after a later request, sent once the connection came back, has
+// already succeeded — if that straggler's failure were applied on
+// arrival, it would flip the indicator back to "unreachable" even though
+// a more recent attempt already proved the server responds fine again.
+// Same supersede-guard idiom as sellerShowcaseLoadToken/
+// catalogThumbnailPersistTokens elsewhere in this file: each attempt gets
+// a monotonic id at issue time, and a result is only applied if no
+// later-issued attempt's result has already landed — an out-of-order
+// straggler is silently dropped instead of overwriting fresher info.
+let syncAttemptSeq = 0;
+let lastAppliedSyncAttempt = 0;
+function nextSyncAttempt() {
+  return ++syncAttemptSeq;
+}
+function reportSyncResult(attemptId, reachable) {
+  if (attemptId < lastAppliedSyncAttempt) return;
+  lastAppliedSyncAttempt = attemptId;
+  setServerReachable(reachable);
+}
+
 connectivityIndicatorEl.addEventListener('click', () => {
   alert("Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
 });
@@ -1752,33 +1778,36 @@ function isNetworkError(err) {
 }
 
 async function syncCreate(mesh) {
+  const attemptId = nextSyncAttempt();
   try {
     await createInstanceRemote(instanceFromMesh(mesh));
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
   }
 }
 
 async function syncUpdate(mesh) {
+  const attemptId = nextSyncAttempt();
   try {
     const { instanceId, ...patch } = instanceFromMesh(mesh);
     await updateInstanceRemote(instanceId, patch);
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
   }
 }
 
 async function syncDelete(instanceId) {
+  const attemptId = nextSyncAttempt();
   try {
     await deleteInstanceRemote(instanceId);
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync instance delete to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
   }
 }
 
@@ -1795,36 +1824,39 @@ async function syncDelete(instanceId) {
 // came back with items missing and no record of what or why.
 async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
+  const attemptId = nextSyncAttempt();
   try {
     await createInstancesRemote(meshes.map(instanceFromMesh));
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
     alert(`Couldn't save ${meshes.length} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
 
 async function syncBatchUpdate(meshes) {
   if (meshes.length === 0) return;
+  const attemptId = nextSyncAttempt();
   try {
     await upsertInstancesRemote(meshes.map(instanceFromMesh));
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
     alert(`Couldn't save ${meshes.length} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
 
 async function syncBatchDelete(instanceIds) {
   if (instanceIds.length === 0) return;
+  const attemptId = nextSyncAttempt();
   try {
     await deleteInstancesRemote(instanceIds);
-    setServerReachable(true);
+    reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync instance deletes to backend:', err);
-    if (isNetworkError(err)) setServerReachable(false);
+    if (isNetworkError(err)) reportSyncResult(attemptId, false);
     alert(`Couldn't save the deletion of ${instanceIds.length} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
   }
 }
