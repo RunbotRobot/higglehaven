@@ -149,6 +149,64 @@
           padding: 3px 8px;
         }
       }
+      /* #540: Sell mode's "faux lándlet" 3D array — scrolling through pages
+         of the seller's own products (see enterSellMode/loadSellerShowcasePage
+         in src/main.js), each page its own ground plane sized to fit that
+         page's items, capped by a cumulative model-file-size budget rather
+         than a fixed item count. Hidden by default (only shown while
+         currentMode === 'sell'); bottom-center is free in every other mode. */
+      #seller-showcase-pager {
+        display: none;
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        align-items: center;
+        gap: 10px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 6px 14px;
+        border-radius: 999px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #seller-showcase-pager.visible {
+        display: flex;
+      }
+      #seller-showcase-pager button {
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        border-radius: 999px;
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #seller-showcase-pager button:disabled {
+        opacity: 0.4;
+      }
+      /* Reopens #seller-modal after it's been closed to browse the
+         showcase array behind it — otherwise closing it would strand the
+         seller with no way back to Manage/List/Upload. Bottom-right is
+         free while in Sell mode: #camera-debug-panel (its usual occupant)
+         is one of SELL_HIDDEN_BUILDER_UI_IDS. */
+      #seller-showcase-manage-btn {
+        display: none;
+        position: fixed;
+        bottom: 12px;
+        right: 8px;
+        z-index: 10;
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #seller-showcase-manage-btn.visible {
+        display: block;
+      }
       #camera-debug-panel {
         position: fixed;
         bottom: 44px;
@@ -2902,6 +2960,12 @@
       <button id="camera-debug-copy" type="button">Copy</button>
     </div>
     <div id="product-info"></div>
+    <div id="seller-showcase-pager">
+      <button id="seller-showcase-prev-btn" type="button" aria-label="Previous page">&#9664;</button>
+      <span id="seller-showcase-page-label">Page 1 of 1</span>
+      <button id="seller-showcase-next-btn" type="button" aria-label="Next page">&#9654;</button>
+    </div>
+    <button id="seller-showcase-manage-btn" type="button" hidden>Manage Products</button>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>

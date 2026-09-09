@@ -69,10 +69,14 @@ console.log('Manage toggle button active after tapping the card (should be true)
 console.log('the tapped product\'s row is already expanded (should be true):', rowExpanded);
 
 // Reopening the modal should reset back to Manage, same as Settings resets
-// to its General tab.
+// to its General tab. #540: clicking the Sell nav tab while already in Sell
+// mode is now a no-op (same as Build/Shop's own tab, currentMode already
+// matches) rather than the old always-reopens-the-modal special case —
+// #seller-showcase-manage-btn (shown behind the modal, over the showcase
+// array) is the real way back in now.
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await page.click('#seller-showcase-manage-btn');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 const manageActiveAfterReopen = await page.locator('#seller-list').isVisible();

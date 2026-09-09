@@ -69,5 +69,6 @@
   "0069_purchases_payment_intent.sql",
   "0070_higgles_rename.sql",
   "0071_catalog_template_image.sql",
-  "0072_purchase_payouts.sql"
+  "0072_purchase_payouts.sql",
+  "0073_catalog_template_model_size.sql"
 ]
