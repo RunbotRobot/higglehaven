@@ -57,9 +57,12 @@ describe('Didit verification webhook (#589)', () => {
     const wrongSig = await postDiditWebhook({ session_id: sessionId, status: 'Approved' }, { signature: 'a'.repeat(64) });
     expect(wrongSig.status).toBe(401);
 
-    // Neither attempt actually changed anything.
+    // Neither attempt actually changed anything from signupBuilder's own
+    // starting trust_tier (test-helpers.js's signup() stamps 'credit_card'
+    // on every test account by default now, see #556 — not literally
+    // 'none', but the point here is unchanged either way).
     const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
-    expect(user.trust_tier).toBe('none');
+    expect(user.trust_tier).toBe('credit_card');
   });
 
   it('raises trust_tier to id_verified on an Approved decision with a valid signature', async () => {
@@ -86,8 +89,11 @@ describe('Didit verification webhook (#589)', () => {
     const response = await postDiditWebhook({ session_id: sessionId, status: 'Declined' });
     expect(response.status).toBe(200);
 
+    // Not raised to 'id_verified' -- still whatever signupBuilder's own
+    // trust_tier shortcut left it at (#556's test-helpers.js default is
+    // 'credit_card' now, not literally 'none', but "unraised" is the point).
     const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
-    expect(user.trust_tier).toBe('none');
+    expect(user.trust_tier).toBe('credit_card');
     const session = await env.DB.prepare('SELECT status FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
     expect(session.status).toBe('declined');
   });
@@ -122,8 +128,10 @@ describe('Didit verification webhook (#589)', () => {
     const replay = await postDiditWebhook({ session_id: sessionId, status: 'Approved' });
     expect(replay.status).toBe(200);
 
+    // Still whatever it was after the first (declined) resolution — the
+    // replay's Approved status was ignored, not re-applied on top.
     const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
-    expect(user.trust_tier).toBe('none'); // still 'none' — the first (declined) resolution stuck, the replay was ignored
+    expect(user.trust_tier).toBe('credit_card');
     const session = await env.DB.prepare('SELECT status FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
     expect(session.status).toBe('declined');
   });
