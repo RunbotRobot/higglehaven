@@ -1712,11 +1712,48 @@ function instanceFromMesh(mesh) {
   };
 }
 
+// #545: the batch siblings below already surface a sync failure loudly via
+// alert() — the single-item ones (this trio) deliberately don't, since
+// alerting on every routine move/rotate/place would be far too noisy (see
+// their own comment). Owner-clarified UX for the gap that leaves: a single
+// small icon reflecting whether the backend was reachable as of the most
+// recent sync attempt (any of the six functions below), not a per-action
+// alert — shown only while unreachable, explained on tap, and hidden the
+// moment any subsequent sync (from any of them) succeeds again. persistLayout
+// (this device's own localStorage save) already runs before any of these are
+// even called, so nothing here is ever a data-loss risk — purely a "the
+// server copy might be stale" signal.
+const connectivityIndicatorEl = document.getElementById('connectivity-indicator');
+let serverReachable = true;
+
+function setServerReachable(reachable) {
+  if (reachable === serverReachable) return;
+  serverReachable = reachable;
+  connectivityIndicatorEl.hidden = reachable;
+}
+
+connectivityIndicatorEl.addEventListener('click', () => {
+  alert("Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
+});
+
+// A fetch() call rejects with a TypeError specifically when it never
+// reached a server at all (offline, DNS failure, connection refused, CORS) —
+// per the Fetch spec, that's the one case this indicator should react to.
+// requestJson (src/api.js) throws a plain Error for an HTTP-level failure
+// (400/500/...) once a response has actually come back, which means the
+// server IS reachable and just rejected the request for its own reason —
+// not what this icon is about.
+function isNetworkError(err) {
+  return err instanceof TypeError;
+}
+
 async function syncCreate(mesh) {
   try {
     await createInstanceRemote(instanceFromMesh(mesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
   }
 }
 
@@ -1724,16 +1761,20 @@ async function syncUpdate(mesh) {
   try {
     const { instanceId, ...patch } = instanceFromMesh(mesh);
     await updateInstanceRemote(instanceId, patch);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
   }
 }
 
 async function syncDelete(instanceId) {
   try {
     await deleteInstanceRemote(instanceId);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance delete to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
   }
 }
 
@@ -1752,8 +1793,10 @@ async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
   try {
     await createInstancesRemote(meshes.map(instanceFromMesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
     alert(`Couldn't save ${meshes.length} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
@@ -1762,8 +1805,10 @@ async function syncBatchUpdate(meshes) {
   if (meshes.length === 0) return;
   try {
     await upsertInstancesRemote(meshes.map(instanceFromMesh));
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
     alert(`Couldn't save ${meshes.length} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
@@ -1772,8 +1817,10 @@ async function syncBatchDelete(instanceIds) {
   if (instanceIds.length === 0) return;
   try {
     await deleteInstancesRemote(instanceIds);
+    setServerReachable(true);
   } catch (err) {
     console.warn('Failed to sync instance deletes to backend:', err);
+    if (isNetworkError(err)) setServerReachable(false);
     alert(`Couldn't save the deletion of ${instanceIds.length} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
   }
 }
@@ -10394,7 +10441,7 @@ function unloadShopLandletInstances(entry) {
 // trying to undo this.
 const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
-  'level-controls',
+  'level-controls', 'connectivity-indicator',
 ];
 
 async function enterShopMode() {

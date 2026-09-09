@@ -159,6 +159,34 @@
         align-items: flex-end;
         gap: 4px;
       }
+      /* #545: only shown when a sync to the backend has failed with a real
+         network-level error (server unreachable) — Build mode's own edits
+         still save fine to this device via localStorage either way
+         (persistLayout, called before any of syncCreate/syncUpdate/
+         syncDelete/syncBatch* ever run), so this exists purely to surface
+         that gap rather than to block anything. Owner: "a little icon in
+         the corner that indicates when server connectivity is not
+         reachable... if they click or tap that icon, it explains what the
+         icon means... when the server is reachable, no icon needs to be
+         displayed" — hidden by default, toggled via setServerReachable in
+         src/main.js. Bottom-left is otherwise unused by any other builder
+         chrome (the other three corners all host something already —
+         #topbar-left, #undo-redo-panel/#mode-nav, #camera-debug-panel). */
+      #connectivity-indicator {
+        position: fixed;
+        bottom: 12px;
+        left: 12px;
+        z-index: 10;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: none;
+        background: var(--danger);
+        color: #fff;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+      }
       /* Shop mode's overlay — hidden by default, toggled with the shared
          .visible class (main.js) exactly like the modals, but these aren't
          modals: they float over the full-screen flight view rather than
@@ -2901,6 +2929,7 @@
       <div id="camera-debug"></div>
       <button id="camera-debug-copy" type="button">Copy</button>
     </div>
+    <button id="connectivity-indicator" type="button" hidden aria-label="Server unreachable — tap for details">&#9888;</button>
     <div id="product-info"></div>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>

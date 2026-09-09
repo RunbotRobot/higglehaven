@@ -286,6 +286,21 @@ cost when it happens anyway:
   creating one — that's the fast, single-query check the rest of this
   fleet is already reading every cycle, so it catches a same-minute
   collision that a GitHub API round-trip alone might not.
+- **Set `waitingOn` back to `"owner"` yourself the moment your own reply
+  hands a decision back to them — the Control Room can't do this for
+  you.** Its own compose-form code auto-clears `waitingOn` from `"owner"`
+  to `"claude"` when the owner replies (every reply typed into that form
+  is always from them), but a session's own reply goes straight through
+  the db API, bypassing that page's JS entirely — nothing on the page
+  ever flips a card back to `"owner"` after you post a proposal, scoping
+  question, or anything else that's genuinely awaiting their call. Found
+  via a backlog audit turning up several cards (#328, #540, #556, #557,
+  among others) stuck showing "Ready for Claude" — a false green light —
+  for hours after a session had already posted a proposal and moved on,
+  simply because nobody's write set `waitingOn` back. This is not
+  something the page will ever catch for you: set it explicitly, in the
+  same write that posts your reply, whenever the ball actually leaves
+  your court.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
