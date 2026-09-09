@@ -2845,6 +2845,75 @@ describe('Simulated purchases', () => {
       });
     });
 
+    // #615 (sub-issue of #350): gates real-money payout once combined
+    // (higgles + real-money) gross income for the year crosses #613's
+    // reporting threshold with no W-9/W-8BEN on file. This suite never
+    // configures STRIPE_SECRET_KEY, but handleSellerPayouts computes this
+    // gate before the stripeConfigured check specifically so the
+    // full-block scenario (no headroom left at all) is reachable and
+    // testable here — see that function's own comment. The
+    // partial-headroom cap (letting some, not all, of a payout through)
+    // interacts with the Stripe balance call further down and isn't
+    // exercisable without Stripe configured, the same limitation this
+    // whole describe block already documents at its own top.
+    describe('Tax-threshold payout gate (#615)', () => {
+      // Same admin land-cap-grants escape hatch "Tax summary (#612)" above
+      // uses to create a real higgles_earnings_events row without needing
+      // a real sale.
+      async function grantHiggles(builderId, amountCents) {
+        const granted = await api(`/builders/${builderId}/land-cap-grants`, adminSession({
+          method: 'POST', body: JSON.stringify({ amountCents }),
+        }));
+        expect(granted.response.status).toBe(201);
+      }
+
+      it('blocks a payout once combined earnings have reached the threshold with no tax paperwork on file', async () => {
+        const builder = await signupBuilder('tax-gate-blocked-builder');
+        const seller = await createConnectedSeller('tax-gate-blocked-seller');
+        await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true }); // 4900 available
+        const sellerBuilder = await api('/builders/me', seller.session());
+        await grantHiggles(sellerBuilder.body.builder.builderId, 2000000); // hits the $20,000 threshold on its own
+
+        const blocked = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+        expect(blocked.response.status).toBe(403);
+        expect(blocked.body.error).toMatch(/tax-reporting/i);
+
+        // Never even reached the claim step — nothing was touched.
+        const summary = await api('/sellers/me/payouts', seller.session());
+        expect(summary.body.availableCents).toBe(4900);
+      });
+
+      it('does not block a payout while combined earnings stay under the threshold', async () => {
+        const builder = await signupBuilder('tax-gate-under-builder');
+        const seller = await createConnectedSeller('tax-gate-under-seller');
+        await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+        const sellerBuilder = await api('/builders/me', seller.session());
+        await grantHiggles(sellerBuilder.body.builder.builderId, 1000000); // 50% of threshold — nowhere near it
+
+        // Falls through to the ordinary unconfigured-Stripe 503, same as
+        // every other payout test in this file — proof the tax gate didn't
+        // fire and block it with its own 403 first.
+        const attempted = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+        expect(attempted.response.status).toBe(503);
+      });
+
+      it('lifts the block once W-9/W-8BEN tax paperwork is on file, even over the threshold', async () => {
+        const builder = await signupBuilder('tax-gate-paperwork-builder');
+        const seller = await createConnectedSeller('tax-gate-paperwork-seller');
+        await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+        const sellerBuilder = await api('/builders/me', seller.session());
+        await grantHiggles(sellerBuilder.body.builder.builderId, 2000000);
+        await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+          .bind('w9', '2026-01-01T00:00:00.000Z', seller.email).run();
+
+        // Same unconfigured-Stripe 503 as the under-threshold case above —
+        // paperwork being on file means the tax gate no longer applies at
+        // all, so this falls through exactly the same way.
+        const attempted = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+        expect(attempted.response.status).toBe(503);
+      });
+    });
+
     // #614 (sub-issue of #350): W-9/W-8BEN collection. This suite
     // deliberately never configures TAX_ID_ENCRYPTION_KEY (worker/tax-id-form.test.js
     // is a separate file for that reason — see its own comment), so this is
