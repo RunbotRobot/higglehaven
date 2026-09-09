@@ -109,13 +109,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Retries once on failure, same rationale/shape as the shard retry
-      # below. Confirmed via job logs (PR #611, all 4 shards, run 34384027836
-      # and its rerun) that this step's own apt-get install can fail with a
-      # "Hash Sum mismatch" fetching Google's Chrome apt repo — an external
-      # CDN-propagation hiccup on dl.google.com's own end, not anything in
-      # this repo, and not something the later per-shard test retry below
-      # ever gets a chance to cover since it dies before any test runs.
+      # ubuntu-latest ships Google's own Chrome apt repo pre-registered
+      # (for a system Chrome install this workflow never uses) — but
+      # --with-deps chromium below only needs apt to resolve shared-library
+      # runtime deps (libnss3, libatk, etc.), never anything actually
+      # fetched *from* that repo. Any apt-get update still hits it anyway
+      # as long as its source list is present, and confirmed via job logs
+      # (PR #611, runs 34384027836/34385033854 — 8 shard failures across
+      # two attempts each, all identical) that dl.google.com's own CDN can
+      # serve an inconsistent package index ("Hash Sum mismatch") for well
+      # over 30 minutes straight, outlasting a short in-job retry. Dropping
+      # the source list removes the dependency on that repo's health
+      # entirely, rather than betting the outage clears in time.
+      - run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome*.list
+      # Retries once on failure too, same rationale/shape as the shard
+      # retry below, as a fallback for any other transient apt/network
+      # issue this step's install-deps step might still hit.
       - run: |
           for attempt in 1 2; do
             if npx playwright install --with-deps chromium; then
