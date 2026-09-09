@@ -62,6 +62,12 @@ const secondBuilderId = await secondPage.evaluate(async (label) => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password: 'e2e-test-password-123', username: label, ageAttested: true }),
   });
+  // #556: claiming (below) now requires trust_tier != 'none' too, not just
+  // a session (see requireSessionBuilder's own assertVerified). Stripe is
+  // never configured in this e2e environment, so confirm-card takes its
+  // simulated fallback (handleConfirmCard's own comment) — no real card
+  // needed, just the round trip.
+  await fetch('/api/auth/confirm-card', { method: 'POST' });
   const me = await fetch('/api/builders/me');
   return (await me.json()).builder.builderId;
 }, SECOND_LABEL);

@@ -234,6 +234,32 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // matches it once it's HIDDEN (no .visible class, so display:none),
   // which Playwright's default "wait for visible" can never satisfy.
   await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
+  await clearVerifyModalIfShown(page);
+}
+
+// #556 (docs/SPEC.md §6): age attestation + credit-card verification,
+// required to build/sell — clears #verify-modal if it's currently showing,
+// a no-op otherwise. Needed after ANY route into Build/Sell for an account
+// that hasn't cleared this gate yet, not just chooseIdentity's own signup
+// flow above — see auth.test.mjs's own Sell-mode visits, which log in/sign
+// up through the auth modal directly rather than through chooseIdentity.
+// A fresh signup always attests age via its own checkbox first, so this
+// usually opens straight into the card step — simulated (Stripe is never
+// configured in this e2e environment, see handleCardSetupIntent's own
+// comment in worker/index.js), never a real Stripe Elements card form. The
+// age-step branch below only matters for a session that reached this
+// modal without ever attesting.
+export async function clearVerifyModalIfShown(page) {
+  const verifyModalShown = await page.waitForSelector('#verify-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
+  if (!verifyModalShown) return;
+  if (await page.locator('#verify-age-step').isVisible()) {
+    await page.check('#verify-age-attest');
+    await page.click('#verify-continue-btn');
+  }
+  if (await page.locator('#verify-modal.visible').count() > 0) {
+    await page.click('#verify-continue-btn');
+  }
+  await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 
 // Claims whatever landlet the claim-modal's overhead map offers first —

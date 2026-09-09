@@ -257,6 +257,20 @@ email verification:
 `verificationEmailSent` is `false` (with a `devVerifyUrl` field added
 instead) whenever the dev-mode fallback above kicks in.
 
+### `POST /api/auth/age-attest`
+
+```json
+{ "ageAttested": true }
+```
+
+Session-gated (`401` without one). Lets an existing account attest age
+after the fact — signup's own `ageAttested` checkbox only covers brand-new
+accounts; every account created before #556 existed has `ageAttestedAt:
+null` and no other way to clear it. `ageAttested` must be exactly `true`
+— `400` otherwise. Idempotent: attesting again on an already-attested
+account is a no-op, not an error. Returns `{ "user": { ... } }`, same
+shape as signup's.
+
 ### `POST /api/auth/card-setup-intent` and `POST /api/auth/confirm-card`
 
 Session-gated (`401` without one). #556's credit-card half of the
@@ -265,10 +279,12 @@ registration gate: collecting a card and reading Stripe's own
 has for seller Connect payouts and checkout — no charge is ever created.
 
 `POST /api/auth/card-setup-intent` takes no body and creates a Stripe
-`SetupIntent`, returning `{ "clientSecret": "seti_..._secret_..." }` for
-the frontend to confirm client-side with Stripe.js Elements. `503` if
-Stripe isn't configured on this deployment (`STRIPE_SECRET_KEY` unset —
-same guarded-secret shape as `STRIPE_SECRET_KEY`'s other uses).
+`SetupIntent`, returning
+`{ "clientSecret": "seti_..._secret_...", "publishableKey": "pk_...", "simulated": false }`
+for the frontend to confirm client-side with Stripe.js Elements. If Stripe
+isn't configured on this deployment (`STRIPE_SECRET_KEY` unset), returns
+`{ "clientSecret": null, "publishableKey": null, "simulated": true }`
+instead of `503` — see below.
 
 ```json
 { "paymentMethodId": "pm_..." }
@@ -280,8 +296,36 @@ account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"` is
 rejected with `400` (SPEC §6's own reasoning: those are too accessible to
 minors to serve as an age signal). `cardFunding` is recorded on the
 account either way, so a rejected attempt is still visible on the
-account rather than a silent no-op. Also `503` if Stripe isn't
-configured.
+account rather than a silent no-op.
+
+**Simulated fallback when Stripe isn't configured:** every builder/seller
+action now requires `trustTier != "none"` (see "Builders"/"Sellers"
+below), not just newly created accounts (owner decision, Control Room
+2026-09-09: "force everyone through the new gates, no grandfathering
+in"). A deployment with no Stripe keys at all (local dev, the test suite,
+or a fresh install before the platform owner adds real keys) would
+otherwise have no way to ever clear that gate. Same silent
+simulated-fallback convention this app already uses for real-money
+purchases and seller-payout onboarding when Stripe isn't configured:
+`card-setup-intent` returns `simulated: true` with nothing to collect, and
+`confirm-card` (called with no `paymentMethodId`, or any body at all) sets
+`trustTier` to `"credit_card"` directly, no real card ever checked. A real
+deployment with `STRIPE_SECRET_KEY` set never sees this path.
+
+### Age/credit-card verification gates builder and seller actions
+
+Every builder-owned or seller-owned mutation (claiming a landlet, placing
+an instance, creating a product, etc. — see "Builders"/"Sellers" sections
+below) requires the session's account to have both `ageAttestedAt` set and
+`trustTier != "none"`, not just a valid session. An account that hasn't
+cleared this gate gets `403` with
+`{ "error": "...", "verificationRequired": true }` — the extra field lets
+the frontend distinguish this from an ordinary ownership/permission `403`.
+Account-level endpoints stay reachable regardless (`GET
+/api/builders|sellers/me`, `age-attest`, `card-setup-intent`,
+`confirm-card`, logout) since a session needs them to clear the gate in
+the first place. Shopping (browsing, buying, reviewing, sign-posts) needs
+no account at all, so it's unaffected either way.
 
 ### `POST /api/auth/didit-verification-session`, `GET /api/auth/didit-verification-status`, `POST /api/auth/didit-webhook`
 

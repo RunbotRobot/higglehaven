@@ -84,6 +84,35 @@ export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
 }
 
+// #556 (docs/SPEC.md §6): lets an existing session attest age after the
+// fact — for accounts created before this requirement existed, since
+// signup's own ageAttested checkbox only covers brand-new ones.
+export async function ageAttest() {
+  const { user } = await requestJson('/auth/age-attest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ageAttested: true }),
+  });
+  return user;
+}
+
+// Returns `{ clientSecret, publishableKey, simulated }` — `simulated: true`
+// (Stripe not configured on this deployment) means there's no card to
+// collect at all; the caller should skip straight to confirmCard() with no
+// paymentMethodId (see handleCardSetupIntent's own comment in worker/index.js).
+export async function cardSetupIntent() {
+  return requestJson('/auth/card-setup-intent', { method: 'POST' });
+}
+
+export async function confirmCard(paymentMethodId) {
+  const { user } = await requestJson('/auth/confirm-card', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paymentMethodId }),
+  });
+  return user;
+}
+
 // docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
 // via Didit — the higher trust tier, above the credit-card tier. Starts a
 // fresh Didit-hosted verification session; the frontend opens the

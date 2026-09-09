@@ -704,25 +704,104 @@ describe('Authentication', () => {
     expect(attested.body.user).toMatchObject({ ageAttested: true, trustTier: 'none', cardFunding: null });
   });
 
-  it('gates card-setup-intent/confirm-card behind a session, then 503s once past that since Stripe is never configured in this test suite', async () => {
+  // #556: now that assertVerified actually gates real activity on
+  // trust_tier, card-setup-intent/confirm-card simulate success when
+  // Stripe isn't configured (same silent fallback this file already uses
+  // for real-money purchases/seller payouts) rather than 503ing — a
+  // deployment with no Stripe keys at all still needs a way to clear the
+  // gate. Still requires a real session either way.
+  it('simulates card-setup-intent/confirm-card when Stripe is not configured in this test suite, still gated behind a session', async () => {
     const noSession = await api('/auth/card-setup-intent', { method: 'POST' });
     expect(noSession.response.status).toBe(401);
 
-    const builder = await signupBuilder('card-setup-503');
-    const notConfigured = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
-    expect(notConfigured.response.status).toBe(503);
+    const builder = await signupBuilder('card-setup-simulated');
+    const setupIntent = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
+    expect(setupIntent.response.status).toBe(200);
+    expect(setupIntent.body).toEqual({ clientSecret: null, publishableKey: null, simulated: true });
 
-    const confirmNoSession = await api('/auth/confirm-card', {
-      method: 'POST',
-      body: JSON.stringify({ paymentMethodId: 'pm_does_not_exist' }),
-    });
+    const confirmNoSession = await api('/auth/confirm-card', { method: 'POST' });
     expect(confirmNoSession.response.status).toBe(401);
 
-    const confirmNotConfigured = await api('/auth/confirm-card', builder.session({
+    const confirmed = await api('/auth/confirm-card', builder.session({ method: 'POST' }));
+    expect(confirmed.response.status).toBe(200);
+    expect(confirmed.body.user).toMatchObject({ trustTier: 'credit_card', cardFunding: 'credit' });
+  });
+
+  // #556, owner decision (Control Room, 2026-09-09): "force everyone
+  // through the new gates, no grandfathering in" — assertVerified in
+  // worker/index.js's requireSessionBuilder/requireSessionSeller applies
+  // to every session, not just newly created ones.
+  it('blocks builder actions behind age attestation + credit-card verification, not just a session', async () => {
+    const email = `auth-unverified-${crypto.randomUUID()}@example.com`;
+    const signedUp = await api('/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ paymentMethodId: 'pm_does_not_exist' }),
+      body: JSON.stringify({
+        email, password: 'a fine long password', username: `user-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true,
+      }),
+    });
+    expect(signedUp.response.status).toBe(201);
+    const session = (options) => withSession(extractSessionCookie(signedUp.response), options);
+
+    const me = await api('/builders/me', session());
+    const builderId = me.body.builder.builderId;
+
+    const blocked = await api(`/builders/${builderId}`, session({
+      method: 'PATCH',
+      body: JSON.stringify({ label: 'Should be blocked' }),
     }));
-    expect(confirmNotConfigured.response.status).toBe(503);
+    expect(blocked.response.status).toBe(403);
+    expect(blocked.body.verificationRequired).toBe(true);
+
+    const confirmed = await api('/auth/confirm-card', session({ method: 'POST' }));
+    expect(confirmed.response.status).toBe(200);
+
+    const allowed = await api(`/builders/${builderId}`, session({
+      method: 'PATCH',
+      body: JSON.stringify({ label: 'Now allowed' }),
+    }));
+    expect(allowed.response.status).toBe(200);
+  });
+
+  // Covers an account created before #556 added age attestation at all —
+  // migrations/0074 leaves every pre-existing row's age_attested_at NULL,
+  // and there's no way back into the signup flow to set it.
+  it('lets an existing session self-attest age after the fact, idempotently', async () => {
+    const builder = await signupBuilder('preexisting-account');
+    await env.DB.prepare(
+      "UPDATE users SET age_attested_at = NULL WHERE user_id = (SELECT user_id FROM builders WHERE builder_id = ?)",
+    ).bind(builder.builderId).run();
+
+    const noSession = await api('/auth/age-attest', { method: 'POST', body: JSON.stringify({ ageAttested: true }) });
+    expect(noSession.response.status).toBe(401);
+
+    const declined = await api('/auth/age-attest', builder.session({
+      method: 'POST', body: JSON.stringify({ ageAttested: false }),
+    }));
+    expect(declined.response.status).toBe(400);
+
+    // Still blocked on age attestation even though the test-helper's own
+    // signup() shortcut already stamped trust_tier — both halves of
+    // assertVerified are required.
+    const blocked = await api(`/builders/${builder.builderId}`, builder.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'Blocked' }),
+    }));
+    expect(blocked.response.status).toBe(403);
+
+    const attested = await api('/auth/age-attest', builder.session({
+      method: 'POST', body: JSON.stringify({ ageAttested: true }),
+    }));
+    expect(attested.response.status).toBe(200);
+    expect(attested.body.user.ageAttested).toBe(true);
+
+    const again = await api('/auth/age-attest', builder.session({
+      method: 'POST', body: JSON.stringify({ ageAttested: true }),
+    }));
+    expect(again.response.status).toBe(200);
+
+    const allowed = await api(`/builders/${builder.builderId}`, builder.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'Allowed' }),
+    }));
+    expect(allowed.response.status).toBe(200);
   });
 
   // #589 (sub-issue of #556): government-ID verification via Didit, the

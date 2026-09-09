@@ -14,6 +14,9 @@ import {
   resetPassword,
   verifyEmail,
   resendVerificationEmail,
+  ageAttest,
+  cardSetupIntent,
+  confirmCard,
   startDiditVerification,
   fetchDiditVerificationStatus,
   fetchCatalog,
@@ -7501,6 +7504,158 @@ async function requireLogin(view = 'signup', hint) {
   return user;
 }
 
+// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
+// government-ID, #589) verification, required to build or sell — owner
+// decision (Control Room, 2026-09-09): "force everyone through the new
+// gates, no grandfathering in," so this applies to every account,
+// including ones that logged in before this existed, not just brand-new
+// signups. Modeled closely on #auth-modal/#checkout-modal's own
+// open/wait/close pattern just above/below, but with no "just dismiss it"
+// escape — the only way out of #verify-modal that isn't clearing the gate
+// is logging out entirely (see verifyLogoutBtn below), since this app has
+// no unverified-but-logged-in state a Build/Sell session can sit in.
+let pendingVerifyResolvers = [];
+function notifyVerifyResult(user) {
+  const resolvers = pendingVerifyResolvers;
+  pendingVerifyResolvers = [];
+  for (const resolve of resolvers) resolve(user);
+}
+function waitForVerifyResult() {
+  return new Promise((resolve) => pendingVerifyResolvers.push(resolve));
+}
+
+const verifyModalEl = document.getElementById('verify-modal');
+const verifyAgeStepEl = document.getElementById('verify-age-step');
+const verifyAgeAttestInput = document.getElementById('verify-age-attest');
+const verifyCardStepEl = document.getElementById('verify-card-step');
+const verifyCardElementEl = document.getElementById('verify-card-element');
+const verifyStatusEl = document.getElementById('verify-status');
+const verifyContinueBtn = document.getElementById('verify-continue-btn');
+const verifyLogoutBtn = document.getElementById('verify-logout-btn');
+
+function setVerifyStatus(text, type) {
+  verifyStatusEl.textContent = text || '';
+  verifyStatusEl.classList.toggle('error', type === 'error');
+}
+
+let verifyCardElement = null;
+// Set once card-setup-intent resolves for the currently-open card step —
+// `simulated: true` (Stripe not configured on this deployment, see
+// handleCardSetupIntent's own comment in worker/index.js) means there's no
+// card element to mount at all; the Continue button goes straight to
+// confirmCard(null).
+let verifyStripeSetup = null;
+
+async function enterVerifyCardStep() {
+  verifyAgeStepEl.hidden = true;
+  verifyCardStepEl.hidden = false;
+  verifyContinueBtn.disabled = true;
+  setVerifyStatus('Loading verification form…');
+  try {
+    verifyStripeSetup = await cardSetupIntent();
+    if (verifyStripeSetup.simulated) {
+      verifyCardStepEl.hidden = true;
+      verifyContinueBtn.textContent = 'Verify (dev mode)';
+    } else {
+      const Stripe = await loadStripeJs();
+      const stripe = Stripe(verifyStripeSetup.publishableKey);
+      const elements = stripe.elements();
+      verifyCardElement = elements.create('card');
+      verifyCardElement.mount(verifyCardElementEl);
+      verifyContinueBtn.textContent = 'Verify card';
+    }
+    setVerifyStatus('');
+    verifyContinueBtn.disabled = false;
+  } catch (err) {
+    setVerifyStatus(err.message || 'Could not load card verification.', 'error');
+  }
+}
+
+function openVerifyModal(user) {
+  verifyStripeSetup = null;
+  verifyAgeAttestInput.checked = false;
+  verifyCardStepEl.hidden = true;
+  if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
+  setVerifyStatus('');
+  verifyModalEl.classList.add('visible');
+  if (!user.ageAttested) {
+    verifyAgeStepEl.hidden = false;
+    verifyContinueBtn.textContent = 'Continue';
+    verifyContinueBtn.disabled = false;
+  } else {
+    enterVerifyCardStep();
+  }
+}
+
+function closeVerifyModal() {
+  verifyModalEl.classList.remove('visible');
+  if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
+}
+
+verifyContinueBtn.addEventListener('click', async () => {
+  if (!verifyAgeStepEl.hidden) {
+    if (!verifyAgeAttestInput.checked) {
+      setVerifyStatus('Please confirm you meet the age requirement.', 'error');
+      return;
+    }
+    verifyContinueBtn.disabled = true;
+    setVerifyStatus('');
+    try {
+      const user = await ageAttest();
+      currentAuthUser = user;
+      if (user.trustTier !== 'none') { notifyVerifyResult(user); return; }
+      await enterVerifyCardStep();
+    } catch (err) {
+      setVerifyStatus(err.message || 'Could not confirm age.', 'error');
+      verifyContinueBtn.disabled = false;
+    }
+    return;
+  }
+
+  verifyContinueBtn.disabled = true;
+  setVerifyStatus('Verifying…');
+  try {
+    let paymentMethodId = null;
+    if (!verifyStripeSetup?.simulated) {
+      const Stripe = await loadStripeJs();
+      const stripe = Stripe(verifyStripeSetup.publishableKey);
+      const result = await stripe.confirmCardSetup(verifyStripeSetup.clientSecret, {
+        payment_method: { card: verifyCardElement },
+      });
+      if (result.error) throw new Error(result.error.message || 'Card verification failed.');
+      paymentMethodId = result.setupIntent.payment_method;
+    }
+    const user = await confirmCard(paymentMethodId);
+    currentAuthUser = user;
+    notifyVerifyResult(user);
+  } catch (err) {
+    setVerifyStatus(err.message || 'Card verification failed.', 'error');
+    verifyContinueBtn.disabled = false;
+  }
+});
+
+verifyLogoutBtn.addEventListener('click', async () => {
+  verifyLogoutBtn.disabled = true;
+  await logOut().catch(() => {});
+  currentAuthUser = null;
+  verifyLogoutBtn.disabled = false;
+  closeVerifyModal();
+  notifyVerifyResult(null);
+});
+
+// Blocks until `user` (already logged in) has cleared the age-attestation
+// + credit-card gate above, resolving with the updated, verified user — or
+// null if they logged out instead of clearing it (see verifyLogoutBtn).
+// Already-verified users resolve immediately without ever showing the
+// modal.
+async function requireVerification(user) {
+  if (user.ageAttested && user.trustTier !== 'none') return user;
+  openVerifyModal(user);
+  const result = await waitForVerifyResult();
+  closeVerifyModal();
+  return result;
+}
+
 // Two independent in-flight promises (not one shared "identity" flow),
 // for the same reason the old picker's own comment gave: Build mode's own
 // startup can be awaiting a login at the very moment the Sell nav button
@@ -7510,7 +7665,9 @@ async function ensureBuilderIdentity() {
   if (builderId) return builderId;
   if (!builderIdentityFlowPromise) {
     builderIdentityFlowPromise = (async () => {
-      const user = await requireLogin('signup', 'Sign up (or log in) to start building.');
+      let user = await requireLogin('signup', 'Sign up (or log in) to start building.');
+      if (!user) return null;
+      user = await requireVerification(user);
       if (!user) return null;
       const builder = await fetchMyBuilder();
       builderId = builder.builderId;
@@ -7527,7 +7684,9 @@ async function ensureSellerIdentity() {
   if (sellerId) return sellerId;
   if (!sellerIdentityFlowPromise) {
     sellerIdentityFlowPromise = (async () => {
-      const user = await requireLogin('signup', 'Sign up (or log in) to start selling.');
+      let user = await requireLogin('signup', 'Sign up (or log in) to start selling.');
+      if (!user) return null;
+      user = await requireVerification(user);
       if (!user) return null;
       const seller = await fetchMySeller();
       sellerId = seller.sellerId;

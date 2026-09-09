@@ -1394,6 +1394,85 @@
       #checkout-pay-btn:disabled {
         opacity: 0.5;
       }
+      /* docs/SPEC.md §6 / #556: same modal shell as #checkout-modal, but
+         with no close button — this one is not optional once it's shown
+         (see openVerifyModal's own comment in src/main.js), the one
+         escape hatch being "log out instead," which never gets you into
+         Build/Sell without clearing it on a later login either. */
+      #verify-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.35);
+        padding: 16px;
+      }
+      #verify-modal.visible {
+        display: flex;
+      }
+      #verify-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #verify-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #verify-modal-intro {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+        margin: 0;
+      }
+      #verify-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #verify-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #verify-status.error {
+        color: #b3402c;
+      }
+      #verify-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #verify-age-continue-btn, #verify-card-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #verify-age-continue-btn:disabled, #verify-card-submit-btn:disabled {
+        opacity: 0.5;
+      }
+      #verify-logout-btn {
+        align-self: center;
+        background: none;
+        border: none;
+        color: rgb(var(--ink-rgb) / 0.6);
+        font: 13px/1.4 sans-serif;
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 0;
+      }
       /* Same modal shell as #upload-modal, just wider — each row needs
          room for an axis picker, a minimum-length field, and a Save
          button alongside the product name. */
@@ -3209,6 +3288,33 @@
         <div id="checkout-modal-actions">
           <button id="checkout-pay-btn" type="button">Pay</button>
         </div>
+      </div>
+    </div>
+    <div id="verify-modal">
+      <div id="verify-modal-content">
+        <h2>Verify to continue</h2>
+        <p id="verify-modal-intro">
+          Building and selling on higglehaven requires confirming you're at least 18, plus a credit card (or
+          government-ID verification) to back that up — never charged, only checked.
+        </p>
+        <div id="verify-age-step">
+          <label class="auth-checkbox-label">
+            <input type="checkbox" id="verify-age-attest" />
+            I confirm I am at least 18 years old
+          </label>
+        </div>
+        <div id="verify-card-step" hidden>
+          <p id="verify-card-intro">
+            Add a credit card (not debit or prepaid) to verify your age. This only checks the card type — it is
+            never charged.
+          </p>
+          <div id="verify-card-element"></div>
+        </div>
+        <div id="verify-status"></div>
+        <div id="verify-modal-actions">
+          <button id="verify-continue-btn" type="button">Continue</button>
+        </div>
+        <button id="verify-logout-btn" type="button">Log out instead</button>
       </div>
     </div>
     <div id="seller-modal">
