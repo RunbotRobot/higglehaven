@@ -1,9 +1,13 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { api, signupBuilder, signupSeller } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder, signupSeller } from './test-helpers.js';
+
+let adminSession;
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  const admin = await signupAdmin('stripe-connect-admin');
+  adminSession = admin.session;
 });
 
 // Every KYC field a valid POST needs — individually overridden per test to
@@ -189,5 +193,94 @@ describe('Builder Stripe Connect account (#624)', () => {
     }));
     const sellerStatus = await api('/sellers/me/stripe-account', seller.session());
     expect(sellerStatus.body.connected).toBe(false);
+  });
+});
+
+// #625 (sub-issue of #349/#324): redeeming a builder's higgles balance for
+// real cash. Stripe is never configured in this suite (see this file's own
+// top-of-suite convention), so the actual transfer+payout round trip isn't
+// exercised here — only everything this endpoint checks before ever
+// reaching Stripe, same limitation as "Seller payouts"' own real-money
+// tests in worker/commerce.test.js.
+describe('Higgles redemption (#625)', () => {
+  async function connectBuilder(builder) {
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_test_redeem', stripe_onboarding_status = 'complete' WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+  }
+
+  async function creditHiggles(builder, amountCents) {
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(amountCents, builder.builderId).run();
+  }
+
+  it('requires a session for both GET and POST', async () => {
+    const got = await api('/builders/me/redeem');
+    expect(got.response.status).toBe(401);
+
+    const posted = await api('/builders/me/redeem', { method: 'POST', body: JSON.stringify({}) });
+    expect(posted.response.status).toBe(401);
+  });
+
+  it("reports availableCents from the builder's own higgles balance", async () => {
+    const builder = await signupBuilder('redeem-status');
+    await creditHiggles(builder, 5000);
+    const { response, body } = await api('/builders/me/redeem', builder.session());
+    expect(response.status).toBe(200);
+    expect(body.availableCents).toBe(5000);
+    expect(body.connected).toBe(false); // no Stripe account yet
+  });
+
+  it('rejects redeeming with nothing available', async () => {
+    const builder = await signupBuilder('redeem-empty');
+    const got = await api('/builders/me/redeem', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(got.response.status).toBe(400);
+  });
+
+  it('rejects redeeming more than the available balance', async () => {
+    const builder = await signupBuilder('redeem-too-much');
+    await creditHiggles(builder, 1000);
+    const got = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 5000 }),
+    }));
+    expect(got.response.status).toBe(400);
+
+    // Rejected before ever touching the balance.
+    const status = await api('/builders/me/redeem', builder.session());
+    expect(status.body.availableCents).toBe(1000);
+  });
+
+  it('blocks redemption once combined earnings cross the reporting threshold with no tax paperwork on file', async () => {
+    const builder = await signupBuilder('redeem-threshold');
+    await connectBuilder(builder);
+    // Over the $20,000 threshold via the same higgles_earnings_events
+    // ledger annualGrossIncome reads — a real earnings event, not just a
+    // balance bump, so it's actually counted as this year's gross income.
+    await api(`/builders/${builder.builderId}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 2_000_001 }),
+    }));
+    await creditHiggles(builder, 2_000_001);
+
+    const got = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(got.response.status).toBe(403);
+    expect(got.body.error).toMatch(/tax-reporting/i);
+
+    // Blocked before ever touching the balance.
+    const status = await api('/builders/me/redeem', builder.session());
+    expect(status.body.availableCents).toBe(2_000_001);
+  });
+
+  it('returns 503 once past validation but Stripe is not configured, leaving the balance untouched', async () => {
+    const builder = await signupBuilder('redeem-unconfigured');
+    await creditHiggles(builder, 5000);
+    const got = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(got.response.status).toBe(503);
+
+    const status = await api('/builders/me/redeem', builder.session());
+    expect(status.body.availableCents).toBe(5000);
   });
 });
