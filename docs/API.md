@@ -1493,6 +1493,14 @@ reason for content-addressing here is consistency with the thumbnail
 endpoint above, not because two prompts are likely to produce identical
 bytes.
 
+Also counts against `POST /api/models`'s own `MAX_TOTAL_STORAGE_BYTES` cap
+(#602) via the same atomic reservation dance — `507` once the shared bucket
+has no headroom left, same as an oversized model upload. Unlike catalog
+thumbnails (deliberately exempted — see `MAX_THUMBNAIL_BYTES`'s own
+comment), a generated concept image is never deduplicated in practice
+(essentially always a new object per distinct prompt), so it needs the
+same real enforcement a model upload gets rather than skipping it.
+
 #### Testing note
 
 Same shape as `STRIPE_SECRET_KEY`/`RESEND_API_KEY` elsewhere in this file: a
