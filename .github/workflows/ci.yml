@@ -109,7 +109,38 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # ubuntu-latest ships Google's own Chrome apt repo pre-registered
+      # (for a system Chrome install this workflow never uses) — but
+      # --with-deps chromium below only needs apt to resolve shared-library
+      # runtime deps (libnss3, libatk, etc.), never anything actually
+      # fetched *from* that repo. Any apt-get update still hits it anyway
+      # as long as its source is present, and confirmed via job logs
+      # (PR #611, runs 34384027836/34385033854/34385292940 — 12 shard
+      # failures across three separate pushes, all identical) that
+      # dl.google.com's own CDN can serve an inconsistent package index
+      # ("Hash Sum mismatch") for well over 30 minutes straight, outlasting
+      # a short in-job retry. Matching by content (dl.google.com), not a
+      # guessed filename -- guessing google-chrome.list here first (the
+      # classic name Google's own installer normally uses) didn't actually
+      # match whatever this runner image's own source file is really
+      # called, confirmed by the exact same fetch still happening after
+      # that rm. Dropping whichever file it actually is removes the
+      # dependency on that repo's health entirely, rather than betting the
+      # outage clears in time.
+      - run: sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | xargs -r sudo rm -f
+      # Retries once on failure too, same rationale/shape as the shard
+      # retry below, as a fallback for any other transient apt/network
+      # issue this step's install-deps step might still hit.
+      - run: |
+          for attempt in 1 2; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
+            sleep 10
+          done
+          echo "playwright install failed twice — treating as a real failure, not a transient one." >&2
+          exit 1
       # .dev.vars is gitignored (wrangler's standard local-only-override
       # mechanism — see docs/API.md's own note on it), so CI recreates the
       # one value e2e/run-all.mjs's own wrangler dev needs. Not a real
