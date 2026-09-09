@@ -1146,7 +1146,11 @@ creates missing IDs, returning `200`; it supports idempotently synchronizing a
 bounded catalog batch. Both modes avoid one D1 request per product. Any
 template in the batch that has (or already has, for a `PUT` that touches an
 existing row) a non-null `sellerId` requires a session logged in as that
-seller — `403` if any one of them isn't yours.
+seller — `403` if any one of them isn't yours. A `PUT` that changes an
+existing template's dimensions triggers `notifyBuildersOfDimensionChange`
+per template (see "Notifications" above), the same as the single-item
+`PATCH /api/catalog/:templateId` — a seller batch-resizing several products
+at once still warns every builder hosting a placed instance of one of them.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
@@ -2050,6 +2054,15 @@ Otherwise it remains lightweight until a later expansion first overlaps it.
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
 
+Rejects with `409` if the candidate's footprint would overlap any existing
+landlet or land candidate (#570) — the same check `generate-mosaic` already
+applies to its own generated cells, extended here since this endpoint takes
+arbitrary admin input rather than a self-consistent generator's output. A
+candidate with no explicit `polygon` is treated as a circle of radius
+`sqrt(areaM2 / π)` around its `center`, matching how the rest of the backend
+(`landletMinWorldRadius`/`landletMaxWorldRadius`) already reads such a row —
+not an unchecked zero-area point.
+
 ### `POST /api/land-candidates/batch`
 
 Atomically queues between 1 and 100 candidates for efficient world-generation
@@ -2075,6 +2088,12 @@ Candidates already overlapping the current world circle are materialized as
 generating landlets in the same batch. The `201` response returns all created
 `candidates` and a `landlets` array containing only those materialized
 immediately.
+
+Rejects the whole batch with `409` (#570) under the same overlap rule as the
+single-create endpoint above — checked against existing land *and* against
+the other candidates in the same batch request, since a manually-submitted
+batch (unlike `generate-mosaic`'s own output) isn't guaranteed internally
+non-overlapping.
 
 ## Landlets
 

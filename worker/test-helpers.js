@@ -111,7 +111,12 @@ export async function signupSeller(label) {
 // parameter rather than closing over a shared one. Every call site keeps
 // its original `createGreenbeltLandlet(landletId)` shape via a one-line
 // local wrapper in each file: `(id) => createGreenbeltLandletAs(adminSession, id)`.
-export async function createGreenbeltLandletAs(adminSession, landletId) {
+// `center` is optional (omitted, every caller before #570 gets the same
+// origin-default body as always) — worker-api.test.js's own land-candidates
+// tests are the one caller that now needs its fixture landlets spread out
+// in space, since #570's new overlap check means a real landlet sitting at
+// the literal world origin is no longer a neutral position.
+export async function createGreenbeltLandletAs(adminSession, landletId, center) {
   return api('/landlets', adminSession({
     method: 'POST',
     body: JSON.stringify({
@@ -119,6 +124,7 @@ export async function createGreenbeltLandletAs(adminSession, landletId) {
       name: `Test ${landletId}`,
       areaM2: 1000,
       status: 'greenbelt',
+      ...(center ? { center } : {}),
     }),
   }));
 }
