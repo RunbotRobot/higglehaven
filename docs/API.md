@@ -2015,6 +2015,15 @@ Otherwise it remains lightweight until a later expansion first overlaps it.
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
 
+Rejects with `409` if the candidate's footprint would overlap any existing
+landlet or land candidate (#570) — the same check `generate-mosaic` already
+applies to its own generated cells, extended here since this endpoint takes
+arbitrary admin input rather than a self-consistent generator's output. A
+candidate with no explicit `polygon` is treated as a circle of radius
+`sqrt(areaM2 / π)` around its `center`, matching how the rest of the backend
+(`landletMinWorldRadius`/`landletMaxWorldRadius`) already reads such a row —
+not an unchecked zero-area point.
+
 ### `POST /api/land-candidates/batch`
 
 Atomically queues between 1 and 100 candidates for efficient world-generation
@@ -2040,6 +2049,12 @@ Candidates already overlapping the current world circle are materialized as
 generating landlets in the same batch. The `201` response returns all created
 `candidates` and a `landlets` array containing only those materialized
 immediately.
+
+Rejects the whole batch with `409` (#570) under the same overlap rule as the
+single-create endpoint above — checked against existing land *and* against
+the other candidates in the same batch request, since a manually-submitted
+batch (unlike `generate-mosaic`'s own output) isn't guaranteed internally
+non-overlapping.
 
 ## Landlets
 

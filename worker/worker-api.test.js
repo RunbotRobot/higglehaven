@@ -20,8 +20,8 @@ beforeAll(async () => {
   adminSession = admin.session;
 });
 
-function createGreenbeltLandlet(landletId) {
-  return createGreenbeltLandletAs(adminSession, landletId);
+function createGreenbeltLandlet(landletId, center) {
+  return createGreenbeltLandletAs(adminSession, landletId, center);
 }
 
 describe('Worker API', () => {
@@ -653,7 +653,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-reference-landlet', name: 'Catalog batch reference landlet', areaM2: 100,
-        status: 'claimed', ownerBuilderId: referenceBuilder.builderId,
+        status: 'claimed', ownerBuilderId: referenceBuilder.builderId, center: { x: 5000, y: 0 },
       }),
     }));
     const reference = await api('/instances', referenceBuilder.session({
@@ -750,7 +750,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'instance-page-landlet', name: 'Instance page landlet', areaM2: 4,
-        status: 'claimed', ownerBuilderId: pageBuilder.builderId,
+        status: 'claimed', ownerBuilderId: pageBuilder.builderId, center: { x: 5000, y: 200 },
       }),
     }));
     for (const instanceId of ['instance-page-b', 'instance-page-a']) {
@@ -803,7 +803,7 @@ describe('Worker API', () => {
 
   it('atomically creates bounded instance batches', async () => {
     const batchBuilder = await signupBuilder('instance-batch-builder');
-    await createGreenbeltLandlet('instance-batch-landlet');
+    await createGreenbeltLandlet('instance-batch-landlet', { x: 6000, y: 0 });
     const claimed = await api('/landlets/instance-batch-landlet/claim', batchBuilder.session({ method: 'POST' }));
     expect(claimed.response.status).toBe(200);
     const created = await api('/instances/batch', batchBuilder.session({
@@ -898,8 +898,8 @@ describe('Worker API', () => {
   it('checks ownership of every distinct landlet in an instance batch, not just one of them', async () => {
     const ownerBuilder = await signupBuilder('instance-batch-owner');
     const otherBuilder = await signupBuilder('instance-batch-other');
-    await createGreenbeltLandlet('instance-batch-owned-landlet');
-    await createGreenbeltLandlet('instance-batch-other-landlet');
+    await createGreenbeltLandlet('instance-batch-owned-landlet', { x: 6000, y: 200 });
+    await createGreenbeltLandlet('instance-batch-other-landlet', { x: 6000, y: 400 });
     expect((await api('/landlets/instance-batch-owned-landlet/claim', ownerBuilder.session({ method: 'POST' }))).response.status).toBe(200);
     expect((await api('/landlets/instance-batch-other-landlet/claim', otherBuilder.session({ method: 'POST' }))).response.status).toBe(200);
 
@@ -934,7 +934,7 @@ describe('Worker API', () => {
   });
 
   it('claims an available greenbelt landlet', async () => {
-    const created = await createGreenbeltLandlet('claimable-landlet');
+    const created = await createGreenbeltLandlet('claimable-landlet', { x: 6000, y: 600 });
     expect(created.response.status).toBe(201);
 
     const builder = await signupBuilder('claimable-landlet-builder');
@@ -950,8 +950,8 @@ describe('Worker API', () => {
   });
 
   it('rejects a second starter claim by the same builder', async () => {
-    await createGreenbeltLandlet('first-landlet');
-    await createGreenbeltLandlet('second-landlet');
+    await createGreenbeltLandlet('first-landlet', { x: 6000, y: 800 });
+    await createGreenbeltLandlet('second-landlet', { x: 6000, y: 1000 });
     const builder = await signupBuilder('single-landlet-builder');
 
     const first = await api('/landlets/first-landlet/claim', builder.session({ method: 'POST' }));
@@ -963,7 +963,7 @@ describe('Worker API', () => {
   });
 
   it('rejects unavailable, missing, and malformed claims', async () => {
-    await createGreenbeltLandlet('contested-landlet');
+    await createGreenbeltLandlet('contested-landlet', { x: 6000, y: 1200 });
     const winningBuilder = await signupBuilder('winning-builder');
     const otherBuilder = await signupBuilder('other-builder');
     await api('/landlets/contested-landlet/claim', winningBuilder.session({ method: 'POST' }));
@@ -997,6 +997,7 @@ describe('Worker API', () => {
         areaM2: 1000,
         status: 'greenbelt',
         landType: 'water',
+        center: { x: 5000, y: 400 },
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -1009,7 +1010,7 @@ describe('Worker API', () => {
   });
 
   it('defaults landType to buildable and rejects an invalid value', async () => {
-    const defaulted = await createGreenbeltLandlet('default-land-type-landlet');
+    const defaulted = await createGreenbeltLandlet('default-land-type-landlet', { x: 6000, y: 1400 });
     expect(defaulted.body.landlet.landType).toBe('buildable');
 
     const invalid = await api('/landlets', adminSession({
@@ -1019,6 +1020,7 @@ describe('Worker API', () => {
         name: 'Invalid land type',
         areaM2: 1000,
         landType: 'lava',
+        center: { x: 5000, y: 600 },
       }),
     }));
     expect(invalid.response.status).toBe(400);
@@ -1028,7 +1030,7 @@ describe('Worker API', () => {
   it('excludes water landlets from the greenbelt count/ratio but includes them in total', async () => {
     const before = (await api('/world')).body.world.landletCounts;
 
-    await createGreenbeltLandlet('water-count-buildable-landlet');
+    await createGreenbeltLandlet('water-count-buildable-landlet', { x: 6000, y: 1600 });
     await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
@@ -1037,6 +1039,7 @@ describe('Worker API', () => {
         areaM2: 1000,
         status: 'greenbelt',
         landType: 'water',
+        center: { x: 5000, y: 800 },
       }),
     }));
 
@@ -1195,7 +1198,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-landlet', name: 'Draft landlet', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: draftBuilder.builderId,
+        status: 'claimed', ownerBuilderId: draftBuilder.builderId, center: { x: 5000, y: 1000 },
       }),
     }));
 
@@ -1288,7 +1291,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'draft-sign-landlet', name: 'Draft sign landlet', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: draftSignBuilder.builderId,
+        status: 'claimed', ownerBuilderId: draftSignBuilder.builderId, center: { x: 5000, y: 1200 },
       }),
     }));
 
@@ -1361,7 +1364,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-landlet', name: 'Versioned landlet', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: versionBuilder.builderId,
+        status: 'claimed', ownerBuilderId: versionBuilder.builderId, center: { x: 5000, y: 1400 },
       }),
     }));
 
@@ -1453,7 +1456,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'version-name-too-long-landlet', name: 'Version name cap landlet', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: builder.builderId,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5000, y: 1600 },
       }),
     }));
 
@@ -1490,7 +1493,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'versioned-flags-landlet', name: 'Versioned flags landlet', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: flagBuilder.builderId,
+        status: 'claimed', ownerBuilderId: flagBuilder.builderId, center: { x: 5000, y: 1800 },
       }),
     }));
     await api('/instances', flagBuilder.session({
@@ -1537,7 +1540,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'concurrent-versions', name: 'Concurrent versions', areaM2: 1000,
-        status: 'claimed', ownerBuilderId: concurrentBuilder.builderId,
+        status: 'claimed', ownerBuilderId: concurrentBuilder.builderId, center: { x: 5000, y: 2000 },
       }),
     }));
 
@@ -1564,7 +1567,7 @@ describe('Worker API', () => {
         landletId: 'enclosed-generation',
         name: 'Enclosed generation',
         areaM2: 4,
-        center: { x: 0, y: 0 },
+        center: { x: 20, y: 20 },
         status: 'generating',
       }),
     }));
@@ -1584,7 +1587,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         landletId: 'not-generating-landlet', name: 'Not generating', areaM2: 4,
-        status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId,
+        status: 'claimed', ownerBuilderId: notGeneratingBuilder.builderId, center: { x: 5000, y: 2200 },
       }),
     }));
     const invalid = await api('/landlets/not-generating-landlet/generation-complete', adminSession({ method: 'POST' }));
@@ -1593,10 +1596,10 @@ describe('Worker API', () => {
   });
 
   it('filters and cursor-paginates landlets in stable order', async () => {
-    for (const landletId of ['landlet-page-b', 'landlet-page-a']) {
+    for (const [index, landletId] of ['landlet-page-b', 'landlet-page-a'].entries()) {
       await api('/landlets', adminSession({
         method: 'POST',
-        body: JSON.stringify({ landletId, name: landletId, areaM2: 4, status: 'generating' }),
+        body: JSON.stringify({ landletId, name: landletId, areaM2: 4, status: 'generating', center: { x: 5000, y: 2600 + index * 200 } }),
       }));
     }
 
@@ -1622,6 +1625,7 @@ describe('Worker API', () => {
         areaM2: 4,
         status: 'claimed',
         ownerBuilderId: pageOwnerBuilder.builderId,
+        center: { x: 5000, y: 3000 },
       }),
     }));
     // Padded with spaces to confirm the query param is trimmed before
@@ -1664,6 +1668,65 @@ describe('Worker API', () => {
       SELECT min_world_radius_m FROM landlet_candidates WHERE landlet_id = 'inside-candidate'
     `).first();
     expect(stored.min_world_radius_m).toBe(0);
+  });
+
+  it('rejects manual/batch land candidates that would overlap existing land (#570)', async () => {
+    const base = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'overlap-base-candidate', name: 'Overlap base', areaM2: 1000, center: { x: 60, y: 60 } }),
+    }));
+    expect(base.response.status).toBe(201);
+
+    const overlapsMaterialized = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'overlap-vs-materialized', name: 'Overlaps materialized', areaM2: 1000, center: { x: 60, y: 60 } }),
+    }));
+    expect(overlapsMaterialized.response.status).toBe(409);
+    expect(overlapsMaterialized.body).toEqual({ error: 'Land candidate would overlap existing land' });
+    expect((await api('/land-candidates/overlap-vs-materialized')).response.status).toBe(404);
+
+    const pendingBase = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'overlap-pending-candidate', name: 'Pending base', areaM2: 4, center: { x: 100, y: 60 } }),
+    }));
+    expect(pendingBase.response.status).toBe(201);
+    expect(pendingBase.body.candidate.materializedAt).toBeNull();
+
+    const overlapsPending = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'overlap-vs-pending', name: 'Overlaps pending', areaM2: 4, center: { x: 100, y: 60 } }),
+    }));
+    expect(overlapsPending.response.status).toBe(409);
+
+    const batchVsExisting = await api('/land-candidates/batch', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [{ landletId: 'batch-overlap-vs-existing', name: 'Batch vs existing', areaM2: 1000, center: { x: 60, y: 60 } }],
+      }),
+    }));
+    expect(batchVsExisting.response.status).toBe(409);
+    expect((await api('/land-candidates/batch-overlap-vs-existing')).response.status).toBe(404);
+
+    const batchInternalOverlap = await api('/land-candidates/batch', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'batch-internal-a', name: 'Batch internal A', areaM2: 4, center: { x: 120, y: 60 } },
+          { landletId: 'batch-internal-b', name: 'Batch internal B', areaM2: 4, center: { x: 120, y: 60 } },
+        ],
+      }),
+    }));
+    expect(batchInternalOverlap.response.status).toBe(409);
+    expect((await api('/land-candidates/batch-internal-a')).response.status).toBe(404);
+    expect((await api('/land-candidates/batch-internal-b')).response.status).toBe(404);
+
+    const clear = await api('/land-candidates/batch', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [{ landletId: 'no-overlap-candidate', name: 'No overlap', areaM2: 4, center: { x: 140, y: 60 } }],
+      }),
+    }));
+    expect(clear.response.status).toBe(201);
   });
 
   it('deletes only pending land candidates', async () => {
@@ -1915,6 +1978,26 @@ describe('Worker API', () => {
   });
 
   it('completes generation for a fully materialized ring in one request', async () => {
+    // Advanced one real increment past the world's default radius (and can
+    // only ever grow, never shrink) before generating: with no explicit
+    // innerRadiusM this ring defaults to (and, by the "fully materialized"
+    // premise below, must sit exactly at) whatever the world's current
+    // radius already is -- a real, undeletable ring (#570's new overlap
+    // check enforces that for anything created after it) would otherwise
+    // permanently occupy the exact default-radius band the later 'expands
+    // the world...' test still needs clean for its own edge-of-world
+    // fixtures. A real /world/expand call (not a raw radiusM PATCH) is
+    // used deliberately: expand's own "sweep up anything now-eligible"
+    // side effect only fires here, in this one small, controlled step, so
+    // it can't later surprise a bigger jump with a backlog of long-pending
+    // candidates (e.g. the power-law-ring/pending-completion-ring fixtures
+    // elsewhere in this file) that a raw PATCH would have silently skipped
+    // over instead of processing. This test itself never asserts a
+    // specific radius value, so moving where its own ring lands changes
+    // nothing it actually checks.
+    await api('/world', adminSession({ method: 'PATCH', body: JSON.stringify({ greenbeltMinRatio: 1 }) }));
+    await api('/world/expand', adminSession({ method: 'POST' }));
+
     const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'completion-ring', count: 3 }),
@@ -1959,7 +2042,7 @@ describe('Worker API', () => {
         landletId: 'corrected-candidate',
         name: 'Before correction',
         areaM2: 4,
-        center: { x: 210, y: 0 },
+        center: { x: 1000, y: 400 },
         metadata: { revision: 1 },
       }),
     }));
@@ -1968,7 +2051,7 @@ describe('Worker API', () => {
       body: JSON.stringify({
         landletId: 'ignored-id-change',
         name: 'After correction',
-        center: { x: 220, y: 5 },
+        center: { x: 1010, y: 405 },
         metadata: { revision: 2 },
       }),
     }));
@@ -1977,7 +2060,7 @@ describe('Worker API', () => {
       landletId: 'corrected-candidate',
       name: 'After correction',
       areaM2: 4,
-      center: { x: 220, y: 5 },
+      center: { x: 1010, y: 405 },
       metadata: { revision: 2 },
       materializedAt: null,
     });
@@ -2025,8 +2108,8 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         candidates: [
-          { landletId: 'batch-inside', name: 'Batch inside', areaM2: 4, center: { x: 0, y: 0 } },
-          { landletId: 'batch-outside', name: 'Batch outside', areaM2: 4, center: { x: 100, y: 0 } },
+          { landletId: 'batch-inside', name: 'Batch inside', areaM2: 4, center: { x: 0, y: 25 } },
+          { landletId: 'batch-outside', name: 'Batch outside', areaM2: 4, center: { x: 1000, y: 100 } },
         ],
       }),
     }));
@@ -2076,9 +2159,9 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         candidates: [
-          { landletId: 'page-inside', name: 'Page inside', areaM2: 4, center: { x: 0, y: 0 } },
-          { landletId: 'page-outside-a', name: 'Page outside A', areaM2: 4, center: { x: 100, y: 0 } },
-          { landletId: 'page-outside-b', name: 'Page outside B', areaM2: 4, center: { x: 110, y: 0 } },
+          { landletId: 'page-inside', name: 'Page inside', areaM2: 4, center: { x: -25, y: 0 } },
+          { landletId: 'page-outside-a', name: 'Page outside A', areaM2: 4, center: { x: 1000, y: 200 } },
+          { landletId: 'page-outside-b', name: 'Page outside B', areaM2: 4, center: { x: 1000, y: 210 } },
         ],
       }),
     }));
@@ -2112,13 +2195,37 @@ describe('Worker API', () => {
   }, 15000);
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
+    // Advanced one real increment (see 'completion-ring's own identical
+    // reasoning above — a real /world/expand call, not a raw radiusM
+    // PATCH, so its "sweep up anything now-eligible" side effect fires
+    // exactly once here rather than surprising this test's own official
+    // expand call below with a backlog it never meant to touch) past
+    // wherever 'completion-ring' left the world radius, so this test's
+    // "edge of the world" fixtures land clear of that ring's own real,
+    // undeletable footprint. Everything below is computed relative to
+    // this fresh baseRadius rather than a hardcoded number, so it stays
+    // correct regardless of what earlier tests left the radius at.
+    await api('/world', adminSession({ method: 'PATCH', body: JSON.stringify({ greenbeltMinRatio: 1 }) }));
+    // Several increments rather than one: 'completion-ring's own cells
+    // aren't just at its inner edge (already cleared by one increment) --
+    // their real max_world_radius_m (the ring's outer edge) needs to be
+    // behind this baseline too, or this test's own official expand call
+    // below would legitimately (and correctly) sweep them into its own
+    // promotedLandletIds alongside 'edge-candidate', which isn't what this
+    // test is checking.
+    let bumped;
+    for (let i = 0; i < 4; i += 1) {
+      bumped = await api('/world/expand', adminSession({ method: 'POST' }));
+    }
+    const baseRadius = bumped.body.world.radiusM;
+
     const candidate = await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'edge-candidate',
         name: 'Edge candidate',
         areaM2: 4,
-        center: { x: 35, y: 0 },
+        center: { x: baseRadius + 5, y: 0 },
         status: 'generating',
         polygon: [
           { x: -1, y: -1 },
@@ -2132,7 +2239,7 @@ describe('Worker API', () => {
     const storedRadius = await env.DB.prepare(`
       SELECT max_world_radius_m FROM landlets WHERE landlet_id = 'edge-candidate'
     `).first();
-    expect(storedRadius.max_world_radius_m).toBeCloseTo(Math.hypot(36, 1));
+    expect(storedRadius.max_world_radius_m).toBeCloseTo(Math.hypot(baseRadius + 6, 1));
 
     const incompleteCandidate = await api('/landlets', adminSession({
       method: 'POST',
@@ -2140,7 +2247,7 @@ describe('Worker API', () => {
         landletId: 'unfinished-edge-candidate',
         name: 'Unfinished edge candidate',
         areaM2: 4,
-        center: { x: 35, y: 5 },
+        center: { x: baseRadius + 5, y: 5 },
         status: 'generating',
         polygon: [
           { x: -1, y: -1 },
@@ -2158,7 +2265,7 @@ describe('Worker API', () => {
         landletId: 'queued-edge-candidate',
         name: 'Queued edge candidate',
         areaM2: 4,
-        center: { x: 39, y: 0 },
+        center: { x: baseRadius + 9, y: 0 },
         polygon: [
           { x: -1, y: -1 },
           { x: 1, y: -1 },

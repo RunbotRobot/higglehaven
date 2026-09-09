@@ -1,5 +1,6 @@
 import {
-  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, polygonsOverlap,
+  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
+  polygonsOverlap, sameAreaRadius,
 } from './geometry.js';
 import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
@@ -4987,6 +4988,7 @@ async function handleLandCandidates(request, db, route, url) {
     }
 
     const rows = landlets.map(candidateRowFromLandlet);
+    await assertLandCandidatesDontOverlap(db, rows);
     const settings = await getWorldSettings(db);
     const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
@@ -5011,6 +5013,7 @@ async function handleLandCandidates(request, db, route, url) {
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
+    await assertLandCandidatesDontOverlap(db, [row]);
     const settings = await getWorldSettings(db);
     const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
@@ -5156,6 +5159,48 @@ function candidateInsertStatement(db, row) {
     row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
     row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
+}
+
+// A row with no explicit polygon (the plain manual-candidate shape — see
+// the existing 'starts generation immediately...' test, which only sends
+// center+areaM2) isn't a degenerate zero-area shape: everywhere else that
+// reads such a row (landletMinWorldRadius/landletMaxWorldRadius above)
+// treats it as a circle of radius sameAreaRadius(areaM2) around its center.
+// polygonsOverlap alone would silently see an empty polygon and report no
+// conflict, so the overlap check below needs to represent both shapes.
+function landletFootprint(row) {
+  const polygon = landletWorldPolygon(row);
+  if (polygon.length >= 3) return { polygon };
+  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
+}
+
+function footprintsOverlap(a, b) {
+  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
+  if (a.circle && b.circle) {
+    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
+  }
+  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
+  if (pointInPolygon(circle, polygon)) return true;
+  return polygon.some((point, index) =>
+    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
+}
+
+// Same overlap guard generate-mosaic already applies to its own generated
+// cells (#570), extended to the manual single/batch POST endpoints, whose
+// candidates come from arbitrary admin input rather than a generator that's
+// already structurally self-consistent — so this also checks the new rows
+// against each other, not just against what's already stored.
+async function assertLandCandidatesDontOverlap(db, newRows) {
+  const [existingLandlets, existingCandidates] = await Promise.all([
+    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
+    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
+  ]);
+  const existingFootprints = [...existingLandlets.results, ...existingCandidates.results].map(landletFootprint);
+  const newFootprints = newRows.map(landletFootprint);
+  const conflict = newFootprints.some((footprint, index) =>
+    existingFootprints.some((other) => footprintsOverlap(footprint, other)) ||
+    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
+  if (conflict) throw new HttpError('Land candidate would overlap existing land', 409);
 }
 
 // The actual generation + persistence half of POST /land-candidates/
