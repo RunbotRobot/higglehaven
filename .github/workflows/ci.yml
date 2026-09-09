@@ -114,14 +114,20 @@ jobs:
       # --with-deps chromium below only needs apt to resolve shared-library
       # runtime deps (libnss3, libatk, etc.), never anything actually
       # fetched *from* that repo. Any apt-get update still hits it anyway
-      # as long as its source list is present, and confirmed via job logs
-      # (PR #611, runs 34384027836/34385033854 — 8 shard failures across
-      # two attempts each, all identical) that dl.google.com's own CDN can
-      # serve an inconsistent package index ("Hash Sum mismatch") for well
-      # over 30 minutes straight, outlasting a short in-job retry. Dropping
-      # the source list removes the dependency on that repo's health
-      # entirely, rather than betting the outage clears in time.
-      - run: sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome*.list
+      # as long as its source is present, and confirmed via job logs
+      # (PR #611, runs 34384027836/34385033854/34385292940 — 12 shard
+      # failures across three separate pushes, all identical) that
+      # dl.google.com's own CDN can serve an inconsistent package index
+      # ("Hash Sum mismatch") for well over 30 minutes straight, outlasting
+      # a short in-job retry. Matching by content (dl.google.com), not a
+      # guessed filename -- guessing google-chrome.list here first (the
+      # classic name Google's own installer normally uses) didn't actually
+      # match whatever this runner image's own source file is really
+      # called, confirmed by the exact same fetch still happening after
+      # that rm. Dropping whichever file it actually is removes the
+      # dependency on that repo's health entirely, rather than betting the
+      # outage clears in time.
+      - run: sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | xargs -r sudo rm -f
       # Retries once on failure too, same rationale/shape as the shard
       # retry below, as a fallback for any other transient apt/network
       # issue this step's install-deps step might still hit.
