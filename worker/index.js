@@ -3586,6 +3586,8 @@ function userFromRow(row) {
     ageAttested: row.age_attested_at !== null,
     trustTier: row.trust_tier,
     cardFunding: row.card_funding,
+    taxFormType: row.tax_form_type,
+    taxFormCompletedAt: row.tax_form_completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -3805,6 +3807,96 @@ function deriveStripeOnboardingStatus(account) {
   if ((account.requirements?.currently_due || []).length > 0) return 'requirements_due';
   if (account.charges_enabled && account.payouts_enabled) return 'complete';
   return 'pending';
+}
+
+// ---- W-9/W-8BEN tax-ID collection (#614, sub-issue of #350) — the
+// submitted form's sensitive identifying data (SSN/EIN, foreign tax ID,
+// name, address) is encrypted as one JSON blob before it ever reaches D1,
+// so a database dump alone can't expose it. Same guarded-secret shape as
+// STRIPE_SECRET_KEY/DIDIT_API_KEY above: with env.TAX_ID_ENCRYPTION_KEY
+// unset (never configured in local dev or the automated test suite),
+// taxIdEncryptionConfigured(env) is false and the route handler below
+// returns a real 503 rather than silently storing plaintext.
+function taxIdEncryptionConfigured(env) {
+  return !!env.TAX_ID_ENCRYPTION_KEY;
+}
+
+// The key is a 256-bit value given as 64 hex characters (the same "just a
+// long random secret" shape an operator would generate for any other
+// guarded Worker secret) — imported fresh per call rather than cached,
+// since Workers don't share module-scope state reliably across requests
+// anyway and this is only ever called once per tax-form submission.
+async function importTaxIdEncryptionKey(env) {
+  return crypto.subtle.importKey('raw', hexToBytes(env.TAX_ID_ENCRYPTION_KEY), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+// Self-describing `aesgcm$<ivHex>$<ciphertextHex>` format, the same idiom
+// hashPassword's own `pbkdf2$...` string above uses — a fresh random IV
+// per encryption (AES-GCM requires this; reusing an IV with the same key
+// breaks its confidentiality guarantee) stored alongside the ciphertext
+// since decryption needs it back.
+async function encryptTaxIdPayload(env, payload) {
+  const key = await importTaxIdEncryptionKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
+  return `aesgcm$${bytesToHex(iv)}$${bytesToHex(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptTaxIdPayload(env, stored) {
+  const parts = stored.split('$');
+  if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500);
+  const [, ivHex, ciphertextHex] = parts;
+  const key = await importTaxIdEncryptionKey(env);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: hexToBytes(ivHex) }, key, hexToBytes(ciphertextHex));
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+// W-9 (US persons) needs a US taxpayer ID (SSN or EIN) and a US address;
+// W-8BEN (non-US persons) needs a country of citizenship, a foreign tax
+// ID, and a permanent residence address instead — genuinely different
+// required fields, not just a relabeled copy of the same form.
+function validateTaxIdForm(input) {
+  const formType = input.formType;
+  if (formType !== 'w9' && formType !== 'w8ben') throw new HttpError('formType must be "w9" or "w8ben"', 400);
+  const legalName = stringValue(input.legalName, 'legalName');
+  const addressLine1 = stringValue(input.addressLine1, 'addressLine1');
+  const city = stringValue(input.city, 'city');
+  if (formType === 'w9') {
+    return {
+      formType, legalName, addressLine1, city,
+      state: stringValue(input.state, 'state'),
+      postalCode: stringValue(input.postalCode, 'postalCode'),
+      taxIdNumber: stringValue(input.taxIdNumber, 'taxIdNumber'),
+    };
+  }
+  return {
+    formType, legalName, addressLine1, city,
+    country: stringValue(input.country, 'country'),
+    countryOfCitizenship: stringValue(input.countryOfCitizenship, 'countryOfCitizenship'),
+    foreignTaxId: stringValue(input.foreignTaxId, 'foreignTaxId'),
+  };
+}
+
+// A builder/seller can resubmit (e.g. a corrected SSN, or upgrading from
+// an already-filed W-8BEN to a W-9 after becoming a US person) — this
+// isn't gated on anything yet (#615 is the later sub-issue that actually
+// restricts access based on whether this is on file), so overwriting a
+// prior submission outright is the right default rather than rejecting a
+// resubmission as a conflict.
+async function handleTaxIdForm(request, env, db, user) {
+  if (!taxIdEncryptionConfigured(env)) {
+    throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
+  }
+  const input = await readJson(request);
+  const form = validateTaxIdForm(input);
+  const encrypted = await encryptTaxIdPayload(env, form);
+  const completedAt = new Date().toISOString();
+  await db.prepare(`
+    UPDATE users SET tax_form_type = ?, tax_form_completed_at = ?, tax_id_encrypted = ?,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+  `).bind(form.formType, completedAt, encrypted, user.user_id).run();
+  return json({ taxFormType: form.formType, taxFormCompletedAt: completedAt });
 }
 
 // ---- Government-ID verification via Didit (#589, sub-issue of #556,
@@ -4401,6 +4493,9 @@ async function handleTax(request, env, db, route, url) {
       db, { builderId: builder.builder_id, sellerId: seller?.seller_id ?? null }, year,
     );
     return json(summary);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'id-form') {
+    return handleTaxIdForm(request, env, db, user);
   }
   return json({ error: 'Not found' }, 404);
 }
