@@ -327,6 +327,37 @@ Account-level endpoints stay reachable regardless (`GET
 the first place. Shopping (browsing, buying, reviewing, sign-posts) needs
 no account at all, so it's unaffected either way.
 
+### `POST /api/auth/didit-verification-session`, `GET /api/auth/didit-verification-status`, `POST /api/auth/didit-webhook`
+
+#589 (sub-issue of #556)'s government-ID verification tier, via
+[Didit](https://didit.me/): the higher trust tier above `"credit_card"`,
+raising `trustTier` to `"id_verified"`.
+
+`POST /api/auth/didit-verification-session` is session-gated (`401`
+without one), takes no body, and starts a fresh Didit-hosted verification
+session for the requesting builder, returning
+`{ "sessionId": "...", "url": "https://verify.didit.me/..." }` — the
+frontend opens `url` for the builder to complete verification there.
+`400` if the account is already `"id_verified"`. `503` if Didit isn't
+configured on this deployment (`DIDIT_API_KEY` unset).
+
+`GET /api/auth/didit-verification-status` is session-gated and returns
+`{ "status": "none" | "pending" | "approved" | "declined" }` for the
+requesting builder's most recent verification session. While still
+`pending` and Didit is configured, this reconciles directly against
+Didit's own session-decision endpoint (rather than only trusting the
+webhook below to have already landed), so a builder who already finished
+verification isn't stuck reading "pending" if the webhook is slow.
+
+`POST /api/auth/didit-webhook` is Didit's own server-to-server delivery
+of a verification result — unauthenticated (no session cookie to check),
+verified instead via an HMAC-SHA256 signature over the raw request body
+(`x-signature` header, keyed by `DIDIT_WEBHOOK_SECRET`), `401` on a
+missing or wrong signature. `503` if `DIDIT_WEBHOOK_SECRET` isn't
+configured. Idempotent against a repeat delivery for the same session —
+only the first delivery (webhook or a status poll, whichever gets there
+first) applies the resulting `trustTier` change.
+
 ### `POST /api/auth/login`
 
 ```json
