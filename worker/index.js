@@ -457,6 +457,10 @@ async function handleApi(request, env, url) {
     return handleSellers(request, env, env.DB, route);
   }
 
+  if (route[0] === 'tax') {
+    return handleTax(request, env, env.DB, route, url);
+  }
+
   if (route[0] === 'notifications') {
     return handleNotifications(request, env.DB, route, url);
   }
@@ -4294,6 +4298,77 @@ async function handleSellerPayouts(request, env, db) {
     return json({ payoutCents: claimedCents, purchaseCount: claimed.length, stripePayoutId: payout.id });
   }
 
+  return json({ error: 'Not found' }, 404);
+}
+
+// #612 (sub-issue of #350): foundational annual gross-income aggregation
+// for the eventual 1099-K/1099-NEC tax-reporting pipeline (docs/SPEC.md
+// §7) — reads two ledgers that already exist rather than introducing new
+// storage: the higgles commission a builder earns (higgles_earnings_events,
+// migrations/0050) and the real-money side of `purchases`
+// (migrations/0051/0072). No PII lives here at all — W-9/W-8BEN collection
+// (#614), the earnings gate (#615), and actual form generation (#616) are
+// later sub-issues that build on this.
+//
+// sellerPayoutCents sums total_cents (the full buyer-paid amount), not the
+// seller's own net share after commission — Form 1099-K's own "gross
+// amount" instructions define gross as the full transaction amount
+// "without regard to any adjustments... for fees" (see #350's own
+// scoping comment), so the commission this platform keeps is not netted
+// out here even though it never reaches the seller's own balance.
+// Refunded purchases are excluded (never a completed transaction to
+// report); simulated (non-Stripe) purchases are excluded via the
+// payment_intent_id check, same as unpaidSellerPurchases above.
+async function annualGrossIncome(db, { builderId, sellerId }, year) {
+  const yearStart = `${year}-01-01T00:00:00.000Z`;
+  const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
+  const [higglesRow, payoutRow] = await Promise.all([
+    db.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total FROM higgles_earnings_events
+      WHERE builder_id = ? AND created_at >= ? AND created_at < ?
+    `).bind(builderId, yearStart, yearEnd).first(),
+    sellerId
+      ? db.prepare(`
+          SELECT COALESCE(SUM(total_cents), 0) AS total FROM purchases
+          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
+            AND created_at >= ? AND created_at < ?
+        `).bind(sellerId, yearStart, yearEnd).first()
+      : Promise.resolve({ total: 0 }),
+  ]);
+  return {
+    year,
+    builderHigglesCents: higglesRow.total,
+    sellerPayoutCents: payoutRow.total,
+    totalCents: higglesRow.total + payoutRow.total,
+  };
+}
+
+function queryTaxYear(value) {
+  if (value === null) return new Date().getUTCFullYear();
+  if (!/^\d{4}$/.test(value)) throw new HttpError('year must be a 4-digit year', 400);
+  const year = Number(value);
+  if (year < 2000 || year > 2100) throw new HttpError('year must be a 4-digit year', 400);
+  return year;
+}
+
+// GET returns the current user's combined gross-income summary (higgles
+// commissions from their builder profile, real-money payouts from their
+// seller profile if they have one) for a given calendar year, defaulting
+// to the current one — the account-level "two sources, shown separately
+// with a total" view #350's own Control Room direction asked for. A user
+// with no seller profile yet just gets sellerPayoutCents: 0, the same as
+// any other builder who's never sold anything.
+async function handleTax(request, env, db, route, url) {
+  const user = await requireCurrentUser(request, db);
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'summary') {
+    const builder = await getOrCreateBuilderForUser(db, user);
+    const seller = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+    const year = queryTaxYear(url.searchParams.get('year'));
+    const summary = await annualGrossIncome(
+      db, { builderId: builder.builder_id, sellerId: seller?.seller_id ?? null }, year,
+    );
+    return json(summary);
+  }
   return json({ error: 'Not found' }, 404);
 }
 
