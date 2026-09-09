@@ -1915,6 +1915,35 @@ describe('Worker API', () => {
   });
 
   it('completes generation for a fully materialized ring in one request', async () => {
+    // A ring with no explicit innerRadiusM defaults to the CURRENT world
+    // radius specifically so it's already "overlapping" and immediately
+    // materializes -- that's the whole point of this test's name. But
+    // generateLandletRing always produces a complete, gap-free band all
+    // the way around the circle (no partial-arc option), and once
+    // materialized a ring candidate is immutable at the DB level (see the
+    // DELETE/PATCH handlers' own 409s, and the "generated ring candidates
+    // are immutable" trigger a raw SQL DELETE also hits) -- so wherever
+    // this lands, it's permanently unavailable to every other test at any
+    // angle, not just the one this test happens to use.
+    //
+    // #570 gave the manual/batch land-candidate endpoints (and, via the
+    // shared helper, nothing new here) a real spatial overlap check, which
+    // means this ring can no longer coexist with the *other* tests in this
+    // file that also need a fixture right at the current world edge (see
+    // "expands the world by one increment", which needs that same real
+    // estate for its own, unrelated purpose). Rather than relocate every
+    // edge-of-world fixture in the file, this test relocates itself: bump
+    // the world radius (raw SQL, not the guarded PATCH/PUT endpoint --
+    // increasing it there is permanent by design, see "rejects PUT/PATCH
+    // /world setting radiusM below its current value" below) out past
+    // every other ring already generated in this file (up to 1000m),
+    // generate+complete this ring safely out of everyone's way, then
+    // restore the original radius so every other test still sees the
+    // small baseline it expects.
+    const before = await api('/world');
+    const originalRadiusM = before.body.world.radiusM;
+    await env.DB.prepare("UPDATE world_settings SET radius_m = 50000 WHERE world_id = 'default-world'").run();
+
     const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'completion-ring', count: 3 }),
@@ -1940,6 +1969,13 @@ describe('Worker API', () => {
     expect(retry.body.landlets.map((landlet) => landlet.generatedAt)).toEqual(
       completed.body.landlets.map((landlet) => landlet.generatedAt),
     );
+
+    // Restore before generating pending-completion-ring at its own
+    // explicit innerRadiusM:1000 -- that call requires innerRadiusM to be
+    // at or beyond the current radius, which the 50000 bump above would
+    // otherwise violate.
+    await env.DB.prepare('UPDATE world_settings SET radius_m = ? WHERE world_id = ?')
+      .bind(originalRadiusM, 'default-world').run();
 
     const pending = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
@@ -2110,6 +2146,59 @@ describe('Worker API', () => {
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
   }, 15000);
+
+  // #570: generate-mosaic/-ring already reject a new candidate that would
+  // overlap already-claimed or already-queued land; the manual single POST
+  // and POST .../batch endpoints used to skip that check entirely, since
+  // they exist as admin bulk-import tooling rather than procedural
+  // generation. Owner picked applying the same check unconditionally.
+  it('rejects manual/batch land-candidate creation that would overlap existing land', async () => {
+    // Far enough out (order of thousands of meters) to stay clear of every
+    // other test's fixtures in this file, including the widest generated
+    // rings (innerRadiusM up to 1000) that would otherwise make an
+    // ostensibly-empty-looking spot a landmine.
+    const squarePolygon = [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }];
+    const base = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'overlap-base', name: 'Overlap base', areaM2: 16, center: { x: 5000, y: 5000 }, polygon: squarePolygon,
+      }),
+    }));
+    expect(base.response.status).toBe(201);
+
+    // Offset diagonally (not just along one axis) so the two squares
+    // genuinely overlap in area rather than merely sharing a collinear
+    // edge -- polygonsOverlap deliberately treats an exactly-shared edge
+    // as a touch, not a crossing (see its own comment), which an
+    // axis-only offset the same size as the square's own half-width would
+    // trigger by coincidence.
+    const singleOverlap = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'overlap-single', name: 'Overlap single', areaM2: 16, center: { x: 5001, y: 5001 }, polygon: squarePolygon,
+      }),
+    }));
+    expect(singleOverlap.response.status).toBe(409);
+    expect(singleOverlap.body.error).toMatch(/overlap/i);
+    expect((await api('/land-candidates/overlap-single')).response.status).toBe(404);
+
+    const batchOverlap = await api('/land-candidates/batch', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        candidates: [
+          { landletId: 'overlap-batch-clean', name: 'Clean', areaM2: 4, center: { x: 7000, y: 7000 } },
+          {
+            landletId: 'overlap-batch-conflict', name: 'Conflict', areaM2: 16, center: { x: 5001, y: 5001 }, polygon: squarePolygon,
+          },
+        ],
+      }),
+    }));
+    expect(batchOverlap.response.status).toBe(409);
+    expect(batchOverlap.body.error).toMatch(/overlap/i);
+    // Atomic: the conflicting item in the batch must not let its clean
+    // sibling slip through either.
+    expect((await api('/land-candidates/overlap-batch-clean')).response.status).toBe(404);
+  });
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
     const candidate = await api('/landlets', adminSession({
