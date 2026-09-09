@@ -162,6 +162,17 @@ Read `db.d.ts`'s call contract (linked from the `artifact-capabilities`
 skill) if you need anything beyond simple reads/writes — `where`/`limit`
 queries, batched writes, etc.
 
+**Posting a periodic work summary (e.g. an hourly recap of merged PRs):
+file it as its own new `tasks` doc, not a reply on a recurring one.** The
+owner's own instruction (2026-09-09): "provide the hourly summaries each
+as their new task that is 'WAITING ON OWNER'. I should be able to mark
+tasks as done myself, then you won't have to bother with the task again."
+A reply buried under an old task's thread is easy to miss and leaves the
+owner unable to dismiss it without replying back; a fresh `kind:
+"feedback"`, `tag: "summary"` (or similar) doc with `status: "queued"`,
+`waitingOn: "owner"` puts it in the Queued column on its own, where the
+owner can mark it `"done"` directly — no reply needed from either side.
+
 ### Continuing without a prompt
 
 The owner would rather you keep working through the backlog than sit
@@ -290,17 +301,29 @@ cost when it happens anyway:
   hands a decision back to them — the Control Room can't do this for
   you.** Its own compose-form code auto-clears `waitingOn` from `"owner"`
   to `"claude"` when the owner replies (every reply typed into that form
-  is always from them), but a session's own reply goes straight through
-  the db API, bypassing that page's JS entirely — nothing on the page
-  ever flips a card back to `"owner"` after you post a proposal, scoping
-  question, or anything else that's genuinely awaiting their call. Found
-  via a backlog audit turning up several cards (#328, #540, #556, #557,
-  among others) stuck showing "Ready for Claude" — a false green light —
-  for hours after a session had already posted a proposal and moved on,
-  simply because nobody's write set `waitingOn` back. This is not
-  something the page will ever catch for you: set it explicitly, in the
-  same write that posts your reply, whenever the ball actually leaves
-  your court.
+  is always from them — as of 2026-09-09 this happens unconditionally,
+  not just when the field already read `"owner"`), but a session's own
+  reply goes straight through the db API, bypassing that page's JS
+  entirely — nothing on the page ever flips a card back to `"owner"`
+  after you post a proposal, scoping question, or anything else that's
+  genuinely awaiting their call. Found via a backlog audit turning up
+  several cards (#328, #540, #556, #557, among others) stuck showing
+  "Ready for Claude" — a false green light — for hours after a session
+  had already posted a proposal and moved on, simply because nobody's
+  write set `waitingOn` back. This is not something the page will ever
+  catch for you: set it explicitly, in the same write that posts your
+  reply, whenever the ball actually leaves your court. **Never set
+  `waitingOn: "owner"` without a `replies` doc (or a task `note`)
+  explaining what's needed, in the same write** — the owner flagged this
+  directly (issue-328, issue-556: "keeps changing to WAITING ON OWNER
+  without providing a reply explaining what is still needed"). The board
+  now flags the failure mode this causes — a queued card whose owner
+  spoke last with no session reply following still shows `waitingOn:
+  "owner"` — as a distinct "Waiting on: Owner (unexplained)" badge
+  instead of the normal one, so skipping this is visible on the board
+  itself, not just discoverable by reading every thread. And say "Ready
+  for Claude" (the board's own label), not "Waiting on Claude" — the
+  owner corrected this phrasing on issue-556 as backwards-sounding.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
