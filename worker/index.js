@@ -3838,6 +3838,16 @@ async function diditRequest(env, method, path, body) {
 // bucket would need to cover.
 const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
 
+// Shared by handleDiditVerificationSession (dedup an already-pending
+// session rather than starting a real-cost new one) and
+// handleDiditVerificationStatus (poll the current one) — both need the
+// same "most recent session row for this user" lookup.
+export async function latestDiditSession(db, userId) {
+  return db.prepare(`
+    SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
+  `).bind(userId).first();
+}
+
 // Starts a fresh Didit-hosted verification session for the requesting
 // builder and records it so the webhook/status-poll below have a row to
 // resolve against.
@@ -3849,14 +3859,24 @@ async function handleDiditVerificationSession(request, env, db) {
   if (!diditConfigured(env)) {
     throw new HttpError('Government-ID verification is not configured on this server yet.', 503);
   }
+  // #607: idx_didit_verification_sessions_user_id's own migration comment
+  // says this table is "looked up by user_id when starting a new session
+  // (to reuse/report an already-pending one)" — that lookup never
+  // actually happened, so a re-click of "Verify ID" (or two open tabs)
+  // started a brand new, real-cost Didit session every time instead of
+  // handing back the one still in flight.
+  const latest = await latestDiditSession(db, user.user_id);
+  if (latest && latest.processed_at === null) {
+    return json({ sessionId: latest.session_id, url: latest.url });
+  }
   await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
   const session = await diditRequest(env, 'POST', 'v3/session/', {
     vendor_data: user.user_id,
     callback: `${appBaseUrl(env)}/?diditReturn=1`,
   });
   await db.prepare(`
-    INSERT INTO didit_verification_sessions (session_id, user_id, status) VALUES (?, ?, 'pending')
-  `).bind(session.session_id, user.user_id).run();
+    INSERT INTO didit_verification_sessions (session_id, user_id, status, url) VALUES (?, ?, 'pending', ?)
+  `).bind(session.session_id, user.user_id, session.url).run();
   return json({ sessionId: session.session_id, url: session.url });
 }
 
@@ -3896,9 +3916,7 @@ async function applyDiditDecision(db, sessionId, userId, approved) {
 async function handleDiditVerificationStatus(request, env, db) {
   const user = await requireCurrentUser(request, db);
   if (user.trust_tier === 'id_verified') return json({ status: 'approved' });
-  const latest = await db.prepare(`
-    SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
-  `).bind(user.user_id).first();
+  const latest = await latestDiditSession(db, user.user_id);
   if (!latest) return json({ status: 'none' });
   if (latest.processed_at !== null || !diditConfigured(env)) {
     return json({ status: latest.status });
