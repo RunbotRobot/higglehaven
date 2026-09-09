@@ -32,7 +32,7 @@ describe('Worker API', () => {
     const body = await response.json();
 
     expect(response.status).toBe(201);
-    expect(body).toMatchObject({ sourceName: 'chair.glb', sizeBytes: 24, deduplicated: false });
+    expect(body).toMatchObject({ sourceName: 'chair.glb', sizeBytes: 48, deduplicated: false });
     expect(body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f]{64}\.glb$/);
 
     const duplicateForm = new FormData();
@@ -41,7 +41,7 @@ describe('Worker API', () => {
     expect(duplicate.status).toBe(200);
     expect(await duplicate.json()).toMatchObject({
       modelUrl: body.modelUrl,
-      sizeBytes: 24,
+      sizeBytes: 48,
       deduplicated: true,
     });
 
@@ -49,7 +49,7 @@ describe('Worker API', () => {
     expect(uploaded.status).toBe(200);
     expect(uploaded.headers.get('content-type')).toBe('model/gltf-binary');
     expect(uploaded.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
-    expect((await uploaded.arrayBuffer()).byteLength).toBe(24);
+    expect((await uploaded.arrayBuffer()).byteLength).toBe(48);
 
     const head = await SELF.fetch(`https://higglehaven.test${body.modelUrl}`, { method: 'HEAD' });
     expect(head.status).toBe(200);
@@ -99,8 +99,9 @@ describe('Worker API', () => {
     // vertical-construction-levels tests seed landlet_levels directly —
     // actually filling the real 8GB cap via uploads would take hundreds
     // of requests) so only a sliver of real headroom remains: room for
-    // one 28-byte test upload, not two fired concurrently.
-    const headroomBytes = 30;
+    // one 56-byte test upload (#601 grew glbFile()'s default/merged JSON
+    // payload), not two fired concurrently.
+    const headroomBytes = 60;
     await env.DB.prepare(`
       INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES (?, ?, ?)
     `).bind(`test-reservation-${crypto.randomUUID()}`, capBytes - usedBytes - headroomBytes, Date.now()).run();
@@ -442,6 +443,10 @@ describe('Worker API', () => {
       [glbFile({ version: 1 }), 'Only glTF 2.0 .glb models are supported'],
       [glbFile({ declaredLength: 999 }), 'GLB header length does not match the uploaded file'],
       [glbFile({ json: '{]' }), 'GLB contains invalid JSON metadata'],
+      // #601: syntactically valid JSON that isn't glTF-shaped (missing the
+      // spec-required asset.version field) used to pass this check
+      // outright and store an unusable "model."
+      [glbFile({ json: '{}', mergeAsset: false }), 'GLB is missing the required asset.version field'],
     ]) {
       const form = new FormData();
       form.set('file', file);
