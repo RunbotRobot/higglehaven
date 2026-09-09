@@ -324,6 +324,28 @@ cost when it happens anyway:
   itself, not just discoverable by reading every thread. And say "Ready
   for Claude" (the board's own label), not "Waiting on Claude" — the
   owner corrected this phrasing on issue-556 as backwards-sounding.
+- **Clear a status-like `tag` (`"needs owner"` and similar) the moment
+  it stops being true — the Control Room can't do this for you either.**
+  `tag` is free text, not a controlled field the page understands, so
+  nothing on it auto-syncs to `status` or `waitingOn` the way the board's
+  own "Ready for Claude"/"Waiting on: Owner" badge does. The owner
+  reported this directly (07607tp5q0uzvfqqggcv): "#556 was 'In Progress'.
+  Then it posted a reply that required a response from the owner, and the
+  state was changed to 'NEEDS OWNER', but it stayed 'In Progress'. I
+  replied, but the status stayed 'NEEDS OWNER'... Now Claude has picked
+  it back up and is working on the task, but it still says 'NEEDS
+  OWNER'" — confirmed live: #556 sat at `status: "in_progress"`,
+  `waitingOn: "claude"` (correctly cleared) yet `tag: "needs owner"`
+  (stale) simultaneously, because whichever session set the tag while
+  posting its question never went back to clear it once work resumed.
+  Same root cause and same fix as the `waitingOn` bullet just above:
+  write straight through the db API bypasses the page's JS, so nothing
+  will ever un-stick a stale tag for you — clear or update it yourself,
+  in the same write that changes `status`/`waitingOn` out of the state it
+  was describing. If a task is genuinely blocked on the owner, prefer
+  `waitingOn: "owner"` (with the explanation the bullet above requires)
+  over a free-text tag in the first place — it's the one the board
+  actually renders a live, self-updating badge for.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
