@@ -4508,9 +4508,9 @@ in-house; don't block app usage on paperwork until a payee actually
 crosses the reporting threshold; block only earnings above the threshold
 once crossed; one shared reporting pipeline showing the two income
 sources — real-money seller payouts and higgles commissions — separately,
-with a combined total). Only the foundational aggregation layer (#612) is
-built so far — no threshold-crossing notices, no W-9/W-8BEN collection, no
-gating, and no actual 1099 generation exist yet.
+with a combined total). The foundational aggregation layer (#612) and
+progressive threshold-crossing notices (#613) are built so far — no
+W-9/W-8BEN collection, no gating, and no actual 1099 generation exist yet.
 
 ### `GET /api/tax/summary`
 
@@ -4522,7 +4522,9 @@ income for one calendar year, split by source:
   "year": 2026,
   "builderHigglesCents": 15000,
   "sellerPayoutCents": 42000,
-  "totalCents": 57000
+  "totalCents": 57000,
+  "thresholdCents": 2000000,
+  "noticeLevel": "early"
 }
 ```
 
@@ -4550,13 +4552,37 @@ Both totals key off `purchases.created_at`/`higgles_earnings_events.created_at`
 #616 (actual 1099 generation) settles the precise IRS-correct date to
 report against, per that sub-issue's own open questions.
 
+`thresholdCents` is the federal 1099-K reporting threshold as of the OBBBA
+rollback ($20,000 — the $600 ARPA threshold was reversed; see #350's own
+research comment), applied here to the *combined* `totalCents` per the
+owner's own "share a reporting pipeline" direction, even though the real
+1099-K threshold technically has a second leg (200 transactions) that only
+applies to the card-settled seller side, and the correct threshold/form for
+the higgles side specifically still needs a tax professional's confirmation.
+`noticeLevel` is a purely informational, non-blocking signal (#613) — one
+of `"none"` (below 50% of `thresholdCents`), `"early"` (50-79%),
+`"approaching"` (80-99%), or `"crossed"` (100%+). Nothing in the API
+actually gates on this yet — see #615 for the not-yet-built earnings gate.
+
+The account menu (`#account-menu-tax-notice`, next to the existing land-cap
+line — see "Frontend-only account menu") shows a plain-text notice matching
+`noticeLevel` whenever it isn't `"none"`, refreshed the same "on menu open,
+no live polling" way the land-cap line already is; `"crossed"` renders in
+`--danger` for visibility. Nothing about this notice blocks any action.
+
 #### Testing note
 
 `worker/commerce.test.js`'s "Tax summary (#612)" describe block (nested
 inside "Seller payouts", reusing its `createConnectedSeller`/
 `makeRealMoneyPurchase` helpers) covers the `401`, the all-zeros default,
 higgles-commission counting, the seller's gross-vs-net distinction, excluding
-a refunded purchase, year filtering, and the malformed-`year` `400`.
+a refunded purchase, year filtering, the malformed-`year` `400`, and (#613)
+the `noticeLevel` progression through all four breakpoints via the admin
+land-cap-grants escape hatch. `e2e/land-cap.test.mjs` covers the account
+menu notice staying hidden for a fresh builder with no earnings, alongside
+its existing land-cap display check — the actual notice text for a
+nonzero `noticeLevel` isn't covered there, since reaching it needs more
+real income than that suite's fixture setup produces.
 
 ## D1 schema overview
 

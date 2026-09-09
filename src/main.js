@@ -44,6 +44,7 @@ import {
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
+  fetchTaxSummary,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
   fetchAllLandlets,
@@ -7877,6 +7878,44 @@ async function refreshAccountMenuLandCap() {
   }
 }
 
+// Tax reporting notice (#613, sub-issue of #350) — same "no live polling,
+// refresh on open" approach as refreshAccountMenuLandCap just above. Purely
+// informational: docs/SPEC.md §7's own reporting-threshold paperwork isn't
+// blocking anything yet (see #615 for the actual gate, not built yet), so
+// this only ever tells a builder/seller where they stand, never stops them
+// doing anything.
+const accountMenuTaxNoticeEl = document.getElementById('account-menu-tax-notice');
+const TAX_NOTICE_TEXT = {
+  early: (total, threshold) =>
+    `You've earned ${formatHiggles(total)} of this year's ${formatHiggles(threshold)} tax-reporting threshold — no action needed yet.`,
+  approaching: (total, threshold) =>
+    `You're nearing this year's ${formatHiggles(threshold)} tax-reporting threshold (${formatHiggles(total)} so far) — ` +
+    `tax paperwork will be required once you cross it.`,
+  crossed: (total, threshold) =>
+    `You've crossed this year's ${formatHiggles(threshold)} tax-reporting threshold (${formatHiggles(total)} earned) — ` +
+    `tax paperwork will be required to access earnings above it.`,
+};
+async function refreshAccountMenuTaxNotice() {
+  if (!builderId) {
+    accountMenuTaxNoticeEl.hidden = true;
+    return;
+  }
+  try {
+    const summary = await fetchTaxSummary();
+    const text = TAX_NOTICE_TEXT[summary.noticeLevel];
+    if (!text) {
+      accountMenuTaxNoticeEl.hidden = true;
+      return;
+    }
+    accountMenuTaxNoticeEl.textContent = text(summary.totalCents, summary.thresholdCents);
+    accountMenuTaxNoticeEl.classList.toggle('crossed', summary.noticeLevel === 'crossed');
+    accountMenuTaxNoticeEl.hidden = false;
+  } catch (err) {
+    console.warn('Could not refresh tax notice:', err);
+    accountMenuTaxNoticeEl.hidden = true;
+  }
+}
+
 // Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
 // requests; social map shows friends' approximate location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
@@ -8080,7 +8119,10 @@ accountMenuToggle.addEventListener('click', () => {
   const expanding = !accountMenuPanel.classList.contains('expanded');
   accountMenuPanel.classList.toggle('expanded');
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
-  if (expanding) refreshAccountMenuLandCap();
+  if (expanding) {
+    refreshAccountMenuLandCap();
+    refreshAccountMenuTaxNotice();
+  }
 });
 for (const row of accountMenuPanel.querySelectorAll('button')) {
   row.addEventListener('click', () => {

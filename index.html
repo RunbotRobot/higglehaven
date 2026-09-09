@@ -580,6 +580,16 @@
         color: var(--pill-text);
         opacity: 0.75;
       }
+      #account-menu-tax-notice {
+        padding: 7px 12px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
+      #account-menu-tax-notice.crossed {
+        color: var(--danger);
+        opacity: 1;
+      }
       #notifications-badge,
       #friends-badge {
         display: inline-block;
@@ -3126,6 +3136,7 @@
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
+          <div id="account-menu-tax-notice" hidden></div>
         </div>
       </div>
     </div>
