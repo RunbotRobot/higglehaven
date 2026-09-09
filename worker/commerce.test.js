@@ -2718,5 +2718,99 @@ describe('Simulated purchases', () => {
       const row = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(row.refunded_at).toBeNull();
     });
+
+    // #612 (sub-issue of #350): foundational annual gross-income summary
+    // feeding the eventual 1099-K/1099-NEC pipeline. Reuses this describe
+    // block's own createConnectedSeller/makeRealMoneyPurchase helpers for
+    // the real-money side.
+    describe('Tax summary (#612)', () => {
+      it('requires a session', async () => {
+        const got = await api('/tax/summary');
+        expect(got.response.status).toBe(401);
+      });
+
+      it('defaults to all zeros for a builder with no earnings and no seller profile', async () => {
+        const builder = await signupBuilder('tax-summary-empty-builder');
+        const got = await api('/tax/summary', builder.session());
+        expect(got.response.status).toBe(200);
+        expect(got.body).toMatchObject({
+          year: new Date().getUTCFullYear(), builderHigglesCents: 0, sellerPayoutCents: 0, totalCents: 0,
+        });
+      });
+
+      it('counts higgles commission income earned as a builder', async () => {
+        const builder = await signupBuilder('tax-summary-builder');
+        const seller = await signupSeller('tax-summary-builder-seller');
+        const landletId = 'tax-summary-builder-landlet';
+        const templateId = 'tax-summary-builder-template';
+        const instanceId = 'tax-summary-builder-instance';
+        await createGreenbeltLandletWithArea(landletId, 1000);
+        await claim(landletId, builder);
+        await api('/catalog', seller.session({
+          method: 'POST',
+          body: JSON.stringify({
+            templateId, name: 'Tax summary product', color: '#222222',
+            dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 10000, sellerId: seller.sellerId,
+          }),
+        }));
+        await placeInstance(instanceId, landletId, templateId, builder);
+        const purchased = await api(`/instances/${instanceId}/purchase`, { method: 'POST' });
+        expect(purchased.response.status).toBe(201);
+
+        const got = await api('/tax/summary', builder.session());
+        expect(got.body.builderHigglesCents).toBe(purchased.body.purchase.builderShareCents);
+        expect(got.body.sellerPayoutCents).toBe(0);
+        expect(got.body.totalCents).toBe(purchased.body.purchase.builderShareCents);
+      });
+
+      it("counts a seller's gross real-money payout volume as the full transaction total, not the net share", async () => {
+        const builder = await signupBuilder('tax-summary-seller-builder');
+        const seller = await createConnectedSeller('tax-summary-seller');
+        await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true }); // priceCents 5000, 2% commission
+
+        const got = await api('/tax/summary', seller.session());
+        expect(got.body.sellerPayoutCents).toBe(5000); // full transaction total, not the 4900 net share
+        expect(got.body.builderHigglesCents).toBe(0); // this account's own builder profile earned nothing
+        expect(got.body.totalCents).toBe(5000);
+      });
+
+      it("excludes a refunded real-money purchase from the seller's gross total", async () => {
+        const builder = await signupBuilder('tax-summary-refund-builder');
+        const seller = await createConnectedSeller('tax-summary-refund-seller');
+        const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+        // Refunding for real always 503s in this suite (Stripe isn't
+        // configured — see "Real-money refunds" above), so simulate what a
+        // real refund would have written, the same technique used
+        // throughout this file for other Stripe-dependent columns.
+        await env.DB.prepare(
+          "UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?",
+        ).bind(purchaseId).run();
+
+        const got = await api('/tax/summary', seller.session());
+        expect(got.body.sellerPayoutCents).toBe(0);
+      });
+
+      it('only counts income within the requested calendar year', async () => {
+        const builder = await signupBuilder('tax-summary-year-builder');
+        const seller = await createConnectedSeller('tax-summary-year-seller');
+        const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+        await env.DB.prepare("UPDATE purchases SET created_at = '2020-06-15T00:00:00.000Z' WHERE purchase_id = ?")
+          .bind(purchaseId).run();
+
+        const currentYear = await api('/tax/summary', seller.session());
+        expect(currentYear.body.sellerPayoutCents).toBe(0);
+
+        const pastYear = await api('/tax/summary?year=2020', seller.session());
+        expect(pastYear.response.status).toBe(200);
+        expect(pastYear.body.year).toBe(2020);
+        expect(pastYear.body.sellerPayoutCents).toBe(5000);
+      });
+
+      it('rejects a malformed year', async () => {
+        const builder = await signupBuilder('tax-summary-bad-year-builder');
+        const got = await api('/tax/summary?year=not-a-year', builder.session());
+        expect(got.response.status).toBe(400);
+      });
+    });
   });
 });
