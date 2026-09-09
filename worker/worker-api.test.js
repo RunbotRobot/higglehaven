@@ -712,11 +712,15 @@ describe('Worker API', () => {
     });
     expect(referenced.response.status).toBe(201);
     const hostingBuilder = await signupBuilder('catalog-batch-resize-builder');
+    // Explicit center away from the origin — #570's new land-candidate
+    // overlap check (see createGreenbeltLandletAs's own comment) means a
+    // real landlet left at the default world-origin center is no longer a
+    // neutral position for the later land-candidates tests in this file.
     await api('/landlets', hostingBuilder.session({
       method: 'POST',
       body: JSON.stringify({
         landletId: 'catalog-batch-resize-landlet', name: 'Catalog batch resize landlet', areaM2: 100,
-        status: 'claimed', ownerBuilderId: hostingBuilder.builderId,
+        status: 'claimed', ownerBuilderId: hostingBuilder.builderId, center: { x: 6000, y: 0 },
       }),
     }));
     const placed = await api('/instances', hostingBuilder.session({
