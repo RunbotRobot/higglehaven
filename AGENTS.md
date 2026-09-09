@@ -324,6 +324,22 @@ cost when it happens anyway:
   itself, not just discoverable by reading every thread. And say "Ready
   for Claude" (the board's own label), not "Waiting on Claude" — the
   owner corrected this phrasing on issue-556 as backwards-sounding.
+- **The same rule applies at task-creation time, not just on a reply.**
+  Found via a recurring pattern (higglehaven10, ~hourly for a stretch on
+  2026-09-09): a freshly-filed GitHub-backed `tasks` doc for an
+  owner-judgment issue (e.g. #610, #614, #616) kept showing up as "Ready
+  for Claude" — not because any page code defaults it that way (no page
+  code creates these docs at all; a session's own `write_db`/`set` call
+  does, straight through the db API same as everything else here), but
+  because the creating session's own write simply omitted `waitingOn`,
+  and an absent field reads as `"claude"` (see `waitingOnHtml`'s own
+  logic) regardless of what the issue's title or note says. Set
+  `waitingOn: "owner"` (with the explaining note/reply this file already
+  requires above) in the *same write that creates the card* whenever the
+  issue itself is an owner-judgment call — don't rely on a later pass to
+  notice and correct it, and don't assume "not self-assigning" text in
+  the issue body or note is enough on its own; the board only ever reads
+  the `waitingOn` field.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
