@@ -439,7 +439,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'catalog') {
-    return handleCatalog(request, env.DB, route, url, env.MODELS);
+    return handleCatalog(request, env.DB, route, url, env.MODELS, env);
   }
 
   if (route[0] === 'landlets') {
@@ -779,7 +779,7 @@ const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 // documented on Land cap below for why a hard block there got reverted.
 // Length-capping name/category/subcategory/color (see labelValue below)
 // still lands here; only the rate limit is deliberately left out.
-async function handleCatalog(request, db, route, url, models) {
+async function handleCatalog(request, db, route, url, models, env) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.templateIds)) throw new HttpError('templateIds must be an array', 400);
@@ -911,6 +911,40 @@ async function handleCatalog(request, db, route, url, models) {
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, limit);
     return json({ templates: ranked.map((r) => ({ ...r.template, similarity: r.similarity })) });
+  }
+
+  // #328: given a builder's free-text prompt, generates a concept image via
+  // OpenAI (see generateConceptImageBytes' own comment for the provider
+  // choice) and stores it content-addressed the same way POST .../thumbnail
+  // does — a fixed key would fight the immutable cache-control header on
+  // GET /uploads/:key once a second prompt happens to produce identical
+  // bytes (astronomically unlikely for a generative model, but the
+  // dedup is free either way). Out of scope here (#328's own text):
+  // embedding the result and running it through similarity-search (#329,
+  // already merged) or the placement UI (#330) — this endpoint only ever
+  // turns a prompt into a stored image URL.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'concept-image') {
+    // Session-gated (not anonymous, unlike similarity-search's read-only
+    // query above) and rate-limited per builder — unlike everything else
+    // in this file that calls an external API, this is a real, non-trivial
+    // per-call cost, so an unthrottled or anonymous caller could run up a
+    // real bill.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const input = await readJson(request);
+    const prompt = stringValue(input.prompt, 'prompt');
+    if (prompt.length > 2000) throw new HttpError('prompt must be 2000 characters or fewer', 400);
+    await checkRateLimit(db, `concept-image:${sessionBuilder.builder_id}`, CONCEPT_IMAGE_RATE_LIMIT_MAX);
+    if (!openaiConfigured(env)) {
+      throw new HttpError('Concept-image generation is not configured on this server yet.', 503);
+    }
+    const bytes = await generateConceptImageBytes(env, prompt);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const key = `concept-images/${hash}.png`;
+    if (!(await models.head(key))) {
+      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    }
+    return json({ imageUrl: `/uploads/${key}` }, 201);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -1607,6 +1641,27 @@ async function handleBuilders(request, db, route) {
     // guard blocks the delete, none of the land-release side effects below
     // take hold either, exactly as if the whole request had been rejected
     // up front instead of partially applied.
+    //
+    // A second race, found via a later backlog audit: resolveAuction's own
+    // "active" -> "ended" status flip commits as its own separate .run()
+    // call, before the batch that actually transfers the landlet/credits
+    // the seller/notifies both sides runs. `a.status = 'active'` alone
+    // stops blocking the instant that flip lands, even though the payout
+    // for that exact auction hasn't happened yet — so a self-delete by
+    // either side landing in that gap used to slip through, then made
+    // resolveAuction's own payout batch fail outright (its notification
+    // insert has a NOT NULL FK to builders) and roll back in its entirety,
+    // permanently stranding the auction at status='ended' with no payout
+    // and no way to ever re-resolve it (nothing re-triggers a resolve on
+    // an already-'ended' row). Closed without a new column: while a
+    // winning payout is genuinely still pending, the landlet's current
+    // owner hasn't been updated to reflect it yet either — the bidder's
+    // side stays owned by whoever had it before (not yet the bidder), and
+    // the seller's side is still owned by the seller (not yet released) —
+    // so checking that directly, alongside the existing 'active' checks,
+    // reuses signal the payout batch itself will flip the moment it
+    // actually lands, closing the window exactly when the real transfer
+    // completes rather than on an arbitrary timer.
     const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
     const statements = [
       db.prepare(`
@@ -1620,10 +1675,23 @@ async function handleBuilders(request, db, route) {
           )
           AND NOT EXISTS (
             SELECT 1 FROM auctions a
+            JOIN auction_bids b ON b.auction_id = a.auction_id
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+              AND l.owner_builder_id != ?
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
             WHERE a.seller_builder_id = ? AND a.status = 'active'
               AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
           )
-      `).bind(route[1], route[1], route[1]),
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions a
+            JOIN landlets l ON l.landlet_id = a.landlet_id
+            WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
+              AND l.owner_builder_id = ?
+          )
+      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       ...landletIds.flatMap((landletId) => [
         db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
         db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
@@ -1662,7 +1730,27 @@ async function handleBuilders(request, db, route) {
       if (leadingBid) {
         throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
       }
-      throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      const pendingWin = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        JOIN auction_bids b ON b.auction_id = a.auction_id
+        JOIN landlets l ON l.landlet_id = a.landlet_id
+        WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+          AND l.owner_builder_id != ?
+        LIMIT 1
+      `).bind(route[1], route[1]).first();
+      if (pendingWin) {
+        throw new HttpError('Cannot delete this builder while their auction win is still being paid out', 409);
+      }
+      const sellingWithBids = await db.prepare(`
+        SELECT a.auction_id FROM auctions a
+        WHERE a.seller_builder_id = ? AND a.status = 'active'
+          AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+        LIMIT 1
+      `).bind(route[1]).first();
+      if (sellingWithBids) {
+        throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      }
+      throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
     return json({ deleted: true, releasedLandletIds: landletIds });
   }
@@ -3499,6 +3587,46 @@ async function sendEmail(env, { to, subject, html, text }) {
     return false;
   }
   return true;
+}
+
+// ---- Prompt-mode concept-image generation (#328, sub-issue of #323) —
+// given a builder's free-text prompt, calls an external image-gen API to
+// produce a concept image that a later step (#329's similarity search,
+// already merged) embeds and matches against the catalog. Owner-confirmed
+// provider (#328's own GitHub thread): OpenAI's gpt-image-1, picked over
+// the cheaper Cloudflare Workers AI option because the owner's own stated
+// priority is generation quality, not minimizing per-call cost. Same
+// guarded-secret shape as RESEND_API_KEY/STRIPE_SECRET_KEY above — with
+// env.OPENAI_API_KEY unset (never configured in local dev or the automated
+// test suite), openaiConfigured(env) is false and the route handler below
+// returns a real 503 rather than attempting a live network call, so this
+// stays fully testable without a real OpenAI account.
+function openaiConfigured(env) {
+  return !!env.OPENAI_API_KEY;
+}
+
+// A real, non-trivial per-call cost (unlike every other rate-limited
+// action in this file) — kept well below the general-purpose 20/15min
+// shape used elsewhere so a runaway loop can't run up a real bill before
+// this kicks in.
+const CONCEPT_IMAGE_RATE_LIMIT_MAX = 10;
+
+// gpt-image-1 only ever returns base64-encoded image bytes (b64_json) —
+// unlike dall-e-2/3, it has no url response-format option — so there's no
+// separate "download the generated image" round trip; the bytes are
+// already in hand from this one call.
+async function generateConceptImageBytes(env, prompt) {
+  const response = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
+    throw new HttpError('Concept-image generation failed — please try again', 502);
+  }
+  return Uint8Array.from(atob(data.data[0].b64_json), (character) => character.charCodeAt(0));
 }
 
 // ---- Stripe Connect (Custom accounts) — #452, first leaf under #347's

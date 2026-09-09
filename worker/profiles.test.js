@@ -290,6 +290,85 @@ describe('Builders', () => {
     expect(deleted.response.status).toBe(200);
   });
 
+  // Backlog audit: resolveAuction's own "active" -> "ended" status flip
+  // commits as its own call, separately from the batch that actually
+  // transfers the landlet/credits the seller a few lines later (see
+  // resolveAuction's own comment in worker/index.js) — so there's a real
+  // window where the row already reads status: 'ended' but the payout
+  // hasn't landed yet. The two tests below manufacture that exact window
+  // directly (flip the row the same way resolveAuction's own guard UPDATE
+  // does, without running its payout batch) rather than relying on timing,
+  // since it's otherwise a genuine race between two concurrent requests.
+  it('rejects deleting the winning bidder while their win on an ended auction is still pending payout', async () => {
+    const seller = await signupBuilder('pending-payout-bidder-seller');
+    const bidder = await signupBuilder('pending-payout-bidder-bidder');
+    await createGreenbeltLandlet('pending-payout-bidder-landlet');
+    await api('/landlets/pending-payout-bidder-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/pending-payout-bidder-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    const bidRow = await env.DB.prepare('SELECT bid_id FROM auction_bids WHERE auction_id = ?').bind(auctionId).first();
+    // Same status flip resolveAuction's own guard UPDATE performs, without
+    // its follow-up payout batch — the landlet is deliberately left owned
+    // by the seller, exactly as it would be mid-race.
+    await env.DB.prepare(`UPDATE auctions SET status = 'ended', winning_bid_id = ? WHERE auction_id = ?`)
+      .bind(bidRow.bid_id, auctionId).run();
+
+    const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while their auction win is still being paid out',
+    });
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(bidder.builderId).first();
+    expect(stillThere).not.toBeNull();
+
+    // Once the transfer actually lands (landlet ownership reflects the
+    // win), deletion is allowed again — same as the already-resolved case
+    // above.
+    await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+      .bind(bidder.builderId, 'pending-payout-bidder-landlet').run();
+    const deletedAfterPayout = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
+    expect(deletedAfterPayout.response.status).toBe(200);
+  });
+
+  it('rejects deleting the seller while their sold-and-ended auction is still pending payout', async () => {
+    const seller = await signupBuilder('pending-payout-seller-seller');
+    const bidder = await signupBuilder('pending-payout-seller-bidder');
+    await createGreenbeltLandlet('pending-payout-seller-landlet');
+    await api('/landlets/pending-payout-seller-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/pending-payout-seller-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    const bidRow = await env.DB.prepare('SELECT bid_id FROM auction_bids WHERE auction_id = ?').bind(auctionId).first();
+    await env.DB.prepare(`UPDATE auctions SET status = 'ended', winning_bid_id = ? WHERE auction_id = ?`)
+      .bind(bidRow.bid_id, auctionId).run();
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while their auction sale is still being paid out',
+    });
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(seller.builderId).first();
+    expect(stillThere).not.toBeNull();
+
+    // Once the transfer actually lands, the seller no longer owns the
+    // landlet — deletion is allowed again.
+    await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+      .bind(bidder.builderId, 'pending-payout-seller-landlet').run();
+    const deletedAfterPayout = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deletedAfterPayout.response.status).toBe(200);
+  });
+
   // #279's guard has to catch a bid on *any* of a seller's active auctions,
   // not just a single one — this sets up two, with the bid on only the
   // second, to prove the check isn't limited to "their one auction."
