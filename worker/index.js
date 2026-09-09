@@ -439,7 +439,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'catalog') {
-    return handleCatalog(request, env.DB, route, url, env.MODELS);
+    return handleCatalog(request, env.DB, route, url, env.MODELS, env);
   }
 
   if (route[0] === 'landlets') {
@@ -779,7 +779,7 @@ const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 // documented on Land cap below for why a hard block there got reverted.
 // Length-capping name/category/subcategory/color (see labelValue below)
 // still lands here; only the rate limit is deliberately left out.
-async function handleCatalog(request, db, route, url, models) {
+async function handleCatalog(request, db, route, url, models, env) {
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.templateIds)) throw new HttpError('templateIds must be an array', 400);
@@ -910,6 +910,40 @@ async function handleCatalog(request, db, route, url, models) {
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, limit);
     return json({ templates: ranked.map((r) => ({ ...r.template, similarity: r.similarity })) });
+  }
+
+  // #328: given a builder's free-text prompt, generates a concept image via
+  // OpenAI (see generateConceptImageBytes' own comment for the provider
+  // choice) and stores it content-addressed the same way POST .../thumbnail
+  // does — a fixed key would fight the immutable cache-control header on
+  // GET /uploads/:key once a second prompt happens to produce identical
+  // bytes (astronomically unlikely for a generative model, but the
+  // dedup is free either way). Out of scope here (#328's own text):
+  // embedding the result and running it through similarity-search (#329,
+  // already merged) or the placement UI (#330) — this endpoint only ever
+  // turns a prompt into a stored image URL.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'concept-image') {
+    // Session-gated (not anonymous, unlike similarity-search's read-only
+    // query above) and rate-limited per builder — unlike everything else
+    // in this file that calls an external API, this is a real, non-trivial
+    // per-call cost, so an unthrottled or anonymous caller could run up a
+    // real bill.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const input = await readJson(request);
+    const prompt = stringValue(input.prompt, 'prompt');
+    if (prompt.length > 2000) throw new HttpError('prompt must be 2000 characters or fewer', 400);
+    await checkRateLimit(db, `concept-image:${sessionBuilder.builder_id}`, CONCEPT_IMAGE_RATE_LIMIT_MAX);
+    if (!openaiConfigured(env)) {
+      throw new HttpError('Concept-image generation is not configured on this server yet.', 503);
+    }
+    const bytes = await generateConceptImageBytes(env, prompt);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const key = `concept-images/${hash}.png`;
+    if (!(await models.head(key))) {
+      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    }
+    return json({ imageUrl: `/uploads/${key}` }, 201);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -3498,6 +3532,46 @@ async function sendEmail(env, { to, subject, html, text }) {
     return false;
   }
   return true;
+}
+
+// ---- Prompt-mode concept-image generation (#328, sub-issue of #323) —
+// given a builder's free-text prompt, calls an external image-gen API to
+// produce a concept image that a later step (#329's similarity search,
+// already merged) embeds and matches against the catalog. Owner-confirmed
+// provider (#328's own GitHub thread): OpenAI's gpt-image-1, picked over
+// the cheaper Cloudflare Workers AI option because the owner's own stated
+// priority is generation quality, not minimizing per-call cost. Same
+// guarded-secret shape as RESEND_API_KEY/STRIPE_SECRET_KEY above — with
+// env.OPENAI_API_KEY unset (never configured in local dev or the automated
+// test suite), openaiConfigured(env) is false and the route handler below
+// returns a real 503 rather than attempting a live network call, so this
+// stays fully testable without a real OpenAI account.
+function openaiConfigured(env) {
+  return !!env.OPENAI_API_KEY;
+}
+
+// A real, non-trivial per-call cost (unlike every other rate-limited
+// action in this file) — kept well below the general-purpose 20/15min
+// shape used elsewhere so a runaway loop can't run up a real bill before
+// this kicks in.
+const CONCEPT_IMAGE_RATE_LIMIT_MAX = 10;
+
+// gpt-image-1 only ever returns base64-encoded image bytes (b64_json) —
+// unlike dall-e-2/3, it has no url response-format option — so there's no
+// separate "download the generated image" round trip; the bytes are
+// already in hand from this one call.
+async function generateConceptImageBytes(env, prompt) {
+  const response = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
+    throw new HttpError('Concept-image generation failed — please try again', 502);
+  }
+  return Uint8Array.from(atob(data.data[0].b64_json), (character) => character.charCodeAt(0));
 }
 
 // ---- Stripe Connect (Custom accounts) — #452, first leaf under #347's
