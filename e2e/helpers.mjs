@@ -200,14 +200,13 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
 // is for re-entry cases where nothing needs signing up again.
 export async function chooseIdentity(page, { mode, label, isNew = true }) {
   await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
-  // Switching to Build (unlike Sell, a modal overlay with no reload —
-  // see #mode-nav's own click handler in src/main.js) always reloads the
-  // page first; bootstrap() only decides whether a login prompt is needed
-  // once that reload has actually landed, so checking for the modal
-  // before it finishes would race an in-flight navigation.
-  if (mode !== 'sell') {
-    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  }
+  // #540 gave Sell the same real currentMode/reload treatment Build and
+  // Shop already had (src/main.js's #mode-nav click handler no longer
+  // special-cases it) — all three now always reload the page first;
+  // bootstrap() only decides whether a login prompt is needed once that
+  // reload has actually landed, so checking for the modal before it
+  // finishes would race an in-flight navigation.
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   const authModalShown = await page.waitForSelector('#auth-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
   if (!authModalShown) return; // already logged in — entry proceeds on its own
 

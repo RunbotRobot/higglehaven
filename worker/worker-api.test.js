@@ -285,6 +285,112 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
+  // #540: the seller's own "faux lándlet" 3D array paginates by a
+  // cumulative model-file-size cap — this is the field that makes that
+  // possible, previously computed by POST /api/models but discarded by
+  // every caller instead of being persisted anywhere.
+  it('persists modelSizeBytes on catalog templates and validates it', async () => {
+    const form = new FormData();
+    form.set('file', glbFile());
+    const uploaded = await (await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form })).json();
+
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-size-bytes-test',
+        name: 'Model size bytes test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelUrl: uploaded.modelUrl,
+        modelSizeBytes: uploaded.sizeBytes,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.modelSizeBytes).toBe(uploaded.sizeBytes);
+    expect((await api('/catalog/model-size-bytes-test')).body.template.modelSizeBytes).toBe(uploaded.sizeBytes);
+
+    // A patch that doesn't touch modelSizeBytes must not silently wipe it —
+    // validateTemplate merges against the existing row precisely so an
+    // unrelated field edit (name, here) doesn't lose it.
+    const renamed = await api('/catalog/model-size-bytes-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.template.modelSizeBytes).toBe(uploaded.sizeBytes);
+
+    // Explicitly updating it still works (e.g. after a rescale re-upload).
+    const resized = await api('/catalog/model-size-bytes-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ modelSizeBytes: uploaded.sizeBytes + 1000 }),
+    });
+    expect(resized.response.status).toBe(200);
+    expect(resized.body.template.modelSizeBytes).toBe(uploaded.sizeBytes + 1000);
+
+    // A template with no modelUrl/modelSizeBytes at all still works — NULL,
+    // not a validation failure (every template uploaded before this field
+    // existed looks like this).
+    const withoutSize = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-size-bytes-omitted-test',
+        name: 'No size',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(withoutSize.response.status).toBe(201);
+    expect(withoutSize.body.template.modelSizeBytes).toBeNull();
+
+    // Bounded against the same real 20MB upload limit handleModelUpload
+    // itself enforces (MAX_MODEL_BYTES) — a model is never actually that
+    // large in practice, so this is a defensive bound against a malformed
+    // request, not a real UX limit.
+    const negative = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-size-bytes-negative-test',
+        name: 'Negative size',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelSizeBytes: -1,
+      }),
+    });
+    expect(negative.response.status).toBe(400);
+    const tooLarge = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-size-bytes-too-large-test',
+        name: 'Too large',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        modelSizeBytes: 20 * 1024 * 1024 + 1,
+      }),
+    });
+    expect(tooLarge.response.status).toBe(400);
+
+    // The batch create/update path stores it too, not just the single-item
+    // route above.
+    const batchForm = new FormData();
+    batchForm.set('file', glbFile({ json: '{"batchModelSize":true}' }));
+    const batchUploaded = await (await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: batchForm })).json();
+    const batchCreated = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [{
+          templateId: 'model-size-bytes-batch-test',
+          name: 'Batch model size test',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          modelUrl: batchUploaded.modelUrl,
+          modelSizeBytes: batchUploaded.sizeBytes,
+        }],
+      }),
+    });
+    expect(batchCreated.response.status).toBe(201);
+    expect(batchCreated.body.templates[0].modelSizeBytes).toBe(batchUploaded.sizeBytes);
+  });
+
   // #417: completeScan used to be derived purely from R2's listing.truncated
   // flag, which only says whether a *further page* exists — not whether the
   // inner loop actually finished examining every object already fetched on
@@ -2122,6 +2228,47 @@ describe('Worker API', () => {
     expect(blocked.body).toEqual({
       error: 'Greenbelt reserve is at or above the expansion threshold',
     });
+  });
+
+  // #523: nothing previously stopped an admin PUT/PATCH from setting
+  // radiusM below its current value, with no re-validation of
+  // already-materialized land that could then sit outside the new,
+  // smaller bound. Owner direction: block shrinking outright, no
+  // cascade-cleanup option.
+  it('rejects PUT/PATCH /world setting radiusM below its current value, but allows an equal or larger one', async () => {
+    const current = await api('/world');
+    const currentRadiusM = current.body.world.radiusM;
+
+    const shrunkPatch = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM - 1 }),
+    }));
+    expect(shrunkPatch.response.status).toBe(400);
+    expect(shrunkPatch.body).toEqual({ error: 'World radius cannot be decreased' });
+
+    const shrunkPut = await api('/world', adminSession({
+      method: 'PUT',
+      body: JSON.stringify({ radiusM: currentRadiusM - 1 }),
+    }));
+    expect(shrunkPut.response.status).toBe(400);
+    expect(shrunkPut.body).toEqual({ error: 'World radius cannot be decreased' });
+
+    const unchanged = await api('/world');
+    expect(unchanged.body.world.radiusM).toBe(currentRadiusM);
+
+    const sameRadius = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM }),
+    }));
+    expect(sameRadius.response.status).toBe(200);
+    expect(sameRadius.body.world.radiusM).toBe(currentRadiusM);
+
+    const grown = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ radiusM: currentRadiusM + 1 }),
+    }));
+    expect(grown.response.status).toBe(200);
+    expect(grown.body.world.radiusM).toBe(currentRadiusM + 1);
   });
 
   // The scheduled() export (see wrangler.jsonc's triggers.crons) is what

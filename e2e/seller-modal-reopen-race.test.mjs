@@ -58,11 +58,15 @@ await productRow().locator('button', { hasText: 'Save Digital Good' }).click();
 
 // Close the modal (real user behavior — nothing in-flight is canceled by
 // this, see closeSellerModal's own comment on why: it only toggles a CSS
-// class) before the delayed PATCH above resolves, then reopen it.
+// class) before the delayed PATCH above resolves, then reopen it. #540
+// made Sell a genuine currentMode (a real reload on entry) rather than a
+// modal overlay, so re-clicking the Sell nav tab while already in Sell
+// mode is now a no-op — reopening goes through the showcase's own
+// "Manage Products" button instead, same as seller-list-view.test.mjs.
 await page.waitForTimeout(200);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(200);
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await page.click('#seller-showcase-manage-btn');
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 

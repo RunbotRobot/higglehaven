@@ -856,13 +856,14 @@ async function handleCatalog(request, db, route, url, models, env) {
         color = excluded.color, width_m = excluded.width_m, depth_m = excluded.depth_m,
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
+        model_size_bytes = excluded.model_size_bytes,
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(template))));
     const placeholders = templates.map(() => '?').join(', ');
@@ -1127,8 +1128,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     return json({ template }, 201);
   }
@@ -1166,9 +1167,9 @@ async function handleCatalog(request, db, route, url, models, env) {
     await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
     await notifyBuildersOfDimensionChange(db, template, {
       width: existing.width_m,
       depth: existing.depth_m,
@@ -5233,6 +5234,17 @@ async function handleWorld(request, db, route) {
     const existing = await getWorldSettings(db);
     const input = await readJson(request);
     const world = validateWorld({ ...worldFromRow(existing), ...input });
+    // #523: nothing here re-validates already-materialized/greenbelt land
+    // against a smaller radius, and expandWorldOnce (the only other writer
+    // of radius_m) only ever grows it — so a shrink here was the one path
+    // that could leave existing landlets sitting outside the world's own
+    // stated bounds. Owner direction (reply yyjnvw3ueii8zn0k5cs3): block
+    // shrinking outright; if the radius is ever wrong by accident, that's
+    // a one-time manual/engineered fix, not something this endpoint should
+    // allow as routine input.
+    if (world.radiusM < existing.radius_m) {
+      throw new HttpError('World radius cannot be decreased', 400);
+    }
     await db.prepare(`
       UPDATE world_settings
       SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
@@ -6956,6 +6968,14 @@ function validateTemplate(input, fallbackId) {
     priceCents: optionalInteger(input.priceCents, 'priceCents'),
     sellerId: input.sellerId || null,
     modelUrl: input.modelUrl || null,
+    // #540: the seller's own "faux lándlet" 3D array paginates by a
+    // cumulative model-file-size cap, not a fixed item count — this is the
+    // one place that size (already computed and returned by
+    // handleModelUpload, previously discarded by every client-side caller)
+    // gets persisted so later pagination doesn't need to re-fetch every
+    // model just to plan pages. NULL for a template with no model, or one
+    // uploaded before this field existed.
+    modelSizeBytes: optionalModelSizeBytes(input.modelSizeBytes),
     metadata: input.metadata || {},
   };
   // Found via backlog audit (#375): modelUrl went straight through with no
@@ -7078,7 +7098,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata)];
 }
 
 function instanceParams(instance) {
@@ -7103,6 +7123,7 @@ function templateFromRow(row) {
     priceCents: row.price_cents,
     sellerId: row.seller_id,
     modelUrl: row.model_url,
+    modelSizeBytes: row.model_size_bytes,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
@@ -7348,6 +7369,19 @@ function optionalInteger(value, field) {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MONEY_CENTS) {
     throw new HttpError(`${field} must be a non-negative integer no greater than ${MAX_MONEY_CENTS}`, 400);
+  }
+  return number;
+}
+
+// #540: bounded against MAX_MODEL_BYTES (the same real upload-size limit
+// handleModelUpload itself enforces), not MAX_MONEY_CENTS like
+// optionalInteger above — a model's size is never actually money-sized, and
+// reusing that cap here would just be the wrong bound wearing the right shape.
+function optionalModelSizeBytes(value) {
+  if (value === undefined || value === null) return null;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MODEL_BYTES) {
+    throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
   }
   return number;
 }
