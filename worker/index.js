@@ -7912,6 +7912,23 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.paid_out_at) {
     throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
   }
+  // #651: the exact same money-unaccounted-for risk as paid_out_at above,
+  // just on the builder side. higgles_balance_cents is one fungible
+  // lifetime pool (see handleBuilderRedeem's own comment on why it has no
+  // per-purchase provenance to check against precisely), so if a builder
+  // has already redeemed enough of it for real Stripe cash that this
+  // purchase's own share can no longer be covered, clawing it back
+  // unconditionally would just drive the balance negative — silently
+  // treating already-paid-out real money as still-clawbackable. Same fix
+  // shape: reject up front rather than guess at a policy, before the
+  // unconditional clawback below ever runs.
+  if (purchase.builder_id) {
+    const currentBuilder = await db.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(purchase.builder_id).first();
+    if (currentBuilder && currentBuilder.higgles_balance_cents < purchase.builder_share_cents) {
+      throw new HttpError('This purchase\'s commission has already been redeemed for real cash and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+    }
+  }
   const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
