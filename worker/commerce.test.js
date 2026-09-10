@@ -2485,13 +2485,14 @@ describe('Simulated purchases', () => {
     );
   });
 
-  // #651: this used to document a real gap (no floor at all — the clawback
-  // below would push the balance negative, silently treating already-spent
-  // real money as still-clawbackable). Fixed by rejecting the refund
-  // outright once the builder's balance can no longer cover it, the same
-  // "reject rather than go unaccounted for" shape paid_out_at already uses
-  // on the seller side — see handlePurchaseRefund's own comment.
-  it('rejects the refund rather than letting the clawback push a builder\'s higgles balance negative', async () => {
+  // Owner (Control Room, 2026-09-10, on #651): a refund must never be
+  // blocked just because a builder already redeemed their commission —
+  // "a shopper should not be punished for the chance occurrence of a
+  // builder cashing out... higglehaven will have to bear the financial
+  // burden of the negative balance." PR #652 briefly added a 409
+  // floor-guard here (see git history) that this test reverts: the
+  // clawback is unconditional again and genuinely allowed to go negative.
+  it('lets the clawback push a builder\'s higgles balance negative — there is no floor on a refund', async () => {
     const seller = await signupBuilder('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
     await claim('purchase-refund-negative-landlet', seller);
@@ -2499,15 +2500,13 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-refund-negative-instance', 'purchase-refund-negative-landlet', 'purchase-refund-negative-template', seller);
 
     const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
-    // Spend down the builder's balance below the commission that's about to
-    // be clawed back, so the refund would otherwise push it negative.
+    // Spend down the builder's balance below the commission they're about
+    // to have clawed back, so the refund must push it negative.
     await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
 
-    const refunded = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
-    expect(refunded.response.status).toBe(409);
-    expect(refunded.body.error).toMatch(/already been redeemed/i);
+    await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     const after = await builderRow(seller.builderId);
-    expect(after.higgles_balance_cents).toBe(0);
+    expect(after.higgles_balance_cents).toBe(-purchased.body.purchase.builderShareCents);
   });
 
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {

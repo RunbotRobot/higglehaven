@@ -272,7 +272,29 @@ describe('Higgles redemption (#625)', () => {
     expect(status.body.availableCents).toBe(2_000_001);
   });
 
-  it('returns 503 once past validation but Stripe is not configured, leaving the balance untouched', async () => {
+  // Owner (Control Room, 2026-09-10, on #651): higgles_balance_cents has no
+  // provenance back to real money — the free/simulated purchase path
+  // credits builder commission exactly like a real Stripe sale does, so
+  // redeeming it is a zero-capital, zero-auth mint of real cash. Same
+  // stopgap-first shape as the (since-lifted) #629 auction pause:
+  // REDEMPTION_PAUSED_PENDING_PROVENANCE now occupies the same slot —
+  // after every other validation, ahead of the stripeConfigured check —
+  // which is the actual reason the test just below still sees 503 too.
+  it('pauses redemption pending the provenance-tracking fix, ahead of the Stripe-configured check, leaving the balance untouched', async () => {
+    const builder = await signupBuilder('redeem-paused-provenance');
+    await connectBuilder(builder);
+    await creditHiggles(builder, 5000);
+    const got = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(got.response.status).toBe(503);
+    expect(got.body.error).toMatch(/paused/i);
+
+    const status = await api('/builders/me/redeem', builder.session());
+    expect(status.body.availableCents).toBe(5000);
+  });
+
+  it('returns the same pause 503 even once Stripe would otherwise be configured (message differs from the plain unconfigured case)', async () => {
     const builder = await signupBuilder('redeem-unconfigured');
     await creditHiggles(builder, 5000);
     const got = await api('/builders/me/redeem', builder.session({

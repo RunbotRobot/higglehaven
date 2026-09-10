@@ -4581,6 +4581,19 @@ async function handleBuilderStripeAccount(request, env, db) {
 // redemption cap the way #615 computes — simpler, and honest about not
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
+//
+// Pending #NNN (owner-flagged, 2026-09-10): higgles_balance_cents is one
+// fungible pool with no provenance tracking back to real money — the
+// simulated/free purchase path (handleInstancePurchase's dev-mode
+// fallback, no real payment ever collected) credits builder commission
+// exactly like a real Stripe sale does, so redeeming it for real cash is a
+// zero-capital, zero-auth mint of real money. Same root cause #629 already
+// found on the auction side, but reachable here with no capital and no
+// exploit skill at all. Pausing real-cash redemption again — same
+// stopgap-first-ask-later precedent as #629/#630 — until provenance
+// tracking (or some other bound) closes this; independent of any auction-
+// side flag, since that root cause was already fixed for auctions.
+const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
 async function handleBuilderRedeem(request, env, db) {
   const user = await requireCurrentUser(request, db);
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
@@ -4610,6 +4623,18 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
+    }
+
+    // Paused pending the provenance-tracking design question above — same
+    // slot the #629 pause (REDEMPTION_PAUSED_PENDING_629, since lifted)
+    // occupied: after every other validation, so a malformed/oversized/
+    // threshold-blocked request still gets its own real status code, and
+    // only a redemption that would otherwise actually succeed hits this.
+    if (REDEMPTION_PAUSED_PENDING_PROVENANCE) {
+      throw new HttpError(
+        'Redeeming higgles for real cash is temporarily paused while we close a fraud gap — nothing about your balance is lost, this only affects new redemptions. Check back soon.',
+        503,
+      );
     }
 
     if (!stripeConfigured(env)) {
@@ -7392,6 +7417,19 @@ function isoDateString(value, field) {
 const PURCHASE_COMMISSION_RATE = 0.02; // "2% standard for seller-listed products"
 const PURCHASE_BUILDER_SPLIT = 0.5; // "Universal 50/50 split"
 const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
+// #651 (owner, Control Room, 2026-09-10): a real-money refund pays back
+// only this fraction of the original total, never the full 100% — closes
+// a fraud triangle (buy fake sale, cash out builder commission, refund
+// full price) that a no-floor-guard refund would otherwise leave open. Set
+// to exactly 1 - (PURCHASE_COMMISSION_RATE * PURCHASE_BUILDER_SPLIT), i.e.
+// 1 minus the builder's typical share of a sale, so the haircut exactly
+// offsets what the triangle could otherwise net — see handlePurchaseRefund's
+// own comment for the full reasoning. Not derived from the other constants
+// programmatically since the owner's own number (99%) is the actual
+// policy, publish on a refund-policy page verbatim — this should change
+// only if that policy itself changes, not silently drift if the
+// commission rate ever does.
+const REFUND_PAYOUT_RATE = 0.99;
 // quantity had no upper bound at all until this was added — a single
 // unauthenticated call with an absurd quantity (there's no shopper account
 // to even attribute it to) could mint an arbitrary amount of a builder's
@@ -7912,23 +7950,14 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.paid_out_at) {
     throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
   }
-  // #651: the exact same money-unaccounted-for risk as paid_out_at above,
-  // just on the builder side. higgles_balance_cents is one fungible
-  // lifetime pool (see handleBuilderRedeem's own comment on why it has no
-  // per-purchase provenance to check against precisely), so if a builder
-  // has already redeemed enough of it for real Stripe cash that this
-  // purchase's own share can no longer be covered, clawing it back
-  // unconditionally would just drive the balance negative — silently
-  // treating already-paid-out real money as still-clawbackable. Same fix
-  // shape: reject up front rather than guess at a policy, before the
-  // unconditional clawback below ever runs.
-  if (purchase.builder_id) {
-    const currentBuilder = await db.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
-      .bind(purchase.builder_id).first();
-    if (currentBuilder && currentBuilder.higgles_balance_cents < purchase.builder_share_cents) {
-      throw new HttpError('This purchase\'s commission has already been redeemed for real cash and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
-    }
-  }
+  // Owner (Control Room, 2026-09-10, on #651): a refund must never be
+  // blocked just because a builder already redeemed their commission for
+  // real cash — "a shopper should not be punished for the chance
+  // occurrence of a builder cashing out... higglehaven will have to bear
+  // the financial burden of the negative balance." A prior version of
+  // this function rejected the refund here the same way paid_out_at does
+  // above; removed per that direction — the unconditional clawback below
+  // is now allowed to drive higgles_balance_cents negative.
   const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
@@ -7953,22 +7982,40 @@ async function handlePurchaseRefund(request, env, purchaseId) {
 
   // #348: a real-money purchase (payment_intent_id set — see #453) needs
   // its Stripe charge actually reversed, not just the local row flagged.
-  // reverse_transfer pulls the ~98% share back out of the seller's
+  // reverse_transfer pulls the seller's own share back out of their
   // connected-account balance (the same way the block below claws back
   // the builder's higgles share); refund_application_fee reverses
-  // higglehaven's own cut too, so nobody keeps money on a refunded sale.
-  // If Stripe's call fails, the guard above is released (refunded_at reset
-  // to NULL) and the error propagates before the builder's higgles balance
-  // is ever touched — a failed real-money reversal should never look like
-  // a successful refund, and should stay retryable.
+  // higglehaven's own cut too, proportional to the same capped amount. If
+  // Stripe's call fails, the guard above is released (refunded_at reset to
+  // NULL) and the error propagates before the builder's higgles balance is
+  // ever touched — a failed real-money reversal should never look like a
+  // successful refund, and should stay retryable.
+  //
+  // Owner (Control Room, 2026-09-10, on #651): removing the floor-guard
+  // above (never blocking a refund) opened a real fraud triangle —
+  // buy a fake sale, cash out the builder's real commission, then refund
+  // the full purchase price back, netting the cashed-out commission for
+  // free. REFUND_PAYOUT_RATE caps what actually comes back to the buyer at
+  // 99% of the original total instead of a full reversal: builderShareCents
+  // is deterministically 1% of totalCents at this codebase's actual
+  // PURCHASE_COMMISSION_RATE/PURCHASE_BUILDER_SPLIT (2% commission, 50/50
+  // split — the 0.5% floor never binds at that rate), so a 99% refund
+  // exactly zeroes out the triangle's profit rather than leaving it
+  // partially exploitable. The owner's own words: "unless you can think of
+  // a better solution, I want to use this... refund only 99%." Applies
+  // only to the money that actually reaches the buyer — the builder's own
+  // higgles clawback just below is unaffected, still the full
+  // builder_share_cents, allowed to go negative per the direction above.
   if (purchase.payment_intent_id) {
     if (!stripeConfigured(env)) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
       throw new HttpError('Stripe payments are not configured on this server yet.', 503);
     }
+    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
     try {
       await stripeRequest(env, 'POST', 'refunds', {
         payment_intent: purchase.payment_intent_id,
+        amount: refundAmountCents,
         reverse_transfer: true,
         refund_application_fee: true,
       });
