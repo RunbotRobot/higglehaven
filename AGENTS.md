@@ -435,6 +435,20 @@ cost when it happens anyway:
   entry — both update in real time and are authoritative; `note` is
   history, not a signal to act on by itself.
 
+- **A `[Tracking]` card's own `status` should read `"queued"` while it's
+  waiting on its sub-issues — reserve `"in_progress"` for a tracking
+  card with real work happening directly on it (rare; usually the
+  sub-issues carry all the actual work).** The owner flagged this twice
+  in one pass (01fii7zrm9kahajhuxws on #326, w51z2hlwti74jk10e0h2 as the
+  general rule): a tracking card sitting on `"in_progress"` while every
+  actual unit of work lives on its own separately-tracked sub-issue cards
+  reads as "someone is actively working this," which isn't true — it's
+  just waiting, the same as any other queued item. `waitingOn` still
+  does the real work of saying *what* it's waiting on (a specific
+  sub-issue's id/number, or `"owner"`); `status` on the tracking card
+  itself should follow that same logic `status`/`waitingOn` already
+  follow everywhere else on the board.
+
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
