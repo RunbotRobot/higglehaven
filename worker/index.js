@@ -2580,6 +2580,15 @@ async function handleStartAuction(request, db, landletId) {
 // stacked directly on the previous one.
 const LEVEL_HEIGHT_M = 10;
 
+// Half a level's height, allowed as slack on each end of a landlet's
+// purchased-levels range — an instance's own thickness can carry it
+// slightly past a level's exact z boundary (see levelCapConsumedM2's own
+// comment on where that boundary sits) without actually needing the next
+// level purchased just to fit. Shared by assertInstanceZWithinLevels
+// (validating a placement) and handleLandletLevels' own DELETE branch
+// (deciding what still fits once a level is removed).
+const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
+
 // docs/SPEC.md §3's two hard limits on digging down (issue #164): a
 // downward level is blocked once its own cross-sectional area (the cone
 // narrowing toward Earth's center) would fall below this floor, and dead-
@@ -2767,6 +2776,21 @@ async function handleLandletLevels(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
     }
+    // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
+    // z-range this level was providing is removed from active shoppable
+    // space rather than silently drifting out of bounds — nothing else
+    // ever re-checks an existing instance's z once placed
+    // (assertInstanceZWithinLevels only runs on that instance's own
+    // create/move). Same allowed-range formula (and half-level-height
+    // slack) as assertInstanceZWithinLevels, computed against the levels
+    // that remain after this delete, so an instance already within
+    // tolerance of the new boundary isn't needlessly swept up.
+    const remaining = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(landletId).all();
+    const remainingIndices = remaining.results.map((row) => row.level_index);
+    const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    await db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
+      .bind(landletId, minZ, maxZ).run();
     await recomputeLandCap(db, landlet.owner_builder_id);
     return json({ deleted: true });
   }
@@ -7707,13 +7731,6 @@ async function assertCropWithinTemplateBounds(db, instances) {
     }
   }
 }
-
-// Half a level's height, allowed as slack on each end of a landlet's
-// purchased-levels range below — an instance's own thickness can carry it
-// slightly past a level's exact z boundary (see levelCapConsumedM2's own
-// comment on where that boundary sits) without actually needing the next
-// level purchased just to fit.
-const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
 // Confirms every instance's z falls within the landlet's actual purchased
 // vertical extent (landlet_levels — see handleLandletLevels, the only

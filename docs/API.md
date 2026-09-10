@@ -4269,6 +4269,20 @@ part of the `DELETE`'s own atomic guard, not just the initial read, so a
 concurrent add extending past this level between the read and the delete
 can't leave a gap in the level sequence.
 
+#522 (owner-confirmed, 2026-09-09): any `placed_instances` row left
+sitting in the z-range this level was providing is deleted along with
+it — nothing else ever re-checks an already-placed instance's z once a
+level it depended on is removed (`assertInstanceZWithinLevels` only runs
+on that instance's own create/move). Uses the same allowed-range formula
+(and half-level-height slack) as that function, computed against the
+levels that remain after the delete, so an instance already within
+tolerance of the new boundary isn't swept up unnecessarily. This is
+intentionally a hard delete, not a hold/flag — the owner's own answer on
+#522 confirmed removed-level instances should come out of active
+shoppable space; a separate, larger feature (saving a removed level's
+layout for the builder to selectively reapply elsewhere) is tracked
+independently and does not change this endpoint's behavior.
+
 ### Ownership-change cleanup
 
 A lándlet's levels are reset (`DELETE FROM landlet_levels`) everywhere
