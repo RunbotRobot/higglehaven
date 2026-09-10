@@ -77,5 +77,6 @@
   "0077_tax_id_form.sql",
   "0078_builder_stripe_connect.sql",
   "0079_higgles_redemptions.sql",
-  "0080_saved_level_layouts.sql"
+  "0080_saved_level_layouts.sql",
+  "0081_tax_1099_forms.sql"
 ]
