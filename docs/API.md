@@ -5417,12 +5417,18 @@ avatar's own altitude (mirrored onto `shopAvatarPosition.z` every frame in
 `updateShopMovement`, which the existing camera-follow logic already tracks
 for free since it's relative to the avatar's position).
 
-Trigger matches the spec's own wording exactly — "double-tap jump (mobile)
-/ double-press spacebar (desktop)" — via `bindShopFlyToggle` (the new
-`#shop-fly-btn`) and a `keydown` listener on `Space`, both requiring two
-presses within `SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than
-one, so an ordinary single tap/press never launches the player
-accidentally. Takeoff ramps `shopFlightAltitudeM` from 0 to
+Trigger matches the spec's own wording — a single tap on `#shop-fly-btn`
+(`bindShopFlyToggle`), or a double-press of `Space` (desktop, via a
+`keydown` listener requiring two presses within
+`SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS` (400ms) rather than one). The two
+gestures are deliberately asymmetric: `Space` is an overloaded key an
+ordinary press could trigger by accident while just moving around, so it
+needs the double-press guard against launching the player unintentionally;
+the bird button is a dedicated, visible control with no such accidental-
+trigger risk, so it toggles on a single tap (owner feedback,
+`u7rvtz1jn1wchfsz6c1o`, 2026-09-10 — it originally mirrored `Space`'s own
+double-tap requirement, which just added friction with nothing to guard
+against). Takeoff ramps `shopFlightAltitudeM` from 0 to
 `SHOP_FLIGHT_HOVER_START_ALTITUDE_M` over `SHOP_FLIGHT_TAKEOFF_DURATION_S`
 (spec's "~1s lift"); landing reverses that over
 `SHOP_FLIGHT_LANDING_DURATION_S` (spec's "~2s reverse") from whatever
