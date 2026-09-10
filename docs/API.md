@@ -4766,16 +4766,34 @@ A purchase with a `paymentIntentId` (see "Real-money checkout" above —
 it needs to actually reverse the Stripe charge, not just flag the local
 row. Alongside the higgle-commission clawback above, this issues a Stripe
 refund against the original PaymentIntent with `reverse_transfer: true`
-(pulls the seller's ~98% share back out of their connected account's
-balance — the real-money mirror of clawing back the builder's higgle
-share) and `refund_application_fee: true` (reverses higglehaven's own cut
-too, so nobody keeps money on a refunded sale). `503` if
+(pulls the seller's share back out of their connected account's balance —
+the real-money mirror of clawing back the builder's higgle share) and
+`refund_application_fee: true` (reverses higglehaven's own cut too,
+proportional to the same capped amount below). `503` if
 `STRIPE_SECRET_KEY` isn't configured. If Stripe's refund call fails for
 any reason, the purchase is left exactly as it was before this
 request — not marked refunded, builder's higgle balance untouched — so a
 failed real-money reversal never looks like a successful refund and stays
 retryable; only once Stripe confirms the refund does the higgle clawback
 above happen at all.
+
+**Refund policy — 99%, not 100% (#651).** The buyer only ever gets back
+`REFUND_PAYOUT_RATE` (0.99) of the purchase's original total, never a full
+reversal — passed explicitly as Stripe's own `amount` param on the refund
+call. This closes a real fraud triangle the owner identified: since a
+refund's higgle clawback above has no floor and can't be blocked (a
+shopper must never be denied a refund just because a builder already
+redeemed their commission for real cash — "higglehaven will have to bear
+the financial burden of the negative balance"), a full 100% refund would
+let someone buy a fake sale from their own alt-account listing, redeem the
+builder commission for real Stripe cash, then refund the full price back —
+netting the cashed-out commission for free, repeatable at any capital
+level. `builderShareCents` is deterministically exactly 1% of the sale
+total at this codebase's actual commission math (`PURCHASE_COMMISSION_RATE`
+2%, split 50/50 — the 0.5% builder floor never binds at that rate), so a
+99% refund exactly zeroes out that triangle's profit rather than leaving
+it partially exploitable. A refund-policy page should tell buyers this
+plainly before they buy, per the owner's own direction.
 
 A purchase's `builderId` can itself be null (migrations/0062 — the host
 builder's account was later deleted; `SET NULL`, not `CASCADE`, keeps the
