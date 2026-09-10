@@ -4420,18 +4420,27 @@ UI (#635, built on top of the detail endpoint above — see
 
 ### Pasting saved-layout instances onto a landlet (#636)
 
-No dedicated endpoint — the preview's "Paste onto My Lándlet" button
-(shown once the marquee-select above has a nonempty selection) sends the
+No dedicated endpoint — the preview's "Paste onto Lándlet" button (shown
+once the marquee-select above has a nonempty selection) sends the
 selected instances' `templateId`/`x`/`y`/`z`/rotation/`crop`/`scale`/
 community-sign-and-calendar flags straight through the existing `POST
 /api/instances/batch` (the same bulk-create every other multi-instance
 change already goes through — see `createInstancesRemote` in
-`src/api.js`), targeting whichever landlet the builder currently has
-claimed (never a picker — a builder can only ever hold one claimed
-landlet at a time). `instanceId` is deliberately omitted from each
-pasted entry so the batch endpoint assigns a fresh one, rather than
+`src/api.js`). `instanceId` is deliberately omitted from each pasted
+entry so the batch endpoint assigns a fresh one, rather than
 resurrecting the original id a now long-gone `placed_instances` row once
 had.
+
+#648: the target landlet is resolved via `populateLayoutPreviewPasteTarget`
+(`src/main.js`) — every claimed landlet the builder owns (`GET
+/api/landlets?status=claimed&ownerBuilderId=...`, not just the first),
+defaulting to `currentLandletId` when it's among them (same "whichever
+one Build mode was last on" convention the auction-start landlet picker,
+`renderStartSection`, already established for the same underlying fact:
+`#199`/`#249` mean a builder can genuinely hold two simultaneously-claimed
+landlets, not just one). A picker (`<select id="layout-preview-paste-
+target">`) only actually renders once there's more than one to choose
+from.
 
 Routing through the normal create path means a paste gets the exact same
 validation any other instance-create does, with no "already paid for"

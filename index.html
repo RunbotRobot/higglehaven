@@ -240,6 +240,15 @@
         padding: 4px 12px;
         font: 13px/1.4 sans-serif;
       }
+      /* #648: only shown once populateLayoutPreviewPasteTarget (src/main.js)
+         finds the builder owns more than one claimed landlet — same
+         "picker only when there's a real choice to make" convention
+         renderStartSection's own .landlet-picker already follows. */
+      #layout-preview-paste-target {
+        border-radius: 999px;
+        padding: 4px 10px;
+        font: 13px/1.4 sans-serif;
+      }
       /* The drag-rectangle itself — positioned/sized entirely via inline
          style from JS on every pointermove while dragging (see
          updateLayoutPreviewMarquee in src/main.js), so this rule only
@@ -3215,7 +3224,8 @@
       <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
       <span id="layout-preview-name"></span>
       <span id="layout-preview-selection-count"></span>
-      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto My Lándlet</button>
+      <select id="layout-preview-paste-target" hidden></select>
+      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Lándlet</button>
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="gizmo-mode-controls">
