@@ -125,7 +125,23 @@ sign-off needed.
   (`"issue"`|`"pr"`), `title`, `status` (`"queued"`|`"in_progress"`|
   `"done"`), `session` (your own session name), `url`, `updatedAt` (ISO
   timestamp) — write or update it the moment you self-assign, when you
-  open a PR, and when you merge, exactly as before. A message-shaped doc
+  open a PR, and when you merge, exactly as before. `note` (your own
+  claim/progress/completion write-up — the board renders it in the
+  thread, formatted and sorted exactly like a real reply, whichever of
+  `session`/`from` is set as its author) has its own timestamp field,
+  `noteUpdatedAt` — **set it alongside `note` in the same write, to that
+  write's own timestamp, separately from `updatedAt`.** `updatedAt` gets
+  bumped by other actions too (a card-action button — Mark done, Ready
+  for Claude, Requeue, Clear tag — changes it without touching `note` at
+  all), so anchoring the note's own displayed/sorted time to `updatedAt`
+  instead means an unrelated later action makes an old note look freshly
+  posted and re-sorts it to the top of the thread. Found via a real
+  report (yxt7ds607c25rn2oa03c): a stale note ended up both mis-timed
+  ("just now" on days-old content) and, separately, misattributed to the
+  owner because an empty `session: ''` (routine on a card you've stood
+  down from) was read as falsy. The board falls back to `updatedAt` for
+  older docs that predate `noteUpdatedAt` — no regression, just no longer
+  the only signal once you set it. A message-shaped doc
   (freeform direction/feedback/a question with no GitHub issue behind
   it — `add` it with an auto id, or `.doc('feedback-<id>').set(...)` if
   you're claiming an existing feedback item per "Claiming a task" below)
