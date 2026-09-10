@@ -11418,6 +11418,7 @@ const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
 const layoutPreviewNameEl = document.getElementById('layout-preview-name');
 const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
 const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
+const layoutPreviewPasteTargetEl = document.getElementById('layout-preview-paste-target');
 const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
 
 function disposeLayoutPreviewMeshes() {
@@ -11513,13 +11514,7 @@ layoutPreviewBackBtn.addEventListener('click', () => {
 });
 
 // #636 (sub-issue of #631): pastes the currently-selected saved instances
-// onto the builder's own landlet as brand-new placed_instances rows.
-// "Target landlet" is never a real picker — a builder can only ever have
-// one landlet claimed at a time (see claimLandlet's own NOT EXISTS guard),
-// so it's always "whichever one that is," resolved fresh here rather than
-// reused from Build mode's own currentLandletId (this mode is reached
-// without ever running Build mode's own startup, so that variable is
-// still just its unset default).
+// onto a landlet the builder owns, as brand-new placed_instances rows.
 //
 // Deliberately routed through the exact same POST /instances/batch
 // createInstancesRemote already uses for every other bulk-create — the
@@ -11531,18 +11526,46 @@ layoutPreviewBackBtn.addEventListener('click', () => {
 // longer exist (they were swept into this saved_layout_instances snapshot
 // when the level was removed), and the batch endpoint already assigns a
 // fresh id to any entry that omits one.
+
+// #648: "target landlet" was first shipped as never a real picker, on the
+// premise that a builder can only ever have one landlet claimed at a
+// time. That's not actually true here — ownedLandletsByBuilderId's own
+// comment in worker/index.js ("a builder can own more than one lándlet —
+// auctions can transfer extra ones in") and this same file's own
+// auction-start picker (renderStartSection, built for exactly #199/#249's
+// two-simultaneously-claimed-landlets case) both establish it as a real,
+// already-handled shape. Populated once per preview session (owned
+// landlets don't change mid-preview), same "fetch-all + default to
+// currentLandletId when it's in the list + only show a picker when
+// there's more than one" convention renderStartSection already uses.
+async function populateLayoutPreviewPasteTarget() {
+  let owned;
+  try {
+    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+  } catch {
+    owned = []; // surfaced instead at paste time, same as the empty-owned case below
+  }
+  layoutPreviewPasteTargetEl.innerHTML = '';
+  for (const ownedLandlet of owned) {
+    const option = document.createElement('option');
+    option.value = ownedLandlet.landletId;
+    option.textContent = ownedLandlet.name || ownedLandlet.landletId;
+    if (ownedLandlet.landletId === currentLandletId) option.selected = true;
+    layoutPreviewPasteTargetEl.appendChild(option);
+  }
+  layoutPreviewPasteTargetEl.hidden = owned.length <= 1;
+}
+
 layoutPreviewPasteBtn.addEventListener('click', async () => {
   const selected = layoutPreviewInstances.filter((instance) => selectedSavedInstanceIds.has(instance.instanceId));
   if (selected.length === 0) return;
+  const targetLandletId = layoutPreviewPasteTargetEl.value;
+  if (!targetLandletId) {
+    alert("You don't have a claimed lándlet to paste onto — claim one first.");
+    return;
+  }
   layoutPreviewPasteBtn.disabled = true;
   try {
-    const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
-    if (owned.length === 0) {
-      alert("You don't have a claimed lándlet to paste onto — claim one first.");
-      layoutPreviewPasteBtn.disabled = false;
-      return;
-    }
-    const targetLandletId = owned[0].landletId;
     // Both instanceId and id (savedLayoutInstanceFromRow's own alias for
     // it) need stripping — validateInstance on the server falls back to
     // input.id just as readily as input.instanceId, so leaving either one
@@ -11593,6 +11616,7 @@ async function enterLayoutPreviewMode() {
     await enterShopMode();
     return;
   }
+  populateLayoutPreviewPasteTarget();
 
   let layout;
   try {
