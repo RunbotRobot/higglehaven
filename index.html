@@ -207,6 +207,55 @@
       #seller-showcase-manage-btn.visible {
         display: block;
       }
+      /* #635 (sub-issue of #631): the faux-layout preview's own small
+         toolbar — top-center, since bottom-center is already
+         #seller-showcase-pager's spot and this mode is never active at
+         the same time as Sell mode. Same pill look as the showcase
+         toolbars above for visual consistency across every "dedicated
+         read-only 3D view" this app has. */
+      #layout-preview-toolbar {
+        display: none;
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        align-items: center;
+        gap: 10px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 8px 16px;
+        border-radius: 999px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #layout-preview-toolbar.visible {
+        display: flex;
+      }
+      #layout-preview-back-btn {
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        border-radius: 999px;
+        padding: 4px 12px;
+        font: 13px/1.4 sans-serif;
+      }
+      /* The drag-rectangle itself — positioned/sized entirely via inline
+         style from JS on every pointermove while dragging (see
+         updateLayoutPreviewMarquee in src/main.js), so this rule only
+         needs to own the fixed visual look. pointer-events:none so the
+         rectangle drawn "in front of" the meshes it's selecting never
+         itself intercepts the very pointerup that finishes the drag. */
+      #layout-preview-marquee {
+        display: none;
+        position: fixed;
+        z-index: 9;
+        border: 1px solid rgb(255 255 255 / 0.9);
+        background: rgb(255 255 255 / 0.15);
+        pointer-events: none;
+      }
+      #layout-preview-marquee.visible {
+        display: block;
+      }
       #camera-debug-panel {
         position: fixed;
         bottom: 44px;
@@ -3161,6 +3210,12 @@
       <button id="seller-showcase-next-btn" type="button" aria-label="Next page">&#9654;</button>
     </div>
     <button id="seller-showcase-manage-btn" type="button" hidden>Manage Products</button>
+    <div id="layout-preview-toolbar">
+      <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
+      <span id="layout-preview-name"></span>
+      <span id="layout-preview-selection-count"></span>
+    </div>
+    <div id="layout-preview-marquee"></div>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>

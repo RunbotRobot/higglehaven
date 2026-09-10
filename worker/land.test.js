@@ -1754,6 +1754,45 @@ describe('Landlet levels', () => {
       expect(secondPage.body.nextCursor).toBeNull();
     });
 
+    it('requires a session to fetch a single saved layout', async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-get-noauth-owner', 'saved-layouts-get-noauth-landlet');
+      const got = await api(`/saved-layouts/${savedLayoutId}`);
+      expect(got.response.status).toBe(401);
+    });
+
+    it("rejects fetching another builder's saved layout", async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-get-owner', 'saved-layouts-get-landlet');
+      const stranger = await signupBuilder('saved-layouts-get-stranger');
+      const got = await api(`/saved-layouts/${savedLayoutId}`, stranger.session());
+      expect(got.response.status).toBe(403);
+    });
+
+    it('404s fetching a saved layout that does not exist', async () => {
+      const builder = await signupBuilder('saved-layouts-get-missing');
+      const got = await api('/saved-layouts/does-not-exist', builder.session());
+      expect(got.response.status).toBe(404);
+    });
+
+    it("fetches a single saved layout with its full instance snapshot (position, rotation, template)", async () => {
+      const { owner, savedLayoutId } = await saveALayout('saved-layouts-get-real-owner', 'saved-layouts-get-real-landlet');
+
+      const got = await api(`/saved-layouts/${savedLayoutId}`, owner.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.savedLayout).toMatchObject({
+        savedLayoutId,
+        sourceLandletId: 'saved-layouts-get-real-landlet',
+        sourceLevelIndex: 1,
+        instanceCount: 1,
+      });
+      expect(got.body.savedLayout.instances).toHaveLength(1);
+      expect(got.body.savedLayout.instances[0]).toMatchObject({
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+        z: LEVEL_HEIGHT_M * 1.5,
+      });
+    });
+
     it('requires a session to delete a saved layout', async () => {
       const { savedLayoutId } = await saveALayout('saved-layouts-delete-noauth-owner', 'saved-layouts-delete-noauth-landlet');
       const got = await api(`/saved-layouts/${savedLayoutId}`, { method: 'DELETE' });

@@ -90,6 +90,9 @@ import {
   requestSellerPayout,
   markPurchaseShipped,
   confirmPurchaseDelivery,
+  fetchSavedLayouts,
+  fetchSavedLayout,
+  deleteSavedLayout,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -97,6 +100,7 @@ import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './fli
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
+import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -159,6 +163,11 @@ let sellerId = null;
 // once bootstrap() reads it, and a plain fresh tab with nothing set always
 // lands on Shop, the product's chosen default landing view.
 const START_MODE_KEY = 'higglehaven.startMode';
+// #635's own preview is reached via a reload the same way Shop/Build/Sell
+// switch (see START_MODE_KEY's own comment above) — this carries which
+// saved layout to load across that reload, since START_MODE_KEY itself
+// only ever holds a bare mode name.
+const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 let currentMode = 'shop';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
@@ -4741,6 +4750,95 @@ function renderBuildSettingsSection() {
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
   settingsSectionEl.appendChild(historyField);
+
+  // #634/#635 (sub-issues of #631): a removed level's swept-out instances
+  // (#633) land here — reusing Version History's own .settings-field/
+  // .version-list/.version-row/.version-action-btn look immediately above
+  // rather than inventing a second list style for what's structurally the
+  // same kind of thing (a builder's own named, timestamped, deletable
+  // snapshot of instances).
+  const savedLayoutsField = document.createElement('div');
+  savedLayoutsField.className = 'settings-field';
+  const savedLayoutsLabel = document.createElement('span');
+  savedLayoutsLabel.textContent = 'Saved Layouts';
+  savedLayoutsField.appendChild(savedLayoutsLabel);
+  const savedLayoutsHint = document.createElement('div');
+  savedLayoutsHint.className = 'settings-empty-note';
+  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level land here, so nothing's really lost.";
+  savedLayoutsField.appendChild(savedLayoutsHint);
+  const savedLayoutsList = document.createElement('div');
+  savedLayoutsList.className = 'version-list';
+  savedLayoutsField.appendChild(savedLayoutsList);
+  settingsSectionEl.appendChild(savedLayoutsField);
+
+  let savedLayoutsLoadToken = 0;
+  async function renderSavedLayoutsList() {
+    const myLoadToken = ++savedLayoutsLoadToken;
+    savedLayoutsList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let savedLayouts;
+    try {
+      ({ savedLayouts } = await fetchSavedLayouts({ limit: 20 }));
+    } catch (err) {
+      if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      savedLayoutsList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load saved layouts.';
+      savedLayoutsList.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    savedLayoutsList.innerHTML = '';
+    if (savedLayouts.length === 0) {
+      savedLayoutsList.innerHTML = '<div class="settings-empty-note">Nothing saved yet — removing a level with instances on it saves them here first.</div>';
+      return;
+    }
+    for (const savedLayout of savedLayouts) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
+      info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+
+      const previewBtn = document.createElement('button');
+      previewBtn.type = 'button';
+      previewBtn.className = 'version-action-btn';
+      previewBtn.textContent = 'Preview';
+      previewBtn.addEventListener('click', () => {
+        sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
+        sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
+        location.reload();
+      });
+      actions.appendChild(previewBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'version-action-btn';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', async () => {
+        if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
+        deleteBtn.disabled = true;
+        try {
+          await deleteSavedLayout(savedLayout.savedLayoutId);
+          renderSavedLayoutsList();
+        } catch (err) {
+          alert(err.message || 'Could not delete this saved layout.');
+          deleteBtn.disabled = false;
+        }
+      });
+      actions.appendChild(deleteBtn);
+
+      row.appendChild(actions);
+      savedLayoutsList.appendChild(row);
+    }
+  }
+  renderSavedLayoutsList();
 
   // renderVersionHistory() is called from several places in quick
   // succession — the initial render, and again after Publish or after
@@ -11291,6 +11389,217 @@ const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
 ];
 
+// #635 (sub-issue of #631): the faux-layout preview — a dedicated,
+// read-only 3D view rendering one saved layout's instances at their true
+// original relative positions (never sellerShowcase's own grid-repacking —
+// see savedLayoutPreview.js's own comment on why), plus drag-rectangle
+// marquee selection over them (the v1 interaction agreed on #631 in place
+// of a literal freehand circle). Reuses the same "faux ground plane +
+// real instance meshes" technique sellerShowcase already established
+// (curveGroundGeometry on a swapped `landlet.geometry`, createMeshForInstance
+// for real content) and the existing addSelectionOutline/removeSelectionOutline
+// highlight Build mode's own single-selection already uses, rather than
+// inventing either from scratch.
+let layoutPreviewMeshes = [];
+const selectedSavedInstanceIds = new Set();
+// {x, y} in client (viewport) coordinates while a marquee drag is in
+// progress, else null — the one piece of state every pointer handler below
+// checks to know whether a drag is actually happening right now.
+let layoutPreviewDragStart = null;
+
+const layoutPreviewToolbarEl = document.getElementById('layout-preview-toolbar');
+const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
+const layoutPreviewNameEl = document.getElementById('layout-preview-name');
+const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
+const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
+
+function disposeLayoutPreviewMeshes() {
+  for (const mesh of layoutPreviewMeshes) {
+    removeSelectionOutline(mesh);
+    scene.remove(mesh);
+    disposeObject(mesh);
+  }
+  layoutPreviewMeshes = [];
+  selectedSavedInstanceIds.clear();
+}
+
+function updateLayoutPreviewSelectionUI() {
+  const n = selectedSavedInstanceIds.size;
+  layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
+}
+
+// A raw pointerdown-then-pointerup with no real movement between them is a
+// plain click, not a drag — treated as "clear the selection" (the same
+// click-empty-space-to-deselect convention Build mode's own clearSelection
+// already follows) rather than as a zero-area rectangle that happens to
+// contain nothing.
+const LAYOUT_PREVIEW_DRAG_THRESHOLD_PX = 4;
+
+function updateLayoutPreviewMarquee(clientX, clientY) {
+  const x = Math.min(layoutPreviewDragStart.x, clientX);
+  const y = Math.min(layoutPreviewDragStart.y, clientY);
+  layoutPreviewMarqueeEl.style.left = `${x}px`;
+  layoutPreviewMarqueeEl.style.top = `${y}px`;
+  layoutPreviewMarqueeEl.style.width = `${Math.abs(clientX - layoutPreviewDragStart.x)}px`;
+  layoutPreviewMarqueeEl.style.height = `${Math.abs(clientY - layoutPreviewDragStart.y)}px`;
+}
+
+// Finishes a marquee drag: projects each preview mesh's real world position
+// through the live camera into screen-pixel space (the same NDC-to-pixel
+// conversion the renderer itself does internally, just done here explicitly
+// since three.js doesn't expose a mesh's own last-rendered screen position)
+// and keeps whichever ones land inside the dragged rectangle, via the same
+// pointInDragRect axis-aligned test savedLayoutPreview.js's own tests cover.
+function finishLayoutPreviewDrag(clientX, clientY) {
+  const rect = { x1: layoutPreviewDragStart.x, y1: layoutPreviewDragStart.y, x2: clientX, y2: clientY };
+  layoutPreviewDragStart = null;
+  layoutPreviewMarqueeEl.classList.remove('visible');
+
+  for (const mesh of layoutPreviewMeshes) removeSelectionOutline(mesh);
+  selectedSavedInstanceIds.clear();
+
+  const dragDistance = Math.hypot(rect.x2 - rect.x1, rect.y2 - rect.y1);
+  if (dragDistance >= LAYOUT_PREVIEW_DRAG_THRESHOLD_PX) {
+    const projected = new THREE.Vector3();
+    for (const mesh of layoutPreviewMeshes) {
+      projected.copy(mesh.position).project(camera);
+      // z > 1 in NDC space means behind the camera — never "in frame" even
+      // if its projected x/y happens to fall inside the rect.
+      if (projected.z > 1) continue;
+      const screenPoint = {
+        x: (projected.x + 1) / 2 * window.innerWidth,
+        y: (1 - projected.y) / 2 * window.innerHeight,
+      };
+      if (pointInDragRect(screenPoint, rect)) {
+        selectedSavedInstanceIds.add(mesh.userData.savedInstanceId);
+        addSelectionOutline(mesh);
+      }
+    }
+  }
+  updateLayoutPreviewSelectionUI();
+}
+
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (currentMode !== 'layoutPreview') return;
+  layoutPreviewDragStart = { x: event.clientX, y: event.clientY };
+  layoutPreviewMarqueeEl.classList.add('visible');
+  updateLayoutPreviewMarquee(event.clientX, event.clientY);
+});
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
+  updateLayoutPreviewMarquee(event.clientX, event.clientY);
+});
+// On window, not just the canvas — a drag that ends after the pointer has
+// left the canvas (dragging the marquee out past the toolbar, say) still
+// needs to finish cleanly rather than leaving layoutPreviewDragStart set
+// forever with no matching pointerup ever landing on the canvas itself.
+window.addEventListener('pointerup', (event) => {
+  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
+  finishLayoutPreviewDrag(event.clientX, event.clientY);
+});
+
+layoutPreviewBackBtn.addEventListener('click', () => {
+  sessionStorage.setItem(START_MODE_KEY, 'build');
+  location.reload();
+});
+
+// Entered only via bootstrap() below (reached the same way Shop/Build/Sell
+// are — see START_MODE_KEY's own comment), never as an in-place transition
+// from another live mode, so there's no other mode's leftover scene state
+// to tear down here the way enterSellMode has to for a builder switching
+// tabs mid-session.
+async function enterLayoutPreviewMode() {
+  const savedLayoutId = sessionStorage.getItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
+  sessionStorage.removeItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
+  if (!savedLayoutId) {
+    // Reached with no id to actually preview (a stale/direct reload) —
+    // nothing to show, so land somewhere real instead of a blank scene.
+    sessionStorage.setItem(START_MODE_KEY, 'build');
+    location.reload();
+    return;
+  }
+
+  for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+  layoutPreviewToolbarEl.classList.add('visible');
+  clearSelection();
+  translateControls.detach();
+  rotateControls.detach();
+  controls.enabled = false;
+
+  builderId = await ensureBuilderIdentity();
+  if (!builderId) {
+    currentMode = 'shop';
+    updateModeNavUI();
+    await enterShopMode();
+    return;
+  }
+
+  let layout;
+  try {
+    [activeCatalog, layout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
+  } catch (err) {
+    layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
+    return;
+  }
+  layoutPreviewNameEl.textContent = layout.name;
+
+  const ground = computeSavedLayoutGround(layout.instances);
+  const oldGeometry = landlet.geometry;
+  const halfWidth = ground.width / 2;
+  const halfDepth = ground.depth / 2;
+  const groundShape = new THREE.Shape([
+    new THREE.Vector2(-halfWidth, -halfDepth),
+    new THREE.Vector2(halfWidth, -halfDepth),
+    new THREE.Vector2(halfWidth, halfDepth),
+    new THREE.Vector2(-halfWidth, halfDepth),
+  ]);
+  landlet.geometry = new THREE.ShapeGeometry(groundShape);
+  curveGroundGeometry(landlet.geometry);
+  oldGeometry.dispose();
+
+  // Frame the camera on the ground plane's own size right away, before
+  // waiting on each instance's (network-dependent) model load below — a
+  // camera still parked wherever Build mode left it, while the toolbar and
+  // name already read as "loaded", would show the wrong part of the world
+  // for as long as the slowest model takes to fetch.
+  const dist = Math.max(ground.width, ground.depth);
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+  controls.target.set(0, 0, 0);
+  // The free-fly dolly-to-truck conversion (see the controls 'change'
+  // listener above, near lastKnownDistance's own declaration) compares the
+  // camera's distance-to-target against that stale module-level value on
+  // the very next 'change' event to infer a scroll/pinch dolly amount —
+  // without resyncing it here, this mode's own one-time camera jump reads
+  // as a huge dolly nothing actually did, and immediately flings
+  // controls.target far from the origin this preview is centered on.
+  lastKnownDistance = camera.position.distanceTo(controls.target);
+
+  const meshes = await Promise.all(layout.instances.map((instance) => createMeshForInstance({
+    ...instance,
+    x: instance.x - ground.centerX,
+    y: instance.y - ground.centerY,
+    z: instance.z - ground.centerZ,
+  })));
+  for (const mesh of meshes) {
+    if (!mesh) continue;
+    scene.add(mesh);
+    layoutPreviewMeshes.push(mesh);
+  }
+  // mesh.userData.instanceId is already set (to the same source instance
+  // id) by createMeshForInstance itself — savedInstanceId is just a
+  // same-value alias so this mode's own selection code reads its own
+  // clearly-named field rather than reaching into a field named for a
+  // concept (a live, ownable placed instance) that doesn't really apply
+  // to this read-only preview.
+  for (let i = 0; i < meshes.length; i++) {
+    if (meshes[i]) meshes[i].userData.savedInstanceId = layout.instances[i].instanceId;
+  }
+}
+
 // #539/#540: makes Sell a genuine currentMode (the mode-architecture
 // plumbing #539 itself was closed without ever landing — see #540's own
 // GitHub thread) rather than a modal shown over whatever Build/Shop scene
@@ -11891,7 +12200,8 @@ async function bootstrap() {
   // product's chosen default landing view (see START_MODE_KEY above).
   const requestedStartMode = sessionStorage.getItem(START_MODE_KEY);
   sessionStorage.removeItem(START_MODE_KEY);
-  const startMode = requestedStartMode === 'build' || requestedStartMode === 'sell' ? requestedStartMode : 'shop';
+  const startMode = requestedStartMode === 'build' || requestedStartMode === 'sell' || requestedStartMode === 'layoutPreview'
+    ? requestedStartMode : 'shop';
 
   if (startMode === 'shop') {
     currentMode = 'shop';
@@ -11900,8 +12210,8 @@ async function bootstrap() {
     return;
   }
 
-  // Only Build/Sell actually need currentAuthUser settled before
-  // proceeding (see authInitPromise's own comment on the race this
+  // Only Build/Sell/layoutPreview actually need currentAuthUser settled
+  // before proceeding (see authInitPromise's own comment on the race this
   // avoids) — deliberately not awaited above, so a Shop-mode visit (the
   // majority of traffic, and the one path this file already goes out of
   // its way to render instantly without waiting on the network) is never
@@ -11912,6 +12222,17 @@ async function bootstrap() {
     currentMode = 'sell';
     updateModeNavUI();
     await enterSellMode();
+    return;
+  }
+
+  // #635: the faux-layout preview — never reachable from #mode-nav itself
+  // (only from a saved layout's own "Preview" button in Settings > Build),
+  // so updateModeNavUI() below is a harmless no-op (no nav button's
+  // data-mode ever equals 'layoutPreview').
+  if (startMode === 'layoutPreview') {
+    currentMode = 'layoutPreview';
+    updateModeNavUI();
+    await enterLayoutPreviewMode();
     return;
   }
 

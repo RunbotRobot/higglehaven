@@ -924,3 +924,28 @@ export async function refundPurchase(purchaseId) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });
   return purchase;
 }
+
+// #634 (sub-issue of #631): the current builder's own saved level layouts
+// (#633's snapshot of a removed level's swept-out instances) — newest
+// first, paginated.
+export async function fetchSavedLayouts({ limit, cursor } = {}) {
+  const query = new URLSearchParams();
+  if (limit) query.set('limit', String(limit));
+  if (cursor) query.set('cursor', cursor);
+  const qs = query.toString();
+  return requestJson(`/builders/me/saved-layouts${qs ? `?${qs}` : ''}`);
+}
+
+// #635: one saved layout's full instance snapshot (position, rotation,
+// template, etc. — same shape as a landlet version's own snapshotted
+// instances, see versionInstanceFromRow in worker/index.js) for the
+// faux-layout preview to actually render.
+export async function fetchSavedLayout(savedLayoutId) {
+  const { savedLayout } = await requestJson(`/saved-layouts/${encodeURIComponent(savedLayoutId)}`);
+  return savedLayout;
+}
+
+// #634: permanently deletes one saved layout.
+export async function deleteSavedLayout(savedLayoutId) {
+  await requestJson(`/saved-layouts/${encodeURIComponent(savedLayoutId)}`, { method: 'DELETE' });
+}

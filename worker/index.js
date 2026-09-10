@@ -2926,13 +2926,51 @@ async function handleListSavedLayouts(request, db, url) {
   });
 }
 
-// #634: DELETE /api/saved-layouts/:id — owner-gated the same way every
+// #635's own preview needs each instance's full snapshot (template,
+// position, rotation, crop, scale) to actually render it — the same shape
+// versionInstanceFromRow already gives createMeshForInstance for a landlet
+// version's own snapshot rows, just read off saved_layout_instances
+// instead of version_instances.
+function savedLayoutInstanceFromRow(row) {
+  return {
+    instanceId: row.source_instance_id,
+    id: row.source_instance_id,
+    templateId: row.template_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    rotationX: row.rotation_x_rad,
+    rotationY: row.rotation_y_rad,
+    rotationZ: row.rotation_z_rad,
+    label: row.label,
+    crop: JSON.parse(row.crop_json || '{}'),
+    scale: row.scale,
+    isCommunitySign: Boolean(row.is_community_sign),
+    isCommunityCalendar: Boolean(row.is_community_calendar),
+  };
+}
+
+// #634: GET/DELETE /api/saved-layouts/:id — owner-gated the same way every
 // other builder-owned resource in this file is (assertOwner against the
 // session's own resolved builder id), a separate top-level collection
 // rather than nested under /builders/me since a single saved layout is
 // addressed by its own id, not by the builder's — the list above is the
 // only place that needs the builder's own id in its path.
 async function handleSavedLayouts(request, db, route) {
+  if (request.method === 'GET' && route.length === 2) {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    const { results } = await db.prepare(
+      'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ? ORDER BY source_instance_id',
+    ).bind(savedLayoutId).all();
+    return json({
+      savedLayout: { ...savedLayoutFromRow(row), instanceCount: results.length, instances: results.map(savedLayoutInstanceFromRow) },
+    });
+  }
+
   if (request.method === 'DELETE' && route.length === 2) {
     const savedLayoutId = route[1];
     const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
