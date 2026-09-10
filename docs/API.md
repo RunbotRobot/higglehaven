@@ -1029,6 +1029,16 @@ tax" (that issue's own original framing) — it's unrestricted below the
 real regulatory threshold, and blocked once that's crossed without tax
 paperwork on file, reusing #615's exact gate.
 
+**Currently paused (#629)**: `POST` unconditionally returns `503` right
+now (`REDEMPTION_PAUSED_PENDING_629` in `worker/index.js`), regardless of
+Stripe configuration. Auction bidding (`handleAuctionBids`/`resolveAuction`)
+was never balance-gated — a winning bid credits the seller's higgles
+balance with the full bid amount whether or not the bidder ever held that
+balance, which was harmless before this endpoint existed and is a real,
+unbounded unbacked-cash exploit now that it does. Paused pending an owner
+decision on how to close that gap (balance-gating bids, an escrow model, a
+provenance/backing mechanism, or otherwise) — `GET` is unaffected.
+
 Both require a session (`401` otherwise) and act on the calling account's
 own builder profile.
 
