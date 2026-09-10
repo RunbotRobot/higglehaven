@@ -879,6 +879,11 @@ describe('Friendships', () => {
     expect(aliceList.body.friendships).toHaveLength(1);
     expect(aliceList.body.friendships[0].direction).toBe('outgoing');
     expect(aliceList.body.friendships[0].status).toBe('pending');
+    // #610 (owner): a pending request shouldn't hand either side a
+    // shortcut straight to the other's lándlet before they've actually
+    // agreed to connect — Bob already claimed one above, but it stays
+    // hidden from Alice's view of this still-pending request.
+    expect(aliceList.body.friendships[0].otherLandlet).toBeNull();
 
     const bobList = await api('/friendships', bob.session());
     expect(bobList.body.friendships).toHaveLength(1);

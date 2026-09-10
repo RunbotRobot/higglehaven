@@ -2408,7 +2408,16 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
   const otherBuilderId = row.requester_builder_id === viewerBuilderId
     ? row.recipient_builder_id
     : row.requester_builder_id;
-  const landlet = landletsById.get(otherBuilderId) ?? null;
+  // Owner (#610): "It's public knowledge who owns a lánd when you're
+  // already looking at it. But it seems like a further invasion of
+  // privacy to be able to provide a path from a stranger to their lánd.
+  // Let's not show the pending friend's lánd location until the friend
+  // request is accepted." A landlet's owner is discoverable in-world by
+  // walking up to it, but a pending friend request (sent OR received,
+  // before either side has actually agreed to connect) shouldn't hand
+  // either party a shortcut straight to the other's home before that
+  // consent exists.
+  const landlet = row.status === 'accepted' ? (landletsById.get(otherBuilderId) ?? null) : null;
   return {
     friendshipId: row.friendship_id,
     requesterBuilderId: row.requester_builder_id,
