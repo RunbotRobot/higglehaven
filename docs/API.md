@@ -1004,6 +1004,103 @@ or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
 
+### `GET /api/builders/me/stripe-account`
+### `POST /api/builders/me/stripe-account`
+
+Stripe Connect (Custom account) onboarding for a **builder** (#624,
+sub-issue of #349/#324) — the prerequisite for redeeming a higgles balance
+for real cash (see `GET`/`POST /api/builders/me/redeem` below). Identical
+contract to `GET`/`POST /api/sellers/me/stripe-account` just above in
+every respect (same request/response shapes, same KYC validation, same
+"no PII persisted on the row itself" property, same `STRIPE_SECRET_KEY`
+requirement) — acts on the calling account's own **builder** profile
+instead of its seller one. A builder and a seller profile on the same
+account have completely independent Stripe Connect accounts; submitting
+one's onboarding never touches the other's.
+
+### `GET /api/builders/me/redeem`
+### `POST /api/builders/me/redeem`
+
+Redeems some or all of a builder's `higglesBalanceCents` for a real-money
+Stripe payout (#625, sub-issue of #349/#324) — the first real exit from
+higgles to cash this codebase has. Per the owner's own Control Room answer
+on #349 (2026-09-09): redemption is **not** scoped to "only what's owed in
+tax" (that issue's own original framing) — it's unrestricted below the
+real regulatory threshold, and blocked once that's crossed without tax
+paperwork on file, reusing #615's exact gate.
+
+Both require a session (`401` otherwise) and act on the calling account's
+own builder profile.
+
+`GET` response — folds in the same fields `GET .../stripe-account` returns,
+plus the redemption-specific one:
+
+```json
+{
+  "configured": true,
+  "connected": true,
+  "status": "complete",
+  "requirementsCurrentlyDue": [],
+  "updatedAt": "2026-09-09T23:00:00.000Z",
+  "availableCents": 5000
+}
+```
+
+`availableCents` is simply the builder's current `higglesBalanceCents`
+(never negative) — unlike a seller's own held/available split, there's no
+separate "held" pool here since nothing about a higgles balance is ever
+pending release the way an unshipped physical sale is.
+
+`POST` body — `amountCents` is optional; an empty `{}` body redeems the
+full available balance:
+
+```json
+{ "amountCents": 2000 }
+```
+
+Checked in order: `400` if nothing is available at all, `400` if
+`amountCents` exceeds the available balance, then the #615-style
+tax-reporting-threshold gate — `403` if this account's combined gross
+income for the current calendar year has already crossed
+`TAX_REPORTING_THRESHOLD_CENTS` ($20,000, same constant #613/#615 use)
+with no W-9/W-8BEN on file (see "Tax reporting" above). Unlike #615's own
+gate, this doesn't compute a **partial** redeemable amount once close to
+the line — `higglesBalanceCents` is one lifetime running total with no
+per-earning-event pool to partially attribute a redemption against the
+way #615's own per-purchase gross can, so this is a flat block once the
+threshold is already crossed, not a partial cap. `503` if
+`STRIPE_SECRET_KEY` isn't configured; `400` if Stripe onboarding
+(`GET/POST .../stripe-account` above) isn't complete; `409` if the
+balance changed between the request starting and the atomic debit (a
+concurrent redemption already claimed some of it — safe to retry).
+
+On success, moves the redeemed amount from the platform's own Stripe
+balance into the builder's connected account (a `POST /v1/transfers`
+call) and immediately triggers a real payout of it to their bank (a
+`POST /v1/payouts` call against that connected account) — unlike a
+seller's own sale proceeds, which land directly in their connected
+account via `transfer_data` at checkout time, higgles were never sitting
+in any per-builder Stripe balance to begin with, so the transfer step is
+new here. Records a permanent `higgles_redemptions` row (amount, Stripe
+transfer/payout ids) for reconciliation. Response:
+
+```json
+{ "redeemedCents": 2000, "stripePayoutId": "po_..." }
+```
+
+#### Testing note
+
+`worker/stripe-connect.test.js`'s "Higgles redemption (#625)" describe
+block covers everything reachable without a real Stripe account (this
+suite never configures `STRIPE_SECRET_KEY`, same as every other Stripe
+test in this file): the `401`s, `availableCents` reflecting the real
+balance, the nothing-available and over-balance `400`s, the tax-threshold
+`403`, and the `503` once past validation — confirming the balance stays
+untouched in every rejected case. The actual `transfers`/`payouts` Stripe
+round trip and the atomic-claim race guard aren't covered by any
+automated test in this repo, the same limitation "Real-money checkout"'s
+own testing note already documents for Stripe-dependent code paths.
+
 ### `GET /api/sellers/me/payouts`
 ### `POST /api/sellers/me/payouts`
 
@@ -1060,6 +1157,30 @@ Stripe's own reported available balance for the connected account, to
 avoid a payout Stripe would reject outright). Marks every purchase whose
 own share fit inside the actual payout amount as paid out; a purchase
 whose amount didn't fit stays available for the next request.
+
+**Tax-reporting gate (#615, sub-issue of #350):** once this account's
+combined gross income for the calendar year — higgles commissions plus
+real-money sales, the same combined total `GET /api/tax/summary` (#612)
+reports and `noticeLevel` (#613) warns about — reaches the
+`thresholdCents` reporting threshold with no W-9/W-8BEN on file (`POST
+/api/tax/id-form`, #614), this endpoint blocks access to the *excess*
+above that line rather than the whole balance: a payout is capped to
+whatever headroom is still under the threshold (higgles earnings consume
+that headroom first, since nothing in this codebase lets a builder
+spend/withdraw a higgles balance at all yet — see the next paragraph),
+and returns `403` once no headroom is left, checked before the
+`STRIPE_SECRET_KEY`/onboarding checks above so a caller already over the
+line gets this specific error rather than an unrelated `503`/`400`
+masking it. Filing paperwork removes the cap entirely, including
+retroactively over past-threshold earnings already sitting unpaid.
+
+This is a real-money-only gate for now — higgles are never gated here,
+because no endpoint in this codebase currently lets a builder spend or
+withdraw a higgles balance at all (an auction win never debits the
+winning bidder's own balance, and #349's higgle-to-cash redemption isn't
+built yet), so there's no higgles "access" action to block. `#615`'s own
+scoping left this as an explicit open question to resolve once one of
+those exists.
 
 ```json
 {

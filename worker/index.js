@@ -450,7 +450,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'builders') {
-    return handleBuilders(request, env.DB, route);
+    return handleBuilders(request, env, env.DB, route);
   }
 
   if (route[0] === 'sellers') {
@@ -1625,13 +1625,28 @@ async function getVersion(db, landletId, versionId) {
 const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 
-async function handleBuilders(request, db, route) {
+async function handleBuilders(request, env, db, route) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
   // but so a reader hits "my own profile" before the generic CRUD story —
   // see handleMyBuilder's own comment for why this exists at all.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     return handleMyBuilder(request, db);
+  }
+
+  // #624 (sub-issue of #349/#324): builder-side Stripe Connect onboarding,
+  // the prerequisite for #625's higgles-to-cash redemption — mirrors
+  // handleSellerStripeAccount below almost exactly (same Custom-account
+  // create/update/status logic, same "no PII persisted here" property),
+  // just against the builders table/getOrCreateBuilderForUser instead.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
+    return handleBuilderStripeAccount(request, env, db);
+  }
+
+  // #625 (sub-issue of #349/#324): redeem a builder's higgles balance for
+  // real cash, now that #624 gives them somewhere to send it.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'redeem') {
+    return handleBuilderRedeem(request, env, db);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -3835,14 +3850,20 @@ async function importTaxIdEncryptionKey(env) {
 // per encryption (AES-GCM requires this; reusing an IV with the same key
 // breaks its confidentiality guarantee) stored alongside the ciphertext
 // since decryption needs it back.
-async function encryptTaxIdPayload(env, payload) {
+// Exported (like latestDiditSession below) so a test can verify the round
+// trip actually reconstructs the original payload, not just that the
+// stored format looks plausible -- nothing in this codebase yet calls
+// decryptTaxIdPayload for real (no export/admin endpoint exists), so
+// without a direct test its correctness would otherwise go unverified
+// until #616 needs it.
+export async function encryptTaxIdPayload(env, payload) {
   const key = await importTaxIdEncryptionKey(env);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(JSON.stringify(payload)));
   return `aesgcm$${bytesToHex(iv)}$${bytesToHex(new Uint8Array(ciphertext))}`;
 }
 
-async function decryptTaxIdPayload(env, stored) {
+export async function decryptTaxIdPayload(env, stored) {
   const parts = stored.split('$');
   if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500);
   const [, ivHex, ciphertextHex] = parts;
@@ -4074,7 +4095,7 @@ function boundedIntegerValue(value, field, min, max) {
 // (business name, EIN, representative/owner info) and is deliberately
 // left for a fast-follow once an actual seller needs it, per #452's own
 // "not in scope" note on document-verification UI.
-function buildStripeIndividualParams(input, userEmail, request) {
+function buildStripeIndividualParams(input, userEmail, request, productDescription = 'higglehaven marketplace seller') {
   const individual = input.individual || {};
   const externalAccount = input.externalAccount || {};
   const country = stringValue(individual.addressCountry, 'individual.addressCountry').toUpperCase();
@@ -4085,7 +4106,7 @@ function buildStripeIndividualParams(input, userEmail, request) {
     country,
     email: userEmail,
     business_type: 'individual',
-    business_profile: { product_description: 'higglehaven marketplace seller' },
+    business_profile: { product_description: productDescription },
     capabilities: { transfers: { requested: 'true' }, card_payments: { requested: 'true' } },
     individual: {
       first_name: stringValue(individual.firstName, 'individual.firstName'),
@@ -4205,6 +4226,172 @@ async function handleSellerStripeAccount(request, env, db) {
   return json({ error: 'Not found' }, 404);
 }
 
+// #624 (sub-issue of #349/#324): a builder's own Stripe Connect Custom
+// account, so higgles-redeemed cash (#625) has somewhere real to land —
+// same shape as handleSellerStripeAccount just above (same Custom-account
+// create/update/status flow, same #473/#474 race guard on first-time
+// creation), against the builders table instead of sellers. productDescription
+// distinguishes the two roles in Stripe's own dashboard/compliance view
+// only — nothing here is seller-specific in practice.
+async function handleBuilderStripeAccount(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionBuilder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json(stripeAccountStatusJson(env, sessionBuilder));
+  }
+
+  if (request.method === 'POST') {
+    const input = await readJson(request);
+    const params = buildStripeIndividualParams(input, user.email, request, 'higglehaven marketplace builder');
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+
+    let account;
+    let createdNewAccount = false;
+    if (sessionBuilder.stripe_account_id) {
+      const { country, ...updateParams } = params;
+      account = await stripeRequest(env, 'POST', `accounts/${sessionBuilder.stripe_account_id}`, updateParams);
+    } else {
+      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `builder-account-create:${sessionBuilder.builder_id}`);
+      createdNewAccount = true;
+    }
+
+    const status = deriveStripeOnboardingStatus(account);
+    const requirementsDue = account.requirements?.currently_due || [];
+    const nowIso = new Date().toISOString();
+    const result = await db.prepare(`
+      UPDATE builders
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      WHERE builder_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
+    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionBuilder.builder_id).run();
+
+    if (createdNewAccount && result.meta.changes === 0) {
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      const winner = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
+      return json(stripeAccountStatusJson(env, winner));
+    }
+
+    return json(stripeAccountStatusJson(env, {
+      stripe_account_id: account.id,
+      stripe_onboarding_status: status,
+      stripe_requirements_due: JSON.stringify(requirementsDue),
+      stripe_updated_at: nowIso,
+    }));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #625 (sub-issue of #349/#324): a builder's higgles balance was, until
+// #624, purely an internal number with no exit to real cash at all — see
+// #349's own Control Room answer (2026-09-09 06:53 UTC) confirming
+// redemption should be free below the reporting threshold rather than
+// scoped to "only what's owed in tax" (the issue's own original, narrower
+// framing this supersedes).
+//
+// Reuses #615's exact threshold-gating pieces (annualGrossIncome,
+// TAX_REPORTING_THRESHOLD_CENTS, user.tax_form_completed_at), but not its
+// partial-cap math: #615 drains a granular pool of individual purchases
+// it can partially include, while higgles_balance_cents is one lifetime
+// running total with no per-earning-event pool left to partially redeem
+// from (see migrations/0050's own daller_earnings_events/
+// higgles_earnings_events — a ledger of how the balance grew, not
+// something a redemption can attribute itself against precisely). This
+// only supports a flat block once this year's combined gross income has
+// already crossed the line with no paperwork on file, not a partial
+// redemption cap the way #615 computes — simpler, and honest about not
+// pretending to apportion which "layer" of a lifetime balance corresponds
+// to this year's earnings specifically.
+async function handleBuilderRedeem(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionBuilder = await getOrCreateBuilderForUser(db, user);
+  const availableCents = Math.max(sessionBuilder.higgles_balance_cents, 0);
+
+  if (request.method === 'GET') {
+    return json({ ...stripeAccountStatusJson(env, sessionBuilder), availableCents });
+  }
+
+  if (request.method === 'POST') {
+    if (availableCents <= 0) {
+      throw new HttpError('Nothing is available to redeem yet.', 400);
+    }
+    // An empty {} body means "redeem everything available" — amountCents
+    // only needs specifying to redeem a smaller amount.
+    const input = await readJson(request);
+    const amountCents = input.amountCents === undefined ? availableCents : nonnegativeInteger(input.amountCents, 'amountCents');
+    if (amountCents <= 0) throw new HttpError('amountCents must be greater than 0', 400);
+    if (amountCents > availableCents) {
+      throw new HttpError(`Only ${formatCents(availableCents)} is available to redeem.`, 400);
+    }
+
+    const sessionSeller = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+    const grossIncome = await annualGrossIncome(
+      db, { builderId: sessionBuilder.builder_id, sellerId: sessionSeller?.seller_id ?? null }, new Date().getUTCFullYear(),
+    );
+    const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
+    if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
+      throw taxThresholdPayoutBlockedError();
+    }
+
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionBuilder.stripe_account_id || sessionBuilder.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before redeeming higgles for cash.', 400);
+    }
+
+    // Atomically claims the balance before ever calling Stripe, guarded on
+    // the balance still covering this amount at commit time — the same
+    // "claim first, guard on the current value" idiom claimPurchasesForPayout
+    // above uses for sellers, closing the same double-redemption race two
+    // concurrent requests would otherwise hit.
+    const claim = await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ? AND higgles_balance_cents >= ?
+    `).bind(amountCents, sessionBuilder.builder_id, amountCents).run();
+    if (claim.meta.changes === 0) {
+      throw new HttpError('Your higgles balance changed — try again.', 409);
+    }
+
+    let payout;
+    try {
+      // Two real Stripe calls, unlike a seller's own payout: higgles were
+      // never sitting in any per-builder Stripe balance to begin with (a
+      // seller's sale proceeds land in their own connected account
+      // automatically via transfer_data at checkout — see #454's own
+      // comment), so a Transfer has to move platform-held funds into the
+      // builder's connected account first, before a Payout can send that
+      // balance out to their bank the same way handleSellerPayouts already
+      // does.
+      const transfer = await stripeRequest(
+        env, 'POST', 'transfers',
+        { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
+        `builder-redeem-transfer:${sessionBuilder.builder_id}:${crypto.randomUUID()}`,
+      );
+      payout = await stripeRequest(
+        env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' }, undefined, sessionBuilder.stripe_account_id,
+      );
+      await db.prepare(`
+        INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(`redemption-${crypto.randomUUID()}`, sessionBuilder.builder_id, amountCents, transfer.id, payout.id).run();
+    } catch (err) {
+      // The claim above already debited the balance — release it so a
+      // failed Stripe call never strands real higgles the builder still
+      // has, the same undo-on-failure pattern releasePurchaseClaim uses.
+      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+        .bind(amountCents, sessionBuilder.builder_id).run();
+      throw err;
+    }
+
+    return json({ redeemedCents: amountCents, stripePayoutId: payout.id });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
 // #454: real-money sale proceeds already sit in the seller's own Stripe
 // Custom-account balance the instant a sale is charged (#453's own
 // transfer_data) — this is purely a policy-driven gate on when
@@ -4319,17 +4506,53 @@ async function handleSellerPayouts(request, env, db) {
   }
 
   if (request.method === 'POST') {
-    if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
-    }
-    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
-      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
-    }
     const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
     const eligible = purchases.filter(isPurchaseEligibleForPayout);
     const availableCents = eligible.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to cash out yet.', 400);
+    }
+
+    // #615 (sub-issue of #350): once this account's combined higgles +
+    // real-money gross income for the year crosses the #613 reporting
+    // threshold with no W-9/W-8BEN on file (#614), block access to the
+    // *excess* above the line — not the whole balance, per the owner's own
+    // Control Room framing. A real-money payout is the only existing
+    // "access" endpoint this actually applies to today: higgles themselves
+    // are never gated here because nothing in this codebase yet lets a
+    // builder spend or withdraw a higgles balance at all (an auction win
+    // never debits the winning bidder's own balance — see resolveAuction's
+    // own comment — and #349's higgle-to-cash redemption isn't built), so
+    // there's no higgles "access" action to block yet. Computed before the
+    // Stripe-configuration/onboarding checks below so a caller who's
+    // already fully over the line without paperwork gets this specific
+    // error rather than an unrelated 503/400 masking it.
+    const builder = await getOrCreateBuilderForUser(db, user);
+    const taxYear = new Date().getUTCFullYear();
+    const grossIncome = await annualGrossIncome(
+      db, { builderId: builder.builder_id, sellerId: sessionSeller.seller_id }, taxYear,
+    );
+    const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
+    // annualGrossIncome's own sellerPayoutCents sums total_cents for every
+    // real-money purchase this year regardless of paid_out_at, so it
+    // already includes this exact `eligible` pool's own gross — subtract
+    // that back out to isolate everything this payout would be stacked on
+    // top of (higgles, held/ineligible purchases, and anything already
+    // paid out this year).
+    const eligibleGrossCents = eligible.reduce((sum, p) => sum + p.total_cents, 0);
+    const otherEarnedCents = grossIncome.totalCents - eligibleGrossCents;
+    const taxBudgetCents = hasTaxPaperworkOnFile
+      ? Infinity
+      : Math.max(0, TAX_REPORTING_THRESHOLD_CENTS - otherEarnedCents);
+    if (taxBudgetCents <= 0) {
+      throw taxThresholdPayoutBlockedError();
+    }
+
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
     }
 
     // Our own hold is a policy gate layered on top of Stripe's own
@@ -4345,17 +4568,24 @@ async function handleSellerPayouts(request, env, db) {
 
     // Payouts are per-whole-purchase, not fractional — only mark a
     // purchase paid out if its own share genuinely fit inside what Stripe
-    // will actually let us withdraw right now; anything left over just
-    // stays "available" for the next cash-out request.
+    // will actually let us withdraw right now, and its own gross still
+    // fits inside the tax-threshold headroom computed above; anything left
+    // over just stays "available" for a later cash-out request (once more
+    // Stripe balance clears, or once paperwork is filed).
     let payoutCents = 0;
+    let grossIncludedCents = 0;
+    let skippedForTax = false;
     const included = [];
     for (const purchase of eligible) {
       const share = purchaseSellerShareCents(purchase);
       if (payoutCents + share > payoutCapCents) continue;
+      if (grossIncludedCents + purchase.total_cents > taxBudgetCents) { skippedForTax = true; continue; }
       payoutCents += share;
+      grossIncludedCents += purchase.total_cents;
       included.push(purchase);
     }
     if (included.length === 0) {
+      if (skippedForTax) throw taxThresholdPayoutBlockedError();
       throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
     }
 
@@ -4428,6 +4658,18 @@ async function handleSellerPayouts(request, env, db) {
 // acceptable simplification here even though it wouldn't be for #616's
 // actual form generation.
 const TAX_REPORTING_THRESHOLD_CENTS = 20_000_00;
+
+// #615's own payout-blocked error, shared by both places handleSellerPayouts
+// can hit it (fully over the line before ever building a payout, or the
+// tax-budget cap leaving nothing includable once Stripe's own cap is also
+// applied) — see that function's own comment.
+function taxThresholdPayoutBlockedError() {
+  return new HttpError(
+    `Your combined earnings this year have reached the ${formatCents(TAX_REPORTING_THRESHOLD_CENTS)} tax-reporting `
+    + 'threshold. Submit your W-9/W-8BEN tax paperwork (POST /api/tax/id-form) before withdrawing further earnings.',
+    403,
+  );
+}
 
 // Three progressive, non-blocking breakpoints (#613's own "50%/80%/100%"
 // scope) — 'crossed' doesn't gate anything by itself (see #615), it's
