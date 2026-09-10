@@ -1572,6 +1572,83 @@ describe('Landlet levels', () => {
     expect(instances.body.instances.map((i) => i.instanceId)).toEqual(['levels-remove-instances-ground']);
   });
 
+  // #633 (sub-issue of #631, owner-confirmed on #522/#631): the instances
+  // swept out of active space above aren't just gone — they're snapshotted
+  // into a reusable saved_level_layouts/saved_layout_instances record
+  // first, mirroring version_instances' own snapshot shape.
+  it('saves instances swept out of active space into a reusable layout record', async () => {
+    const owner = await signupBuilder('levels-save-layout-owner');
+    await createGreenbeltLandletWithArea('levels-save-layout-landlet', 1000);
+    await claim('levels-save-layout-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-save-layout-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-save-layout-ground',
+        landletId: 'levels-save-layout-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: 0,
+      }),
+    }));
+    const swept = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-save-layout-upper',
+        landletId: 'levels-save-layout-landlet',
+        templateId: 'placeholder-tree',
+        x: 2, y: 3, z: LEVEL_HEIGHT_M * 1.5,
+        rotationZ: 1.25,
+      }),
+    }));
+    expect(swept.response.status).toBe(201);
+
+    const removed = await api('/landlets/levels-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0].source_landlet_id).toBe('levels-save-layout-landlet');
+    expect(layouts[0].source_level_index).toBe(1);
+    expect(layouts[0].name).toMatch(/Level 1/);
+
+    const { results: savedInstances } = await env.DB.prepare(
+      'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ?',
+    ).bind(layouts[0].saved_layout_id).all();
+    // Only the swept (upper) instance is saved — the ground one that
+    // survived was never deleted, so nothing needed preserving for it.
+    expect(savedInstances).toHaveLength(1);
+    expect(savedInstances[0].source_instance_id).toBe('levels-save-layout-upper');
+    expect(savedInstances[0].x_m).toBe(2);
+    expect(savedInstances[0].y_m).toBe(3);
+    expect(savedInstances[0].rotation_z_rad).toBe(1.25);
+  });
+
+  // Removing a level with nothing in its z-range shouldn't create an empty
+  // saved-layout record — there's nothing worth preserving.
+  it('creates no saved-layout record when a removed level has no instances to sweep', async () => {
+    const owner = await signupBuilder('levels-no-save-layout-owner');
+    await createGreenbeltLandletWithArea('levels-no-save-layout-landlet', 1000);
+    await claim('levels-no-save-layout-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-no-save-layout-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const removed = await api('/landlets/levels-no-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(0);
+  });
+
   // Found via backlog audit (#395): the outermost-level DELETE used to run
   // a plain SELECT-then-DELETE with no guard tying the delete to the
   // extent it was read against. Racing two DELETEs against the exact same

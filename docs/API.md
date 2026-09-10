@@ -4316,18 +4316,30 @@ concurrent add extending past this level between the read and the delete
 can't leave a gap in the level sequence.
 
 #522 (owner-confirmed, 2026-09-09): any `placed_instances` row left
-sitting in the z-range this level was providing is deleted along with
-it — nothing else ever re-checks an already-placed instance's z once a
-level it depended on is removed (`assertInstanceZWithinLevels` only runs
-on that instance's own create/move). Uses the same allowed-range formula
-(and half-level-height slack) as that function, computed against the
-levels that remain after the delete, so an instance already within
-tolerance of the new boundary isn't swept up unnecessarily. This is
-intentionally a hard delete, not a hold/flag — the owner's own answer on
-#522 confirmed removed-level instances should come out of active
-shoppable space; a separate, larger feature (saving a removed level's
-layout for the builder to selectively reapply elsewhere) is tracked
-independently and does not change this endpoint's behavior.
+sitting in the z-range this level was providing is removed from active
+shoppable space along with it — nothing else ever re-checks an
+already-placed instance's z once a level it depended on is removed
+(`assertInstanceZWithinLevels` only runs on that instance's own
+create/move). Uses the same allowed-range formula (and half-level-height
+slack) as that function, computed against the levels that remain after
+the delete, so an instance already within tolerance of the new boundary
+isn't swept up unnecessarily.
+
+#633 (sub-issue of #631, owner-confirmed): this isn't a bare delete —
+every instance swept out this way is snapshotted first into a new
+`saved_level_layouts` row (one per removal that actually sweeps at least
+one instance; nothing is created if there's nothing to sweep) plus a
+`saved_layout_instances` row per instance, mirroring `version_instances`'
+own snapshot column shape (`template_id`, `x_m`/`y_m`/`z_m`, rotation,
+`label`, `crop_json`, `scale`, community-sign/calendar flags). Unlike
+`landlet_versions`/`version_instances` (parented to a landlet),
+`saved_level_layouts` is parented to the **builder** — a saved layout is
+meant to outlive its source landlet, since the whole point (per the
+owner's own framing) is later reusing it on a *different* landlet. No
+endpoint reads these tables back yet — listing/managing (#634), a
+faux-lándlet preview + selection UI (#635), and pasting onto a target
+landlet (#636) are separate, not-yet-built sub-issues of the same
+tracking issue (#631).
 
 ### Ownership-change cleanup
 
