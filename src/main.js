@@ -9346,16 +9346,24 @@ let nearestActiveCalendar = null;
 // {mesh, group, templateId, reviews, sprites} entry per loaded one, with
 // `reviews` populated once rather than re-fetched.
 const shopReviews = [];
-let nearestActiveReview = null;
-// #shop-product-info's own content/visibility is driven by this instead of
-// nearestActiveReview (see the tap handler further below) — showing it the
-// instant a shopper wanders near anything read as noisy/intrusive, closer
-// to a tooltip stuck to the cursor than an intentional "what is this."
-// Requiring a tap makes seeing it a deliberate choice. The buy/review hints
-// stay proximity-driven below, unlike product-info — those are prompts to
-// *do* something about whatever's nearby, not information display, so
-// showing them on approach still reads as "you can act here," not clutter.
+// #shop-product-info's own content/visibility is driven by this (see the
+// tap handler further below) — showing it the instant a shopper wanders
+// near anything read as noisy/intrusive, closer to a tooltip stuck to the
+// cursor than an intentional "what is this." Requiring a tap makes seeing
+// it a deliberate choice.
+//
+// Owner (Control Room, N42): the buy/review hints used to be purely
+// proximity-driven (visible whenever nearest-in-range, no tap needed) —
+// "walking near a product should not make the buttons appear... they
+// should only appear after the user taps the product." Now shares this
+// same tapped-product state instead of its own nearest-by-distance
+// tracking, so a shopper has to deliberately tap before either button can
+// show. Still range-gated on top of that (see updateReviewFade below) —
+// walking away from a tapped product hides its buttons again, the same
+// physical-interaction requirement every other in-world hint (signs,
+// calendar events) already enforces.
 let shopTappedProduct = null;
+let shopReviewHintsVisible = false;
 
 // Sustained view-attention tracking (#215, sub-issue of #207 — docs/SPEC.md
 // §2's item-handling animations trigger "on sustained view-attention," not
@@ -10522,10 +10530,12 @@ function rebuildReviewSprites(review) {
 }
 
 // Product reviews' own per-frame fade — identical logic to updateSignFade/
-// updateCalendarFade above, over shopReviews instead of shopSigns.
+// updateCalendarFade above, over shopReviews instead of shopSigns. Also
+// drives the buy/review hints' visibility: tapped (shopTappedProduct) AND
+// still within interact range, recomputed every frame so walking away from
+// a tapped product hides its buttons again without needing a fresh tap.
 function updateReviewFade() {
-  let nearest = null;
-  let nearestDistance = Infinity;
+  let tappedDistance = Infinity;
   for (const review of shopReviews) {
     const world = review.mesh.getWorldPosition(scratchSignWorldPos);
     const distance = world.distanceTo(camera.position);
@@ -10533,18 +10543,16 @@ function updateReviewFade() {
       (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
     );
     for (const sprite of review.sprites) sprite.material.opacity = opacity;
-    if (distance <= SIGN_INTERACT_RADIUS_M && distance < nearestDistance) {
-      nearest = review;
-      nearestDistance = distance;
-    }
+    if (review === shopTappedProduct) tappedDistance = distance;
   }
-  if (nearest !== nearestActiveReview) {
-    nearestActiveReview = nearest;
-    shopReviewHintEl.classList.toggle('visible', !!nearest);
+  const tappedInRange = !!shopTappedProduct && tappedDistance <= SIGN_INTERACT_RADIUS_M;
+  if (tappedInRange !== shopReviewHintsVisible) {
+    shopReviewHintsVisible = tappedInRange;
+    shopReviewHintEl.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy hint at
     // all rather than one that would just 400 on click.
-    shopBuyHintEl.classList.toggle('visible', !!nearest && nearest.mesh.userData.template.priceCents != null);
+    shopBuyHintEl.classList.toggle('visible', tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null);
   }
 }
 
@@ -10795,7 +10803,7 @@ shopCalendarHintEl.addEventListener('click', async () => {
 });
 
 shopReviewHintEl.addEventListener('click', async () => {
-  const review = nearestActiveReview;
+  const review = shopTappedProduct;
   if (!review) return;
   const authorLabel = shopperLabel();
   if (!authorLabel) return;
@@ -10909,7 +10917,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
 }
 
 shopBuyHintEl.addEventListener('click', async () => {
-  const review = nearestActiveReview;
+  const review = shopTappedProduct;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
@@ -10985,18 +10993,16 @@ function unloadShopLandletInstances(entry) {
     if (review.group !== entry.group) continue;
     disposeReviewSprites(review);
     shopReviews.splice(shopReviews.indexOf(review), 1);
-    if (nearestActiveReview === review) {
-      nearestActiveReview = null;
-      shopReviewHintEl.classList.remove('visible');
-      shopBuyHintEl.classList.remove('visible');
-    }
     // The tapped product's own mesh is about to be disposed below — clear
-    // the reference and hide its info rather than leaving #shop-product-info
-    // pointing at (and this landlet's next load potentially reusing) a
+    // the reference and hide its info/buy/review hints rather than leaving
+    // them pointing at (and this landlet's next load potentially reusing) a
     // stale entry.
     if (shopTappedProduct === review) {
       shopTappedProduct = null;
+      shopReviewHintsVisible = false;
       shopProductInfoEl.classList.remove('visible');
+      shopReviewHintEl.classList.remove('visible');
+      shopBuyHintEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise

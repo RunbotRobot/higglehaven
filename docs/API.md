@@ -3619,16 +3619,20 @@ In Shop mode, every loaded placed instance registers into `shopReviews`
 unconditionally (`registerShopReview`, keyed by the instance's underlying
 `templateId` rather than its own `instanceId`) — no flag gates this the way
 `isCommunitySign`/`isCommunityCalendar` gate their own registration.
-`rebuildReviewSprites`/`updateReviewFade` otherwise mirror the sign/
-calendar machinery exactly, reusing `makeSignPostSprite`,
-`SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/`SIGN_INTERACT_RADIUS_M`/
-`SIGN_MAX_VISIBLE_POSTS`, and the per-frame `updateShopMovement` hook.
-`#shop-review-hint` ("Rate this Product") sits one slot higher than
-`#shop-calendar-hint` (`bottom: 280px` vs. `230px`/`180px`) so it can show
-alongside a sign/calendar hint without colliding — since every instance is
-now reviewable, this hint is visible near almost anything a shopper walks
-up to, which is the intended (if occasionally busy) result of reviews being
-about the product rather than a curated slot.
+`rebuildReviewSprites` mirrors the sign/calendar machinery exactly, reusing
+`makeSignPostSprite`/`SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/
+`SIGN_MAX_VISIBLE_POSTS` for the sprite fade. `#shop-review-hint` ("Rate
+this Product") sits one slot higher than `#shop-calendar-hint`
+(`bottom: 280px` vs. `230px`/`180px`) so it can show alongside a sign/
+calendar hint without colliding.
+Unlike signs/calendars, `#shop-review-hint` is NOT proximity-driven — it
+was originally, but the owner flagged that as noisy (N42): since every
+instance is reviewable, a purely-proximity hint would show near almost
+anything a shopper walks up to. `updateReviewFade` now gates it (and
+`#shop-buy-hint`, below) on `shopTappedProduct` instead — the same
+tap-to-inspect state `#shop-product-info` already used — so a shopper has
+to deliberately tap the product first, still re-checking `SIGN_INTERACT_RADIUS_M`
+every frame so walking away from a tapped product hides its buttons again.
 
 Each placement fetches its product's review list independently rather than
 sharing a per-template cache across every loaded instance of the same
@@ -4692,10 +4696,11 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 
 ### Frontend wiring
 
-Shop mode's proximity-tracked nearest-instance hint column
-(`updateReviewFade` in `src/main.js`, shared with "Product reviews" and
-"Product pricing" above) gains a "Buy" button (`#shop-buy-hint`), shown
-only when the nearest instance's template has a price set. Clicking it
+Shop mode's tap-gated product hint column (`updateReviewFade` in
+`src/main.js`, shared with "Product reviews" and "Product pricing" above —
+see "Product reviews"' own note on why this is tap-driven, not proximity)
+gains a "Buy" button (`#shop-buy-hint`), shown only when the tapped
+instance's template has a price set. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
 the response is an already-completed `purchase` (the simulated path),
 that's the whole flow — same as before this feature existed. If it's
@@ -5909,7 +5914,7 @@ the field is cleared back to blank, not `0`.
 `#shop-product-info`, a non-interactive text line, shows a tapped placed
 instance's own product name and price (`"<name> — <price>"`, or just
 `"<name>"` when unpriced). Originally proximity-tracked the same way
-Product Reviews' own hint is (nearest in `SIGN_INTERACT_RADIUS_M`), but
+Product Reviews' own hint was (nearest in `SIGN_INTERACT_RADIUS_M`), but
 that read as noisy — a name/price popup appearing the instant a shopper
 walked near anything, whether or not they cared. Now driven by a plain
 raycast click/tap handler against every loaded `shopReviews` mesh (the
@@ -5917,11 +5922,11 @@ same "walk up to whichever registered root mesh is this hit's ancestor"
 pattern Build mode's own click handler uses against `productMeshes`, see
 `findTappedShopProduct`): tapping a product shows its info, tapping
 anything else (ground, sky, empty space) dismisses it. `#shop-review-hint`/
-`#shop-buy-hint` stay proximity-driven — those are prompts to act on
-whatever's nearby, not a display, so showing them on approach still reads
-as "you can do something here" rather than clutter. It sits one slot
-higher than `#shop-review-hint` (`bottom: 330px` vs. `280px`) so both can
-show together without colliding.
+`#shop-buy-hint` share this same `shopTappedProduct` state (see "Product
+reviews" above) — the owner later flagged the same noisiness for those two
+as well (N42), so all three are now tap-gated rather than just
+`#shop-product-info`. It sits one slot higher than `#shop-review-hint`
+(`bottom: 330px` vs. `280px`) so both can show together without colliding.
 
 ### Testing note
 
