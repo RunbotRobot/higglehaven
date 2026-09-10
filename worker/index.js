@@ -2982,6 +2982,72 @@ async function handleSavedLayouts(request, db, route) {
     await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
     return json({ deleted: true });
   }
+
+  // #636 (last sub-issue of #631): applies a builder-selected subset of a
+  // saved layout's instances onto a target landlet they own, as brand-new
+  // placed_instances rows — the saved layout record itself is left intact
+  // (a builder may want to paste the same layout more than once), so this
+  // never deletes from saved_layout_instances the way DELETE above does.
+  // A pasted instance is validated exactly like any other instance create
+  // (assertCropWithinTemplateBounds/assertInstanceZWithinLevels below) —
+  // per #631's own scoping, it isn't treated as "already paid for" just
+  // because an equivalent instance existed once on the source landlet, so
+  // a target whose current levels don't reach the saved z (or whose
+  // template has since shrunk below the saved crop) correctly rejects it.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'paste') {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+
+    const input = await readJson(request);
+    if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
+    if (input.instanceIds.length === 0) throw new HttpError('instanceIds must contain at least one item', 400);
+    if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
+    const sourceInstanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
+    if (new Set(sourceInstanceIds).size !== sourceInstanceIds.length) {
+      throw new HttpError('instanceIds must be unique', 400);
+    }
+    const landletId = stringValue(input.landletId, 'landletId');
+    await assertReferenceExists(db, 'landlets', 'landlet_id', landletId, 'landletId');
+    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+
+    const placeholders = sourceInstanceIds.map(() => '?').join(', ');
+    const { results: savedInstanceRows } = await db.prepare(`
+      SELECT * FROM saved_layout_instances WHERE saved_layout_id = ? AND source_instance_id IN (${placeholders})
+    `).bind(savedLayoutId, ...sourceInstanceIds).all();
+    if (savedInstanceRows.length !== sourceInstanceIds.length) {
+      throw new HttpError('Every instanceId must belong to this saved layout', 400);
+    }
+
+    // Fresh instanceIds — a saved snapshot's source_instance_id was already
+    // consumed (and possibly reused since) by the placed_instances row it
+    // came from, and a layout can be pasted more than once, so reusing it
+    // here would risk colliding with either.
+    const instances = savedInstanceRows.map((savedRow) => ({
+      ...savedLayoutInstanceFromRow(savedRow), instanceId: crypto.randomUUID(), landletId,
+    }));
+    await assertCropWithinTemplateBounds(db, instances);
+    await assertInstanceZWithinLevels(db, instances);
+    // #456: same "fold the ownership re-check into the write itself" idiom
+    // as every other instance-creating endpoint in this file — a transfer
+    // of landletId in the await gap above (auction resolving, say) must not
+    // let this paste plant instances on a landlet no longer the caller's.
+    const batchResults = await db.batch(instances.map((instance) => db.prepare(`
+      INSERT INTO placed_instances
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id)));
+    if (batchResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
+    const instanceIds = instances.map((instance) => instance.instanceId);
+    const stored = await getInstancesById(db, instanceIds);
+    return json({ instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, 201);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 

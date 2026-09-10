@@ -949,3 +949,17 @@ export async function fetchSavedLayout(savedLayoutId) {
 export async function deleteSavedLayout(savedLayoutId) {
   await requestJson(`/saved-layouts/${encodeURIComponent(savedLayoutId)}`, { method: 'DELETE' });
 }
+
+// #636 (last sub-issue of #631): pastes the given subset of a saved
+// layout's instances onto a target landlet the builder owns, as brand-new
+// placed_instances rows. The saved layout record itself is left intact —
+// nothing here deletes it, so the same selection (or a different one) can
+// be pasted again later.
+export async function pasteSavedLayoutInstances(savedLayoutId, { instanceIds, landletId }) {
+  const { instances } = await requestJson(`/saved-layouts/${encodeURIComponent(savedLayoutId)}/paste`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instanceIds, landletId }),
+  });
+  return instances;
+}

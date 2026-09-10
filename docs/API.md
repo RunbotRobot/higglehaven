@@ -4417,8 +4417,44 @@ Listing/managing above, single-layout detail, and deletion together
 cover everything up through the faux-lándlet preview + rectangle-select
 UI (#635, built on top of the detail endpoint above — see
 `src/savedLayoutPreview.js` for its ground-sizing/selection math).
-Pasting selected instances onto a target landlet (#636) is the one
-remaining not-yet-built sub-issue of tracking issue #631.
+
+### `POST /api/saved-layouts/:savedLayoutId/paste`
+
+#636 (last sub-issue of #631): applies a builder-chosen subset of a saved
+layout's instances onto a landlet the builder owns, as brand-new
+`placed_instances` rows. The saved layout itself is left completely
+intact by this — nothing here deletes from `saved_layout_instances`, so
+the same selection (or a different one) can be pasted again later, any
+number of times.
+
+```json
+{ "instanceIds": ["instance-...", "instance-..."], "landletId": "landlet-..." }
+```
+
+`instanceIds` (1-100, unique) must each be a `source_instance_id` already
+present on this saved layout — `400` otherwise. `landletId` must be a
+landlet the caller owns (`404`/`403`/`401` follow the same
+`requireOwnedLandlet` shape every other instance-touching endpoint in
+this file uses).
+
+A pasted instance is validated exactly like a normal instance create —
+`assertCropWithinTemplateBounds` and `assertInstanceZWithinLevels` both
+run against the *target* landlet's current state, not the source
+landlet's state at save time. Per #631's own scoping ("not treated as
+already paid for" just because an equivalent instance existed once
+elsewhere), this means a target whose current levels don't reach the
+saved `z` (`400`, same message `POST /api/instances` would give), or
+whose template has since shrunk below the saved crop, correctly rejects
+the paste rather than silently bypassing either check. Every instance
+gets a fresh `instanceId` (never the original `source_instance_id`,
+which the source landlet's own `placed_instances` row for it no longer
+even exists to collide with) via the same ownership-reraced batch insert
+`POST/PUT /api/instances/batch` already uses (`409` if the target
+landlet changed hands in the interim).
+
+```json
+{ "instances": [ { "instanceId": "instance-...", "landletId": "landlet-...", "templateId": "placeholder-tree", "x": 2, "y": 3, "z": 15, "rotationX": 0, "rotationY": 0, "rotationZ": 1.25, "label": null, "crop": {}, "scale": 1, "isCommunitySign": false, "isCommunityCalendar": false } ] }
+```
 
 ### Ownership-change cleanup
 

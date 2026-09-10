@@ -231,12 +231,21 @@
       #layout-preview-toolbar.visible {
         display: flex;
       }
-      #layout-preview-back-btn {
+      #layout-preview-back-btn,
+      #layout-preview-paste-btn {
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
         color: var(--pill-text);
         border-radius: 999px;
         padding: 4px 12px;
+        font: 13px/1.4 sans-serif;
+      }
+      #layout-preview-paste-btn:disabled {
+        opacity: 0.5;
+      }
+      #layout-preview-paste-target {
+        border-radius: 999px;
+        padding: 4px 10px;
         font: 13px/1.4 sans-serif;
       }
       /* The drag-rectangle itself — positioned/sized entirely via inline
@@ -3214,6 +3223,9 @@
       <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
       <span id="layout-preview-name"></span>
       <span id="layout-preview-selection-count"></span>
+      <select id="layout-preview-paste-target" hidden></select>
+      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto landlet</button>
+      <span id="layout-preview-paste-status"></span>
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="gizmo-mode-controls">

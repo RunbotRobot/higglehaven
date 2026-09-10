@@ -1831,6 +1831,160 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #636 (last sub-issue of #631): applying a saved layout's instances onto
+  // a target landlet as brand-new placed_instances rows.
+  describe('Pasting saved-layout instances onto a landlet (#636)', () => {
+    // Mirrors the "Listing and deleting" describe block's own saveALayout
+    // helper above, but also hands back the saved instance's own
+    // source_instance_id (needed as this endpoint's own instanceIds body
+    // field) and the owner's second, still-empty claimed landlet to paste
+    // onto (a builder can hold two simultaneously-claimed landlets per
+    // #199/#249 — see renderStartSection's own comment in src/main.js).
+    async function saveALayoutWithTarget(label) {
+      const owner = await signupBuilder(`${label}-owner`);
+      const sourceLandletId = `${label}-source`;
+      const targetLandletId = `${label}-target`;
+      await createGreenbeltLandletWithArea(sourceLandletId, 1000);
+      await claim(sourceLandletId, owner);
+      await growLandCapHeadroom(owner.builderId);
+      await api(`/landlets/${sourceLandletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: `${label}-upper`,
+          landletId: sourceLandletId,
+          templateId: 'placeholder-tree',
+          x: 2, y: 3, z: LEVEL_HEIGHT_M * 1.5,
+          rotationZ: 1.25,
+        }),
+      }));
+      expect(placed.response.status).toBe(201);
+      const removed = await api(`/landlets/${sourceLandletId}/levels/1`, owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+      const { results } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE builder_id = ?')
+        .bind(owner.builderId).all();
+      const savedLayoutId = results[0].saved_layout_id;
+      const { results: savedInstances } = await env.DB.prepare(
+        'SELECT source_instance_id FROM saved_layout_instances WHERE saved_layout_id = ?',
+      ).bind(savedLayoutId).all();
+
+      await createGreenbeltLandletWithArea(targetLandletId, 1000);
+      // Bypasses the real one-at-a-time /claim flow purely for this test's
+      // own setup convenience, same as the pagination test above.
+      await env.DB.prepare(`
+        UPDATE landlets SET status = 'claimed', owner_builder_id = ?,
+          claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+      `).bind(owner.builderId, targetLandletId).run();
+
+      return {
+        owner, savedLayoutId, targetLandletId, sourceInstanceId: savedInstances[0].source_instance_id,
+      };
+    }
+
+    it('requires a session to paste', async () => {
+      const { savedLayoutId, targetLandletId, sourceInstanceId } = await saveALayoutWithTarget('paste-noauth');
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, {
+        method: 'POST', body: JSON.stringify({ instanceIds: [sourceInstanceId], landletId: targetLandletId }),
+      });
+      expect(got.response.status).toBe(401);
+    });
+
+    it("rejects pasting from another builder's saved layout", async () => {
+      const { savedLayoutId, targetLandletId, sourceInstanceId } = await saveALayoutWithTarget('paste-notmine');
+      const stranger = await signupBuilder('paste-notmine-stranger');
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, stranger.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: [sourceInstanceId], landletId: targetLandletId }),
+      }));
+      expect(got.response.status).toBe(403);
+    });
+
+    it('404s pasting a saved layout that does not exist', async () => {
+      const builder = await signupBuilder('paste-missing-layout');
+      const got = await api('/saved-layouts/does-not-exist/paste', builder.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: ['anything'], landletId: 'starter-landlet' }),
+      }));
+      expect(got.response.status).toBe(404);
+    });
+
+    it('rejects an empty instanceIds array', async () => {
+      const { owner, savedLayoutId, targetLandletId } = await saveALayoutWithTarget('paste-empty-ids');
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, owner.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: [], landletId: targetLandletId }),
+      }));
+      expect(got.response.status).toBe(400);
+    });
+
+    it("rejects an instanceId that doesn't belong to this saved layout", async () => {
+      const { owner, savedLayoutId, targetLandletId } = await saveALayoutWithTarget('paste-bad-id');
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, owner.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: ['not-in-this-layout'], landletId: targetLandletId }),
+      }));
+      expect(got.response.status).toBe(400);
+    });
+
+    it('rejects pasting onto a landlet the builder does not own', async () => {
+      const { owner, savedLayoutId, sourceInstanceId } = await saveALayoutWithTarget('paste-not-owned');
+      await createGreenbeltLandletWithArea('paste-not-owned-elsewhere', 1000);
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, owner.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: [sourceInstanceId], landletId: 'paste-not-owned-elsewhere' }),
+      }));
+      expect(got.response.status).toBe(403);
+    });
+
+    it("rejects pasting where the target landlet's current levels don't reach the saved z", async () => {
+      // The saved instance sits at LEVEL_HEIGHT_M * 1.5 (its source landlet
+      // had a level added before removal) — the freshly-claimed target
+      // above never gained one, so its own implicit ground-level-only
+      // range can't fit it, mirroring a normal instance create's own
+      // assertInstanceZWithinLevels rejection.
+      const { owner, savedLayoutId, targetLandletId, sourceInstanceId } = await saveALayoutWithTarget('paste-z-oob');
+      const got = await api(`/saved-layouts/${savedLayoutId}/paste`, owner.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: [sourceInstanceId], landletId: targetLandletId }),
+      }));
+      expect(got.response.status).toBe(400);
+    });
+
+    it('pastes selected instances onto a target landlet as new placed_instances rows, leaving the saved layout intact', async () => {
+      const {
+        owner, savedLayoutId, targetLandletId, sourceInstanceId,
+      } = await saveALayoutWithTarget('paste-real');
+      // Give the target the same headroom (a level up) the z-check above
+      // shows is otherwise required.
+      await api(`/landlets/${targetLandletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+
+      const pasted = await api(`/saved-layouts/${savedLayoutId}/paste`, owner.session({
+        method: 'POST', body: JSON.stringify({ instanceIds: [sourceInstanceId], landletId: targetLandletId }),
+      }));
+      expect(pasted.response.status).toBe(201);
+      expect(pasted.body.instances).toHaveLength(1);
+      const [created] = pasted.body.instances;
+      expect(created.instanceId).not.toBe(sourceInstanceId); // fresh id, not reused
+      expect(created.landletId).toBe(targetLandletId);
+      expect(created.templateId).toBe('placeholder-tree');
+      expect(created.x).toBe(2);
+      expect(created.y).toBe(3);
+      expect(created.z).toBe(LEVEL_HEIGHT_M * 1.5);
+      expect(created.rotationZ).toBe(1.25);
+
+      const onTarget = await api(`/instances?landletId=${targetLandletId}`);
+      expect(onTarget.body.instances.map((i) => i.instanceId)).toContain(created.instanceId);
+
+      // The saved layout itself is untouched — still fetchable, still
+      // holding its own original snapshot row, so the same selection (or a
+      // different one) can be pasted again later.
+      const stillThere = await api(`/saved-layouts/${savedLayoutId}`, owner.session());
+      expect(stillThere.response.status).toBe(200);
+      expect(stillThere.body.savedLayout.instances).toHaveLength(1);
+      expect(stillThere.body.savedLayout.instances[0].instanceId).toBe(sourceInstanceId);
+    });
+  });
+
   // Found via backlog audit (#395): the outermost-level DELETE used to run
   // a plain SELECT-then-DELETE with no guard tying the delete to the
   // extent it was read against. Racing two DELETEs against the exact same

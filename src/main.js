@@ -93,6 +93,7 @@ import {
   fetchSavedLayouts,
   fetchSavedLayout,
   deleteSavedLayout,
+  pasteSavedLayoutInstances,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -11406,12 +11407,18 @@ const selectedSavedInstanceIds = new Set();
 // progress, else null — the one piece of state every pointer handler below
 // checks to know whether a drag is actually happening right now.
 let layoutPreviewDragStart = null;
+// The layout currently being previewed — set once in enterLayoutPreviewMode,
+// needed later by the paste button's own click handler below.
+let layoutPreviewSavedLayoutId = null;
 
 const layoutPreviewToolbarEl = document.getElementById('layout-preview-toolbar');
 const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
 const layoutPreviewNameEl = document.getElementById('layout-preview-name');
 const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
 const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
+const layoutPreviewPasteTargetEl = document.getElementById('layout-preview-paste-target');
+const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
+const layoutPreviewPasteStatusEl = document.getElementById('layout-preview-paste-status');
 
 function disposeLayoutPreviewMeshes() {
   for (const mesh of layoutPreviewMeshes) {
@@ -11426,7 +11433,68 @@ function disposeLayoutPreviewMeshes() {
 function updateLayoutPreviewSelectionUI() {
   const n = selectedSavedInstanceIds.size;
   layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
+  // Hidden rather than merely disabled while nothing's selected — matches
+  // this toolbar's own back-button-only look on first entering the mode,
+  // before the picker below has even had a chance to populate.
+  layoutPreviewPasteBtn.hidden = n === 0;
 }
+
+// #636 (last sub-issue of #631): lets the builder actually apply their
+// marquee selection onto a landlet they own, as brand-new placed_instances
+// — the one piece #635's own preview/select work explicitly left undone.
+// Populates the target picker once per preview session (owned landlets
+// don't change mid-preview) rather than on every selection change.
+async function populateLayoutPreviewPasteTarget() {
+  let owned;
+  try {
+    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+  } catch (err) {
+    layoutPreviewPasteStatusEl.textContent = err.message || 'Could not check your landlets.';
+    layoutPreviewPasteBtn.disabled = true;
+    return;
+  }
+  if (owned.length === 0) {
+    layoutPreviewPasteStatusEl.textContent = 'Claim a landlet first to paste onto it.';
+    layoutPreviewPasteBtn.disabled = true;
+    return;
+  }
+  layoutPreviewPasteTargetEl.innerHTML = '';
+  // Same "default to whichever landlet Build mode was last on" convention
+  // as the auction-start landlet picker (renderStartSection above) — this
+  // mode never has its own currentLandletId context (see the geometry swap
+  // in enterLayoutPreviewMode), so the module-level one Build mode itself
+  // left behind is exactly the right default here too.
+  for (const ownedLandlet of owned) {
+    const option = document.createElement('option');
+    option.value = ownedLandlet.landletId;
+    option.textContent = ownedLandlet.name || ownedLandlet.landletId;
+    if (ownedLandlet.landletId === currentLandletId) option.selected = true;
+    layoutPreviewPasteTargetEl.appendChild(option);
+  }
+  layoutPreviewPasteTargetEl.hidden = owned.length <= 1;
+}
+
+layoutPreviewPasteBtn.addEventListener('click', async () => {
+  const instanceIds = [...selectedSavedInstanceIds];
+  if (instanceIds.length === 0) return;
+  const landletId = layoutPreviewPasteTargetEl.hidden
+    ? layoutPreviewPasteTargetEl.options[0]?.value
+    : layoutPreviewPasteTargetEl.value;
+  if (!landletId) return;
+  layoutPreviewPasteBtn.disabled = true;
+  layoutPreviewPasteStatusEl.textContent = 'Pasting…';
+  try {
+    await pasteSavedLayoutInstances(layoutPreviewSavedLayoutId, { instanceIds, landletId });
+    layoutPreviewPasteStatusEl.textContent = `Pasted ${instanceIds.length} item${instanceIds.length === 1 ? '' : 's'}.`;
+    for (const mesh of layoutPreviewMeshes) removeSelectionOutline(mesh);
+    selectedSavedInstanceIds.clear();
+    updateLayoutPreviewSelectionUI();
+  } catch (err) {
+    layoutPreviewPasteStatusEl.textContent = err.message || 'Could not paste onto that landlet.';
+  } finally {
+    layoutPreviewPasteBtn.disabled = false;
+  }
+});
 
 // A raw pointerdown-then-pointerup with no real movement between them is a
 // plain click, not a drag — treated as "clear the selection" (the same
@@ -11518,12 +11586,15 @@ async function enterLayoutPreviewMode() {
     location.reload();
     return;
   }
+  layoutPreviewSavedLayoutId = savedLayoutId;
 
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
   layoutPreviewToolbarEl.classList.add('visible');
+  layoutPreviewPasteStatusEl.textContent = '';
+  layoutPreviewPasteBtn.hidden = true;
   clearSelection();
   translateControls.detach();
   rotateControls.detach();
@@ -11536,6 +11607,7 @@ async function enterLayoutPreviewMode() {
     await enterShopMode();
     return;
   }
+  populateLayoutPreviewPasteTarget();
 
   let layout;
   try {
