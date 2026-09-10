@@ -3030,7 +3030,7 @@ the scheduled-event confetti effect and its own one-shot trigger.
   "friendshipId": "friendship-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
   "requesterBuilderId": "builder-alice",
   "recipientBuilderId": "builder-bob",
-  "status": "pending",
+  "status": "accepted",
   "createdAt": "2026-08-25T00:00:00.000Z",
   "otherBuilderId": "builder-bob",
   "otherLabel": "Bob",
@@ -3046,6 +3046,12 @@ was made as — the same row looks different depending on who's asking (see
 lándlet yet, and picks the first one found if they somehow own more than
 one (auctions can transfer extra ones in) — good enough for "approximate
 location," not a claim about which one is their "real" home.
+
+**`otherLandlet` is also `null` while `status` is still `pending`**
+(owner, #610): a lándlet's owner is discoverable in-world just by walking
+up to it, but a pending request — before either side has actually agreed
+to connect — shouldn't hand either party a shortcut straight to a
+stranger's home. It only populates once `status` becomes `accepted`.
 
 ### `GET /api/friendships?builderId=X`
 
