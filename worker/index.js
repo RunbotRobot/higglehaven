@@ -1643,6 +1643,12 @@ async function handleBuilders(request, env, db, route) {
     return handleBuilderStripeAccount(request, env, db);
   }
 
+  // #625 (sub-issue of #349/#324): redeem a builder's higgles balance for
+  // real cash, now that #624 gives them somewhere to send it.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'redeem') {
+    return handleBuilderRedeem(request, env, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
@@ -4273,6 +4279,114 @@ async function handleBuilderStripeAccount(request, env, db) {
       stripe_requirements_due: JSON.stringify(requirementsDue),
       stripe_updated_at: nowIso,
     }));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #625 (sub-issue of #349/#324): a builder's higgles balance was, until
+// #624, purely an internal number with no exit to real cash at all — see
+// #349's own Control Room answer (2026-09-09 06:53 UTC) confirming
+// redemption should be free below the reporting threshold rather than
+// scoped to "only what's owed in tax" (the issue's own original, narrower
+// framing this supersedes).
+//
+// Reuses #615's exact threshold-gating pieces (annualGrossIncome,
+// TAX_REPORTING_THRESHOLD_CENTS, user.tax_form_completed_at), but not its
+// partial-cap math: #615 drains a granular pool of individual purchases
+// it can partially include, while higgles_balance_cents is one lifetime
+// running total with no per-earning-event pool left to partially redeem
+// from (see migrations/0050's own daller_earnings_events/
+// higgles_earnings_events — a ledger of how the balance grew, not
+// something a redemption can attribute itself against precisely). This
+// only supports a flat block once this year's combined gross income has
+// already crossed the line with no paperwork on file, not a partial
+// redemption cap the way #615 computes — simpler, and honest about not
+// pretending to apportion which "layer" of a lifetime balance corresponds
+// to this year's earnings specifically.
+async function handleBuilderRedeem(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const sessionBuilder = await getOrCreateBuilderForUser(db, user);
+  const availableCents = Math.max(sessionBuilder.higgles_balance_cents, 0);
+
+  if (request.method === 'GET') {
+    return json({ ...stripeAccountStatusJson(env, sessionBuilder), availableCents });
+  }
+
+  if (request.method === 'POST') {
+    if (availableCents <= 0) {
+      throw new HttpError('Nothing is available to redeem yet.', 400);
+    }
+    // An empty {} body means "redeem everything available" — amountCents
+    // only needs specifying to redeem a smaller amount.
+    const input = await readJson(request);
+    const amountCents = input.amountCents === undefined ? availableCents : nonnegativeInteger(input.amountCents, 'amountCents');
+    if (amountCents <= 0) throw new HttpError('amountCents must be greater than 0', 400);
+    if (amountCents > availableCents) {
+      throw new HttpError(`Only ${formatCents(availableCents)} is available to redeem.`, 400);
+    }
+
+    const sessionSeller = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+    const grossIncome = await annualGrossIncome(
+      db, { builderId: sessionBuilder.builder_id, sellerId: sessionSeller?.seller_id ?? null }, new Date().getUTCFullYear(),
+    );
+    const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
+    if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
+      throw taxThresholdPayoutBlockedError();
+    }
+
+    if (!stripeConfigured(env)) {
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    }
+    if (!sessionBuilder.stripe_account_id || sessionBuilder.stripe_onboarding_status !== 'complete') {
+      throw new HttpError('Complete Stripe onboarding before redeeming higgles for cash.', 400);
+    }
+
+    // Atomically claims the balance before ever calling Stripe, guarded on
+    // the balance still covering this amount at commit time — the same
+    // "claim first, guard on the current value" idiom claimPurchasesForPayout
+    // above uses for sellers, closing the same double-redemption race two
+    // concurrent requests would otherwise hit.
+    const claim = await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ? AND higgles_balance_cents >= ?
+    `).bind(amountCents, sessionBuilder.builder_id, amountCents).run();
+    if (claim.meta.changes === 0) {
+      throw new HttpError('Your higgles balance changed — try again.', 409);
+    }
+
+    let payout;
+    try {
+      // Two real Stripe calls, unlike a seller's own payout: higgles were
+      // never sitting in any per-builder Stripe balance to begin with (a
+      // seller's sale proceeds land in their own connected account
+      // automatically via transfer_data at checkout — see #454's own
+      // comment), so a Transfer has to move platform-held funds into the
+      // builder's connected account first, before a Payout can send that
+      // balance out to their bank the same way handleSellerPayouts already
+      // does.
+      const transfer = await stripeRequest(
+        env, 'POST', 'transfers',
+        { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
+        `builder-redeem-transfer:${sessionBuilder.builder_id}:${crypto.randomUUID()}`,
+      );
+      payout = await stripeRequest(
+        env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' }, undefined, sessionBuilder.stripe_account_id,
+      );
+      await db.prepare(`
+        INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(`redemption-${crypto.randomUUID()}`, sessionBuilder.builder_id, amountCents, transfer.id, payout.id).run();
+    } catch (err) {
+      // The claim above already debited the balance — release it so a
+      // failed Stripe call never strands real higgles the builder still
+      // has, the same undo-on-failure pattern releasePurchaseClaim uses.
+      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+        .bind(amountCents, sessionBuilder.builder_id).run();
+      throw err;
+    }
+
+    return json({ redeemedCents: amountCents, stripePayoutId: payout.id });
   }
 
   return json({ error: 'Not found' }, 404);
