@@ -353,6 +353,43 @@ cost when it happens anyway:
   itself, not just discoverable by reading every thread. And say "Ready
   for Claude" (the board's own label), not "Waiting on Claude" — the
   owner corrected this phrasing on issue-556 as backwards-sounding.
+- **Clear a status-like `tag` (`"needs owner"` and similar) the moment
+  it stops being true — the Control Room can't do this for you either.**
+  `tag` is free text, not a controlled field the page understands, so
+  nothing on it auto-syncs to `status` or `waitingOn` the way the board's
+  own "Ready for Claude"/"Waiting on: Owner" badge does. The owner
+  reported this directly (07607tp5q0uzvfqqggcv): "#556 was 'In Progress'.
+  Then it posted a reply that required a response from the owner, and the
+  state was changed to 'NEEDS OWNER', but it stayed 'In Progress'. I
+  replied, but the status stayed 'NEEDS OWNER'... Now Claude has picked
+  it back up and is working on the task, but it still says 'NEEDS
+  OWNER'" — confirmed live: #556 sat at `status: "in_progress"`,
+  `waitingOn: "claude"` (correctly cleared) yet `tag: "needs owner"`
+  (stale) simultaneously, because whichever session set the tag while
+  posting its question never went back to clear it once work resumed.
+  Same root cause and same fix as the `waitingOn` bullet just above:
+  write straight through the db API bypasses the page's JS, so nothing
+  will ever un-stick a stale tag for you — clear or update it yourself,
+  in the same write that changes `status`/`waitingOn` out of the state it
+  was describing. If a task is genuinely blocked on the owner, prefer
+  `waitingOn: "owner"` (with the explanation the bullet above requires)
+  over a free-text tag in the first place — it's the one the board
+  actually renders a live, self-updating badge for.
+
+  Owner follow-up (gz9kt9d7l0qoaveiboga): "Do we need separate 'NEEDS
+  OWNER' and 'WAITING ON: OWNER' statuses? It seems like it would be
+  clean to consolidate them into a single 'WAITING ON: OWNER' state." Yes
+  — done. The board's own badge (`waitingOnHtml`) used to only render on
+  `queued` cards, on the theory that `in_progress` already means someone's
+  on it; it now also renders on `in_progress` when `waitingOn` is
+  explicitly set (never the default "Ready for Claude" there — only an
+  actual explicit wait — so an ordinary in-progress card stays quiet).
+  That makes `waitingOn` the single, live-updating home for "is this
+  blocked on the owner" across every non-done status, so a status-like
+  `tag` like `"needs owner"` no longer has a job to do at all — don't
+  write one; set `waitingOn: "owner"` instead, whatever `status` the task
+  is currently in.
+
 - **Set `waitingOn` in the same write that creates a new card, if it
   isn't immediately actionable — don't rely on fixing it afterward.**
   A brand-new `tasks` doc with no `waitingOn` field renders as the
@@ -373,6 +410,44 @@ cost when it happens anyway:
   session can act on it, set `waitingOn: "owner"` or the blocking id in
   that exact same `add`/`set` call — same discipline as the bullet
   above, just applied one write earlier.
+
+- **A task's `note` field is a narrative log, not live state — never flip
+  `waitingOn` back to `"owner"` on the strength of what `note` says.**
+  The owner reported (y8gabn9mv3d4ifz2sipt, 2026-09-09) explicitly
+  clicking "Ready for Claude" on several cards (#522, #610, #616, #350)
+  and posting a confirming reply on each, only to find them "inexplicably"
+  back to `"WAITING ON: OWNER"` later — repeatedly enough ("dozens of
+  times") that they wondered whether the whole board needed migrating off
+  this Artifact-based platform to a real server. It doesn't: the
+  `knownDoneRefs`/`clearIfWaitingOnDone` auto-flip code in the page's own
+  script explicitly never touches `waitingOn: "owner"`
+  (`if (!w || w === 'claude' || w === 'owner') return;`), so the page
+  itself isn't reverting these. The actual mechanism is a session
+  reading a card's `note` — a point-in-time write-up from whoever last
+  worked it, often phrased "not self-assignable" or "needs owner
+  judgment" — and "correcting" `waitingOn` back to `"owner"` on that
+  basis, without checking whether the owner has since clicked "Ready for
+  Claude" or replied in the thread. `note` is never rewritten just
+  because `waitingOn` or `status` changed elsewhere, so it goes stale the
+  moment the owner acts and stays stale until someone happens to rewrite
+  it. Before changing a card's `waitingOn` (in either direction), check
+  the live `waitingOn` value and the `replies` thread's own most recent
+  entry — both update in real time and are authoritative; `note` is
+  history, not a signal to act on by itself.
+
+- **A `[Tracking]` card's own `status` should read `"queued"` while it's
+  waiting on its sub-issues — reserve `"in_progress"` for a tracking
+  card with real work happening directly on it (rare; usually the
+  sub-issues carry all the actual work).** The owner flagged this twice
+  in one pass (01fii7zrm9kahajhuxws on #326, w51z2hlwti74jk10e0h2 as the
+  general rule): a tracking card sitting on `"in_progress"` while every
+  actual unit of work lives on its own separately-tracked sub-issue cards
+  reads as "someone is actively working this," which isn't true — it's
+  just waiting, the same as any other queued item. `waitingOn` still
+  does the real work of saying *what* it's waiting on (a specific
+  sub-issue's id/number, or `"owner"`); `status` on the tracking card
+  itself should follow that same logic `status`/`waitingOn` already
+  follow everywhere else on the board.
 
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
