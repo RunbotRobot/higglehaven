@@ -9533,27 +9533,29 @@ function bindShopVerticalButton(el, direction) {
 bindShopVerticalButton(shopUpBtn, 1);
 bindShopVerticalButton(shopDownBtn, -1);
 
-// A double-tap/double-press, not a single one, so a single accidental tap
-// (or an ordinary spacebar press while, say, a builder is just looking
-// around with keyboard focus on the page) never launches the player into
-// the air unintentionally — matches docs/SPEC.md §2's own wording exactly
-// ("double-tap jump (mobile) / double-press spacebar (desktop)").
+// Owner (u7rvtz1jn1wchfsz6c1o): "The bird icon should be a single tap
+// instead of a double-tap." The double-press requirement below (spacebar/
+// mobile jump) exists to protect an overloaded gesture — spacebar/jump
+// does other things too, so a stray press needs guarding against launching
+// flight unintentionally. The bird button has no such risk: it's a
+// dedicated, visible control the player has to deliberately aim for and
+// tap, so requiring a double-tap there was just friction, not protection.
 function bindShopFlyToggle(el) {
   el.addEventListener('pointerdown', (event) => {
     if (!shopActive) return;
     event.preventDefault();
     event.stopPropagation();
-    const now = performance.now();
-    if (now - shopLastFlyBtnTapAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
-      shopLastFlyBtnTapAt = -Infinity; // consumed — a third tap starts a fresh pair, not an immediate re-trigger
-      toggleShopFlight();
-    } else {
-      shopLastFlyBtnTapAt = now;
-    }
+    toggleShopFlight();
   });
 }
 bindShopFlyToggle(shopFlyBtn);
 
+// A double-tap/double-press, not a single one, so an ordinary spacebar
+// press while, say, a builder is just looking around with keyboard focus
+// on the page never launches the player into the air unintentionally —
+// matches docs/SPEC.md §2's own wording exactly ("double-press spacebar
+// (desktop)"). The bird button (bindShopFlyToggle, above) is a single tap
+// instead — see its own comment for why the two gestures differ.
 window.addEventListener('keydown', (event) => {
   if (event.code !== 'Space' || !shopActive) return;
   const target = event.target;
@@ -9766,7 +9768,6 @@ let shopFlightTransitionElapsedS = 0;
 let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors this (offset by ground curvature) every frame
 let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
 let shopLastSpacePressAt = -Infinity;
-let shopLastFlyBtnTapAt = -Infinity;
 
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
