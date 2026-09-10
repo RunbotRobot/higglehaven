@@ -24,6 +24,17 @@ function createGreenbeltLandlet(landletId) {
   return createGreenbeltLandletAs(adminSession, landletId);
 }
 
+// #629: placing a bid now requires the bidder to actually hold enough
+// higgles_balance_cents to cover it (see worker/index.js's
+// handleAuctionBids/resolveAuction) — a fresh signupBuilder() starts at 0,
+// so every test below that places a real bid funds its bidder first. Same
+// pattern as stripe-connect.test.js's own creditHiggles helper: this SETs
+// an absolute balance, not additive.
+function fundHiggles(builder, amountCents = 100_000_000) {
+  return env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+    .bind(amountCents, builder.builderId).run();
+}
+
 describe('Builders', () => {
   it('creates, lists, renames, and validates builders', async () => {
     const created = await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Ada' }) });
@@ -146,6 +157,7 @@ describe('Builders', () => {
   it('rejects deleting a builder while their own active auction has bids', async () => {
     const seller = await signupBuilder('auction-seller-deleted');
     const bidder = await signupBuilder('auction-seller-deleted-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-seller-deleted-landlet');
     await api('/landlets/auction-seller-deleted-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/auction-seller-deleted-landlet/auction', seller.session({
@@ -198,6 +210,7 @@ describe('Builders', () => {
     const seller = await signupBuilder('auction-unrelated-seller');
     const bidder = await signupBuilder('auction-unrelated-bidder');
     const bystander = await signupBuilder('auction-unrelated-bystander');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-unrelated-landlet');
     await api('/landlets/auction-unrelated-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/auction-unrelated-landlet/auction', seller.session({
@@ -222,6 +235,7 @@ describe('Builders', () => {
   it('rejects deleting a builder while they hold the leading bid on an active auction', async () => {
     const seller = await signupBuilder('leading-bid-seller');
     const bidder = await signupBuilder('leading-bid-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('leading-bid-landlet');
     await api('/landlets/leading-bid-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/leading-bid-landlet/auction', seller.session({
@@ -250,6 +264,8 @@ describe('Builders', () => {
     const seller = await signupBuilder('outbid-deletion-seller');
     const firstBidder = await signupBuilder('outbid-deletion-first-bidder');
     const secondBidder = await signupBuilder('outbid-deletion-second-bidder');
+    await fundHiggles(firstBidder);
+    await fundHiggles(secondBidder);
     await createGreenbeltLandlet('outbid-deletion-landlet');
     await api('/landlets/outbid-deletion-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/outbid-deletion-landlet/auction', seller.session({
@@ -274,6 +290,7 @@ describe('Builders', () => {
   it('allows deleting a builder whose leading bid was on an auction that already ended', async () => {
     const seller = await signupBuilder('ended-auction-deletion-seller');
     const bidder = await signupBuilder('ended-auction-deletion-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('ended-auction-deletion-landlet');
     await api('/landlets/ended-auction-deletion-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/ended-auction-deletion-landlet/auction', seller.session({
@@ -302,6 +319,7 @@ describe('Builders', () => {
   it('rejects deleting the winning bidder while their win on an ended auction is still pending payout', async () => {
     const seller = await signupBuilder('pending-payout-bidder-seller');
     const bidder = await signupBuilder('pending-payout-bidder-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('pending-payout-bidder-landlet');
     await api('/landlets/pending-payout-bidder-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/pending-payout-bidder-landlet/auction', seller.session({
@@ -339,6 +357,7 @@ describe('Builders', () => {
   it('rejects deleting the seller while their sold-and-ended auction is still pending payout', async () => {
     const seller = await signupBuilder('pending-payout-seller-seller');
     const bidder = await signupBuilder('pending-payout-seller-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('pending-payout-seller-landlet');
     await api('/landlets/pending-payout-seller-landlet/claim', seller.session({ method: 'POST' }));
     const started = await api('/landlets/pending-payout-seller-landlet/auction', seller.session({
@@ -376,6 +395,8 @@ describe('Builders', () => {
     const seller = await signupBuilder('multi-auction-seller-deleted');
     const donor = await signupBuilder('multi-auction-donor');
     const bidder = await signupBuilder('multi-auction-bidder');
+    await fundHiggles(seller);
+    await fundHiggles(bidder);
 
     // A builder can only ever *claim* one greenbelt landlet directly, but
     // docs/SPEC.md §0/§5's auctions let them acquire additional
@@ -624,6 +645,7 @@ describe('Notifications', () => {
   async function seedNotifications(suffix) {
     const owner = await signupBuilder(`notif-owner-${suffix}`);
     const bidder = await signupBuilder(`notif-bidder-${suffix}`);
+    await fundHiggles(bidder);
     const landletId = `notif-landlet-${suffix}`;
     await createGreenbeltLandlet(landletId);
     await claim(landletId, owner);
@@ -660,6 +682,7 @@ describe('Notifications', () => {
   it('paginates the notifications list via cursor, newest first, with no gaps or duplicates', async () => {
     const owner = await signupBuilder('notif-page-owner');
     const bidder = await signupBuilder('notif-page-bidder');
+    await fundHiggles(bidder);
     const landletId = 'notif-page-landlet';
     await createGreenbeltLandlet(landletId);
     await claim(landletId, owner);

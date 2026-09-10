@@ -76,5 +76,6 @@
   "0076_didit_session_url.sql",
   "0077_tax_id_form.sql",
   "0078_builder_stripe_connect.sql",
-  "0079_higgles_redemptions.sql"
+  "0079_higgles_redemptions.sql",
+  "0080_saved_level_layouts.sql"
 ]

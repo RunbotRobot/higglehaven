@@ -450,7 +450,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'builders') {
-    return handleBuilders(request, env, env.DB, route);
+    return handleBuilders(request, env, env.DB, route, url);
   }
 
   if (route[0] === 'sellers') {
@@ -479,6 +479,10 @@ async function handleApi(request, env, url) {
 
   if (route[0] === 'auctions') {
     return handleAuctions(request, env.DB, route, url);
+  }
+
+  if (route[0] === 'saved-layouts') {
+    return handleSavedLayouts(request, env.DB, route);
   }
 
   if (route[0] === 'catalog') {
@@ -1625,7 +1629,7 @@ async function getVersion(db, landletId, versionId) {
 const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 
-async function handleBuilders(request, env, db, route) {
+async function handleBuilders(request, env, db, route, url) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
   // but so a reader hits "my own profile" before the generic CRUD story —
@@ -1647,6 +1651,18 @@ async function handleBuilders(request, env, db, route) {
   // real cash, now that #624 gives them somewhere to send it.
   if (route.length === 3 && route[1] === 'me' && route[2] === 'redeem') {
     return handleBuilderRedeem(request, env, db);
+  }
+
+  // #634 (sub-issue of #631): list the current builder's own saved level
+  // layouts (#633/#638's saved_level_layouts/saved_layout_instances) —
+  // deletion lives at the top-level /api/saved-layouts/:id below, the
+  // same split GET-under-builders/DELETE-under-its-own-collection shape
+  // this file doesn't otherwise use, but nothing else here ever lists a
+  // resource under its owner's own /me path while also exposing a
+  // single-item route for it, so there's no existing split-route
+  // precedent to match either way.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'saved-layouts') {
+    return handleListSavedLayouts(request, db, url);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -1869,6 +1885,26 @@ async function handleBuilders(request, env, db, route) {
     `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents).run();
     const { nextCap } = await recomputeLandCap(db, route[1]);
     return json({ landCapM2: nextCap }, 201);
+  }
+
+  // Same "admin-gated test/ops fixture" reasoning as land-cap-grants just
+  // above, for the other half of what #629 made auction bidding actually
+  // require: a builder's spendable higgles_balance_cents itself, not just
+  // land-cap headroom (the two are deliberately independent — land-cap-
+  // grants only ever touches the earnings ledger, never balance, so a test
+  // needing a builder to be able to *afford* a bid needs this instead).
+  // Purely a balance top-up, no earnings-ledger entry — this isn't meant
+  // to simulate real income the way land-cap-grants' event is.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'higgles-grants') {
+    await requireAdmin(request, db);
+    await requireBuilder(db, route[1]);
+    const input = await readJson(request);
+    const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
+    await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
+    `).bind(amountCents, route[1]).run();
+    const builder = await requireBuilder(db, route[1]);
+    return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -2580,6 +2616,15 @@ async function handleStartAuction(request, db, landletId) {
 // stacked directly on the previous one.
 const LEVEL_HEIGHT_M = 10;
 
+// Half a level's height, allowed as slack on each end of a landlet's
+// purchased-levels range — an instance's own thickness can carry it
+// slightly past a level's exact z boundary (see levelCapConsumedM2's own
+// comment on where that boundary sits) without actually needing the next
+// level purchased just to fit. Shared by assertInstanceZWithinLevels
+// (validating a placement) and handleLandletLevels' own DELETE branch
+// (deciding what still fits once a level is removed).
+const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
+
 // docs/SPEC.md §3's two hard limits on digging down (issue #164): a
 // downward level is blocked once its own cross-sectional area (the cone
 // narrowing toward Earth's center) would fall below this floor, and dead-
@@ -2767,6 +2812,59 @@ async function handleLandletLevels(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
     }
+    // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
+    // z-range this level was providing is removed from active shoppable
+    // space rather than silently drifting out of bounds — nothing else
+    // ever re-checks an existing instance's z once placed
+    // (assertInstanceZWithinLevels only runs on that instance's own
+    // create/move). Same allowed-range formula (and half-level-height
+    // slack) as assertInstanceZWithinLevels, computed against the levels
+    // that remain after this delete, so an instance already within
+    // tolerance of the new boundary isn't needlessly swept up.
+    const remaining = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(landletId).all();
+    const remainingIndices = remaining.results.map((row) => row.level_index);
+    const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    // #633 (sub-issue of #631, owner-confirmed on #522): before the sweep
+    // below deletes these instances from active space, snapshot them into
+    // a reusable saved_level_layouts/saved_layout_instances record — "we
+    // should save it for the builder's future use" — so this removal isn't
+    // a silent loss of their work, just a move out of active shoppable
+    // space. Read-then-batch-insert is safe here (unlike a TOCTOU-prone
+    // read-then-act elsewhere in this file) since nothing else can write to
+    // this exact landlet_id's placed_instances between this SELECT and the
+    // DELETE below — assertOwner above already serializes this handler to
+    // one caller at a time per landlet's own owner.
+    const outOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
+      .bind(landletId, minZ, maxZ).all();
+    const statements = [];
+    if (outOfRange.results.length > 0) {
+      const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
+      statements.push(db.prepare(`
+        INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        savedLayoutId, landlet.owner_builder_id, landletId, levelIndex,
+        `Level ${levelIndex} from ${landlet.name}, removed ${new Date().toISOString().slice(0, 10)}`,
+      ));
+      for (const instance of outOfRange.results) {
+        statements.push(db.prepare(`
+          INSERT INTO saved_layout_instances (
+            saved_layout_id, source_instance_id, template_id, x_m, y_m, z_m,
+            rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale,
+            is_community_sign, is_community_calendar
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          savedLayoutId, instance.instance_id, instance.template_id, instance.x_m, instance.y_m, instance.z_m,
+          instance.rotation_x_rad, instance.rotation_y_rad, instance.rotation_z_rad, instance.label,
+          instance.crop_json, instance.scale, instance.is_community_sign, instance.is_community_calendar,
+        ));
+      }
+    }
+    statements.push(
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),
+    );
+    await db.batch(statements);
     await recomputeLandCap(db, landlet.owner_builder_id);
     return json({ deleted: true });
   }
@@ -2782,6 +2880,71 @@ function levelFromRow(row) {
     capConsumedM2: row.cap_consumed_m2,
     createdAt: row.created_at,
   };
+}
+
+function savedLayoutFromRow(row) {
+  return {
+    savedLayoutId: row.saved_layout_id,
+    sourceLandletId: row.source_landlet_id,
+    sourceLevelIndex: row.source_level_index,
+    name: row.name,
+    createdAt: row.created_at,
+    instanceCount: row.instance_count,
+  };
+}
+
+// #634 (sub-issue of #631): GET /api/builders/me/saved-layouts — newest
+// first, same cursor shape as GET /api/notifications above (DESC on both
+// created_at and the tiebreak id, "older than the last row already seen"
+// on the next page) since a builder's own saved-layout history reads the
+// same way a notification feed does, not like the ascending lists
+// (auctions, landlets, instances) elsewhere in this file.
+async function handleListSavedLayouts(request, db, url) {
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  const limit = queryLimit(url.searchParams.get('limit'), 100);
+  const cursor = decodeCursor(url.searchParams.get('cursor'));
+  const conditions = ['l.builder_id = ?'];
+  const bindings = [sessionBuilder.builder_id];
+  if (cursor) {
+    conditions.push('(l.created_at < ? OR (l.created_at = ? AND l.saved_layout_id < ?))');
+    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const { results } = await db.prepare(`
+    SELECT l.*, COUNT(i.source_instance_id) AS instance_count
+    FROM saved_level_layouts l
+    LEFT JOIN saved_layout_instances i ON i.saved_layout_id = l.saved_layout_id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY l.saved_layout_id
+    ORDER BY l.created_at DESC, l.saved_layout_id DESC LIMIT ?
+  `).bind(...bindings, limit + 1).all();
+  const hasMore = results.length > limit;
+  const page = results.slice(0, limit);
+  const last = page.at(-1);
+  return json({
+    savedLayouts: page.map(savedLayoutFromRow),
+    nextCursor: hasMore ? encodeCursor(last.created_at, last.saved_layout_id) : null,
+  });
+}
+
+// #634: DELETE /api/saved-layouts/:id — owner-gated the same way every
+// other builder-owned resource in this file is (assertOwner against the
+// session's own resolved builder id), a separate top-level collection
+// rather than nested under /builders/me since a single saved layout is
+// addressed by its own id, not by the builder's — the list above is the
+// only place that needs the builder's own id in its path.
+async function handleSavedLayouts(request, db, route) {
+  if (request.method === 'DELETE' && route.length === 2) {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    // saved_layout_instances cascades via its own FOREIGN KEY ... ON
+    // DELETE CASCADE (migration 0080) — nothing else to clean up here.
+    await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
+    return json({ deleted: true });
+  }
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handleAuctions(request, db, route, url) {
@@ -2888,10 +3051,39 @@ async function handleAuctionBids(request, db, route) {
     // pattern as the level-add gate above.
     const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(resolved.landlet_id).first();
     const bidderCap = await recomputeLandCap(db, builderId);
-    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+    // #629 (owner-confirmed, 2026-09-10): a bid now needs to actually be
+    // affordable, holding both higgles and land cap until the bidder is
+    // outbid or the auction closes — otherwise a builder could bid on more
+    // auctions than their balance/cap could ever cover if more than one
+    // resolved in their favor. "Held" is computed live off the bidder's own
+    // currently-highest bid on each of their OTHER active auctions (never
+    // stored separately) — the moment a higher bid supersedes one, it drops
+    // out of this sum on its own, which is the "released on outbid" half;
+    // resolveAuction's own atomic per-auction debit is what actually
+    // enforces this at settlement time (this check is the up-front,
+    // best-effort half — see that function's own comment on why a narrow
+    // race here is acceptable).
+    const heldElsewhere = await db.prepare(`
+      SELECT COALESCE(SUM(ab.amount_cents), 0) AS higglesCents, COALESCE(SUM(l.area_m2), 0) AS areaM2
+      FROM auction_bids ab
+      JOIN auctions a ON a.auction_id = ab.auction_id
+      JOIN landlets l ON l.landlet_id = a.landlet_id
+      WHERE ab.bidder_builder_id = ? AND a.status = 'active' AND a.auction_id != ?
+        AND ab.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = ab.auction_id)
+    `).bind(builderId, auctionId).first();
+    if (heldElsewhere.higglesCents + amountCents > sessionBuilder.higgles_balance_cents) {
       throw new HttpError(
-        `Winning this auction would take you to ${(bidderCap.ownedAreaM2 + auctionedLandlet.area_m2).toFixed(2)}m², `
-        + `over your ${bidderCap.nextCap}m² land cap`,
+        `This bid needs ${formatCents(amountCents)}, but only `
+        + `${formatCents(Math.max(sessionBuilder.higgles_balance_cents - heldElsewhere.higglesCents, 0))} `
+        + `is available after what your other active bids are already holding`,
+        400,
+      );
+    }
+    const committedAreaM2 = bidderCap.ownedAreaM2 + heldElsewhere.areaM2 + auctionedLandlet.area_m2;
+    if (committedAreaM2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `Winning this auction would take you to ${committedAreaM2.toFixed(2)}m² `
+        + `(including what your other active bids are already holding), over your ${bidderCap.nextCap}m² land cap`,
         409,
       );
     }
@@ -3165,10 +3357,6 @@ async function resolveAuctionIfDue(db, auction) {
 // builder acquires *additional* already-claimed land) — see migration
 // 0058 on why that no longer trips a UNIQUE constraint here.
 async function resolveAuction(db, auction) {
-  const highest = await db.prepare(`
-    SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-  `).bind(auction.auction_id).first();
-
   // Three separate call sites can all reach this for the same overdue
   // auction (resolveDueAuctions' sweep, resolveAuctionIfDue's per-request
   // check, and the explicit /resolve endpoint) — each on its own stale
@@ -3179,17 +3367,54 @@ async function resolveAuction(db, auction) {
   // caller loses the race affects 0 rows here and returns the
   // already-resolved auction as-is — a harmless no-op, matching this
   // function's existing "resolving twice" contract, never double-running
-  // the money-mutating side effects below.
+  // the money-mutating side effects below. winning_bid_id is finalized
+  // below, once the real winner (who may not be the top bid — see next
+  // comment) is known, not here.
   const guard = await db.prepare(`
-    UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE auction_id = ? AND status = 'active'
-  `).bind(highest ? highest.bid_id : null, auction.auction_id).run();
+  `).bind(auction.auction_id).run();
   if (guard.meta.changes === 0) {
     return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
   }
 
-  const statements = [];
-  if (highest) {
+  // #629 (owner-confirmed, 2026-09-10): bidding's own held-balance/land-cap
+  // check (handleAuctionBids) is only a best-effort, non-atomic-across-
+  // auctions pre-check — this is the real, atomic enforcement. Walk bids
+  // highest-first, atomically debiting each candidate's higgles balance
+  // and confirming their land cap still covers this landlet, before ever
+  // crediting the seller — the first candidate who can actually afford it
+  // wins. A candidate who can't (their balance/cap changed since bidding,
+  // e.g. another of their own auctions resolved first in the same sweep)
+  // is skipped with zero side effects, never crediting a seller with money
+  // that was never really debited from anyone.
+  const { results: candidates } = await db.prepare(`
+    SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at
+  `).bind(auction.auction_id).all();
+  const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(auction.landlet_id).first();
+
+  let winner = null;
+  for (const candidate of candidates) {
+    const debited = await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?
+      WHERE builder_id = ? AND higgles_balance_cents >= ?
+    `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents).run();
+    if (debited.meta.changes === 0) continue;
+
+    const candidateCap = await recomputeLandCap(db, candidate.bidder_builder_id);
+    if (candidateCap.ownedAreaM2 + auctionedLandlet.area_m2 > candidateCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+        .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
+      continue;
+    }
+    winner = candidate;
+    break;
+  }
+
+  const statements = [
+    db.prepare('UPDATE auctions SET winning_bid_id = ? WHERE auction_id = ?').bind(winner ? winner.bid_id : null, auction.auction_id),
+  ];
+  if (winner) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
@@ -3198,23 +3423,23 @@ async function resolveAuction(db, auction) {
         UPDATE landlets
         SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ?
-      `).bind(highest.bidder_builder_id, auction.landlet_id),
+      `).bind(winner.bidder_builder_id, auction.landlet_id),
       db.prepare(`
         UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-      `).bind(highest.amount_cents, auction.seller_builder_id),
+      `).bind(winner.amount_cents, auction.seller_builder_id),
       // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
       // trailing-30-day earnings WINDOW, not the lifetime
       // higgles_balance_cents total above — this per-event ledger is what
       // makes that window computable later (see recomputeLandCap).
       db.prepare(`
         INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
-      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
+      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, winner.amount_cents),
       notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your higgles balance.`),
-      notificationStatement(db, highest.bidder_builder_id,
-        `You won the auction for ${auction.landlet_id} at ${formatCents(highest.amount_cents)}! It's yours to build on now.`),
+        `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.`),
+      notificationStatement(db, winner.bidder_builder_id,
+        `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.`),
     );
-  } else if (auction.starting_bid_cents === 0) {
+  } else if (candidates.length === 0 && auction.starting_bid_cents === 0) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
@@ -3227,6 +3452,11 @@ async function resolveAuction(db, auction) {
       `).bind(auction.landlet_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
+    );
+  } else if (candidates.length > 0) {
+    statements.push(
+      notificationStatement(db, auction.seller_builder_id,
+        `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the land.`),
     );
   } else {
     statements.push(
@@ -7686,13 +7916,6 @@ async function assertCropWithinTemplateBounds(db, instances) {
     }
   }
 }
-
-// Half a level's height, allowed as slack on each end of a landlet's
-// purchased-levels range below — an instance's own thickness can carry it
-// slightly past a level's exact z boundary (see levelCapConsumedM2's own
-// comment on where that boundary sits) without actually needing the next
-// level purchased just to fit.
-const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
 // Confirms every instance's z falls within the landlet's actual purchased
 // vertical extent (landlet_levels — see handleLandletLevels, the only

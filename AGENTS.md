@@ -125,7 +125,23 @@ sign-off needed.
   (`"issue"`|`"pr"`), `title`, `status` (`"queued"`|`"in_progress"`|
   `"done"`), `session` (your own session name), `url`, `updatedAt` (ISO
   timestamp) — write or update it the moment you self-assign, when you
-  open a PR, and when you merge, exactly as before. A message-shaped doc
+  open a PR, and when you merge, exactly as before. `note` (your own
+  claim/progress/completion write-up — the board renders it in the
+  thread, formatted and sorted exactly like a real reply, whichever of
+  `session`/`from` is set as its author) has its own timestamp field,
+  `noteUpdatedAt` — **set it alongside `note` in the same write, to that
+  write's own timestamp, separately from `updatedAt`.** `updatedAt` gets
+  bumped by other actions too (a card-action button — Mark done, Ready
+  for Claude, Requeue, Clear tag — changes it without touching `note` at
+  all), so anchoring the note's own displayed/sorted time to `updatedAt`
+  instead means an unrelated later action makes an old note look freshly
+  posted and re-sorts it to the top of the thread. Found via a real
+  report (yxt7ds607c25rn2oa03c): a stale note ended up both mis-timed
+  ("just now" on days-old content) and, separately, misattributed to the
+  owner because an empty `session: ''` (routine on a card you've stood
+  down from) was read as falsy. The board falls back to `updatedAt` for
+  older docs that predate `noteUpdatedAt` — no regression, just no longer
+  the only signal once you set it. A message-shaped doc
   (freeform direction/feedback/a question with no GitHub issue behind
   it — `add` it with an auto id, or `.doc('feedback-<id>').set(...)` if
   you're claiming an existing feedback item per "Claiming a task" below)
@@ -243,29 +259,39 @@ assigning a GitHub Issue, and claiming a task in the control room, are
 both advisory, not atomic), but each shrinks the window or lowers the
 cost when it happens anyway:
 
-- **Self-assign before you investigate, not after.** The gap between
-  reading a task and claiming it is where collisions happen — don't
-  spend several minutes reading code or planning a fix before claiming
-  it. Claim first, investigate second. This applies equally to an
-  unresolved control-room `feedback`/`question` task you're about to act
-  on, not just a GitHub Issue: the moment you decide to do it, update
-  that task's own doc directly with `status: "in_progress"` and your
-  session name, *then* start reading code — no separate claim doc
-  needed, since (as of the 2026-09-07 messages→tasks merge) the feedback
-  item already IS the `tasks` doc; there's no longer a `messages` doc
-  behind it to reference. If you *do* also file a real GitHub issue for
-  it, still update the feedback task's own doc (`status: "in_progress"`,
-  a `replies` doc noting the issue number) rather than leaving it
-  orphaned — don't let "just reply to the owner first" or "just check
-  the code first" become the de facto claim instead. A feedback item
-  small enough that filing a real issue feels like overkill is still
-  worth claiming its own `tasks` doc for this reason alone — the claim
-  is the point, not the issue tracker.
-- **Immediately after writing your claim, re-read that same doc once
-  before doing anything else.** Two sessions can still write a claim
-  within moments of each other — this doesn't stop that, but it stops
-  the *wasted work* it causes. Right after your own `set`/`update` call
-  lands, `get` that exact doc back: if it shows your session name, you
+- **Self-assign before you investigate, not after — and treat it as a
+  three-step gate, not a single write: (1) read, (2) claim, (3) re-read
+  to confirm the claim actually won, before any code gets touched.** The
+  gap between reading a task and claiming it is where collisions
+  happen — don't spend several minutes reading code or planning a fix
+  before claiming it. Claim first, investigate second. Concretely, for a
+  GitHub Issue: (1) `issue_read`/`list_issues` to confirm it's still
+  unclaimed, (2) `issue_write` with `assignees` set to yourself, (3)
+  `issue_read` it again immediately — only an `assignees` array that
+  still shows just you means you won; anything else (someone else's name
+  added before or after yours, a second assignee) means stand down as a
+  duplicate claim before reading a single line of code. The same
+  three-step shape applies equally to an unresolved control-room
+  `feedback`/`question` task, not just a GitHub Issue: the moment you
+  decide to do it, update that task's own doc directly with `status:
+  "in_progress"` and your session name, *then* start reading code — no
+  separate claim doc needed, since (as of the 2026-09-07 messages→tasks
+  merge) the feedback item already IS the `tasks` doc; there's no longer
+  a `messages` doc behind it to reference. If you *do* also file a real
+  GitHub issue for it, still update the feedback task's own doc
+  (`status: "in_progress"`, a `replies` doc noting the issue number)
+  rather than leaving it orphaned — don't let "just reply to the owner
+  first" or "just check the code first" become the de facto claim
+  instead. A feedback item small enough that filing a real issue feels
+  like overkill is still worth claiming its own `tasks` doc for this
+  reason alone — the claim is the point, not the issue tracker.
+- **Immediately after writing your claim, re-read that same doc (or
+  issue) once before doing anything else — this is step 3 above, not an
+  optional extra.** Two sessions can still write a claim within moments
+  of each other — this doesn't stop that, but it stops the *wasted work*
+  it causes. Right after your own `set`/`update`/`issue_write` call
+  lands, read that exact doc/issue back: if it shows your session name
+  (or, for a GitHub Issue, `assignees` still showing only you) — you
   genuinely won the race and can start investigating for real; if it
   shows someone else's, you lost it (their write landed after yours but
   was read after, or simply overwrote yours) — note in the doc that
@@ -275,7 +301,10 @@ cost when it happens anyway:
   fully duplicating an implementation (per the project owner directly:
   "the extra effort of grabbing a single task one more time before
   executing a task is minuscule compared with the wasted effort of
-  duplicating work").
+  duplicating work") — the owner reiterated this after #633 (sub-issue
+  of #631) still ended up with three sessions independently picking it
+  up despite this convention already existing, i.e. skipping step 3
+  above is exactly what turns an advisory claim into a real collision.
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —

@@ -11,7 +11,7 @@
 // 24-hour default), so waiting for a real one isn't practical in an e2e
 // run. That's covered instead by worker/commerce.test.js, which can set
 // ends_at into the past directly via the D1 test binding.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin, grantLandCapHeadroomAsAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, createGreenbeltLandletAsAdmin, grantLandCapHeadroomAsAdmin, grantHigglesAsAdmin } from './helpers.mjs';
 
 const SELLER = 'Auction Seller';
 const BIDDER = 'Auction Bidder';
@@ -61,9 +61,13 @@ await claimLandlet(bidderPage);
 // their own claimed landlet (the whole point of this test being "owning
 // land doesn't stop you from bidding"), so bidding on the seller's landlet
 // too now needs real headroom first (see grantLandCapHeadroomAsAdmin's own
-// comment); not what this suite is actually testing.
+// comment); not what this suite is actually testing. #629: bidding also
+// now needs the bidder to actually hold enough higgles to cover their bid
+// — a fresh builder starts at 0, so the same "not what this suite is
+// testing" fixture grant applies to balance too.
 const bidderBuilderId = await bidderPage.evaluate(() => fetch('/api/builders/me').then((r) => r.json()).then((body) => body.builder.builderId));
 await grantLandCapHeadroomAsAdmin(bidderBuilderId);
+await grantHigglesAsAdmin(bidderBuilderId);
 
 await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');

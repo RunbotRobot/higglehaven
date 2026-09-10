@@ -1035,6 +1035,16 @@ describe('Land cap', () => {
     return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
+  // #629: bidding now also requires the bidder to actually hold enough
+  // higgles_balance_cents to cover the bid — independent of the land-cap
+  // gating these tests exist to exercise. Fund bidders past their (small)
+  // bid amount so a rejection here is unambiguously about land cap, not
+  // balance (see worker/index.js's handleAuctionBids/resolveAuction).
+  async function fundHiggles(builder, amountCents = 100_000_000) {
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(amountCents, builder.builderId).run();
+  }
+
   async function startAuction(landletId, seller) {
     return api(`/landlets/${landletId}/auction`, seller.session({
       method: 'POST',
@@ -1063,6 +1073,7 @@ describe('Land cap', () => {
   it('blocks a bid that would take the bidder over their land cap', async () => {
     const seller = await signupBuilder('land-cap-seller-a');
     const bidder = await signupBuilder('land-cap-bidder-a');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-big-landlet', 5000);
     await claim('land-cap-big-landlet', seller);
     const started = await startAuction('land-cap-big-landlet', seller);
@@ -1076,6 +1087,7 @@ describe('Land cap', () => {
   it('allows a bid that stays within the bidder\'s land cap', async () => {
     const seller = await signupBuilder('land-cap-seller-b');
     const bidder = await signupBuilder('land-cap-bidder-b');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-small-landlet', 900);
     await claim('land-cap-small-landlet', seller);
     const started = await startAuction('land-cap-small-landlet', seller);
@@ -1092,6 +1104,7 @@ describe('Land cap', () => {
   it('gives the auction-bid land cap gate the same one-unit display-rounding buffer', async () => {
     const sellerWithin = await signupBuilder('land-cap-buffer-seller-within');
     const bidderWithin = await signupBuilder('land-cap-buffer-bidder-within');
+    await fundHiggles(bidderWithin);
     await createGreenbeltLandletWithArea('land-cap-buffer-within-landlet', 1001);
     await claim('land-cap-buffer-within-landlet', sellerWithin);
     const startedWithin = await startAuction('land-cap-buffer-within-landlet', sellerWithin);
@@ -1102,6 +1115,7 @@ describe('Land cap', () => {
 
     const sellerBeyond = await signupBuilder('land-cap-buffer-seller-beyond');
     const bidderBeyond = await signupBuilder('land-cap-buffer-bidder-beyond');
+    await fundHiggles(bidderBeyond);
     await createGreenbeltLandletWithArea('land-cap-buffer-beyond-landlet', 1002);
     await claim('land-cap-buffer-beyond-landlet', sellerBeyond);
     const startedBeyond = await startAuction('land-cap-buffer-beyond-landlet', sellerBeyond);
@@ -1142,6 +1156,7 @@ describe('Land cap', () => {
   it('credits a real per-event earnings ledger entry when an auction actually sells', async () => {
     const seller = await signupBuilder('land-cap-ledger-seller');
     const bidder = await signupBuilder('land-cap-ledger-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-ledger-landlet', 1000);
     await claim('land-cap-ledger-landlet', seller);
     const started = await startAuction('land-cap-ledger-landlet', seller);
@@ -1157,6 +1172,52 @@ describe('Land cap', () => {
     ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(500);
+  });
+
+  // #629 (owner-confirmed): a bid holds land cap until the bidder is
+  // outbid or the auction closes, so leading on one auction now counts
+  // against what a second bid elsewhere is allowed to commit to — closing
+  // the gap where a builder could win more auctions than their cap could
+  // ever actually cover.
+  it("counts a bidder's currently-leading bid on another active auction against their land cap for a new bid", async () => {
+    const sellerA = await signupBuilder('land-cap-hold-seller-a');
+    const sellerB = await signupBuilder('land-cap-hold-seller-b');
+    const bidder = await signupBuilder('land-cap-hold-bidder');
+    await fundHiggles(bidder);
+    // A fresh builder's cap is 1000 m² — leading on a 700 m² auction plus
+    // a second 700 m² bid would be 1400 m², over cap, even though neither
+    // bid alone would be.
+    await createGreenbeltLandletWithArea('land-cap-hold-landlet-a', 700);
+    await createGreenbeltLandletWithArea('land-cap-hold-landlet-b', 700);
+    await claim('land-cap-hold-landlet-a', sellerA);
+    await claim('land-cap-hold-landlet-b', sellerB);
+    const auctionA = await startAuction('land-cap-hold-landlet-a', sellerA);
+    const auctionB = await startAuction('land-cap-hold-landlet-b', sellerB);
+
+    const firstBid = await api(`/auctions/${auctionA.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(firstBid.response.status).toBe(201);
+
+    const secondBid = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(secondBid.response.status).toBe(409);
+    expect(secondBid.body.error).toMatch(/land cap/i);
+
+    // Being outbid releases the hold — the same bid now succeeds once
+    // someone else takes over the lead on the first auction.
+    const outbidder = await signupBuilder('land-cap-hold-outbidder');
+    await fundHiggles(outbidder);
+    const outbid = await api(`/auctions/${auctionA.body.auction.auctionId}/bids`, outbidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
+    }));
+    expect(outbid.response.status).toBe(201);
+
+    const thirdBid = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(thirdBid.response.status).toBe(201);
   });
 
   it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
@@ -1207,6 +1268,51 @@ describe('Land cap', () => {
     expect(results[0].amount_cents).toBe(100000);
 
     const missingBuilder = await api('/builders/does-not-exist/land-cap-grants', adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(missingBuilder.response.status).toBe(404);
+  });
+
+  // #629: bidding now also requires the bidder to hold enough
+  // higgles_balance_cents to cover their bid — deliberately independent of
+  // land-cap-grants above, which only ever touches the earnings ledger
+  // (cap growth), never balance. A test fixture needing a builder to
+  // actually *afford* a bid needs this instead.
+  it('grants higgles balance directly, admin-only, independent of land-cap-grants', async () => {
+    const builder = await createBuilder('Higgles Grant Builder');
+
+    const unauthenticated = await api(`/builders/${builder}/higgles-grants`, {
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const nonAdmin = await api(`/builders/${builder}/higgles-grants`, (await signupBuilder('higgles-grant-non-admin')).session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(nonAdmin.response.status).toBe(403);
+
+    const granted = await api(`/builders/${builder}/higgles-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(granted.response.status).toBe(201);
+    expect(granted.body.higglesBalanceCents).toBe(100000);
+
+    // Additive, not a flat set — a second grant stacks onto the first.
+    const grantedAgain = await api(`/builders/${builder}/higgles-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 50000 }),
+    }));
+    expect(grantedAgain.response.status).toBe(201);
+    expect(grantedAgain.body.higglesBalanceCents).toBe(150000);
+
+    // Unlike land-cap-grants, this never touches the earnings ledger — it's
+    // a pure balance top-up, not a stand-in for real income.
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(builder).all();
+    expect(results).toHaveLength(0);
+    expect(landCapOf(await api('/builders'), builder)).toBe(1000);
+
+    const missingBuilder = await api('/builders/does-not-exist/higgles-grants', adminSession({
       method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
     }));
     expect(missingBuilder.response.status).toBe(404);
@@ -1420,6 +1526,270 @@ describe('Landlet levels', () => {
 
     const list = await api('/landlets/levels-remove-landlet/levels');
     expect(list.body.levels.map((level) => level.levelIndex)).toEqual([-1]);
+  });
+
+  // #522 (owner-confirmed, 2026-09-09): nothing previously re-checked an
+  // already-placed instance's z once a level it depended on was removed —
+  // assertInstanceZWithinLevels only ever runs on that instance's own
+  // create/move, never on level removal. The owner's answer: instances left
+  // in the removed level's z-range should come out of active shoppable
+  // space.
+  it('removes instances left in a level\'s z-range once that level is removed, leaving others untouched', async () => {
+    const owner = await signupBuilder('levels-remove-instances-owner');
+    await createGreenbeltLandletWithArea('levels-remove-instances-landlet', 1000);
+    await claim('levels-remove-instances-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-remove-instances-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const onGround = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-remove-instances-ground',
+        landletId: 'levels-remove-instances-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: 0,
+      }),
+    }));
+    expect(onGround.response.status).toBe(201);
+
+    const onLevel1 = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-remove-instances-upper',
+        landletId: 'levels-remove-instances-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+      }),
+    }));
+    expect(onLevel1.response.status).toBe(201);
+
+    const removed = await api('/landlets/levels-remove-instances-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const instances = await api('/instances?landletId=levels-remove-instances-landlet');
+    expect(instances.body.instances.map((i) => i.instanceId)).toEqual(['levels-remove-instances-ground']);
+  });
+
+  // #633 (sub-issue of #631, owner-confirmed on #522/#631): the instances
+  // swept out of active space above aren't just gone — they're snapshotted
+  // into a reusable saved_level_layouts/saved_layout_instances record
+  // first, mirroring version_instances' own snapshot shape.
+  it('saves instances swept out of active space into a reusable layout record', async () => {
+    const owner = await signupBuilder('levels-save-layout-owner');
+    await createGreenbeltLandletWithArea('levels-save-layout-landlet', 1000);
+    await claim('levels-save-layout-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-save-layout-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-save-layout-ground',
+        landletId: 'levels-save-layout-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: 0,
+      }),
+    }));
+    const swept = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-save-layout-upper',
+        landletId: 'levels-save-layout-landlet',
+        templateId: 'placeholder-tree',
+        x: 2, y: 3, z: LEVEL_HEIGHT_M * 1.5,
+        rotationZ: 1.25,
+      }),
+    }));
+    expect(swept.response.status).toBe(201);
+
+    const removed = await api('/landlets/levels-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0].source_landlet_id).toBe('levels-save-layout-landlet');
+    expect(layouts[0].source_level_index).toBe(1);
+    expect(layouts[0].name).toMatch(/Level 1/);
+
+    const { results: savedInstances } = await env.DB.prepare(
+      'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ?',
+    ).bind(layouts[0].saved_layout_id).all();
+    // Only the swept (upper) instance is saved — the ground one that
+    // survived was never deleted, so nothing needed preserving for it.
+    expect(savedInstances).toHaveLength(1);
+    expect(savedInstances[0].source_instance_id).toBe('levels-save-layout-upper');
+    expect(savedInstances[0].x_m).toBe(2);
+    expect(savedInstances[0].y_m).toBe(3);
+    expect(savedInstances[0].rotation_z_rad).toBe(1.25);
+  });
+
+  // Removing a level with nothing in its z-range shouldn't create an empty
+  // saved-layout record — there's nothing worth preserving.
+  it('creates no saved-layout record when a removed level has no instances to sweep', async () => {
+    const owner = await signupBuilder('levels-no-save-layout-owner');
+    await createGreenbeltLandletWithArea('levels-no-save-layout-landlet', 1000);
+    await claim('levels-no-save-layout-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-no-save-layout-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const removed = await api('/landlets/levels-no-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(0);
+  });
+
+  // #634 (sub-issue of #631): list/delete the saved-layout records #633
+  // creates above. Reuses this describe block's own growLandCapHeadroom/
+  // createGreenbeltLandletWithArea helpers to get a real removed-level
+  // save on the books without duplicating that whole setup per test.
+  describe('Listing and deleting saved layouts (#634)', () => {
+    async function saveALayout(ownerLabel, landletId) {
+      const owner = await signupBuilder(ownerLabel);
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      await growLandCapHeadroom(owner.builderId);
+      await api(`/landlets/${landletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: `${landletId}-upper`,
+          landletId,
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      expect(placed.response.status).toBe(201);
+      const removed = await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+      const { results } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE builder_id = ?')
+        .bind(owner.builderId).all();
+      return { owner, savedLayoutId: results[0].saved_layout_id };
+    }
+
+    it('requires a session to list saved layouts', async () => {
+      const got = await api('/builders/me/saved-layouts');
+      expect(got.response.status).toBe(401);
+    });
+
+    it("lists the current builder's own saved layouts with an instance count, never another builder's", async () => {
+      const { owner } = await saveALayout('saved-layouts-list-owner', 'saved-layouts-list-landlet');
+      const stranger = await signupBuilder('saved-layouts-list-stranger');
+
+      const mine = await api('/builders/me/saved-layouts', owner.session());
+      expect(mine.response.status).toBe(200);
+      expect(mine.body.savedLayouts).toHaveLength(1);
+      expect(mine.body.savedLayouts[0]).toMatchObject({
+        sourceLandletId: 'saved-layouts-list-landlet',
+        sourceLevelIndex: 1,
+        instanceCount: 1,
+      });
+      expect(mine.body.savedLayouts[0].name).toMatch(/Level 1/);
+
+      const theirs = await api('/builders/me/saved-layouts', stranger.session());
+      expect(theirs.response.status).toBe(200);
+      expect(theirs.body.savedLayouts).toHaveLength(0);
+    });
+
+    it('paginates newest-first via cursor', async () => {
+      const owner = await signupBuilder('saved-layouts-page-owner');
+      for (const suffix of ['a', 'b']) {
+        const landletId = `saved-layouts-page-landlet-${suffix}`;
+        await createGreenbeltLandletWithArea(landletId, 1000);
+        if (suffix === 'a') {
+          await claim(landletId, owner);
+        } else {
+          // A builder can only hold one claimed landlet at a time via the
+          // real /claim flow (POST .../claim's own NOT EXISTS guard) —
+          // owner already holds landlet "a" from the loop's first pass,
+          // so this second one is claimed by directly setting the same
+          // columns POST .../claim itself sets (see that handler's own
+          // UPDATE), bypassing that one-at-a-time restriction purely for
+          // this test's own setup convenience.
+          await env.DB.prepare(`
+            UPDATE landlets SET status = 'claimed', owner_builder_id = ?,
+              claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE landlet_id = ?
+          `).bind(owner.builderId, landletId).run();
+        }
+        await growLandCapHeadroom(owner.builderId);
+        await api(`/landlets/${landletId}/levels`, owner.session({
+          method: 'POST', body: JSON.stringify({ direction: 'up' }),
+        }));
+        await api('/instances', owner.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: `${landletId}-upper`, landletId, templateId: 'placeholder-tree',
+            x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+          }),
+        }));
+        const removed = await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+        expect(removed.response.status).toBe(200);
+      }
+
+      const firstPage = await api('/builders/me/saved-layouts?limit=1', owner.session());
+      expect(firstPage.body.savedLayouts).toHaveLength(1);
+      expect(firstPage.body.savedLayouts[0].sourceLandletId).toBe('saved-layouts-page-landlet-b');
+      expect(firstPage.body.nextCursor).toBeTruthy();
+
+      const secondPage = await api(
+        `/builders/me/saved-layouts?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`,
+        owner.session(),
+      );
+      expect(secondPage.body.savedLayouts).toHaveLength(1);
+      expect(secondPage.body.savedLayouts[0].sourceLandletId).toBe('saved-layouts-page-landlet-a');
+      expect(secondPage.body.nextCursor).toBeNull();
+    });
+
+    it('requires a session to delete a saved layout', async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-delete-noauth-owner', 'saved-layouts-delete-noauth-landlet');
+      const got = await api(`/saved-layouts/${savedLayoutId}`, { method: 'DELETE' });
+      expect(got.response.status).toBe(401);
+    });
+
+    it("rejects deleting another builder's saved layout", async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-delete-owner', 'saved-layouts-delete-landlet');
+      const stranger = await signupBuilder('saved-layouts-delete-stranger');
+      const got = await api(`/saved-layouts/${savedLayoutId}`, stranger.session({ method: 'DELETE' }));
+      expect(got.response.status).toBe(403);
+    });
+
+    it('404s deleting a saved layout that does not exist', async () => {
+      const builder = await signupBuilder('saved-layouts-delete-missing');
+      const got = await api('/saved-layouts/does-not-exist', builder.session({ method: 'DELETE' }));
+      expect(got.response.status).toBe(404);
+    });
+
+    it('deletes a saved layout and cascades its saved instances, owner-gated', async () => {
+      const { owner, savedLayoutId } = await saveALayout('saved-layouts-delete-real-owner', 'saved-layouts-delete-real-landlet');
+
+      const deleted = await api(`/saved-layouts/${savedLayoutId}`, owner.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body.deleted).toBe(true);
+
+      const { results: layouts } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?')
+        .bind(savedLayoutId).all();
+      expect(layouts).toHaveLength(0);
+      const { results: instances } = await env.DB.prepare('SELECT * FROM saved_layout_instances WHERE saved_layout_id = ?')
+        .bind(savedLayoutId).all();
+      expect(instances).toHaveLength(0);
+
+      const afterList = await api('/builders/me/saved-layouts', owner.session());
+      expect(afterList.body.savedLayouts).toHaveLength(0);
+    });
   });
 
   // Found via backlog audit (#395): the outermost-level DELETE used to run

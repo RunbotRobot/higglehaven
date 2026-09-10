@@ -1029,6 +1029,15 @@ tax" (that issue's own original framing) — it's unrestricted below the
 real regulatory threshold, and blocked once that's crossed without tax
 paperwork on file, reusing #615's exact gate.
 
+**#629**: this endpoint was briefly paused after a real exploit was found
+here — auction bidding used to credit the seller's higgles balance with
+the full bid amount whether or not the bidder ever held it, harmless
+before this endpoint existed, unbounded unbacked-cash extraction once it
+did. The pause lifted once bidding itself was fixed to require and hold
+both higgles balance and land cap until the bidder is outbid or the
+auction closes, atomically enforced at resolution — see "Land acquisition
+auctions" below.
+
 Both require a session (`401` otherwise) and act on the calling account's
 own builder profile.
 
@@ -3929,6 +3938,35 @@ the minimum acceptable amount:
 - At least one bid already: must be strictly greater than the current
   highest.
 
+**#629 (owner-confirmed, 2026-09-10): a bid must be affordable, and holds
+what it needs until outbid or the auction closes.** A winning bid used to
+credit the seller's `higglesBalanceCents` with the full amount regardless
+of whether the bidder ever held it — harmless before #625 gave a higgles
+balance a real Stripe cash-out, a real unbacked-money exploit after.
+Placing a bid now checks the bidder's `higglesBalanceCents` and land cap
+**net of what their own currently-highest bid on every other active
+auction is already holding** (computed live from `auction_bids` — nothing
+is stored as a separate escrow/hold column, so a hold releases itself the
+instant a higher bid supersedes it):
+
+- `400` if `heldElsewhere + amountCents` exceeds the bidder's
+  `higglesBalanceCents`.
+- `409` if the bidder's owned area + `heldElsewhere` area + this
+  landlet's area would exceed their land cap (the existing land-cap gate,
+  extended the same way).
+
+This is a best-effort, non-atomic-across-different-auctions check (unlike
+the same-auction "must beat the current highest" guard, which stays fully
+atomic) — see "Resolution" below for the real, atomic enforcement.
+
+A fresh builder starts at `0` `higglesBalanceCents`, so any test placing a
+real bid needs to fund one first — `POST /api/builders/:builderId/higgles-
+grants` (admin-gated, `{ "amountCents" }`, additive) is the balance-side
+counterpart to the existing land-cap-grants fixture above: it never
+touches the earnings ledger (it's not standing in for real income, just a
+balance top-up), the same deliberate independence `annualGrossIncome`'s
+own gross-vs-net split holds elsewhere in this doc.
+
 A reserved (`> $0` starting bid) auction's first accepted bid also frees
 the seller's claim-eligibility lock immediately — see "Claim-lock release
 timing" below (#199).
@@ -3946,20 +3984,38 @@ penalizing a redundant call.
 `resolveAuction` in `worker/index.js` — the same logic whether triggered
 lazily or via the explicit endpoint:
 
-- **A winning bid exists:** ownership transfers to the highest bidder
-  (`landlets.owner_builder_id`), the landlet's build is cleared (placed
-  instances, versions, `active_version_id`) exactly like `DELETE
+**#629: the highest bid isn't automatically the winner anymore.** Bids are
+walked highest-first; each candidate's `higglesBalanceCents` is atomically
+debited (`UPDATE ... WHERE higgles_balance_cents >= amount`, guarded on
+`meta.changes`) and their land cap re-checked before they're accepted as
+the winner — the first candidate who actually clears both is the winner.
+This is the real, atomic enforcement behind bid-time's own best-effort
+check above: a candidate whose balance or land cap no longer covers their
+bid by resolution time (e.g. another of their own auctions resolved first
+in the same sweep) is skipped with zero side effects — the debit attempt
+itself is a no-op if it fails, and a land-cap failure explicitly refunds
+the just-taken debit — never crediting a seller with money nobody actually
+had. If no candidate can cover their bid, the outcome is the same as no
+bids at all.
+
+- **A winning bid clears both checks:** ownership transfers to that
+  bidder (`landlets.owner_builder_id`), the landlet's build is cleared
+  (placed instances, versions, `active_version_id`) exactly like `DELETE
   /api/builders/:id` already clears a reclaimed landlet's build — a new
   owner gets the land, not the previous owner's stuff on it — and the
   seller's `higglesBalanceCents` is credited the winning bid amount
   (docs/SPEC.md §5: "Higgles raised in a successful auction go to the
   previously-inactive builder's account"). `auctions.status` becomes
   `ended`, `winningBidId` records which bid won.
-- **No bids, `startingBidCents` was `0`:** the landlet releases to
-  `greenbelt` (owner cleared, build cleared, `claimable_at` refreshed) —
-  the seller's own explicit "relinquish for free" choice.
-- **No bids, `startingBidCents` was `> 0`:** the landlet stays exactly as
-  it was — the seller wanted to retain it if unsold, so nothing about
+- **No bids, or no bidder could actually cover their bid, and
+  `startingBidCents` was `0`:** the landlet releases to `greenbelt` (owner
+  cleared, build cleared, `claimable_at` refreshed) — the seller's own
+  explicit "relinquish for free" choice. (A non-empty bid list where every
+  bidder failed the resolution-time check is treated the same as the
+  seller keeping the land below, not greenbelt — see the next bullet.)
+- **No bids, `startingBidCents` was `> 0`, or bids existed but none could
+  be covered:** the landlet stays exactly as it was — the seller wanted to
+  retain it if unsold (or nobody could actually pay), so nothing about
   ownership or the build changes, only `auctions.status` becomes `ended`.
 
 ### Claim-lock release timing
@@ -4258,6 +4314,70 @@ Found via backlog audit (#395): "still the outermost" is re-checked as
 part of the `DELETE`'s own atomic guard, not just the initial read, so a
 concurrent add extending past this level between the read and the delete
 can't leave a gap in the level sequence.
+
+#522 (owner-confirmed, 2026-09-09): any `placed_instances` row left
+sitting in the z-range this level was providing is removed from active
+shoppable space along with it — nothing else ever re-checks an
+already-placed instance's z once a level it depended on is removed
+(`assertInstanceZWithinLevels` only runs on that instance's own
+create/move). Uses the same allowed-range formula (and half-level-height
+slack) as that function, computed against the levels that remain after
+the delete, so an instance already within tolerance of the new boundary
+isn't swept up unnecessarily.
+
+#633 (sub-issue of #631, owner-confirmed): this isn't a bare delete —
+every instance swept out this way is snapshotted first into a new
+`saved_level_layouts` row (one per removal that actually sweeps at least
+one instance; nothing is created if there's nothing to sweep) plus a
+`saved_layout_instances` row per instance, mirroring `version_instances`'
+own snapshot column shape (`template_id`, `x_m`/`y_m`/`z_m`, rotation,
+`label`, `crop_json`, `scale`, community-sign/calendar flags). Unlike
+`landlet_versions`/`version_instances` (parented to a landlet),
+`saved_level_layouts` is parented to the **builder** — a saved layout is
+meant to outlive its source landlet, since the whole point (per the
+owner's own framing) is later reusing it on a *different* landlet.
+
+### `GET /api/builders/me/saved-layouts`
+
+#634 (sub-issue of #631): lists the session-authenticated builder's own
+`saved_level_layouts` rows, newest first, each with an `instanceCount`
+(a `LEFT JOIN`/`COUNT` against `saved_layout_instances`, the same shape
+`GET /api/landlets/:landletId/versions` already uses for its own
+per-version instance counts). Cursor-paginated the same way
+`GET /api/notifications` is — `?limit=` (1-100, default 100) and an
+opaque `?cursor=` from a previous page's `nextCursor`, descending on
+`(createdAt, savedLayoutId)` so "older than the last row already seen"
+is a strict less-than on both. Never returns another builder's saved
+layouts — always scoped to the caller's own `builder_id`.
+
+```json
+{
+  "savedLayouts": [
+    {
+      "savedLayoutId": "saved-layout-...",
+      "sourceLandletId": "landlet-...",
+      "sourceLevelIndex": 1,
+      "name": "Level 1 from My Landlet, removed 2026-09-10",
+      "createdAt": "2026-09-10T00:00:00.000Z",
+      "instanceCount": 3
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+### `DELETE /api/saved-layouts/:savedLayoutId`
+
+#634: permanently deletes one saved layout. `404` if it doesn't exist,
+`403` if the caller isn't the builder it's parented to (`401` with no
+session). `saved_layout_instances` rows cascade via their own
+`FOREIGN KEY ... ON DELETE CASCADE` (migration 0080) — nothing else to
+clean up.
+
+Listing/managing above and deletion here only prevent the work from
+being lost outright — a faux-lándlet preview + selection UI (#635) and
+pasting selected instances onto a target landlet (#636) are separate,
+not-yet-built sub-issues of the same tracking issue (#631).
 
 ### Ownership-change cleanup
 
