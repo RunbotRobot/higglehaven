@@ -382,6 +382,30 @@ cost when it happens anyway:
   that exact same `add`/`set` call — same discipline as the bullet
   above, just applied one write earlier.
 
+- **A task's `note` field is a narrative log, not live state — never flip
+  `waitingOn` back to `"owner"` on the strength of what `note` says.**
+  The owner reported (y8gabn9mv3d4ifz2sipt, 2026-09-09) explicitly
+  clicking "Ready for Claude" on several cards (#522, #610, #616, #350)
+  and posting a confirming reply on each, only to find them "inexplicably"
+  back to `"WAITING ON: OWNER"` later — repeatedly enough ("dozens of
+  times") that they wondered whether the whole board needed migrating off
+  this Artifact-based platform to a real server. It doesn't: the
+  `knownDoneRefs`/`clearIfWaitingOnDone` auto-flip code in the page's own
+  script explicitly never touches `waitingOn: "owner"`
+  (`if (!w || w === 'claude' || w === 'owner') return;`), so the page
+  itself isn't reverting these. The actual mechanism is a session
+  reading a card's `note` — a point-in-time write-up from whoever last
+  worked it, often phrased "not self-assignable" or "needs owner
+  judgment" — and "correcting" `waitingOn` back to `"owner"` on that
+  basis, without checking whether the owner has since clicked "Ready for
+  Claude" or replied in the thread. `note` is never rewritten just
+  because `waitingOn` or `status` changed elsewhere, so it goes stale the
+  moment the owner acts and stays stale until someone happens to rewrite
+  it. Before changing a card's `waitingOn` (in either direction), check
+  the live `waitingOn` value and the `replies` thread's own most recent
+  entry — both update in real time and are authoritative; `note` is
+  history, not a signal to act on by itself.
+
 If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
