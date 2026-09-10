@@ -11401,6 +11401,12 @@ const SELL_HIDDEN_BUILDER_UI_IDS = [
 // highlight Build mode's own single-selection already uses, rather than
 // inventing either from scratch.
 let layoutPreviewMeshes = [];
+// The saved layout's own instance records, exactly as #635's GET endpoint
+// returned them (never recentered the way the meshes' render positions
+// are) — #636's "Paste" reads a selected instance's real x/y/z/rotation/
+// crop/scale/flags back out of here, since those (not the preview-only
+// recentered mesh position) are what should land on the target landlet.
+let layoutPreviewInstances = [];
 const selectedSavedInstanceIds = new Set();
 // {x, y} in client (viewport) coordinates while a marquee drag is in
 // progress, else null — the one piece of state every pointer handler below
@@ -11412,6 +11418,7 @@ const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
 const layoutPreviewNameEl = document.getElementById('layout-preview-name');
 const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
 const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
+const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
 
 function disposeLayoutPreviewMeshes() {
   for (const mesh of layoutPreviewMeshes) {
@@ -11420,12 +11427,14 @@ function disposeLayoutPreviewMeshes() {
     disposeObject(mesh);
   }
   layoutPreviewMeshes = [];
+  layoutPreviewInstances = [];
   selectedSavedInstanceIds.clear();
 }
 
 function updateLayoutPreviewSelectionUI() {
   const n = selectedSavedInstanceIds.size;
   layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
+  layoutPreviewPasteBtn.hidden = n === 0;
 }
 
 // A raw pointerdown-then-pointerup with no real movement between them is a
@@ -11503,6 +11512,54 @@ layoutPreviewBackBtn.addEventListener('click', () => {
   location.reload();
 });
 
+// #636 (sub-issue of #631): pastes the currently-selected saved instances
+// onto the builder's own landlet as brand-new placed_instances rows.
+// "Target landlet" is never a real picker — a builder can only ever have
+// one landlet claimed at a time (see claimLandlet's own NOT EXISTS guard),
+// so it's always "whichever one that is," resolved fresh here rather than
+// reused from Build mode's own currentLandletId (this mode is reached
+// without ever running Build mode's own startup, so that variable is
+// still just its unset default).
+//
+// Deliberately routed through the exact same POST /instances/batch
+// createInstancesRemote already uses for every other bulk-create — the
+// server applies its normal ownership/z-bounds checks with no special
+// "trusted paste" path, so e.g. a target landlet that hasn't purchased the
+// level a saved instance's z requires rejects it exactly like a normal
+// create would. instanceId is deliberately omitted from each payload
+// entry: the original ids belonged to placed_instances rows that no
+// longer exist (they were swept into this saved_layout_instances snapshot
+// when the level was removed), and the batch endpoint already assigns a
+// fresh id to any entry that omits one.
+layoutPreviewPasteBtn.addEventListener('click', async () => {
+  const selected = layoutPreviewInstances.filter((instance) => selectedSavedInstanceIds.has(instance.instanceId));
+  if (selected.length === 0) return;
+  layoutPreviewPasteBtn.disabled = true;
+  try {
+    const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
+    if (owned.length === 0) {
+      alert("You don't have a claimed lándlet to paste onto — claim one first.");
+      layoutPreviewPasteBtn.disabled = false;
+      return;
+    }
+    const targetLandletId = owned[0].landletId;
+    // Both instanceId and id (savedLayoutInstanceFromRow's own alias for
+    // it) need stripping — validateInstance on the server falls back to
+    // input.id just as readily as input.instanceId, so leaving either one
+    // in place would hand the old, now-nonexistent id straight back
+    // instead of letting the server assign a fresh one.
+    await createInstancesRemote(selected.map(({ instanceId, id, ...instance }) => ({
+      ...instance,
+      landletId: targetLandletId,
+    })));
+    sessionStorage.setItem(START_MODE_KEY, 'build');
+    location.reload();
+  } catch (err) {
+    alert(err.message || "Couldn't paste these items.");
+    layoutPreviewPasteBtn.disabled = false;
+  }
+});
+
 // Entered only via bootstrap() below (reached the same way Shop/Build/Sell
 // are — see START_MODE_KEY's own comment), never as an in-place transition
 // from another live mode, so there's no other mode's leftover scene state
@@ -11545,6 +11602,7 @@ async function enterLayoutPreviewMode() {
     return;
   }
   layoutPreviewNameEl.textContent = layout.name;
+  layoutPreviewInstances = layout.instances;
 
   const ground = computeSavedLayoutGround(layout.instances);
   const oldGeometry = landlet.geometry;

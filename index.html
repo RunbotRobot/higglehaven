@@ -231,7 +231,8 @@
       #layout-preview-toolbar.visible {
         display: flex;
       }
-      #layout-preview-back-btn {
+      #layout-preview-back-btn,
+      #layout-preview-paste-btn {
         border: none;
         background: rgb(var(--ink-rgb) / 0.15);
         color: var(--pill-text);
@@ -3214,6 +3215,7 @@
       <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
       <span id="layout-preview-name"></span>
       <span id="layout-preview-selection-count"></span>
+      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto My Lándlet</button>
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="gizmo-mode-controls">

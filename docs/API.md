@@ -4417,8 +4417,32 @@ Listing/managing above, single-layout detail, and deletion together
 cover everything up through the faux-lándlet preview + rectangle-select
 UI (#635, built on top of the detail endpoint above — see
 `src/savedLayoutPreview.js` for its ground-sizing/selection math).
-Pasting selected instances onto a target landlet (#636) is the one
-remaining not-yet-built sub-issue of tracking issue #631.
+
+### Pasting saved-layout instances onto a landlet (#636)
+
+No dedicated endpoint — the preview's "Paste onto My Lándlet" button
+(shown once the marquee-select above has a nonempty selection) sends the
+selected instances' `templateId`/`x`/`y`/`z`/rotation/`crop`/`scale`/
+community-sign-and-calendar flags straight through the existing `POST
+/api/instances/batch` (the same bulk-create every other multi-instance
+change already goes through — see `createInstancesRemote` in
+`src/api.js`), targeting whichever landlet the builder currently has
+claimed (never a picker — a builder can only ever hold one claimed
+landlet at a time). `instanceId` is deliberately omitted from each
+pasted entry so the batch endpoint assigns a fresh one, rather than
+resurrecting the original id a now long-gone `placed_instances` row once
+had.
+
+Routing through the normal create path means a paste gets the exact same
+validation any other instance-create does, with no "already paid for"
+special case: `assertInstanceZWithinLevels` rejects a saved instance's
+`z` just as readily as it would a brand-new one if the target landlet
+hasn't (yet, or anymore) purchased the level that height needs. Pasting
+is a copy, not a move — the saved layout itself is untouched and can be
+pasted again.
+
+Tracking issue #631's four sub-issues (#633 schema/save-on-removal, #634
+list/manage, #635 preview/select, #636 paste) are now all shipped.
 
 ### Ownership-change cleanup
 
