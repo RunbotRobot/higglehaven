@@ -450,7 +450,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'builders') {
-    return handleBuilders(request, env, env.DB, route);
+    return handleBuilders(request, env, env.DB, route, url);
   }
 
   if (route[0] === 'sellers') {
@@ -479,6 +479,10 @@ async function handleApi(request, env, url) {
 
   if (route[0] === 'auctions') {
     return handleAuctions(request, env.DB, route, url);
+  }
+
+  if (route[0] === 'saved-layouts') {
+    return handleSavedLayouts(request, env.DB, route);
   }
 
   if (route[0] === 'catalog') {
@@ -1625,7 +1629,7 @@ async function getVersion(db, landletId, versionId) {
 const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 
-async function handleBuilders(request, env, db, route) {
+async function handleBuilders(request, env, db, route, url) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
   // but so a reader hits "my own profile" before the generic CRUD story —
@@ -1647,6 +1651,18 @@ async function handleBuilders(request, env, db, route) {
   // real cash, now that #624 gives them somewhere to send it.
   if (route.length === 3 && route[1] === 'me' && route[2] === 'redeem') {
     return handleBuilderRedeem(request, env, db);
+  }
+
+  // #634 (sub-issue of #631): list the current builder's own saved level
+  // layouts (#633/#638's saved_level_layouts/saved_layout_instances) —
+  // deletion lives at the top-level /api/saved-layouts/:id below, the
+  // same split GET-under-builders/DELETE-under-its-own-collection shape
+  // this file doesn't otherwise use, but nothing else here ever lists a
+  // resource under its owner's own /me path while also exposing a
+  // single-item route for it, so there's no existing split-route
+  // precedent to match either way.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'saved-layouts') {
+    return handleListSavedLayouts(request, db, url);
   }
 
   if (request.method === 'GET' && route.length === 1) {
@@ -2864,6 +2880,71 @@ function levelFromRow(row) {
     capConsumedM2: row.cap_consumed_m2,
     createdAt: row.created_at,
   };
+}
+
+function savedLayoutFromRow(row) {
+  return {
+    savedLayoutId: row.saved_layout_id,
+    sourceLandletId: row.source_landlet_id,
+    sourceLevelIndex: row.source_level_index,
+    name: row.name,
+    createdAt: row.created_at,
+    instanceCount: row.instance_count,
+  };
+}
+
+// #634 (sub-issue of #631): GET /api/builders/me/saved-layouts — newest
+// first, same cursor shape as GET /api/notifications above (DESC on both
+// created_at and the tiebreak id, "older than the last row already seen"
+// on the next page) since a builder's own saved-layout history reads the
+// same way a notification feed does, not like the ascending lists
+// (auctions, landlets, instances) elsewhere in this file.
+async function handleListSavedLayouts(request, db, url) {
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  const limit = queryLimit(url.searchParams.get('limit'), 100);
+  const cursor = decodeCursor(url.searchParams.get('cursor'));
+  const conditions = ['l.builder_id = ?'];
+  const bindings = [sessionBuilder.builder_id];
+  if (cursor) {
+    conditions.push('(l.created_at < ? OR (l.created_at = ? AND l.saved_layout_id < ?))');
+    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const { results } = await db.prepare(`
+    SELECT l.*, COUNT(i.source_instance_id) AS instance_count
+    FROM saved_level_layouts l
+    LEFT JOIN saved_layout_instances i ON i.saved_layout_id = l.saved_layout_id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY l.saved_layout_id
+    ORDER BY l.created_at DESC, l.saved_layout_id DESC LIMIT ?
+  `).bind(...bindings, limit + 1).all();
+  const hasMore = results.length > limit;
+  const page = results.slice(0, limit);
+  const last = page.at(-1);
+  return json({
+    savedLayouts: page.map(savedLayoutFromRow),
+    nextCursor: hasMore ? encodeCursor(last.created_at, last.saved_layout_id) : null,
+  });
+}
+
+// #634: DELETE /api/saved-layouts/:id — owner-gated the same way every
+// other builder-owned resource in this file is (assertOwner against the
+// session's own resolved builder id), a separate top-level collection
+// rather than nested under /builders/me since a single saved layout is
+// addressed by its own id, not by the builder's — the list above is the
+// only place that needs the builder's own id in its path.
+async function handleSavedLayouts(request, db, route) {
+  if (request.method === 'DELETE' && route.length === 2) {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    // saved_layout_instances cascades via its own FOREIGN KEY ... ON
+    // DELETE CASCADE (migration 0080) — nothing else to clean up here.
+    await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
+    return json({ deleted: true });
+  }
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handleAuctions(request, db, route, url) {

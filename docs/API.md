@@ -4335,11 +4335,49 @@ own snapshot column shape (`template_id`, `x_m`/`y_m`/`z_m`, rotation,
 `landlet_versions`/`version_instances` (parented to a landlet),
 `saved_level_layouts` is parented to the **builder** — a saved layout is
 meant to outlive its source landlet, since the whole point (per the
-owner's own framing) is later reusing it on a *different* landlet. No
-endpoint reads these tables back yet — listing/managing (#634), a
-faux-lándlet preview + selection UI (#635), and pasting onto a target
-landlet (#636) are separate, not-yet-built sub-issues of the same
-tracking issue (#631).
+owner's own framing) is later reusing it on a *different* landlet.
+
+### `GET /api/builders/me/saved-layouts`
+
+#634 (sub-issue of #631): lists the session-authenticated builder's own
+`saved_level_layouts` rows, newest first, each with an `instanceCount`
+(a `LEFT JOIN`/`COUNT` against `saved_layout_instances`, the same shape
+`GET /api/landlets/:landletId/versions` already uses for its own
+per-version instance counts). Cursor-paginated the same way
+`GET /api/notifications` is — `?limit=` (1-100, default 100) and an
+opaque `?cursor=` from a previous page's `nextCursor`, descending on
+`(createdAt, savedLayoutId)` so "older than the last row already seen"
+is a strict less-than on both. Never returns another builder's saved
+layouts — always scoped to the caller's own `builder_id`.
+
+```json
+{
+  "savedLayouts": [
+    {
+      "savedLayoutId": "saved-layout-...",
+      "sourceLandletId": "landlet-...",
+      "sourceLevelIndex": 1,
+      "name": "Level 1 from My Landlet, removed 2026-09-10",
+      "createdAt": "2026-09-10T00:00:00.000Z",
+      "instanceCount": 3
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+### `DELETE /api/saved-layouts/:savedLayoutId`
+
+#634: permanently deletes one saved layout. `404` if it doesn't exist,
+`403` if the caller isn't the builder it's parented to (`401` with no
+session). `saved_layout_instances` rows cascade via their own
+`FOREIGN KEY ... ON DELETE CASCADE` (migration 0080) — nothing else to
+clean up.
+
+Listing/managing above and deletion here only prevent the work from
+being lost outright — a faux-lándlet preview + selection UI (#635) and
+pasting selected instances onto a target landlet (#636) are separate,
+not-yet-built sub-issues of the same tracking issue (#631).
 
 ### Ownership-change cleanup
 
