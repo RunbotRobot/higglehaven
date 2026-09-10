@@ -1649,6 +1649,149 @@ describe('Landlet levels', () => {
     expect(layouts).toHaveLength(0);
   });
 
+  // #634 (sub-issue of #631): list/delete the saved-layout records #633
+  // creates above. Reuses this describe block's own growLandCapHeadroom/
+  // createGreenbeltLandletWithArea helpers to get a real removed-level
+  // save on the books without duplicating that whole setup per test.
+  describe('Listing and deleting saved layouts (#634)', () => {
+    async function saveALayout(ownerLabel, landletId) {
+      const owner = await signupBuilder(ownerLabel);
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      await growLandCapHeadroom(owner.builderId);
+      await api(`/landlets/${landletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: `${landletId}-upper`,
+          landletId,
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      expect(placed.response.status).toBe(201);
+      const removed = await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+      const { results } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE builder_id = ?')
+        .bind(owner.builderId).all();
+      return { owner, savedLayoutId: results[0].saved_layout_id };
+    }
+
+    it('requires a session to list saved layouts', async () => {
+      const got = await api('/builders/me/saved-layouts');
+      expect(got.response.status).toBe(401);
+    });
+
+    it("lists the current builder's own saved layouts with an instance count, never another builder's", async () => {
+      const { owner } = await saveALayout('saved-layouts-list-owner', 'saved-layouts-list-landlet');
+      const stranger = await signupBuilder('saved-layouts-list-stranger');
+
+      const mine = await api('/builders/me/saved-layouts', owner.session());
+      expect(mine.response.status).toBe(200);
+      expect(mine.body.savedLayouts).toHaveLength(1);
+      expect(mine.body.savedLayouts[0]).toMatchObject({
+        sourceLandletId: 'saved-layouts-list-landlet',
+        sourceLevelIndex: 1,
+        instanceCount: 1,
+      });
+      expect(mine.body.savedLayouts[0].name).toMatch(/Level 1/);
+
+      const theirs = await api('/builders/me/saved-layouts', stranger.session());
+      expect(theirs.response.status).toBe(200);
+      expect(theirs.body.savedLayouts).toHaveLength(0);
+    });
+
+    it('paginates newest-first via cursor', async () => {
+      const owner = await signupBuilder('saved-layouts-page-owner');
+      for (const suffix of ['a', 'b']) {
+        const landletId = `saved-layouts-page-landlet-${suffix}`;
+        await createGreenbeltLandletWithArea(landletId, 1000);
+        if (suffix === 'a') {
+          await claim(landletId, owner);
+        } else {
+          // A builder can only hold one claimed landlet at a time via the
+          // real /claim flow (POST .../claim's own NOT EXISTS guard) —
+          // owner already holds landlet "a" from the loop's first pass,
+          // so this second one is claimed by directly setting the same
+          // columns POST .../claim itself sets (see that handler's own
+          // UPDATE), bypassing that one-at-a-time restriction purely for
+          // this test's own setup convenience.
+          await env.DB.prepare(`
+            UPDATE landlets SET status = 'claimed', owner_builder_id = ?,
+              claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE landlet_id = ?
+          `).bind(owner.builderId, landletId).run();
+        }
+        await growLandCapHeadroom(owner.builderId);
+        await api(`/landlets/${landletId}/levels`, owner.session({
+          method: 'POST', body: JSON.stringify({ direction: 'up' }),
+        }));
+        await api('/instances', owner.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: `${landletId}-upper`, landletId, templateId: 'placeholder-tree',
+            x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+          }),
+        }));
+        const removed = await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+        expect(removed.response.status).toBe(200);
+      }
+
+      const firstPage = await api('/builders/me/saved-layouts?limit=1', owner.session());
+      expect(firstPage.body.savedLayouts).toHaveLength(1);
+      expect(firstPage.body.savedLayouts[0].sourceLandletId).toBe('saved-layouts-page-landlet-b');
+      expect(firstPage.body.nextCursor).toBeTruthy();
+
+      const secondPage = await api(
+        `/builders/me/saved-layouts?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`,
+        owner.session(),
+      );
+      expect(secondPage.body.savedLayouts).toHaveLength(1);
+      expect(secondPage.body.savedLayouts[0].sourceLandletId).toBe('saved-layouts-page-landlet-a');
+      expect(secondPage.body.nextCursor).toBeNull();
+    });
+
+    it('requires a session to delete a saved layout', async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-delete-noauth-owner', 'saved-layouts-delete-noauth-landlet');
+      const got = await api(`/saved-layouts/${savedLayoutId}`, { method: 'DELETE' });
+      expect(got.response.status).toBe(401);
+    });
+
+    it("rejects deleting another builder's saved layout", async () => {
+      const { savedLayoutId } = await saveALayout('saved-layouts-delete-owner', 'saved-layouts-delete-landlet');
+      const stranger = await signupBuilder('saved-layouts-delete-stranger');
+      const got = await api(`/saved-layouts/${savedLayoutId}`, stranger.session({ method: 'DELETE' }));
+      expect(got.response.status).toBe(403);
+    });
+
+    it('404s deleting a saved layout that does not exist', async () => {
+      const builder = await signupBuilder('saved-layouts-delete-missing');
+      const got = await api('/saved-layouts/does-not-exist', builder.session({ method: 'DELETE' }));
+      expect(got.response.status).toBe(404);
+    });
+
+    it('deletes a saved layout and cascades its saved instances, owner-gated', async () => {
+      const { owner, savedLayoutId } = await saveALayout('saved-layouts-delete-real-owner', 'saved-layouts-delete-real-landlet');
+
+      const deleted = await api(`/saved-layouts/${savedLayoutId}`, owner.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body.deleted).toBe(true);
+
+      const { results: layouts } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?')
+        .bind(savedLayoutId).all();
+      expect(layouts).toHaveLength(0);
+      const { results: instances } = await env.DB.prepare('SELECT * FROM saved_layout_instances WHERE saved_layout_id = ?')
+        .bind(savedLayoutId).all();
+      expect(instances).toHaveLength(0);
+
+      const afterList = await api('/builders/me/saved-layouts', owner.session());
+      expect(afterList.body.savedLayouts).toHaveLength(0);
+    });
+  });
+
   // Found via backlog audit (#395): the outermost-level DELETE used to run
   // a plain SELECT-then-DELETE with no guard tying the delete to the
   // extent it was read against. Racing two DELETEs against the exact same
