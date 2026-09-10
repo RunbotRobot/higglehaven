@@ -1871,6 +1871,26 @@ async function handleBuilders(request, env, db, route) {
     return json({ landCapM2: nextCap }, 201);
   }
 
+  // Same "admin-gated test/ops fixture" reasoning as land-cap-grants just
+  // above, for the other half of what #629 made auction bidding actually
+  // require: a builder's spendable higgles_balance_cents itself, not just
+  // land-cap headroom (the two are deliberately independent — land-cap-
+  // grants only ever touches the earnings ledger, never balance, so a test
+  // needing a builder to be able to *afford* a bid needs this instead).
+  // Purely a balance top-up, no earnings-ledger entry — this isn't meant
+  // to simulate real income the way land-cap-grants' event is.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'higgles-grants') {
+    await requireAdmin(request, db);
+    await requireBuilder(db, route[1]);
+    const input = await readJson(request);
+    const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
+    await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
+    `).bind(amountCents, route[1]).run();
+    const builder = await requireBuilder(db, route[1]);
+    return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2912,10 +2932,39 @@ async function handleAuctionBids(request, db, route) {
     // pattern as the level-add gate above.
     const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(resolved.landlet_id).first();
     const bidderCap = await recomputeLandCap(db, builderId);
-    if (bidderCap.ownedAreaM2 + auctionedLandlet.area_m2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+    // #629 (owner-confirmed, 2026-09-10): a bid now needs to actually be
+    // affordable, holding both higgles and land cap until the bidder is
+    // outbid or the auction closes — otherwise a builder could bid on more
+    // auctions than their balance/cap could ever cover if more than one
+    // resolved in their favor. "Held" is computed live off the bidder's own
+    // currently-highest bid on each of their OTHER active auctions (never
+    // stored separately) — the moment a higher bid supersedes one, it drops
+    // out of this sum on its own, which is the "released on outbid" half;
+    // resolveAuction's own atomic per-auction debit is what actually
+    // enforces this at settlement time (this check is the up-front,
+    // best-effort half — see that function's own comment on why a narrow
+    // race here is acceptable).
+    const heldElsewhere = await db.prepare(`
+      SELECT COALESCE(SUM(ab.amount_cents), 0) AS higglesCents, COALESCE(SUM(l.area_m2), 0) AS areaM2
+      FROM auction_bids ab
+      JOIN auctions a ON a.auction_id = ab.auction_id
+      JOIN landlets l ON l.landlet_id = a.landlet_id
+      WHERE ab.bidder_builder_id = ? AND a.status = 'active' AND a.auction_id != ?
+        AND ab.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = ab.auction_id)
+    `).bind(builderId, auctionId).first();
+    if (heldElsewhere.higglesCents + amountCents > sessionBuilder.higgles_balance_cents) {
       throw new HttpError(
-        `Winning this auction would take you to ${(bidderCap.ownedAreaM2 + auctionedLandlet.area_m2).toFixed(2)}m², `
-        + `over your ${bidderCap.nextCap}m² land cap`,
+        `This bid needs ${formatCents(amountCents)}, but only `
+        + `${formatCents(Math.max(sessionBuilder.higgles_balance_cents - heldElsewhere.higglesCents, 0))} `
+        + `is available after what your other active bids are already holding`,
+        400,
+      );
+    }
+    const committedAreaM2 = bidderCap.ownedAreaM2 + heldElsewhere.areaM2 + auctionedLandlet.area_m2;
+    if (committedAreaM2 > bidderCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      throw new HttpError(
+        `Winning this auction would take you to ${committedAreaM2.toFixed(2)}m² `
+        + `(including what your other active bids are already holding), over your ${bidderCap.nextCap}m² land cap`,
         409,
       );
     }
@@ -3189,10 +3238,6 @@ async function resolveAuctionIfDue(db, auction) {
 // builder acquires *additional* already-claimed land) — see migration
 // 0058 on why that no longer trips a UNIQUE constraint here.
 async function resolveAuction(db, auction) {
-  const highest = await db.prepare(`
-    SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
-  `).bind(auction.auction_id).first();
-
   // Three separate call sites can all reach this for the same overdue
   // auction (resolveDueAuctions' sweep, resolveAuctionIfDue's per-request
   // check, and the explicit /resolve endpoint) — each on its own stale
@@ -3203,17 +3248,54 @@ async function resolveAuction(db, auction) {
   // caller loses the race affects 0 rows here and returns the
   // already-resolved auction as-is — a harmless no-op, matching this
   // function's existing "resolving twice" contract, never double-running
-  // the money-mutating side effects below.
+  // the money-mutating side effects below. winning_bid_id is finalized
+  // below, once the real winner (who may not be the top bid — see next
+  // comment) is known, not here.
   const guard = await db.prepare(`
-    UPDATE auctions SET status = 'ended', winning_bid_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE auction_id = ? AND status = 'active'
-  `).bind(highest ? highest.bid_id : null, auction.auction_id).run();
+  `).bind(auction.auction_id).run();
   if (guard.meta.changes === 0) {
     return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
   }
 
-  const statements = [];
-  if (highest) {
+  // #629 (owner-confirmed, 2026-09-10): bidding's own held-balance/land-cap
+  // check (handleAuctionBids) is only a best-effort, non-atomic-across-
+  // auctions pre-check — this is the real, atomic enforcement. Walk bids
+  // highest-first, atomically debiting each candidate's higgles balance
+  // and confirming their land cap still covers this landlet, before ever
+  // crediting the seller — the first candidate who can actually afford it
+  // wins. A candidate who can't (their balance/cap changed since bidding,
+  // e.g. another of their own auctions resolved first in the same sweep)
+  // is skipped with zero side effects, never crediting a seller with money
+  // that was never really debited from anyone.
+  const { results: candidates } = await db.prepare(`
+    SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at
+  `).bind(auction.auction_id).all();
+  const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(auction.landlet_id).first();
+
+  let winner = null;
+  for (const candidate of candidates) {
+    const debited = await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?
+      WHERE builder_id = ? AND higgles_balance_cents >= ?
+    `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents).run();
+    if (debited.meta.changes === 0) continue;
+
+    const candidateCap = await recomputeLandCap(db, candidate.bidder_builder_id);
+    if (candidateCap.ownedAreaM2 + auctionedLandlet.area_m2 > candidateCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+        .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
+      continue;
+    }
+    winner = candidate;
+    break;
+  }
+
+  const statements = [
+    db.prepare('UPDATE auctions SET winning_bid_id = ? WHERE auction_id = ?').bind(winner ? winner.bid_id : null, auction.auction_id),
+  ];
+  if (winner) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
@@ -3222,23 +3304,23 @@ async function resolveAuction(db, auction) {
         UPDATE landlets
         SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ?
-      `).bind(highest.bidder_builder_id, auction.landlet_id),
+      `).bind(winner.bidder_builder_id, auction.landlet_id),
       db.prepare(`
         UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-      `).bind(highest.amount_cents, auction.seller_builder_id),
+      `).bind(winner.amount_cents, auction.seller_builder_id),
       // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
       // trailing-30-day earnings WINDOW, not the lifetime
       // higgles_balance_cents total above — this per-event ledger is what
       // makes that window computable later (see recomputeLandCap).
       db.prepare(`
         INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
-      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, highest.amount_cents),
+      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, winner.amount_cents),
       notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} sold for ${formatCents(highest.amount_cents)} — credited to your higgles balance.`),
-      notificationStatement(db, highest.bidder_builder_id,
-        `You won the auction for ${auction.landlet_id} at ${formatCents(highest.amount_cents)}! It's yours to build on now.`),
+        `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.`),
+      notificationStatement(db, winner.bidder_builder_id,
+        `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.`),
     );
-  } else if (auction.starting_bid_cents === 0) {
+  } else if (candidates.length === 0 && auction.starting_bid_cents === 0) {
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
@@ -3251,6 +3333,11 @@ async function resolveAuction(db, auction) {
       `).bind(auction.landlet_id),
       notificationStatement(db, auction.seller_builder_id,
         `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
+    );
+  } else if (candidates.length > 0) {
+    statements.push(
+      notificationStatement(db, auction.seller_builder_id,
+        `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the land.`),
     );
   } else {
     statements.push(
@@ -4328,13 +4415,6 @@ async function handleBuilderStripeAccount(request, env, db) {
 // redemption cap the way #615 computes — simpler, and honest about not
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
-// #629: paused pending an owner decision on how to close the unbacked-
-// higgles-via-auction exploit documented on that issue (auction bidding
-// isn't balance-gated, so a winning bid can credit a seller's higgles with
-// no real backing — this endpoint is what turns that into a real Stripe
-// payout). Flip back to false once #629 lands a real fix.
-const REDEMPTION_PAUSED_PENDING_629 = true;
-
 async function handleBuilderRedeem(request, env, db) {
   const user = await requireCurrentUser(request, db);
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
@@ -4364,20 +4444,6 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
-    }
-
-    // #629: auction bidding was never balance-gated (migration 0045) — a
-    // winning bid unconditionally credits the seller's higgles balance with
-    // the full bid amount regardless of whether the bidder ever had that
-    // balance. That was harmless while nothing could cash a higgles balance
-    // out for real money; this endpoint (#625) is exactly that cash-out, so
-    // until auction resolution requires the winning bidder to actually hold
-    // (and spend) sufficient balance — or some other backing mechanism
-    // ships — redemption is paused rather than risk a real, unbacked
-    // Stripe payout. Balance/threshold checks above still run so the rest
-    // of this endpoint's contract stays intact once this lifts.
-    if (REDEMPTION_PAUSED_PENDING_629) {
-      throw new HttpError('Higgles redemption is temporarily paused for a security fix — see issue #629.', 503);
     }
 
     if (!stripeConfigured(env)) {

@@ -1029,15 +1029,14 @@ tax" (that issue's own original framing) — it's unrestricted below the
 real regulatory threshold, and blocked once that's crossed without tax
 paperwork on file, reusing #615's exact gate.
 
-**Currently paused (#629)**: `POST` unconditionally returns `503` right
-now (`REDEMPTION_PAUSED_PENDING_629` in `worker/index.js`), regardless of
-Stripe configuration. Auction bidding (`handleAuctionBids`/`resolveAuction`)
-was never balance-gated — a winning bid credits the seller's higgles
-balance with the full bid amount whether or not the bidder ever held that
-balance, which was harmless before this endpoint existed and is a real,
-unbounded unbacked-cash exploit now that it does. Paused pending an owner
-decision on how to close that gap (balance-gating bids, an escrow model, a
-provenance/backing mechanism, or otherwise) — `GET` is unaffected.
+**#629**: this endpoint was briefly paused after a real exploit was found
+here — auction bidding used to credit the seller's higgles balance with
+the full bid amount whether or not the bidder ever held it, harmless
+before this endpoint existed, unbounded unbacked-cash extraction once it
+did. The pause lifted once bidding itself was fixed to require and hold
+both higgles balance and land cap until the bidder is outbid or the
+auction closes, atomically enforced at resolution — see "Land acquisition
+auctions" below.
 
 Both require a session (`401` otherwise) and act on the calling account's
 own builder profile.
@@ -3939,6 +3938,35 @@ the minimum acceptable amount:
 - At least one bid already: must be strictly greater than the current
   highest.
 
+**#629 (owner-confirmed, 2026-09-10): a bid must be affordable, and holds
+what it needs until outbid or the auction closes.** A winning bid used to
+credit the seller's `higglesBalanceCents` with the full amount regardless
+of whether the bidder ever held it — harmless before #625 gave a higgles
+balance a real Stripe cash-out, a real unbacked-money exploit after.
+Placing a bid now checks the bidder's `higglesBalanceCents` and land cap
+**net of what their own currently-highest bid on every other active
+auction is already holding** (computed live from `auction_bids` — nothing
+is stored as a separate escrow/hold column, so a hold releases itself the
+instant a higher bid supersedes it):
+
+- `400` if `heldElsewhere + amountCents` exceeds the bidder's
+  `higglesBalanceCents`.
+- `409` if the bidder's owned area + `heldElsewhere` area + this
+  landlet's area would exceed their land cap (the existing land-cap gate,
+  extended the same way).
+
+This is a best-effort, non-atomic-across-different-auctions check (unlike
+the same-auction "must beat the current highest" guard, which stays fully
+atomic) — see "Resolution" below for the real, atomic enforcement.
+
+A fresh builder starts at `0` `higglesBalanceCents`, so any test placing a
+real bid needs to fund one first — `POST /api/builders/:builderId/higgles-
+grants` (admin-gated, `{ "amountCents" }`, additive) is the balance-side
+counterpart to the existing land-cap-grants fixture above: it never
+touches the earnings ledger (it's not standing in for real income, just a
+balance top-up), the same deliberate independence `annualGrossIncome`'s
+own gross-vs-net split holds elsewhere in this doc.
+
 A reserved (`> $0` starting bid) auction's first accepted bid also frees
 the seller's claim-eligibility lock immediately — see "Claim-lock release
 timing" below (#199).
@@ -3956,20 +3984,38 @@ penalizing a redundant call.
 `resolveAuction` in `worker/index.js` — the same logic whether triggered
 lazily or via the explicit endpoint:
 
-- **A winning bid exists:** ownership transfers to the highest bidder
-  (`landlets.owner_builder_id`), the landlet's build is cleared (placed
-  instances, versions, `active_version_id`) exactly like `DELETE
+**#629: the highest bid isn't automatically the winner anymore.** Bids are
+walked highest-first; each candidate's `higglesBalanceCents` is atomically
+debited (`UPDATE ... WHERE higgles_balance_cents >= amount`, guarded on
+`meta.changes`) and their land cap re-checked before they're accepted as
+the winner — the first candidate who actually clears both is the winner.
+This is the real, atomic enforcement behind bid-time's own best-effort
+check above: a candidate whose balance or land cap no longer covers their
+bid by resolution time (e.g. another of their own auctions resolved first
+in the same sweep) is skipped with zero side effects — the debit attempt
+itself is a no-op if it fails, and a land-cap failure explicitly refunds
+the just-taken debit — never crediting a seller with money nobody actually
+had. If no candidate can cover their bid, the outcome is the same as no
+bids at all.
+
+- **A winning bid clears both checks:** ownership transfers to that
+  bidder (`landlets.owner_builder_id`), the landlet's build is cleared
+  (placed instances, versions, `active_version_id`) exactly like `DELETE
   /api/builders/:id` already clears a reclaimed landlet's build — a new
   owner gets the land, not the previous owner's stuff on it — and the
   seller's `higglesBalanceCents` is credited the winning bid amount
   (docs/SPEC.md §5: "Higgles raised in a successful auction go to the
   previously-inactive builder's account"). `auctions.status` becomes
   `ended`, `winningBidId` records which bid won.
-- **No bids, `startingBidCents` was `0`:** the landlet releases to
-  `greenbelt` (owner cleared, build cleared, `claimable_at` refreshed) —
-  the seller's own explicit "relinquish for free" choice.
-- **No bids, `startingBidCents` was `> 0`:** the landlet stays exactly as
-  it was — the seller wanted to retain it if unsold, so nothing about
+- **No bids, or no bidder could actually cover their bid, and
+  `startingBidCents` was `0`:** the landlet releases to `greenbelt` (owner
+  cleared, build cleared, `claimable_at` refreshed) — the seller's own
+  explicit "relinquish for free" choice. (A non-empty bid list where every
+  bidder failed the resolution-time check is treated the same as the
+  seller keeping the land below, not greenbelt — see the next bullet.)
+- **No bids, `startingBidCents` was `> 0`, or bids existed but none could
+  be covered:** the landlet stays exactly as it was — the seller wanted to
+  retain it if unsold (or nobody could actually pay), so nothing about
   ownership or the build changes, only `auctions.status` becomes `ended`.
 
 ### Claim-lock release timing

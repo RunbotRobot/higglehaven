@@ -29,6 +29,19 @@ describe('Auctions', () => {
     return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
+  // #629: bidding now requires the bidder to actually hold enough
+  // higgles_balance_cents to cover the bid (see handleAuctionBids/
+  // resolveAuction in worker/index.js) — a fresh signupBuilder() starts at
+  // 0, so every test below that places a real bid funds its bidder first.
+  // A flat, generous default (== MAX_MONEY_CENTS) covers every bid amount
+  // used in this file, including the at-cap boundary test; it SETs an
+  // absolute balance (not additive), matching stripe-connect.test.js's own
+  // creditHiggles helper.
+  async function fundHiggles(builder, amountCents = 100_000_000) {
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(amountCents, builder.builderId).run();
+  }
+
   it('only lets the current owner start an auction on their own claimed landlet', async () => {
     const owner = await signupBuilder('auction-owner');
     const stranger = await signupBuilder('auction-stranger');
@@ -96,6 +109,7 @@ describe('Auctions', () => {
   it('rejects a startingBidCents or amountCents over the money-field cap, and a non-safe-integer value', async () => {
     const owner = await signupBuilder('bid-cap-owner');
     const bidder = await signupBuilder('bid-cap-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-bid-cap-landlet');
     await claim('auction-bid-cap-landlet', owner);
 
@@ -130,6 +144,8 @@ describe('Auctions', () => {
     const owner = await signupBuilder('bid-rules-owner');
     const bidderA = await signupBuilder('bidder-a');
     const bidderB = await signupBuilder('bidder-b');
+    await fundHiggles(bidderA);
+    await fundHiggles(bidderB);
     await createGreenbeltLandlet('auction-bid-rules-landlet');
     await claim('auction-bid-rules-landlet', owner);
     const started = await api('/landlets/auction-bid-rules-landlet/auction', owner.session({
@@ -174,6 +190,8 @@ describe('Auctions', () => {
     const owner = await signupBuilder('bid-race-owner');
     const bidderA = await signupBuilder('bid-race-a');
     const bidderB = await signupBuilder('bid-race-b');
+    await fundHiggles(bidderA);
+    await fundHiggles(bidderB);
     await createGreenbeltLandlet('auction-bid-race-landlet');
     await claim('auction-bid-race-landlet', owner);
     const started = await api('/landlets/auction-bid-race-landlet/auction', owner.session({
@@ -203,6 +221,7 @@ describe('Auctions', () => {
   it('resolves a winning auction: ownership transfers, build clears, seller is paid in higgles', async () => {
     const owner = await signupBuilder('resolve-winner-owner');
     const bidder = await signupBuilder('resolve-winner-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-resolve-win-landlet');
     await claim('auction-resolve-win-landlet', owner);
     await api('/instances', owner.session({
@@ -272,6 +291,7 @@ describe('Auctions', () => {
   it('does not let a concurrent draft save resurrect the old owner\'s content once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('draft-resolve-race-owner');
     const bidder = await signupBuilder('draft-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('draft-resolve-race-landlet');
     await claim('draft-resolve-race-landlet', owner);
     const started = await api('/landlets/draft-resolve-race-landlet/auction', owner.session({
@@ -317,6 +337,7 @@ describe('Auctions', () => {
   it('does not let a concurrent version save land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('version-resolve-race-owner');
     const bidder = await signupBuilder('version-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('version-resolve-race-landlet');
     await claim('version-resolve-race-landlet', owner);
     const started = await api('/landlets/version-resolve-race-landlet/auction', owner.session({
@@ -358,6 +379,7 @@ describe('Auctions', () => {
   it('does not let a concurrent activate leave a stale active version pointer once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('activate-resolve-race-owner');
     const bidder = await signupBuilder('activate-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('activate-resolve-race-landlet');
     await claim('activate-resolve-race-landlet', owner);
     const versioned = await api('/landlets/activate-resolve-race-landlet/versions', owner.session({
@@ -400,6 +422,7 @@ describe('Auctions', () => {
   it('does not let a concurrent instance create land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-create-resolve-race-owner');
     const bidder = await signupBuilder('instance-create-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('instance-create-resolve-race-landlet');
     await claim('instance-create-resolve-race-landlet', owner);
     const started = await api('/landlets/instance-create-resolve-race-landlet/auction', owner.session({
@@ -438,6 +461,7 @@ describe('Auctions', () => {
   it('does not let a concurrent batch instance create land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-batch-resolve-race-owner');
     const bidder = await signupBuilder('instance-batch-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('instance-batch-resolve-race-landlet');
     await claim('instance-batch-resolve-race-landlet', owner);
     const started = await api('/landlets/instance-batch-resolve-race-landlet/auction', owner.session({
@@ -481,6 +505,7 @@ describe('Auctions', () => {
   it('does not let a concurrent instance update land once an auction transfers the landlet', async () => {
     const owner = await signupBuilder('instance-update-resolve-race-owner');
     const bidder = await signupBuilder('instance-update-resolve-race-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('instance-update-resolve-race-landlet');
     await claim('instance-update-resolve-race-landlet', owner);
     await api('/instances', owner.session({
@@ -521,6 +546,8 @@ describe('Auctions', () => {
     const owner = await signupBuilder('instance-update-move-race-owner');
     const priorTargetOwner = await signupBuilder('instance-update-move-race-prior-owner');
     const bidder = await signupBuilder('instance-update-move-race-bidder');
+    await fundHiggles(owner);
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('instance-update-move-race-target');
     await createGreenbeltLandlet('instance-update-move-race-source');
     await claim('instance-update-move-race-source', owner);
@@ -592,6 +619,7 @@ describe('Auctions', () => {
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-bidder-own-landlet');
     await claim('auction-bidder-own-landlet', bidder);
     await createGreenbeltLandlet('auction-resolve-existing-owner-landlet');
@@ -688,6 +716,8 @@ describe('Auctions', () => {
     const owner = await signupBuilder('bid-notice-owner');
     const bidderA = await signupBuilder('bid-notice-bidder-a');
     const bidderB = await signupBuilder('bid-notice-bidder-b');
+    await fundHiggles(bidderA);
+    await fundHiggles(bidderB);
     await createGreenbeltLandlet('auction-bid-notice-landlet');
     await claim('auction-bid-notice-landlet', owner);
     const started = await api('/landlets/auction-bid-notice-landlet/auction', owner.session({
@@ -759,6 +789,7 @@ describe('Auctions', () => {
     const ownerNoBids = await signupBuilder('list-bids-owner-a');
     const ownerTwoBids = await signupBuilder('list-bids-owner-b');
     const bidder = await signupBuilder('list-bids-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('auction-list-bids-no-bids');
     await createGreenbeltLandlet('auction-list-bids-two-bids');
     await claim('auction-list-bids-no-bids', ownerNoBids);
@@ -862,6 +893,7 @@ describe('Auctions', () => {
   it('frees a reserved-bid seller to claim another landlet only once the first bid lands', async () => {
     const seller = await signupBuilder('release-bid-seller');
     const bidder = await signupBuilder('release-bid-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandlet('release-bid-landlet-a');
     await createGreenbeltLandlet('release-bid-landlet-b');
     await claim('release-bid-landlet-a', seller);
@@ -884,6 +916,180 @@ describe('Auctions', () => {
     // frees now, not at resolution.
     const afterBid = await claim('release-bid-landlet-b', seller);
     expect(afterBid.response.status).toBe(200);
+  });
+
+  // #629 (owner-confirmed, 2026-09-10): the exploit this closes — a
+  // winning bid used to credit the seller with the full amount regardless
+  // of whether the bidder ever held it, which #625 turned into a real,
+  // unbacked-cash extraction path. These tests exercise the fix directly:
+  // bidding now holds higgles until outbid or the auction closes, and
+  // resolution never credits a seller with money the winner didn't
+  // actually have at settlement time.
+  describe('Balance holding (#629)', () => {
+    it("rejects a bid once it plus the bidder's currently-leading bid on another auction would exceed their higgles balance", async () => {
+      const sellerA = await signupBuilder('hold-higgles-seller-a');
+      const sellerB = await signupBuilder('hold-higgles-seller-b');
+      const bidder = await signupBuilder('hold-higgles-bidder');
+      await fundHiggles(bidder, 1000);
+      // Generous land-cap headroom so only the higgles-balance check below
+      // is under test — two default 1000m² landlets would otherwise also
+      // trip the (separately-tested) land-cap hold.
+      await api(`/builders/${bidder.builderId}/land-cap-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+      }));
+      await createGreenbeltLandlet('hold-higgles-landlet-a');
+      await createGreenbeltLandlet('hold-higgles-landlet-b');
+      await claim('hold-higgles-landlet-a', sellerA);
+      await claim('hold-higgles-landlet-b', sellerB);
+      const auctionA = await api('/landlets/hold-higgles-landlet-a/auction', sellerA.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      const auctionB = await api('/landlets/hold-higgles-landlet-b/auction', sellerB.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+
+      const firstBid = await api(`/auctions/${auctionA.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+      }));
+      expect(firstBid.response.status).toBe(201);
+
+      // Only 300 left after the 700 already held on auction A.
+      const tooMuch = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 400 }),
+      }));
+      expect(tooMuch.response.status).toBe(400);
+      expect(tooMuch.body.error).toMatch(/available/i);
+
+      const withinRemaining = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 300 }),
+      }));
+      expect(withinRemaining.response.status).toBe(201);
+    });
+
+    it('releases a held bid once the bidder is outbid, freeing their balance for a new bid elsewhere', async () => {
+      const sellerA = await signupBuilder('release-higgles-seller-a');
+      const sellerB = await signupBuilder('release-higgles-seller-b');
+      const bidder = await signupBuilder('release-higgles-bidder');
+      const outbidder = await signupBuilder('release-higgles-outbidder');
+      await fundHiggles(bidder, 1000);
+      await fundHiggles(outbidder, 2000);
+      // Generous land-cap headroom so only the higgles-balance hold below
+      // is under test — see the same note on the test above.
+      await api(`/builders/${bidder.builderId}/land-cap-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+      }));
+      await api(`/builders/${outbidder.builderId}/land-cap-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+      }));
+      await createGreenbeltLandlet('release-higgles-landlet-a');
+      await createGreenbeltLandlet('release-higgles-landlet-b');
+      await claim('release-higgles-landlet-a', sellerA);
+      await claim('release-higgles-landlet-b', sellerB);
+      const auctionA = await api('/landlets/release-higgles-landlet-a/auction', sellerA.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      const auctionB = await api('/landlets/release-higgles-landlet-b/auction', sellerB.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      const auctionAId = auctionA.body.auction.auctionId;
+
+      await api(`/auctions/${auctionAId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      }));
+      const blockedWhileLeading = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+      }));
+      expect(blockedWhileLeading.response.status).toBe(400);
+
+      const outbid = await api(`/auctions/${auctionAId}/bids`, outbidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1001 }),
+      }));
+      expect(outbid.response.status).toBe(201);
+
+      // The full original balance is available again now that the first
+      // auction no longer counts against it.
+      const nowAllowed = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+      }));
+      expect(nowAllowed.response.status).toBe(201);
+    });
+
+    // The bid-time check above is a best-effort, non-atomic-across-
+    // auctions guard (see handleAuctionBids' own comment) — this is what
+    // actually enforces the invariant: resolution atomically debits the
+    // winner, falling through to the next-highest bidder if the leading
+    // one can no longer actually cover it, rather than ever crediting a
+    // seller with money nobody really had.
+    it("falls through to the next-highest bidder at resolution if the leading bidder's balance no longer covers their bid", async () => {
+      const seller = await signupBuilder('fallthrough-seller');
+      const leadingBidder = await signupBuilder('fallthrough-leading-bidder');
+      const secondBidder = await signupBuilder('fallthrough-second-bidder');
+      await fundHiggles(leadingBidder, 1000);
+      await fundHiggles(secondBidder, 1000);
+      await createGreenbeltLandlet('fallthrough-landlet');
+      await claim('fallthrough-landlet', seller);
+      const started = await api('/landlets/fallthrough-landlet/auction', seller.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      const auctionId = started.body.auction.auctionId;
+
+      await api(`/auctions/${auctionId}/bids`, secondBidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+      }));
+      await api(`/auctions/${auctionId}/bids`, leadingBidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 800 }),
+      }));
+
+      // Something spends the leading bidder's balance out from under their
+      // held bid before resolution (e.g. an admin/refund adjustment, or in
+      // production another of their own auctions resolving first in the
+      // same sweep) — simulated directly here since what's under test is
+      // resolution's own atomic response to it, not what caused it.
+      await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?')
+        .bind(leadingBidder.builderId).run();
+      await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+      const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+      expect(resolved.response.status).toBe(200);
+      expect(resolved.body.auction.winningBidId).not.toBeNull();
+
+      const landlet = await api('/landlets/fallthrough-landlet');
+      // The second-highest bidder wins instead, since they can actually pay.
+      expect(landlet.body.landlet.ownerBuilderId).toBe(secondBidder.builderId);
+
+      const builders = await api('/builders');
+      const sellerAfter = builders.body.builders.find((b) => b.builderId === seller.builderId);
+      // Credited the second bidder's own 500, never the drained leader's 800.
+      expect(sellerAfter.higglesBalanceCents).toBe(500);
+      const secondBidderAfter = builders.body.builders.find((b) => b.builderId === secondBidder.builderId);
+      expect(secondBidderAfter.higglesBalanceCents).toBe(500); // 1000 - 500
+    });
+
+    it('keeps the land with the seller if no bidder can actually cover their bid by resolution time', async () => {
+      const seller = await signupBuilder('nobody-can-pay-seller');
+      const bidder = await signupBuilder('nobody-can-pay-bidder');
+      await fundHiggles(bidder, 1000);
+      await createGreenbeltLandlet('nobody-can-pay-landlet');
+      await claim('nobody-can-pay-landlet', seller);
+      const started = await api('/landlets/nobody-can-pay-landlet/auction', seller.session({
+        method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+      }));
+      const auctionId = started.body.auction.auctionId;
+      await api(`/auctions/${auctionId}/bids`, bidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+      }));
+      await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?')
+        .bind(bidder.builderId).run();
+      await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+      const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+      expect(resolved.response.status).toBe(200);
+      expect(resolved.body.auction.winningBidId).toBeNull();
+
+      const landlet = await api('/landlets/nobody-can-pay-landlet');
+      expect(landlet.body.landlet.ownerBuilderId).toBe(seller.builderId);
+      expect(landlet.body.landlet.status).toBe('claimed');
+    });
   });
 });
 

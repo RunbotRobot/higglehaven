@@ -283,24 +283,4 @@ describe('Higgles redemption (#625)', () => {
     const status = await api('/builders/me/redeem', builder.session());
     expect(status.body.availableCents).toBe(5000);
   });
-
-  // #629: auction bidding isn't balance-gated, so a winning bid can credit
-  // a seller's higgles balance with no real backing — harmless until this
-  // endpoint (#625) gave that balance a real cash-out. Redemption is
-  // paused (REDEMPTION_PAUSED_PENDING_629) until auction resolution closes
-  // that gap. This is the actual reason every POST above 400/403 returns
-  // 503 right now, ahead of even the stripeConfigured check.
-  it('pauses redemption for the #629 unbacked-higgles fix, ahead of the Stripe-configured check, leaving the balance untouched', async () => {
-    const builder = await signupBuilder('redeem-paused');
-    await connectBuilder(builder);
-    await creditHiggles(builder, 5000);
-    const got = await api('/builders/me/redeem', builder.session({
-      method: 'POST', body: JSON.stringify({}),
-    }));
-    expect(got.response.status).toBe(503);
-    expect(got.body.error).toMatch(/#629/);
-
-    const status = await api('/builders/me/redeem', builder.session());
-    expect(status.body.availableCents).toBe(5000);
-  });
 });
