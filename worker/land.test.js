@@ -1572,13 +1572,11 @@ describe('Landlet levels', () => {
     expect(instances.body.instances.map((i) => i.instanceId)).toEqual(['levels-remove-instances-ground']);
   });
 
-  // #633 (sub-issue of #631): the instance just swept out of active space
-  // above shouldn't be lost outright — it's snapshotted into a reusable
-  // saved-layout record first, the same idea as a landlet_versions/
-  // version_instances save. No listing/read endpoint exists yet (#634), so
-  // this reads the tables directly the way this file's own other
-  // DB-shape assertions already do (see the `stored` queries above).
-  it('saves a removed level\'s swept-out instances into a reusable layout record', async () => {
+  // #633 (sub-issue of #631, owner-confirmed on #522/#631): the instances
+  // swept out of active space above aren't just gone — they're snapshotted
+  // into a reusable saved_level_layouts/saved_layout_instances record
+  // first, mirroring version_instances' own snapshot shape.
+  it('saves instances swept out of active space into a reusable layout record', async () => {
     const owner = await signupBuilder('levels-save-layout-owner');
     await createGreenbeltLandletWithArea('levels-save-layout-landlet', 1000);
     await claim('levels-save-layout-landlet', owner);
@@ -1596,63 +1594,59 @@ describe('Landlet levels', () => {
         x: 1, y: 1, z: 0,
       }),
     }));
-    const upper = await api('/instances', owner.session({
+    const swept = await api('/instances', owner.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'levels-save-layout-upper',
         landletId: 'levels-save-layout-landlet',
         templateId: 'placeholder-tree',
         x: 2, y: 3, z: LEVEL_HEIGHT_M * 1.5,
-        rotationZ: 1.2,
+        rotationZ: 1.25,
       }),
     }));
-    expect(upper.response.status).toBe(201);
+    expect(swept.response.status).toBe(201);
 
     const removed = await api('/landlets/levels-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(removed.response.status).toBe(200);
 
-    const layout = await env.DB.prepare(
-      'SELECT * FROM saved_level_layouts WHERE source_landlet_id = ? AND source_level_index = ?',
-    ).bind('levels-save-layout-landlet', 1).first();
-    expect(layout).toBeTruthy();
-    expect(layout.builder_id).toBe(owner.builderId);
-    expect(layout.name).toMatch(/^Level 1 from .*, removed \d{4}-\d{2}-\d{2}$/);
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0].source_landlet_id).toBe('levels-save-layout-landlet');
+    expect(layouts[0].source_level_index).toBe(1);
+    expect(layouts[0].name).toMatch(/Level 1/);
 
-    const savedInstances = await env.DB.prepare(
+    const { results: savedInstances } = await env.DB.prepare(
       'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ?',
-    ).bind(layout.saved_layout_id).all();
-    expect(savedInstances.results.length).toBe(1);
-    expect(savedInstances.results[0]).toMatchObject({
-      source_instance_id: 'levels-save-layout-upper',
-      template_id: 'placeholder-tree',
-      x_m: 2, y_m: 3, rotation_z_rad: 1.2,
-    });
-
-    // The ground-floor instance stayed in active space — never swept, so
-    // never saved either. Only the actually-removed one should appear.
-    const groundStillActive = await api('/instances?landletId=levels-save-layout-landlet');
-    expect(groundStillActive.body.instances.map((i) => i.instanceId)).toEqual(['levels-save-layout-ground']);
+    ).bind(layouts[0].saved_layout_id).all();
+    // Only the swept (upper) instance is saved — the ground one that
+    // survived was never deleted, so nothing needed preserving for it.
+    expect(savedInstances).toHaveLength(1);
+    expect(savedInstances[0].source_instance_id).toBe('levels-save-layout-upper');
+    expect(savedInstances[0].x_m).toBe(2);
+    expect(savedInstances[0].y_m).toBe(3);
+    expect(savedInstances[0].rotation_z_rad).toBe(1.25);
   });
 
-  // Same #633 fix as above, the empty-level counterpart: removing a level
-  // nothing ever occupied shouldn't leave a phantom empty entry cluttering
-  // a builder's future saved-layouts list.
-  it('does not create a saved-layout record when a removed level held nothing', async () => {
-    const owner = await signupBuilder('levels-save-layout-empty-owner');
-    await createGreenbeltLandletWithArea('levels-save-layout-empty-landlet', 1000);
-    await claim('levels-save-layout-empty-landlet', owner);
+  // Removing a level with nothing in its z-range shouldn't create an empty
+  // saved-layout record — there's nothing worth preserving.
+  it('creates no saved-layout record when a removed level has no instances to sweep', async () => {
+    const owner = await signupBuilder('levels-no-save-layout-owner');
+    await createGreenbeltLandletWithArea('levels-no-save-layout-landlet', 1000);
+    await claim('levels-no-save-layout-landlet', owner);
     await growLandCapHeadroom(owner.builderId);
-    await api('/landlets/levels-save-layout-empty-landlet/levels', owner.session({
+    await api('/landlets/levels-no-save-layout-landlet/levels', owner.session({
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
 
-    const removed = await api('/landlets/levels-save-layout-empty-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    const removed = await api('/landlets/levels-no-save-layout-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(removed.response.status).toBe(200);
 
-    const layout = await env.DB.prepare(
-      'SELECT * FROM saved_level_layouts WHERE source_landlet_id = ?',
-    ).bind('levels-save-layout-empty-landlet').first();
-    expect(layout).toBeNull();
+    const { results: layouts } = await env.DB.prepare(
+      'SELECT * FROM saved_level_layouts WHERE builder_id = ?',
+    ).bind(owner.builderId).all();
+    expect(layouts).toHaveLength(0);
   });
 
   // Found via backlog audit (#395): the outermost-level DELETE used to run
