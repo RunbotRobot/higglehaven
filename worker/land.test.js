@@ -1422,6 +1422,50 @@ describe('Landlet levels', () => {
     expect(list.body.levels.map((level) => level.levelIndex)).toEqual([-1]);
   });
 
+  // #522 (owner-confirmed, 2026-09-09): nothing previously re-checked an
+  // already-placed instance's z once a level it depended on was removed —
+  // assertInstanceZWithinLevels only ever runs on that instance's own
+  // create/move, never on level removal. The owner's answer: instances left
+  // in the removed level's z-range should come out of active shoppable
+  // space.
+  it('removes instances left in a level\'s z-range once that level is removed, leaving others untouched', async () => {
+    const owner = await signupBuilder('levels-remove-instances-owner');
+    await createGreenbeltLandletWithArea('levels-remove-instances-landlet', 1000);
+    await claim('levels-remove-instances-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-remove-instances-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const onGround = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-remove-instances-ground',
+        landletId: 'levels-remove-instances-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: 0,
+      }),
+    }));
+    expect(onGround.response.status).toBe(201);
+
+    const onLevel1 = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'levels-remove-instances-upper',
+        landletId: 'levels-remove-instances-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+      }),
+    }));
+    expect(onLevel1.response.status).toBe(201);
+
+    const removed = await api('/landlets/levels-remove-instances-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+
+    const instances = await api('/instances?landletId=levels-remove-instances-landlet');
+    expect(instances.body.instances.map((i) => i.instanceId)).toEqual(['levels-remove-instances-ground']);
+  });
+
   // Found via backlog audit (#395): the outermost-level DELETE used to run
   // a plain SELECT-then-DELETE with no guard tying the delete to the
   // extent it was read against. Racing two DELETEs against the exact same
