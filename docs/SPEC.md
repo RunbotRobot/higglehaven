@@ -77,7 +77,7 @@
 
 **Movement:**
 - Walking: 1.8 m/s. Running: 2.7 m/s (~6 mph, v16 — raised from an original 2.2 m/s that read as too small a gap from walking to feel like an actual run).
-- **Flight:** double-tap jump (mobile) / double-press spacebar (desktop). Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
+- **Flight:** single tap on the bird icon (mobile/touch UI) / double-press spacebar (desktop keyboard) — owner feedback (2026-09-10): the icon is a deliberately-aimed-at tap target, so it doesn't need the double-press the spacebar shortcut still uses to guard against an accidental stray press. Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
 - Altitude/speed: **logarithmic** — each doubling of altitude ≈ 50% more max ground speed, diminishing at extremes. ~10x walking speed near building-height, up to ~100x at max altitude (~500m).
 - Flying avatars are invisible to other users.
 - **210-degree rotational offset** applied once during real-world-to-higglehaven coordinate mapping — permanent, zero-cost, thematically resonant detail.

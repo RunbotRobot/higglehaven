@@ -9533,23 +9533,21 @@ function bindShopVerticalButton(el, direction) {
 bindShopVerticalButton(shopUpBtn, 1);
 bindShopVerticalButton(shopDownBtn, -1);
 
-// A double-tap/double-press, not a single one, so a single accidental tap
-// (or an ordinary spacebar press while, say, a builder is just looking
-// around with keyboard focus on the page) never launches the player into
-// the air unintentionally — matches docs/SPEC.md §2's own wording exactly
-// ("double-tap jump (mobile) / double-press spacebar (desktop)").
+// Owner (u7rvtz1jn1wchfsz6c1o): "The bird icon should be a single tap
+// instead of a double-tap." This used to require a double-tap for the same
+// accidental-activation reason the spacebar shortcut below still does (see
+// its own comment) — but the icon is a small, deliberately-aimed-at tap
+// target a builder already has to reach for, unlike a stray spacebar press
+// while just looking around with keyboard focus on the page, so that risk
+// doesn't carry over here. docs/SPEC.md §2 updated to match: flight is now
+// a single tap on the bird icon (mobile/touch UI) or double-press spacebar
+// (desktop keyboard) — the two are no longer the same gesture.
 function bindShopFlyToggle(el) {
   el.addEventListener('pointerdown', (event) => {
     if (!shopActive) return;
     event.preventDefault();
     event.stopPropagation();
-    const now = performance.now();
-    if (now - shopLastFlyBtnTapAt <= SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS) {
-      shopLastFlyBtnTapAt = -Infinity; // consumed — a third tap starts a fresh pair, not an immediate re-trigger
-      toggleShopFlight();
-    } else {
-      shopLastFlyBtnTapAt = now;
-    }
+    toggleShopFlight();
   });
 }
 bindShopFlyToggle(shopFlyBtn);
@@ -9766,7 +9764,6 @@ let shopFlightTransitionElapsedS = 0;
 let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors this (offset by ground curvature) every frame
 let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
 let shopLastSpacePressAt = -Infinity;
-let shopLastFlyBtnTapAt = -Infinity;
 
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
