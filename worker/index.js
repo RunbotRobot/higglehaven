@@ -2809,6 +2809,32 @@ async function handleLandletLevels(request, db, route) {
     const remainingIndices = remaining.results.map((row) => row.level_index);
     const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
     const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    // #633 (sub-issue of #631): snapshot whatever's about to be swept out of
+    // active space (above) into a reusable record first, the same
+    // "freeze these exact placed_instances rows" idiom handleLandletVersions
+    // already uses for version_instances — a level removal shouldn't lose a
+    // builder's work outright, only take it off active display. Skipped
+    // entirely when nothing occupied this z-range, so removing an empty
+    // level never clutters the builder's saved-layouts list.
+    const outOfRange = await db.prepare(
+      'SELECT COUNT(*) AS n FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)',
+    ).bind(landletId, minZ, maxZ).first();
+    if (outOfRange.n > 0) {
+      const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
+      const savedLayoutName = `Level ${levelIndex} from ${landlet.name}, removed ${new Date().toISOString().slice(0, 10)}`;
+      await db.batch([
+        db.prepare(`
+          INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
+          VALUES (?, ?, ?, ?, ?)
+        `).bind(savedLayoutId, sessionBuilder.builder_id, landletId, levelIndex, savedLayoutName),
+        db.prepare(`
+          INSERT INTO saved_layout_instances
+            (saved_layout_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+          SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
+          FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)
+        `).bind(savedLayoutId, landletId, minZ, maxZ),
+      ]);
+    }
     await db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
       .bind(landletId, minZ, maxZ).run();
     await recomputeLandCap(db, landlet.owner_builder_id);

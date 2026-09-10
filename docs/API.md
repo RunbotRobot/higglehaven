@@ -4323,11 +4323,22 @@ on that instance's own create/move). Uses the same allowed-range formula
 (and half-level-height slack) as that function, computed against the
 levels that remain after the delete, so an instance already within
 tolerance of the new boundary isn't swept up unnecessarily. This is
-intentionally a hard delete, not a hold/flag — the owner's own answer on
-#522 confirmed removed-level instances should come out of active
-shoppable space; a separate, larger feature (saving a removed level's
-layout for the builder to selectively reapply elsewhere) is tracked
-independently and does not change this endpoint's behavior.
+intentionally a hard delete out of *active shoppable space*, not a
+hold/flag — the owner's own answer on #522 confirmed removed-level
+instances should come out of active display.
+
+#633 (sub-issue of #631): the swept-out rows aren't lost outright, though —
+before the delete above runs, they're snapshotted into a new
+`saved_level_layouts`/`saved_layout_instances` pair
+(`migrations/0080_saved_level_layouts.sql`), the same "freeze a set of
+`placed_instances` rows" idiom `POST .../versions` already uses for
+`landlet_versions`/`version_instances`, keyed to the *builder* rather than
+the lándlet so a saved layout outlives its source (an auctioned-away or
+hard-deleted lándlet). Skipped entirely when the removed level held
+nothing, so an empty level never leaves a phantom entry behind. Nothing
+reads these tables back yet — listing/deleting them, previewing/selecting
+from one, and pasting onto a target lándlet are separate, still-open
+sub-issues of #631 — this is only the "don't lose the work" half.
 
 ### Ownership-change cleanup
 
