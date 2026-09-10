@@ -2510,6 +2510,44 @@ describe('Simulated purchases', () => {
     expect(after.higgles_balance_cents).toBe(0);
   });
 
+  // #655: the floor check above (#651/#652) was a plain SELECT-then-compare
+  // performed well before the actual clawback UPDATE, with no atomicity
+  // between them — two concurrent refunds on *different* purchases from the
+  // *same* builder could both read a sufficient balance and both claw back,
+  // reintroducing the exact negative-balance bug #651 fixed, just via a
+  // race. Fixed by folding the floor check into the clawback UPDATE's own
+  // WHERE clause. Proven the same way as the payout race above: fire both
+  // refunds genuinely concurrently (Promise.all) and assert exactly one
+  // wins, never both, and the balance never goes negative.
+  it('lets only one of two concurrent refunds on different purchases claw back the same limited builder balance, never both', async () => {
+    const seller = await signupBuilder('purchase-refund-race-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-race-landlet', 1000);
+    await claim('purchase-refund-race-landlet', seller);
+    await createTemplate('purchase-refund-race-template-1', { priceCents: 10000 });
+    await createTemplate('purchase-refund-race-template-2', { priceCents: 10000 });
+    await placeInstance('purchase-refund-race-instance-1', 'purchase-refund-race-landlet', 'purchase-refund-race-template-1', seller);
+    await placeInstance('purchase-refund-race-instance-2', 'purchase-refund-race-landlet', 'purchase-refund-race-template-2', seller);
+
+    const firstPurchase = await api('/instances/purchase-refund-race-instance-1/purchase', { method: 'POST' });
+    const secondPurchase = await api('/instances/purchase-refund-race-instance-2/purchase', { method: 'POST' });
+    // Each purchase's builder_share_cents is 100 (1% of $100) — leave the
+    // builder with exactly enough for one refund's clawback, not both.
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 100 WHERE builder_id = ?').bind(seller.builderId).run();
+
+    const [first, second] = await Promise.all([
+      api(`/purchases/${firstPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' })),
+      api(`/purchases/${secondPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' })),
+    ]);
+    const statuses = [first.response.status, second.response.status].sort();
+    // All-or-nothing: never both 200 (that's the negative-balance race this
+    // test exists to catch) and never both 409 (that would mean the fix
+    // over-corrected and blocked a refund that should have gone through).
+    expect(statuses).toEqual([200, 409]);
+
+    const after = await builderRow(seller.builderId);
+    expect(after.higgles_balance_cents).toBe(0);
+  });
+
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
     const seller = await signupBuilder('purchase-no-returns-seller');
     await createGreenbeltLandletWithArea('purchase-no-returns-landlet', 1000);

@@ -7912,23 +7912,6 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.paid_out_at) {
     throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
   }
-  // #651: the exact same money-unaccounted-for risk as paid_out_at above,
-  // just on the builder side. higgles_balance_cents is one fungible
-  // lifetime pool (see handleBuilderRedeem's own comment on why it has no
-  // per-purchase provenance to check against precisely), so if a builder
-  // has already redeemed enough of it for real Stripe cash that this
-  // purchase's own share can no longer be covered, clawing it back
-  // unconditionally would just drive the balance negative — silently
-  // treating already-paid-out real money as still-clawbackable. Same fix
-  // shape: reject up front rather than guess at a policy, before the
-  // unconditional clawback below ever runs.
-  if (purchase.builder_id) {
-    const currentBuilder = await db.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
-      .bind(purchase.builder_id).first();
-    if (currentBuilder && currentBuilder.higgles_balance_cents < purchase.builder_share_cents) {
-      throw new HttpError('This purchase\'s commission has already been redeemed for real cash and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
-    }
-  }
   const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
@@ -7951,19 +7934,56 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     throw new HttpError('This purchase has already been refunded', 400);
   }
 
+  // #655: folds #651/#652's balance-floor check into the clawback's own
+  // WHERE clause instead of a separate SELECT-then-compare — a plain read
+  // performed here (as #651/#652 originally did) leaves a TOCTOU window
+  // where two concurrent refunds on *different* purchases from the *same*
+  // builder can both observe a sufficient balance before either clawback
+  // lands, still driving the balance negative. Applied before the Stripe
+  // call below (not after, where the unconditional version used to sit)
+  // so a lost race is caught before Stripe is ever touched. builder_id can
+  // be null (migrations/0062 — SET NULL on the host builder's account
+  // deletion, not CASCADE), in which case there's no balance to claw back
+  // or notify.
+  let clawbackApplied = false;
+  if (purchase.builder_id) {
+    const clawback = await db.prepare(
+      'UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ? AND higgles_balance_cents >= ?',
+    ).bind(purchase.builder_share_cents, purchase.builder_id, purchase.builder_share_cents).run();
+    if (clawback.meta.changes === 0) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      throw new HttpError('This purchase\'s commission has already been redeemed for real cash and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+    }
+    clawbackApplied = true;
+  }
+
+  // Undoes both the refunded_at guard and (if applied) the balance
+  // clawback above — used when something after this point fails, so the
+  // purchase stays retryable and the builder's balance isn't left short
+  // for a refund that never actually completed.
+  const rollbackClawbackAndGuard = async () => {
+    const statements = [db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId)];
+    if (clawbackApplied) {
+      statements.push(
+        db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+          .bind(purchase.builder_share_cents, purchase.builder_id),
+      );
+    }
+    await db.batch(statements);
+  };
+
   // #348: a real-money purchase (payment_intent_id set — see #453) needs
   // its Stripe charge actually reversed, not just the local row flagged.
   // reverse_transfer pulls the ~98% share back out of the seller's
-  // connected-account balance (the same way the block below claws back
+  // connected-account balance (the same way the block above claws back
   // the builder's higgles share); refund_application_fee reverses
   // higglehaven's own cut too, so nobody keeps money on a refunded sale.
-  // If Stripe's call fails, the guard above is released (refunded_at reset
-  // to NULL) and the error propagates before the builder's higgles balance
-  // is ever touched — a failed real-money reversal should never look like
-  // a successful refund, and should stay retryable.
+  // If Stripe's call fails, the guard and clawback above are both rolled
+  // back and the error propagates — a failed real-money reversal should
+  // never look like a successful refund, and should stay retryable.
   if (purchase.payment_intent_id) {
     if (!stripeConfigured(env)) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      await rollbackClawbackAndGuard();
       throw new HttpError('Stripe payments are not configured on this server yet.', 503);
     }
     try {
@@ -7973,23 +7993,14 @@ async function handlePurchaseRefund(request, env, purchaseId) {
         refund_application_fee: true,
       });
     } catch (err) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+      await rollbackClawbackAndGuard();
       throw err;
     }
   }
 
-  // builder_id can be null (migrations/0062 — SET NULL on the host
-  // builder's account deletion, not CASCADE, so this purchase's own record
-  // survives). Nothing to claw a balance back from in that case, and
-  // notifications.builder_id is itself NOT NULL, so skip both statements
-  // rather than crediting/notifying a builder that no longer exists.
   if (purchase.builder_id) {
-    await db.batch([
-      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
-        .bind(purchase.builder_share_cents, purchase.builder_id),
-      notificationStatement(db, purchase.builder_id,
-        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-    ]);
+    await notificationStatement(db, purchase.builder_id,
+      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`).run();
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
