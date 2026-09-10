@@ -4304,6 +4304,13 @@ async function handleBuilderStripeAccount(request, env, db) {
 // redemption cap the way #615 computes — simpler, and honest about not
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
+// #629: paused pending an owner decision on how to close the unbacked-
+// higgles-via-auction exploit documented on that issue (auction bidding
+// isn't balance-gated, so a winning bid can credit a seller's higgles with
+// no real backing — this endpoint is what turns that into a real Stripe
+// payout). Flip back to false once #629 lands a real fix.
+const REDEMPTION_PAUSED_PENDING_629 = true;
+
 async function handleBuilderRedeem(request, env, db) {
   const user = await requireCurrentUser(request, db);
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
@@ -4333,6 +4340,20 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
+    }
+
+    // #629: auction bidding was never balance-gated (migration 0045) — a
+    // winning bid unconditionally credits the seller's higgles balance with
+    // the full bid amount regardless of whether the bidder ever had that
+    // balance. That was harmless while nothing could cash a higgles balance
+    // out for real money; this endpoint (#625) is exactly that cash-out, so
+    // until auction resolution requires the winning bidder to actually hold
+    // (and spend) sufficient balance — or some other backing mechanism
+    // ships — redemption is paused rather than risk a real, unbacked
+    // Stripe payout. Balance/threshold checks above still run so the rest
+    // of this endpoint's contract stays intact once this lifts.
+    if (REDEMPTION_PAUSED_PENDING_629) {
+      throw new HttpError('Higgles redemption is temporarily paused for a security fix — see issue #629.', 503);
     }
 
     if (!stripeConfigured(env)) {
