@@ -1035,6 +1035,16 @@ describe('Land cap', () => {
     return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
   }
 
+  // #629: bidding now also requires the bidder to actually hold enough
+  // higgles_balance_cents to cover the bid — independent of the land-cap
+  // gating these tests exist to exercise. Fund bidders past their (small)
+  // bid amount so a rejection here is unambiguously about land cap, not
+  // balance (see worker/index.js's handleAuctionBids/resolveAuction).
+  async function fundHiggles(builder, amountCents = 100_000_000) {
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(amountCents, builder.builderId).run();
+  }
+
   async function startAuction(landletId, seller) {
     return api(`/landlets/${landletId}/auction`, seller.session({
       method: 'POST',
@@ -1063,6 +1073,7 @@ describe('Land cap', () => {
   it('blocks a bid that would take the bidder over their land cap', async () => {
     const seller = await signupBuilder('land-cap-seller-a');
     const bidder = await signupBuilder('land-cap-bidder-a');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-big-landlet', 5000);
     await claim('land-cap-big-landlet', seller);
     const started = await startAuction('land-cap-big-landlet', seller);
@@ -1076,6 +1087,7 @@ describe('Land cap', () => {
   it('allows a bid that stays within the bidder\'s land cap', async () => {
     const seller = await signupBuilder('land-cap-seller-b');
     const bidder = await signupBuilder('land-cap-bidder-b');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-small-landlet', 900);
     await claim('land-cap-small-landlet', seller);
     const started = await startAuction('land-cap-small-landlet', seller);
@@ -1092,6 +1104,7 @@ describe('Land cap', () => {
   it('gives the auction-bid land cap gate the same one-unit display-rounding buffer', async () => {
     const sellerWithin = await signupBuilder('land-cap-buffer-seller-within');
     const bidderWithin = await signupBuilder('land-cap-buffer-bidder-within');
+    await fundHiggles(bidderWithin);
     await createGreenbeltLandletWithArea('land-cap-buffer-within-landlet', 1001);
     await claim('land-cap-buffer-within-landlet', sellerWithin);
     const startedWithin = await startAuction('land-cap-buffer-within-landlet', sellerWithin);
@@ -1102,6 +1115,7 @@ describe('Land cap', () => {
 
     const sellerBeyond = await signupBuilder('land-cap-buffer-seller-beyond');
     const bidderBeyond = await signupBuilder('land-cap-buffer-bidder-beyond');
+    await fundHiggles(bidderBeyond);
     await createGreenbeltLandletWithArea('land-cap-buffer-beyond-landlet', 1002);
     await claim('land-cap-buffer-beyond-landlet', sellerBeyond);
     const startedBeyond = await startAuction('land-cap-buffer-beyond-landlet', sellerBeyond);
@@ -1142,6 +1156,7 @@ describe('Land cap', () => {
   it('credits a real per-event earnings ledger entry when an auction actually sells', async () => {
     const seller = await signupBuilder('land-cap-ledger-seller');
     const bidder = await signupBuilder('land-cap-ledger-bidder');
+    await fundHiggles(bidder);
     await createGreenbeltLandletWithArea('land-cap-ledger-landlet', 1000);
     await claim('land-cap-ledger-landlet', seller);
     const started = await startAuction('land-cap-ledger-landlet', seller);
@@ -1157,6 +1172,52 @@ describe('Land cap', () => {
     ).bind(seller.builderId).all();
     expect(results).toHaveLength(1);
     expect(results[0].amount_cents).toBe(500);
+  });
+
+  // #629 (owner-confirmed): a bid holds land cap until the bidder is
+  // outbid or the auction closes, so leading on one auction now counts
+  // against what a second bid elsewhere is allowed to commit to — closing
+  // the gap where a builder could win more auctions than their cap could
+  // ever actually cover.
+  it("counts a bidder's currently-leading bid on another active auction against their land cap for a new bid", async () => {
+    const sellerA = await signupBuilder('land-cap-hold-seller-a');
+    const sellerB = await signupBuilder('land-cap-hold-seller-b');
+    const bidder = await signupBuilder('land-cap-hold-bidder');
+    await fundHiggles(bidder);
+    // A fresh builder's cap is 1000 m² — leading on a 700 m² auction plus
+    // a second 700 m² bid would be 1400 m², over cap, even though neither
+    // bid alone would be.
+    await createGreenbeltLandletWithArea('land-cap-hold-landlet-a', 700);
+    await createGreenbeltLandletWithArea('land-cap-hold-landlet-b', 700);
+    await claim('land-cap-hold-landlet-a', sellerA);
+    await claim('land-cap-hold-landlet-b', sellerB);
+    const auctionA = await startAuction('land-cap-hold-landlet-a', sellerA);
+    const auctionB = await startAuction('land-cap-hold-landlet-b', sellerB);
+
+    const firstBid = await api(`/auctions/${auctionA.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(firstBid.response.status).toBe(201);
+
+    const secondBid = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(secondBid.response.status).toBe(409);
+    expect(secondBid.body.error).toMatch(/land cap/i);
+
+    // Being outbid releases the hold — the same bid now succeeds once
+    // someone else takes over the lead on the first auction.
+    const outbidder = await signupBuilder('land-cap-hold-outbidder');
+    await fundHiggles(outbidder);
+    const outbid = await api(`/auctions/${auctionA.body.auction.auctionId}/bids`, outbidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 600 }),
+    }));
+    expect(outbid.response.status).toBe(201);
+
+    const thirdBid = await api(`/auctions/${auctionB.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(thirdBid.response.status).toBe(201);
   });
 
   it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
@@ -1207,6 +1268,51 @@ describe('Land cap', () => {
     expect(results[0].amount_cents).toBe(100000);
 
     const missingBuilder = await api('/builders/does-not-exist/land-cap-grants', adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(missingBuilder.response.status).toBe(404);
+  });
+
+  // #629: bidding now also requires the bidder to hold enough
+  // higgles_balance_cents to cover their bid — deliberately independent of
+  // land-cap-grants above, which only ever touches the earnings ledger
+  // (cap growth), never balance. A test fixture needing a builder to
+  // actually *afford* a bid needs this instead.
+  it('grants higgles balance directly, admin-only, independent of land-cap-grants', async () => {
+    const builder = await createBuilder('Higgles Grant Builder');
+
+    const unauthenticated = await api(`/builders/${builder}/higgles-grants`, {
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const nonAdmin = await api(`/builders/${builder}/higgles-grants`, (await signupBuilder('higgles-grant-non-admin')).session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(nonAdmin.response.status).toBe(403);
+
+    const granted = await api(`/builders/${builder}/higgles-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+    }));
+    expect(granted.response.status).toBe(201);
+    expect(granted.body.higglesBalanceCents).toBe(100000);
+
+    // Additive, not a flat set — a second grant stacks onto the first.
+    const grantedAgain = await api(`/builders/${builder}/higgles-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 50000 }),
+    }));
+    expect(grantedAgain.response.status).toBe(201);
+    expect(grantedAgain.body.higglesBalanceCents).toBe(150000);
+
+    // Unlike land-cap-grants, this never touches the earnings ledger — it's
+    // a pure balance top-up, not a stand-in for real income.
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(builder).all();
+    expect(results).toHaveLength(0);
+    expect(landCapOf(await api('/builders'), builder)).toBe(1000);
+
+    const missingBuilder = await api('/builders/does-not-exist/higgles-grants', adminSession({
       method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
     }));
     expect(missingBuilder.response.status).toBe(404);

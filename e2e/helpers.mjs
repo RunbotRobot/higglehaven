@@ -166,6 +166,21 @@ export async function grantLandCapHeadroomAsAdmin(builderId, amountCents = 10000
   }
 }
 
+// #629: auction bidding now requires the bidder to actually hold enough
+// higgles_balance_cents to cover their bid — independent of land cap (see
+// grantLandCapHeadroomAsAdmin just above), so a suite whose real point is
+// something else needs this too whenever its test bidder places a real bid.
+export async function grantHigglesAsAdmin(builderId, amountCents = 1000000) {
+  const cookie = await ensureAdminSession();
+  const granted = await adminApi(`/builders/${builderId}/higgles-grants`, cookie, {
+    method: 'POST',
+    body: JSON.stringify({ amountCents }),
+  });
+  if (granted.response.status !== 201) {
+    throw new Error(`grantHigglesAsAdmin: grant failed — ${granted.body.error}`);
+  }
+}
+
 // Launches a fresh browser + page against the running dev server, with
 // console/page errors collected (callers should assert `errors.length === 0`
 // at the end) and window.prompt() dialogs (used throughout for naming a new
