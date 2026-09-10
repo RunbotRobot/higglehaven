@@ -4823,10 +4823,14 @@ in-house; don't block app usage on paperwork until a payee actually
 crosses the reporting threshold; block only earnings above the threshold
 once crossed; one shared reporting pipeline showing the two income
 sources — real-money seller payouts and higgles commissions — separately,
-with a combined total). The foundational aggregation layer (#612),
-progressive threshold-crossing notices (#613), and W-9/W-8BEN collection
-with encrypted-at-rest storage (#614) are built so far — no gating on
-submission (#615) and no actual 1099 generation (#616) exist yet.
+with a combined total). Built so far: the foundational aggregation layer
+(#612), progressive threshold-crossing notices (#613), W-9/W-8BEN
+collection with encrypted-at-rest storage (#614), the earnings gate above
+the reporting threshold (#615, see "Real-money seller payouts" below), and
+the vendor-independent half of actual 1099 generation — a form-record data
+model plus an admin review endpoint (#645, see below). Still open: actual
+IRS e-filing transmission through a vendor (#646), owner-gated on
+provisioning a vendor account.
 
 ### `GET /api/tax/summary`
 
@@ -4970,6 +4974,98 @@ each form's own missing required field), a successful W-9 and W-8BEN
 submission each, the stored ciphertext never containing the plaintext SSN
 or address, resubmission overwriting a prior submission, and
 `taxFormType`/`taxFormCompletedAt` showing up on `GET /api/auth/me`.
+
+### `GET /api/tax/admin-forms` / `POST /api/tax/admin-forms/:formId/approve`
+
+Admin-only (`401` with no session, `403` for a non-admin). The
+vendor-independent half of #616 (sub-issue of #350) — deciding who needs a
+1099 and tracking its draft/approved lifecycle, with no e-filing vendor
+involved anywhere here (that's #646, still owner-gated on provisioning a
+vendor account).
+
+`GET ?year=YYYY` (year defaults to the current UTC calendar year, same
+validation as `GET /api/tax/summary`) first (re-)generates draft records
+for every account that newly qualifies, then returns every `tax_1099_forms`
+row for that year:
+
+```json
+{
+  "year": 2026,
+  "forms": [
+    {
+      "formId": "tax1099-...",
+      "userId": "user-...",
+      "email": "seller@example.com",
+      "formType": "1099-k",
+      "status": "draft",
+      "grossIncomeCents": 2500000,
+      "taxPaperworkOnFile": true,
+      "taxFormType": "w9",
+      "generatedAt": "2026-01-01T00:00:00.000Z",
+      "approvedAt": null,
+      "filedAt": null,
+      "filingReference": null,
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+Generation runs two independent queries, each against its own real
+threshold — **not** `GET /api/tax/summary`'s combined `totalCents`, which
+is only an acceptable approximation for that endpoint's own non-blocking
+notice (see its own comment on why):
+
+- **`1099-k`**: a seller profile's own `sellerPayoutCents` (same definition
+  as `GET /api/tax/summary`'s — full transaction total, non-refunded,
+  real-money purchases only) crossing `$20,000` for the year. The federal
+  threshold's own second leg (200 transactions) and any lower state
+  thresholds are **not** modeled yet — a known gap, not a silent
+  miscalculation, flagged in #645's own GitHub issue.
+- **`1099-nec`**: a builder profile's own `builderHigglesCents` crossing
+  `$600` for the year — 1099-NEC's standard nonemployee-compensation
+  threshold, much lower than 1099-K's and a genuinely different number
+  from `GET /api/tax/summary`'s combined-total threshold. Per #350's own
+  research, this form-type choice for daller-commission income is a
+  reasonable default, not a tax professional's confirmed answer yet.
+
+Only builder/seller profiles actually linked to a real login
+(`user_id IS NOT NULL`, migrations/0054) are ever considered — an orphaned
+pre-real-accounts profile has no one to send a form to.
+
+A conflicting generation pass only ever refreshes `grossIncomeCents` on a
+row still sitting in `status: "draft"` — once a form is `"approved"` (or
+later `"filed"`/`"voided"`), its snapshot is locked in and further income
+posting that year never silently changes it. `taxPaperworkOnFile` mirrors
+whether that payee has a W-9/W-8BEN on file (`GET /api/auth/me`'s own
+`taxFormType`/`taxFormCompletedAt`) — a `1099-nec`/`1099-k` row can exist
+with this `false` (crossing the income threshold and having paperwork on
+file are independent facts), but approving it requires it to be `true`.
+
+`POST /:formId/approve` transitions a `"draft"` form to `"approved"`,
+stamping `approvedAt`. `409` if the payee has no tax paperwork on file yet
+(`Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet`),
+if the form isn't currently a draft (already approved/filed/voided —
+double-approving is rejected, not silently idempotent, since a second
+approval on an already-processed form usually means something's out of
+sync), or if a concurrent approval already claimed it first (the same
+atomic `UPDATE ... WHERE status = 'draft'` guard this codebase already
+uses for auction bids/purchase claims). `404` for an unknown `formId`.
+Nothing here files anything anywhere — `status: "approved"` just marks a
+form ready for #646's still-to-be-built e-filing transmission to pick up.
+
+#### Testing note
+
+`worker/commerce.test.js`'s "1099 form generation + admin review (#645)"
+describe block (nested alongside "Tax summary (#612)"/"Tax-threshold
+payout gate (#615)", reusing the same `createConnectedSeller`/
+`makeRealMoneyPurchase` helpers) covers the `401`/`403` admin gate,
+generating a `1099-nec` only once the $600 threshold is crossed, generating
+a `1099-k` only once the $20,000 threshold is crossed, refreshing a still-draft
+snapshot on regeneration while never touching an already-approved one,
+rejecting an approval with no tax paperwork on file, rejecting a
+double-approval and an unknown `formId`, and the approve endpoint's own
+admin gate.
 
 ## D1 schema overview
 

@@ -4927,6 +4927,17 @@ async function handleSellerPayouts(request, env, db) {
 // actual form generation.
 const TAX_REPORTING_THRESHOLD_CENTS = 20_000_00;
 
+// #645 (sub-issue of #616): 1099-NEC's own standard nonemployee-
+// compensation threshold ($600/payee/year) -- a much lower, and
+// different, bar than TAX_REPORTING_THRESHOLD_CENTS just above, which is
+// specifically the 1099-K (card/TPSO-settled) dollar threshold. #613's
+// own combined-income notice deliberately approximates with one shared
+// threshold (see that constant's own comment on why that's fine for a
+// soft heads-up) -- but #645 actually generates form records, so it uses
+// the correct, distinct threshold per form type instead of reusing the
+// approximation.
+const TAX_1099_NEC_THRESHOLD_CENTS = 600_00;
+
 // #615's own payout-blocked error, shared by both places handleSellerPayouts
 // can hit it (fully over the line before ever building a payout, or the
 // tax-budget cap leaving nothing includable once Stripe's own cap is also
@@ -4986,6 +4997,68 @@ function queryTaxYear(value) {
   return year;
 }
 
+// #645 (sub-issue of #616): creates or refreshes one draft 1099 form
+// record. The `WHERE tax_1099_forms.status = 'draft'` on the DO UPDATE
+// branch is deliberate, not decorative -- once an admin has approved (or
+// a form has been filed/voided), this must never silently overwrite its
+// locked-in gross_income_cents snapshot just because more income posted
+// later in the year; a conflicting upsert on a non-draft row is a no-op.
+async function upsertTax1099Draft(db, { userId, taxYear, formType, grossIncomeCents, generatedAt }) {
+  await db.prepare(`
+    INSERT INTO tax_1099_forms (form_id, user_id, tax_year, form_type, status, gross_income_cents, generated_at, updated_at)
+    VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)
+    ON CONFLICT (user_id, tax_year, form_type) DO UPDATE SET
+      gross_income_cents = excluded.gross_income_cents,
+      updated_at = excluded.updated_at
+    WHERE tax_1099_forms.status = 'draft'
+  `).bind(`tax1099-${crypto.randomUUID()}`, userId, taxYear, formType, grossIncomeCents, generatedAt, generatedAt).run();
+}
+
+// #645: finds every account whose income for `year` crosses the relevant
+// per-form threshold and creates/refreshes a draft record for it. Only
+// considers builders/sellers actually linked to a real login (`user_id
+// IS NOT NULL`, migrations/0054) -- an orphaned pre-real-accounts profile
+// has nobody to send a tax form to.
+//
+// Deliberately two separate queries/thresholds rather than reusing
+// annualGrossIncome's combined total: a 1099-K only concerns the
+// TPSO-settled seller side (compared against the real $20,000 federal
+// dollar leg -- the 200-transaction leg and any lower state thresholds
+// are NOT modeled here, a known gap flagged in #645's own GitHub issue
+// rather than silently guessed at), and a 1099-NEC only concerns the
+// daller-commission side, compared against its own, much lower, standard
+// nonemployee-compensation threshold.
+async function generateTax1099Drafts(db, year) {
+  const yearStart = `${year}-01-01T00:00:00.000Z`;
+  const yearEnd = `${year + 1}-01-01T00:00:00.000Z`;
+  const generatedAt = new Date().toISOString();
+
+  const [necRows, kRows] = await Promise.all([
+    db.prepare(`
+      SELECT b.user_id AS user_id, SUM(e.amount_cents) AS total
+      FROM higgles_earnings_events e JOIN builders b ON b.builder_id = e.builder_id
+      WHERE b.user_id IS NOT NULL AND e.created_at >= ? AND e.created_at < ?
+      GROUP BY b.user_id HAVING total >= ?
+    `).bind(yearStart, yearEnd, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    db.prepare(`
+      SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+      FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
+      WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+        AND p.created_at >= ? AND p.created_at < ?
+      GROUP BY s.user_id HAVING total >= ?
+    `).bind(yearStart, yearEnd, TAX_REPORTING_THRESHOLD_CENTS).all(),
+  ]);
+
+  await Promise.all([
+    ...necRows.results.map((row) => upsertTax1099Draft(db, {
+      userId: row.user_id, taxYear: year, formType: '1099-nec', grossIncomeCents: row.total, generatedAt,
+    })),
+    ...kRows.results.map((row) => upsertTax1099Draft(db, {
+      userId: row.user_id, taxYear: year, formType: '1099-k', grossIncomeCents: row.total, generatedAt,
+    })),
+  ]);
+}
+
 // GET returns the current user's combined gross-income summary (higgles
 // commissions from their builder profile, real-money payouts from their
 // seller profile if they have one) for a given calendar year, defaulting
@@ -5006,6 +5079,66 @@ async function handleTax(request, env, db, route, url) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'id-form') {
     return handleTaxIdForm(request, env, db, user);
+  }
+  // #645: admin-only review list -- (re-)generates draft 1099 records for
+  // the requested year, then returns every form on file for it, so an
+  // admin viewing this always sees a fresh snapshot rather than a stale
+  // one from whenever generation last ran. See generateTax1099Drafts'
+  // own comment on why a conflicting draft never overwrites an
+  // already-approved/filed/voided row.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-forms') {
+    if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    const year = queryTaxYear(url.searchParams.get('year'));
+    await generateTax1099Drafts(db, year);
+    const rows = await db.prepare(`
+      SELECT f.*, u.email, u.tax_form_type, u.tax_form_completed_at
+      FROM tax_1099_forms f JOIN users u ON u.user_id = f.user_id
+      WHERE f.tax_year = ? ORDER BY u.email, f.form_type
+    `).bind(year).all();
+    return json({
+      year,
+      forms: rows.results.map((row) => ({
+        formId: row.form_id,
+        userId: row.user_id,
+        email: row.email,
+        formType: row.form_type,
+        status: row.status,
+        grossIncomeCents: row.gross_income_cents,
+        taxPaperworkOnFile: Boolean(row.tax_form_type),
+        taxFormType: row.tax_form_type,
+        generatedAt: row.generated_at,
+        approvedAt: row.approved_at,
+        filedAt: row.filed_at,
+        filingReference: row.filing_reference,
+        updatedAt: row.updated_at,
+      })),
+    });
+  }
+  // #645: the review half of "review UI" -- signs off on a draft so it's
+  // ready for #646's e-filing transmission to pick up. Requires the
+  // payee's own W-9/W-8BEN paperwork (#614) to actually be on file first
+  // — approving a form for someone who hasn't submitted tax ID yet would
+  // create a filable-looking record with nothing behind it to transmit.
+  // The status='draft' guard on the UPDATE itself (not just the earlier
+  // read) is the same atomic check-then-act idiom this codebase already
+  // uses for auction bids/purchase claims — a second concurrent approval
+  // of the same form is a no-op, not a double-approval.
+  if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'approve') {
+    if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    const formId = route[2];
+    const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    if (!form) throw new HttpError('Tax form not found', 404);
+    if (form.status !== 'draft') throw new HttpError(`Cannot approve a form in status "${form.status}"`, 409);
+    const payee = await db.prepare('SELECT tax_form_completed_at FROM users WHERE user_id = ?').bind(form.user_id).first();
+    if (!payee?.tax_form_completed_at) {
+      throw new HttpError("Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet", 409);
+    }
+    const approvedAt = new Date().toISOString();
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ? WHERE form_id = ? AND status = 'draft'
+    `).bind(approvedAt, approvedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
+    return json({ formId, status: 'approved', approvedAt });
   }
   return json({ error: 'Not found' }, 404);
 }

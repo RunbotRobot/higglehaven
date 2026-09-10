@@ -3133,5 +3133,132 @@ describe('Simulated purchases', () => {
       }));
       expect(got.response.status).toBe(503);
     });
+
+    // #645 (sub-issue of #616, itself sub-issue of #350): the vendor-independent
+    // half of #616 — a 1099 form-record data model plus an admin-only
+    // generate/review endpoint. No e-filing vendor involved here at all
+    // (that's #646); this only covers deciding who needs a form and tracking
+    // its draft/approved lifecycle.
+    describe('1099 form generation + admin review (#645)', () => {
+      async function grantHiggles(builderId, amountCents) {
+        const granted = await api(`/builders/${builderId}/land-cap-grants`, adminSession({
+          method: 'POST', body: JSON.stringify({ amountCents }),
+        }));
+        expect(granted.response.status).toBe(201);
+      }
+
+      it('requires a session, then admin access', async () => {
+        const anon = await api('/tax/admin-forms');
+        expect(anon.response.status).toBe(401);
+
+        const builder = await signupBuilder('tax-1099-not-admin');
+        const nonAdmin = await api('/tax/admin-forms', builder.session());
+        expect(nonAdmin.response.status).toBe(403);
+      });
+
+      it('generates a 1099-NEC draft once a builder\'s daller-commission income crosses $600, not before', async () => {
+        const builder = await signupBuilder('tax-1099-nec-builder');
+        const builderMe = await api('/builders/me', builder.session());
+
+        await grantHiggles(builderMe.body.builder.builderId, 50000); // $500 — under the $600 NEC threshold
+        const under = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+        expect(under.response.status).toBe(200);
+        expect(under.body.forms.find((f) => f.email === builder.email)).toBeUndefined();
+
+        await grantHiggles(builderMe.body.builder.builderId, 20000); // now $700 total — crosses $600
+        const over = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+        const form = over.body.forms.find((f) => f.email === builder.email);
+        expect(form).toMatchObject({
+          formType: '1099-nec', status: 'draft', grossIncomeCents: 70000, taxPaperworkOnFile: false,
+        });
+      });
+
+      it("generates a 1099-K draft once a seller's real-money payout volume crosses $20,000, not a 1099-NEC", async () => {
+        const builder = await signupBuilder('tax-1099-k-builder');
+        const seller = await createConnectedSeller('tax-1099-k-seller');
+        const purchaseId = await makeRealMoneyPurchase(builder, seller);
+        // makeRealMoneyPurchase's own priceCents is a fixed $50 -- nowhere
+        // near the $20,000 threshold, and buying enough $50 items to reach
+        // it for real would need hundreds of purchases (each its own
+        // landlet/instance). Bumping this one purchase's total_cents
+        // directly is the same "simulate what a real transaction would have
+        // written" technique already used elsewhere in this describe block
+        // (see the refund-exclusion test above).
+        await env.DB.prepare('UPDATE purchases SET total_cents = 2000000 WHERE purchase_id = ?').bind(purchaseId).run();
+
+        const got = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+        const forms = got.body.forms.filter((f) => f.email === seller.email);
+        expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2000000 })]);
+      });
+
+      it('refreshes a draft\'s snapshot on regeneration, but never touches an already-approved form', async () => {
+        const builder = await signupBuilder('tax-1099-refresh-builder');
+        const builderMe = await api('/builders/me', builder.session());
+        await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+          .bind('w9', '2026-01-01T00:00:00.000Z', builder.email).run();
+        const year = new Date().getUTCFullYear();
+
+        await grantHiggles(builderMe.body.builder.builderId, 70000);
+        const first = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const draft = first.body.forms.find((f) => f.email === builder.email);
+        expect(draft.grossIncomeCents).toBe(70000);
+
+        // Still a draft — regenerating after more income posts refreshes it.
+        await grantHiggles(builderMe.body.builder.builderId, 10000);
+        const refreshed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        expect(refreshed.body.forms.find((f) => f.email === builder.email).grossIncomeCents).toBe(80000);
+
+        const approved = await api(`/tax/admin-forms/${draft.formId}/approve`, adminSession({ method: 'POST' }));
+        expect(approved.response.status).toBe(200);
+        expect(approved.body.status).toBe('approved');
+
+        // More income posts after approval — the now-locked-in snapshot must
+        // not silently drift.
+        await grantHiggles(builderMe.body.builder.builderId, 100000);
+        const afterApproval = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const stillApproved = afterApproval.body.forms.find((f) => f.email === builder.email);
+        expect(stillApproved.status).toBe('approved');
+        expect(stillApproved.grossIncomeCents).toBe(80000);
+      });
+
+      it('rejects approving a form for a payee with no W-9/W-8BEN paperwork on file', async () => {
+        const builder = await signupBuilder('tax-1099-approve-no-paperwork');
+        const builderMe = await api('/builders/me', builder.session());
+        await grantHiggles(builderMe.body.builder.builderId, 70000);
+        const year = new Date().getUTCFullYear();
+        const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const form = listed.body.forms.find((f) => f.email === builder.email);
+        expect(form.taxPaperworkOnFile).toBe(false);
+
+        const rejected = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+        expect(rejected.response.status).toBe(409);
+        expect(rejected.body.error).toMatch(/no W-9\/W-8BEN/i);
+      });
+
+      it('rejects approving an already-approved form, and a nonexistent one', async () => {
+        const builder = await signupBuilder('tax-1099-double-approve');
+        const builderMe = await api('/builders/me', builder.session());
+        await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+          .bind('w9', '2026-01-01T00:00:00.000Z', builder.email).run();
+        await grantHiggles(builderMe.body.builder.builderId, 70000);
+        const year = new Date().getUTCFullYear();
+        const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const form = listed.body.forms.find((f) => f.email === builder.email);
+
+        const first = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+        expect(first.response.status).toBe(200);
+        const second = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+        expect(second.response.status).toBe(409);
+
+        const notFound = await api('/tax/admin-forms/tax1099-does-not-exist/approve', adminSession({ method: 'POST' }));
+        expect(notFound.response.status).toBe(404);
+      });
+
+      it('requires admin access to approve a form', async () => {
+        const builder = await signupBuilder('tax-1099-approve-not-admin');
+        const rejected = await api('/tax/admin-forms/tax1099-whatever/approve', builder.session({ method: 'POST' }));
+        expect(rejected.response.status).toBe(403);
+      });
+    });
   });
 });
