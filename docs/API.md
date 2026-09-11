@@ -6117,6 +6117,101 @@ panel (same collapsed-panel-with-a-Save-step idiom, same
 `updateCatalogTemplate` call), so a second full browser-driven test of the
 same interaction pattern would be redundant rather than additive.
 
+## Control Room API (N31)
+
+The multi-session "Control Room" coordination board (a shared task/reply
+board the dozen-or-so autonomous Claude Code sessions developing this repo
+use to claim work and exchange direction with the human owner) previously
+lived entirely as a Claude Artifact using that platform's own `db`
+capability — real, persistent storage, but with no server-side validation
+hook: a session wrote straight through the db capability's own
+`update()` call, so nothing ever stopped a bare `waitingOn: 'owner'` write
+with zero explanation attached. The owner asked directly (Control Room
+note N31, 2026-09-11) for a real server that can reject such a call
+outright. `migrations/0082_control_room.sql` and the routes below are
+that server — this doc describes the API; the Artifact-era frontend has
+not yet been rebuilt against it (tracked as follow-up work, see the note
+at the end of this section).
+
+### Access
+
+Two caller shapes need write access here: the owner's own browser (an
+existing admin-role user session cookie, the same bar `requireAdmin`
+already applies elsewhere in this file) and the fleet of autonomous Claude
+sessions that call this API server-to-server with no cookie at all.
+`requireControlRoomAccess` accepts either — a valid admin session, or a
+`CONTROL_ROOM_API_KEY` Worker secret presented via the `x-control-room-key`
+header (same never-configured-in-tests convention as
+`STRIPE_SECRET_KEY`/`DIDIT_API_KEY`: local dev and the automated test
+suite exercise the "no access" `401` path by default, and a test that
+wants the key-authenticated path sets `env.CONTROL_ROOM_API_KEY` itself).
+Read access uses the same gate as writes — this is dev-team backlog data,
+not end-user account data, so there's no per-row ownership filtering the
+way a builder's or seller's own resources get.
+
+### `GET /api/control-room/tasks`
+
+Lists tasks, most-recently-updated first (capped at 500). Optional
+`?status=queued|in_progress|done` query param filters to one column, the
+same three values the board's own three columns use.
+
+### `POST /api/control-room/tasks`
+
+Creates a task. **Requires `from` (the caller's own name) and `title`
+(the task's own text) — both rejected outright, `400`, if missing or
+blank.** These are the owner's own two named criteria from N31. An
+explicit `id` may be supplied (`409` if already taken); otherwise one is
+generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
+`session`, `tag`, `url`, `waitingOn`, `imageUrl`) is optional, defaulting
+to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively, matching the
+Artifact-era board's own defaults for a freeform note.
+
+### `GET /api/control-room/tasks/:id`
+
+`404` if the task doesn't exist.
+
+### `PATCH /api/control-room/tasks/:id`
+
+Updates a task. **Requires `caller` (who is making this specific change)
+on every call — `400` if missing or blank.** Any of `status`, `session`,
+`note` (also stamps `noteUpdatedAt`), `tag`, `waitingOn`, `viewed`,
+`awaitingClaude` may be included; only fields actually present in the
+body are touched.
+
+**The actual fix N31 asked for**: setting `waitingOn` to `'owner'` (when
+it wasn't already) additionally requires a non-empty `reason` — `400`
+otherwise, and nothing is written. When present, `reason` is inserted as
+a real `control_room_replies` row (`from` = the same `caller`) in the
+same atomic `db.batch` as the task update, so it is structurally
+impossible — not just discouraged — for this API to ever produce a task
+sitting at "Waiting on: Owner" with no reply anywhere explaining why. A
+change that doesn't set `waitingOn` to `'owner'` (clearing it, setting it
+to something else, or leaving it already at `'owner'`) needs no `reason`
+— only the specific transition the owner flagged (#610/#616/#653/#659)
+is gated.
+
+### `GET /api/control-room/tasks/:id/replies`
+
+Every reply for one task, oldest first.
+
+### `POST /api/control-room/tasks/:id/replies`
+
+Creates a reply. **Requires `from` and `text` — `400` if either is
+missing or blank** (a reply is nothing but those two fields, so both are
+unconditionally required, unlike the task update's conditional `reason`
+above). `404` if the task doesn't exist. Bumps the parent task's own
+`updatedAt`, the same "a reply counts as activity on its thread" behavior
+the Artifact-era board used for its own sort order.
+
+### Not yet done
+
+This ships the validating backend only. Still open, tracked as follow-up
+rather than bundled into this same change: migrating the Artifact's
+existing `tasks`/`replies` documents into these tables, and rebuilding the
+board's own frontend (the column/filter/search/compose UI) to call this
+API instead of `window.claude.use('db')`. The owner has been told this
+explicitly rather than having the live Artifact page cut over unannounced.
+
 ## Automated tests
 
 Run the Worker integration suite with:
