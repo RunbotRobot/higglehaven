@@ -230,6 +230,29 @@
         border-radius: 999px;
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
+        /* #666: on a narrow viewport this row's own natural (unwrapped)
+           width can exceed the screen — the picker <select> alone can run
+           wide (a landlet with no name falls back to its raw id), and a
+           long saved-layout name pushes further. Left unconstrained, a
+           row wider than the viewport still renders at its full natural
+           width (browsers don't shrink a fixed-position, auto-width flex
+           container below its children's own minimum content width) and,
+           since it's centered via the transform above rather than
+           anchored to an edge, ends up overflowing *both* sides at once —
+           the rightmost child (the paste button) can land entirely off
+           the right edge, unclickable, with nothing about that visible
+           from the CSS values themselves. max-width plus wrapping is the
+           fix: once a line can't fit, it wraps onto a second centered row
+           instead of forcing the whole pill wider than the screen.
+           Combined with the white-space/truncation rules below (so a
+           single long name/id can't itself balloon into many wrapped
+           lines and drag the wrong sibling's height along with it via
+           align-items:center), this keeps every child readable and
+           reachable regardless of what a saved layout or landlet happens
+           to be named. */
+        max-width: calc(100vw - 24px);
+        flex-wrap: wrap;
+        justify-content: center;
       }
       #layout-preview-toolbar.visible {
         display: flex;
@@ -242,6 +265,19 @@
         border-radius: 999px;
         padding: 4px 12px;
         font: 13px/1.4 sans-serif;
+        white-space: nowrap;
+      }
+      /* Both of these can hold arbitrary, builder-chosen text (a saved
+         layout's own generated name; a landlet's name, or its raw id when
+         unnamed) with no length limit enforced anywhere upstream — capped
+         and truncated here so one long value can't single-handedly widen
+         or (via text wrapping under flex-shrink) vertically balloon the
+         whole toolbar row, the actual root cause behind #666. */
+      #layout-preview-name {
+        max-width: 160px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       /* #648: only shown once populateLayoutPreviewPasteTarget (src/main.js)
          finds the builder owns more than one claimed landlet — same
@@ -251,6 +287,10 @@
         border-radius: 999px;
         padding: 4px 10px;
         font: 13px/1.4 sans-serif;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       /* The drag-rectangle itself — positioned/sized entirely via inline
          style from JS on every pointermove while dragging (see
@@ -3288,7 +3328,7 @@
       <span id="layout-preview-name"></span>
       <span id="layout-preview-selection-count"></span>
       <select id="layout-preview-paste-target" hidden></select>
-      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Lándlet</button>
+      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Land</button>
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="gizmo-mode-controls">
