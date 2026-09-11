@@ -58,7 +58,7 @@ console.log('paste-equivalent create rejected pre-repurchase (should be 400):', 
 
 // Re-purchase level 1 so the landlet's own z-bounds cover the saved z
 // again, then actually exercise the UI: Settings > Saved Layouts >
-// Preview > marquee-select > Paste onto Land.
+// Preview > marquee-select > Paste onto Lándlet.
 await fetchJson(`/api/landlets/${landletId}/levels`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ direction: 'up' }),
 });

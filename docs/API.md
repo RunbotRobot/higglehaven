@@ -4430,7 +4430,7 @@ UI (#635, built on top of the detail endpoint above — see
 
 ### Pasting saved-layout instances onto a landlet (#636)
 
-No dedicated endpoint — the preview's "Paste onto Land" button (shown
+No dedicated endpoint — the preview's "Paste onto Lándlet" button (shown
 once the marquee-select above has a nonempty selection) sends the
 selected instances' `templateId`/`x`/`y`/`z`/rotation/`crop`/`scale`/
 community-sign-and-calendar flags straight through the existing `POST
