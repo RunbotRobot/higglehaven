@@ -9894,6 +9894,23 @@ function shopFlightSpeedMultiplier(altitudeM) {
   });
 }
 
+// N45 (Control Room, 2026-09-11): the bird button's icon stayed the same
+// dove-in-flight glyph (🕊️) the whole time, grounded or airborne — nothing
+// distinguished "tap to take off" from "tap to land" beyond the .active
+// background tint. Switching to a standing/perched bird (🐦) for the whole
+// takingOff/flying span (the same span .active/.shop-flying already cover)
+// gives the icon itself a "you're up — tap to land" reading, mirroring the
+// grounded dove's "tap to fly" one. Centralized here rather than duplicated
+// across toggleShopFlight's two branches and enterShopMode's first-visit
+// spawn (below) so the icon can never drift out of sync with the classes.
+const SHOP_FLY_BTN_GROUNDED_ICON = '\u{1F54A}'; // 🕊️ dove — tap to fly
+const SHOP_FLY_BTN_FLYING_ICON = '\u{1F426}'; // 🐦 standing bird — tap to land
+function setShopFlyBtnFlying(flying) {
+  document.body.classList.toggle('shop-flying', flying);
+  shopFlyBtn.classList.toggle('active', flying);
+  shopFlyBtn.textContent = flying ? SHOP_FLY_BTN_FLYING_ICON : SHOP_FLY_BTN_GROUNDED_ICON;
+}
+
 // Toggling mid-transition (takingOff/landing) is ignored rather than
 // queued or reversed — let the current one finish, then the next press
 // starts cleanly from a real grounded/flying state. Landing captures its
@@ -9907,8 +9924,7 @@ function toggleShopFlight() {
     // (index.html) — shown for the whole takingOff/flying span, not just
     // once actually airborne, so the ascend/descend buttons are already in
     // place the moment takeoff finishes rather than popping in afterward.
-    document.body.classList.add('shop-flying');
-    shopFlyBtn.classList.add('active');
+    setShopFlyBtnFlying(true);
   } else if (shopFlightState === 'flying') {
     shopFlightLandingStartAltitudeM = shopFlightAltitudeM;
     shopFlightState = 'landing';
@@ -9916,8 +9932,7 @@ function toggleShopFlight() {
     // Landing is an automatic descent (shopVerticalInput is only read
     // while actually 'flying' — see updateShopFlight), so the ascend/
     // descend controls hide the instant it starts, not once it finishes.
-    document.body.classList.remove('shop-flying');
-    shopFlyBtn.classList.remove('active');
+    setShopFlyBtnFlying(false);
   }
 }
 
@@ -11252,8 +11267,7 @@ async function enterShopMode() {
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
-  document.body.classList.toggle('shop-flying', isFirstShopVisit);
-  shopFlyBtn.classList.toggle('active', isFirstShopVisit);
+  setShopFlyBtnFlying(isFirstShopVisit);
 
   shopYaw = 0;
   shopPitch = -0.12;
