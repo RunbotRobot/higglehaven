@@ -433,6 +433,25 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #659 (owner, Control Room, 2026-09-11): "Buyers are never shown the
+         refund policy... before purchasing" — same tap-a-priced-product
+         visibility gate as #shop-buy-hint just above (only shown once a
+         priced product is tapped, one slot higher in the same stack), but
+         a plain underlined text link rather than a filled pill — this
+         isn't the primary action on this product the way Buy is, just a
+         disclosure a shopper can check before deciding. */
+      #shop-return-policy-link {
+        bottom: 430px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: none;
+        border: none;
+        padding: 4px 10px;
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+        text-decoration: underline;
+        cursor: pointer;
+      }
       /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
          right looks (yaw/pitch) — each tracks its own pointer via
          setPointerCapture so both thumbs work at once. The knob is an
@@ -1400,6 +1419,46 @@
       /* #453: real-money checkout — same modal shell as #upload-modal,
          stacked above the world (no other modal opens over Shop mode's
          world view), holding a Stripe Elements card field. */
+      /* #659: same modal shell as #checkout-modal just below (read-only —
+         no action buttons, just the close button every dismissible modal
+         in this file already has via .modal-close-btn), scrollable and a
+         little wider since this is a few paragraphs of real text rather
+         than a compact checkout form. */
+      #refund-policy-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #refund-policy-modal.visible {
+        display: flex;
+      }
+      #refund-policy-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 480px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 20px;
+        color: var(--pill-text);
+        font: 14px/1.5 sans-serif;
+      }
+      #refund-policy-modal-content h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+      #refund-policy-modal-content p {
+        margin: 0 0 12px;
+      }
+      #refund-policy-modal-content p:last-child {
+        margin-bottom: 0;
+      }
       #checkout-modal {
         position: fixed;
         inset: 0;
@@ -3167,6 +3226,7 @@
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
     <div id="shop-product-info" class="shop-ui"></div>
+    <button id="shop-return-policy-link" class="shop-ui" type="button">Return Policy</button>
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
@@ -3354,6 +3414,39 @@
         <div id="upload-modal-actions">
           <button id="upload-submit-btn" type="button">Add Product</button>
         </div>
+      </div>
+    </div>
+    <!-- #659 (owner, Control Room, 2026-09-11): the plain-language refund
+         policy explanation — deliberately NOT the fine-print ToS wording,
+         per the owner's own ask. Draft copy pending the owner's sign-off
+         (posted to the Control Room for review); the mechanism here is
+         what's real, the text is easy to revise without touching this
+         markup again. -->
+    <div id="refund-policy-modal">
+      <div id="refund-policy-modal-content">
+        <button id="refund-policy-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Refund Policy</h2>
+        <p>
+          When you return a purchase, you'll get back 99% of what you paid — not the full 100%.
+        </p>
+        <p>
+          Here's why: every purchase pays a small commission to the builder whose lándlet hosted the
+          product. That commission is real money the builder can withdraw right away, and it's part of
+          what makes building on higglehaven worthwhile. If a refund clawed back 100% of the purchase,
+          someone could exploit that — buy their own item, cash out the builder's commission, then refund
+          the purchase for a full 100% back, pocketing the commission for free. Keeping back that last 1%
+          closes the loophole without asking builders to give up their earnings or shoppers to wait for
+          their money.
+        </p>
+        <p>
+          In short: builders are foundational to the community we're building, and this is the simplest
+          way we found to protect their earnings while still standing behind every purchase with a real
+          refund.
+        </p>
+        <p>
+          Some sellers choose not to accept returns on certain products — that's noted on the product
+          before you buy.
+        </p>
       </div>
     </div>
     <div id="checkout-modal">

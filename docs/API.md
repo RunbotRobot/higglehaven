@@ -4841,6 +4841,42 @@ the Edit Returns Policy panel through the real UI — the no-returns
 rejection isn't in `e2e/digital-goods.test.mjs`: a real 400 trips the
 shared `errors.length === 0` check.
 
+#### Frontend-only refund policy disclosure (#659)
+
+The 99%-not-100% policy above was real from #651 onward, but nothing told
+a shopper about it before they bought — per the owner's own Control Room
+direction, this closes that gap with a plain-language disclosure, entirely
+client-side (no new route, no schema change).
+
+A `#shop-return-policy-link` button sits alongside `#shop-product-info`,
+sharing that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
+`#shop-buy-hint` (see "Shop-side: seeing a price" above) — both toggle
+together off one shared `canBuy` boolean in `updateReviewFade()`, so the
+link only ever appears once a shopper has actually tapped a buyable
+product. Clicking it opens `#refund-policy-modal` (same
+modal-with-a-close-button idiom as every other Shop-mode modal in this
+file), which states the 99% rate plainly and explains why (higglehaven's
+own commission share, clawed back on refund, isn't returned). The buy
+confirmation dialog itself also gets a one-line reminder pointing at this
+same policy, so a shopper sees it again right before committing to a
+purchase, not just if they happen to tap the link first.
+
+`productInfoText` (see "Shop-side: seeing a price" above) also appends a
+plain `"(no returns)"` suffix when `metadata.noReturns` is set, so a
+no-returns product's own tapped-info line discloses that up front too,
+independent of the general 99%-refund modal.
+
+**Testing note.** Verified manually via Playwright against the running
+dev server, for the same reason `#shop-product-info`'s own tap-to-show
+behavior is (see "Testing note" above): this suite has no real 3D
+camera/raycast simulation to drive the tap-gating honestly. Confirmed
+`#shop-return-policy-link` and `#refund-policy-modal` both start hidden,
+that programmatically invoking the link's click handler (standing in for
+the real tap) opens the modal showing the "Refund Policy" heading and its
+99%-mentioning copy, that the close button hides it again, and that no
+console/page errors occurred anywhere in the flow. The verification script
+itself was a temporary scratch file, deleted before committing.
+
 ## Tax reporting
 
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
