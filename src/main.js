@@ -9008,6 +9008,21 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 // How fast the avatar's swing amplitude eases toward its current target
 // (moving vs. stopped) each frame — see updateShopAvatarPose.
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
+// Owner (Control Room, N46): flying should tip the avatar into a near-
+// Superman posture instead of staying upright — nose (head) forward and
+// down, not fully flat, so it still reads as "flying forward" rather than
+// "lying on an invisible table." Applied as a rotation.x pitch (the local
+// left-right hinge axis every limb already swings around) before
+// rotation.z's own yaw — see the main per-frame update — so the tip happens
+// in the avatar's own local frame first, then the whole tipped body turns
+// to face the current heading, same as a real flight rig would compose it.
+const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(80 * Math.PI) / 180;
+// Eases shopAvatarPitch toward the target above (or back to 0 on landing)
+// each frame — same idea as SHOP_AVATAR_SWING_EASE_PER_S, tuned to settle
+// over roughly the same ~1s span as SHOP_FLIGHT_TAKEOFF_DURATION_S so the
+// tilt reads as part of the same takeoff motion rather than snapping in
+// separately once altitude ramp-up finishes.
+const SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S = 5;
 // docs/SPEC.md §2's "context-aware idle state machine ... after inactivity,
 // with randomization" — see updateShopAvatarIdle. This pass only covers
 // "stand" (a subtle randomized weight-shift sway + occasional head turn);
@@ -9351,6 +9366,10 @@ let shopPitch = -0.12;
 // scheme. Only updated while moving (see updateShopMovement) — standing
 // still and looking around doesn't spin the avatar in place.
 let shopAvatarFacing = 0;
+// Current eased flight-pose pitch (0 = upright, SHOP_AVATAR_FLIGHT_PITCH_RAD
+// = full tilt) — see SHOP_AVATAR_FLIGHT_PITCH_RAD's own comment and the
+// per-frame ease in updateShopMovement.
+let shopAvatarPitch = 0;
 // -1..1 each, driven continuously by joystick deflection (see
 // bindShopJoystick below) and consumed every animate() frame in
 // updateShopMovement — not per-pointer-move deltas like the old
@@ -10172,6 +10191,15 @@ function updateShopMovement(now) {
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
   updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
+  // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
+  // instead of staying upright; landing eases it back to 0. Applied as
+  // rotation.x (the local left-right axis, same one every limb's walk-cycle
+  // swing already rotates around) BEFORE rotation.z's yaw below, so the tilt
+  // happens in the avatar's own local frame and then the whole tilted body
+  // turns to face the current heading — not the other way around.
+  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
+  shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
+  shopAvatar.group.rotation.x = shopAvatarPitch;
   // The avatar faces its own movement direction (shopAvatarFacing, turned
   // by the left stick above), not the camera's look direction (shopYaw,
   // the right stick) — a standard third-person rig where free-look and
@@ -11303,6 +11331,7 @@ async function enterShopMode() {
   shopYaw = 0;
   shopPitch = -0.12;
   shopAvatarFacing = 0;
+  shopAvatarPitch = 0;
   applyShopCameraOrientation();
   positionShopCamera();
   setShopFov(camera.fov); // re-clamp in case a previous Shop session left it zoomed
