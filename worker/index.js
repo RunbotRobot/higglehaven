@@ -520,7 +520,275 @@ async function handleApi(request, env, url) {
     return handleModelCleanup(request, env);
   }
 
+  if (route[0] === 'control-room') {
+    return handleControlRoom(request, env, route, url);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// N31 (owner, Control Room, 2026-09-11): "I must insist that we move this
+// page to a proper server-based format. That will enable a structured API
+// that we write which can reject calls that don't meet the required
+// criteria (caller name and message text)." The Control Room previously
+// lived entirely as a Claude Artifact's own `db` capability — real
+// persistent storage, but with no server-side validation: a session wrote
+// straight through db.collection('tasks').doc(id).update(), so nothing
+// ever stopped a bare `waitingOn: 'owner'` write with zero explanation
+// (the recurring #610/#616/#653/#659 pattern the owner flagged repeatedly).
+// This is that real, validating server: migrations/0082_control_room.sql
+// holds the data, and every mutating call here is rejected outright —
+// not just flagged after the fact — if it's missing a caller name or
+// message text, or if it tries to set waitingOn to 'owner' with no reason
+// attached.
+//
+// Two caller shapes need write access: the owner's own browser (an
+// existing admin-role user session cookie, same bar as every other
+// requireAdmin-gated endpoint in this file) and the ~12 autonomous Claude
+// sessions that read/write this API server-to-server with no cookie at
+// all. Accepting either lets the frontend page reuse the owner's existing
+// login with no secret ever shipped to a browser, while sessions
+// authenticate with a guarded Worker secret in a header — the same
+// never-configured-in-tests convention as STRIPE_SECRET_KEY/DIDIT_API_KEY,
+// so local dev and this test suite (neither ever sets
+// CONTROL_ROOM_API_KEY) exercise the "no access" 401 path by default.
+async function requireControlRoomAccess(request, env, db) {
+  const providedKey = request.headers.get('x-control-room-key');
+  if (env.CONTROL_ROOM_API_KEY && providedKey === env.CONTROL_ROOM_API_KEY) {
+    return { via: 'api-key' };
+  }
+  const user = await currentUser(request, db);
+  if (user?.is_admin) return { via: 'admin-session', user };
+  throw new HttpError('Control Room access required', 401);
+}
+
+// Generous length cap for a note/reply body (a session's own multi-
+// paragraph write-up, or the owner's own reply) — labelValue's own
+// MAX_LABEL_LENGTH (100, sized for a short display label like a template
+// name) is far too tight for this. 20,000 characters is well beyond any
+// legitimate write-up seen in this project's own history, just enough of
+// a ceiling to keep a single row from growing unboundedly.
+const CONTROL_ROOM_TEXT_MAX_LENGTH = 20000;
+function controlRoomTextValue(value, field) {
+  const text = stringValue(value, field);
+  if (text.length > CONTROL_ROOM_TEXT_MAX_LENGTH) {
+    throw new HttpError(`${field} must be ${CONTROL_ROOM_TEXT_MAX_LENGTH} characters or fewer`, 400);
+  }
+  return text;
+}
+
+function controlRoomTaskFromRow(row) {
+  return {
+    id: row.task_id,
+    kind: row.kind,
+    number: row.number,
+    noteNumber: row.note_number,
+    title: row.title,
+    status: row.status,
+    session: row.session,
+    from: row.posted_by,
+    note: row.note,
+    noteUpdatedAt: row.note_updated_at,
+    tag: row.tag,
+    url: row.url,
+    pr: row.pr_url,
+    waitingOn: row.waiting_on,
+    viewed: !!row.viewed,
+    awaitingClaude: !!row.awaiting_claude,
+    imageUrl: row.image_url,
+    subIssues: row.sub_issues ? JSON.parse(row.sub_issues) : null,
+    subIssueSummaries: row.sub_issue_summaries ? JSON.parse(row.sub_issue_summaries) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function controlRoomReplyFromRow(row) {
+  return {
+    id: row.reply_id,
+    taskId: row.task_id,
+    from: row.from_caller,
+    text: row.text,
+    imageUrl: row.image_url,
+    createdAt: row.created_at,
+  };
+}
+
+async function handleControlRoom(request, env, route, url) {
+  const db = env.DB;
+  if (route.length === 2 && route[1] === 'tasks') {
+    if (request.method === 'GET') return handleControlRoomTasksList(request, env, db, url);
+    if (request.method === 'POST') return handleControlRoomTaskCreate(request, env, db);
+    return json({ error: 'Not found' }, 404);
+  }
+  if (route.length === 3 && route[1] === 'tasks') {
+    const taskId = route[2];
+    if (request.method === 'GET') return handleControlRoomTaskGet(request, env, db, taskId);
+    if (request.method === 'PATCH') return handleControlRoomTaskUpdate(request, env, db, taskId);
+    return json({ error: 'Not found' }, 404);
+  }
+  if (route.length === 4 && route[1] === 'tasks' && route[3] === 'replies') {
+    const taskId = route[2];
+    if (request.method === 'GET') return handleControlRoomRepliesList(request, env, db, taskId);
+    if (request.method === 'POST') return handleControlRoomReplyCreate(request, env, db, taskId);
+    return json({ error: 'Not found' }, 404);
+  }
+  return json({ error: 'Not found' }, 404);
+}
+
+// Read access stays open to any Control Room caller with the right access
+// (no per-row filtering) — this is dev-team backlog/coordination data, the
+// same visibility model the shareable Artifact link already had, not
+// end-user account data.
+async function handleControlRoomTasksList(request, env, db, url) {
+  await requireControlRoomAccess(request, env, db);
+  const status = url.searchParams.get('status');
+  const query = status
+    ? db.prepare('SELECT * FROM control_room_tasks WHERE status = ? ORDER BY updated_at DESC LIMIT 500').bind(status)
+    : db.prepare('SELECT * FROM control_room_tasks ORDER BY updated_at DESC LIMIT 500');
+  const { results } = await query.all();
+  return json({ tasks: results.map(controlRoomTaskFromRow) });
+}
+
+async function handleControlRoomTaskGet(request, env, db, taskId) {
+  await requireControlRoomAccess(request, env, db);
+  const row = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  if (!row) return json({ error: 'Task not found' }, 404);
+  return json({ task: controlRoomTaskFromRow(row) });
+}
+
+// The owner's own two required fields, direct from N31: a caller name
+// (`from`) and message text (`title` — this task's own initial post, the
+// same role a GitHub issue's title or a freeform note's own text plays on
+// the board). Both are rejected outright by controlRoomTextValue/
+// stringValue below if missing or blank, before any row is ever written —
+// the actual fix, not a badge added after the fact.
+async function handleControlRoomTaskCreate(request, env, db) {
+  await requireControlRoomAccess(request, env, db);
+  const body = await readJson(request);
+  const postedBy = stringValue(body.from, 'from (caller name)');
+  const title = controlRoomTextValue(body.title, 'title (message text)');
+  const taskId = body.id ? labelValue(body.id, 'id') : `note-${crypto.randomUUID()}`;
+  const existing = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  if (existing) throw new HttpError('A task with this id already exists', 409);
+
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO control_room_tasks
+      (task_id, kind, number, note_number, title, status, session, posted_by, tag, url,
+       waiting_on, image_url, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    taskId,
+    body.kind ? labelValue(body.kind, 'kind') : 'feedback',
+    body.number == null ? null : positiveInteger(body.number, 'number'),
+    body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber'),
+    title,
+    body.status ? labelValue(body.status, 'status') : 'queued',
+    body.session ? labelValue(body.session, 'session') : '',
+    postedBy,
+    body.tag ? labelValue(body.tag, 'tag') : null,
+    body.url ? labelValue(body.url, 'url') : null,
+    body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null,
+    body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
+    now, now,
+  ).run();
+
+  const row = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  return json({ task: controlRoomTaskFromRow(row) }, 201);
+}
+
+// The core of N31's own fix. Every update requires `caller` (who's making
+// this change — stored as this task's own `session`, mirroring the
+// Artifact-era convention of a task's `session` field naming whichever
+// Claude session currently has it, or the owner's own name). Setting
+// waitingOn to 'owner' additionally requires a non-empty `reason`, written
+// as a real linked reply in the SAME request — atomically, so it is
+// impossible (not just discouraged) for this API to ever produce a task
+// sitting at "Waiting on: Owner" with no reply anywhere explaining why,
+// the exact #610/#616/#653/#659 pattern this whole migration exists to
+// close. A `waitingOn` change to anything else (or a change that doesn't
+// touch waitingOn at all) needs no reason — only the specific transition
+// the owner has repeatedly flagged is gated.
+async function handleControlRoomTaskUpdate(request, env, db, taskId) {
+  await requireControlRoomAccess(request, env, db);
+  const existing = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  if (!existing) return json({ error: 'Task not found' }, 404);
+
+  const body = await readJson(request);
+  const caller = stringValue(body.caller, 'caller (caller name)');
+
+  const settingWaitingOnOwner = body.waitingOn === 'owner' && existing.waiting_on !== 'owner';
+  let reason = null;
+  if (settingWaitingOnOwner) {
+    reason = controlRoomTextValue(body.reason, 'reason (message text explaining the owner block)');
+  }
+
+  const fields = [];
+  const values = [];
+  const setIfPresent = (column, value) => { fields.push(`${column} = ?`); values.push(value); };
+
+  if (body.status !== undefined) setIfPresent('status', labelValue(body.status, 'status'));
+  if (body.session !== undefined) setIfPresent('session', body.session ? labelValue(body.session, 'session') : '');
+  if (body.note !== undefined) {
+    setIfPresent('note', body.note ? controlRoomTextValue(body.note, 'note') : null);
+    setIfPresent('note_updated_at', new Date().toISOString());
+  }
+  if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
+  if (body.waitingOn !== undefined) setIfPresent('waiting_on', body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null);
+  if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
+  if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
+
+  const now = new Date().toISOString();
+  setIfPresent('updated_at', now);
+
+  const statements = [
+    db.prepare(`UPDATE control_room_tasks SET ${fields.join(', ')} WHERE task_id = ?`).bind(...values, taskId),
+  ];
+  if (settingWaitingOnOwner) {
+    statements.push(db.prepare(`
+      INSERT INTO control_room_replies (reply_id, task_id, from_caller, text, created_at) VALUES (?, ?, ?, ?, ?)
+    `).bind(`reply-${crypto.randomUUID()}`, taskId, caller, reason, now));
+  }
+  await db.batch(statements);
+
+  const row = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  return json({ task: controlRoomTaskFromRow(row) });
+}
+
+async function handleControlRoomRepliesList(request, env, db, taskId) {
+  await requireControlRoomAccess(request, env, db);
+  const { results } = await db.prepare(
+    'SELECT * FROM control_room_replies WHERE task_id = ? ORDER BY created_at ASC',
+  ).bind(taskId).all();
+  return json({ replies: results.map(controlRoomReplyFromRow) });
+}
+
+// The other half of N31's own required criteria, applied to a reply
+// directly (a reply is nothing BUT a caller name + message text, so both
+// fields are unconditionally required here, not gated behind any special
+// case the way handleControlRoomTaskUpdate's `reason` is).
+async function handleControlRoomReplyCreate(request, env, db, taskId) {
+  await requireControlRoomAccess(request, env, db);
+  const task = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  if (!task) return json({ error: 'Task not found' }, 404);
+
+  const body = await readJson(request);
+  const fromCaller = stringValue(body.from, 'from (caller name)');
+  const text = controlRoomTextValue(body.text, 'text (message text)');
+  const replyId = `reply-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+
+  await db.batch([
+    db.prepare(`
+      INSERT INTO control_room_replies (reply_id, task_id, from_caller, text, image_url, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(replyId, taskId, fromCaller, text, body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null, now),
+    db.prepare('UPDATE control_room_tasks SET updated_at = ? WHERE task_id = ?').bind(now, taskId),
+  ]);
+
+  const row = await db.prepare('SELECT * FROM control_room_replies WHERE reply_id = ?').bind(replyId).first();
+  return json({ reply: controlRoomReplyFromRow(row) }, 201);
 }
 
 // Accepts a model file as a direct multipart/form-data upload (a "file"
