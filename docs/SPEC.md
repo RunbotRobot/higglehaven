@@ -135,7 +135,7 @@
 - **Version-change transition (shoppers present):** old items fade/shrink into ground, new version's items fade/grow up — ~2–4 second animated transition.
 
 **Performance budgets (starting hypothesis, validate empirically):**
-- ~10–25 MB total model+texture data per average lándlet; density cap ~1–2 MB per cubic meter concentrated.
+- ~10–25 MB total model+texture data per average lánd; density cap ~1–2 MB per cubic meter concentrated.
 - **Automated mesh-merging on save:** builder edits fully individual objects; platform auto-generates an optimized merged mesh for delivery (reduces draw calls) — standard "source vs. build" pipeline pattern.
 - Standard pipeline: **GLB** format, CDN delivery, Draco geometry + Basis Universal texture compression, automatic multi-LOD generation.
 
@@ -143,7 +143,7 @@
 
 **Ground/flooring as real product:** default grass texture is placeholder; placing a specific real flooring/sod product replaces it within that footprint.
 
-**Founding/pioneer recognition (corrected — no size advantage):** permanent "Pioneer" profile badge (grows in prestige over time) and a permanent "founding history" page (the "nail-chalice" — improvised from limited catalog — preserved as founding lore). **Explicitly no larger starter plot for founding builders** — with a sparse early builder community, an oversized early lándlet would let founders claim what becomes prime real estate later purely by being first, undermining the platform's performance-earned (not first-mover-earned) growth philosophy. Recognition stays reputational/historical only.
+**Founding/pioneer recognition (corrected — no size advantage):** permanent "Pioneer" profile badge (grows in prestige over time) and a permanent "founding history" page (the "nail-chalice" — improvised from limited catalog — preserved as founding lore). **Explicitly no larger starter plot for founding builders** — with a sparse early builder community, an oversized early starter plot would let founders claim what becomes prime real estate later purely by being first, undermining the platform's performance-earned (not first-mover-earned) growth philosophy. Recognition stays reputational/historical only.
 
 **No higglehaven-managed central plaza** — superseded by the circular growth model: the platform's own first-ever claimed lánd (yours) naturally occupies that position organically. New users spawn zoomed-out in flight mode above the world.
 
