@@ -154,11 +154,14 @@
          in src/main.js), each page its own ground plane sized to fit that
          page's items, capped by a cumulative model-file-size budget rather
          than a fixed item count. Hidden by default (only shown while
-         currentMode === 'sell'); bottom-center is free in every other mode. */
+         currentMode === 'sell'); bottom-center is free in every other mode.
+         bottom matches #seller-showcase-manage-btn's own bottom (owner
+         feedback N51 — the two pills read as vertically mismatched
+         otherwise, and this one used to sit 4px higher). */
       #seller-showcase-pager {
         display: none;
         position: fixed;
-        bottom: 16px;
+        bottom: 12px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 10;
@@ -3279,7 +3282,7 @@
       <span id="seller-showcase-page-label">Page 1 of 1</span>
       <button id="seller-showcase-next-btn" type="button" aria-label="Next page">&#9654;</button>
     </div>
-    <button id="seller-showcase-manage-btn" type="button" hidden>Manage Products</button>
+    <button id="seller-showcase-manage-btn" type="button" hidden>Products</button>
     <div id="layout-preview-toolbar">
       <button id="layout-preview-back-btn" type="button">&#8592; Back to Build</button>
       <span id="layout-preview-name"></span>

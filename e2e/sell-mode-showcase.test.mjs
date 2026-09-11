@@ -52,7 +52,21 @@ await page.waitForTimeout(500);
 const pagerVisibleAfterClose = await page.locator('#seller-showcase-pager').isVisible();
 const manageBtnVisible = await page.locator('#seller-showcase-manage-btn').isVisible();
 console.log('pager visible once the modal is closed (should be true):', pagerVisibleAfterClose);
-console.log('"Manage Products" button visible once the modal is closed (should be true):', manageBtnVisible);
+console.log('"Products" button visible once the modal is closed (should be true):', manageBtnVisible);
+
+// Owner feedback N51: at this viewport width the centered pager pill and
+// the right-anchored "Products" button used to visually overlap (the
+// button's old, longer "Manage Products" label pushed its left edge into
+// the pager's own horizontal centering). Checking real bounding boxes
+// rather than eyeballing a screenshot, so a future label/CSS change that
+// reintroduces the collision fails a real assertion.
+const pagerBox = await page.locator('#seller-showcase-pager').boundingBox();
+const manageBtnBox = await page.locator('#seller-showcase-manage-btn').boundingBox();
+const rectsOverlap = pagerBox.x < manageBtnBox.x + manageBtnBox.width &&
+  pagerBox.x + pagerBox.width > manageBtnBox.x &&
+  pagerBox.y < manageBtnBox.y + manageBtnBox.height &&
+  pagerBox.y + pagerBox.height > manageBtnBox.y;
+console.log('pager and "Products" button overlap on screen (should be false):', rectsOverlap);
 
 // Prev/Next are both disabled with only one page.
 const prevDisabled = await page.isDisabled('#seller-showcase-prev-btn');
@@ -79,7 +93,7 @@ console.log('reopened on Manage view (should be true):', modalOnManageAfterClick
 console.log('a product row is expanded after the click (should be >= 1):', someRowExpanded);
 
 const pass = pagerVisibleWhileModalOpen && pageLabelWhileModalOpen === 'Page 1 of 1' &&
-  pagerVisibleAfterClose && manageBtnVisible && prevDisabled && nextDisabled &&
+  pagerVisibleAfterClose && manageBtnVisible && !rectsOverlap && prevDisabled && nextDisabled &&
   opened && modalOnManageAfterClick && someRowExpanded >= 1 &&
   errors.length === 0;
 await finish(browser, { pass, label: '#540: Sell mode showcase array — pager, and click-to-Manage on a real placed-instance mesh', errors });
