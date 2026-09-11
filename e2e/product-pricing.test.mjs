@@ -42,6 +42,19 @@ async function uploadProduct({ name, price }) {
   await page.waitForTimeout(500);
 }
 
+// N50: the price fields are plain text inputs (no more native-number
+// spinner/placeholder) that reformat whatever the seller typed to
+// "$X,XXX.XX" once they leave the field — checked directly here, since
+// uploadProduct() below fills-and-submits in one go and never blurs.
+await page.click('#upload-model-btn');
+await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
+await page.fill('#upload-price', '1234.5');
+await page.locator('#upload-price').blur();
+const uploadPriceAfterBlur = await page.locator('#upload-price').inputValue();
+console.log('upload price field after blur (should be "$1,234.50"):', uploadPriceAfterBlur);
+await page.click('#upload-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+
 // A priced product at upload time.
 await uploadProduct({ name: PRICED_PRODUCT, price: '12.5' });
 const pricedRow = () => page.locator('.seller-row').filter({ hasText: PRICED_PRODUCT });
@@ -49,6 +62,23 @@ await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
 const pricedRowPriceText = await pricedRow().locator('.seller-row-price').textContent();
 console.log('priced product\'s row price text (should be "$12.50"):', pricedRowPriceText);
+await pricedRow().locator('.seller-row-toggle').click();
+await page.waitForTimeout(200);
+
+// Same blur-reformat check, now against the Seller "Edit Price" panel —
+// reopen the row, type a raw value into its price input, and confirm it
+// reformats the same way (without saving, so it doesn't disturb this
+// product's price for the rest of the suite).
+await pricedRow().locator('.seller-row-toggle').click();
+await page.waitForTimeout(300);
+await pricedRow().locator('button', { hasText: 'Edit Price' }).click();
+await page.waitForTimeout(300);
+await pricedRow().locator('.seller-price-input').fill('1234.5');
+await pricedRow().locator('.seller-price-input').blur();
+const editPriceAfterBlur = await pricedRow().locator('.seller-price-input').inputValue();
+console.log('Edit Price input after blur (should be "$1,234.50"):', editPriceAfterBlur);
+await pricedRow().locator('button', { hasText: 'Edit Price' }).click();
+await page.waitForTimeout(200);
 await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
 
@@ -94,7 +124,9 @@ await page.waitForFunction(
 const clearedRowPriceText = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('row price text after clearing it back to blank (should be "Not priced"):', clearedRowPriceText);
 
-const pass = pricedRowPriceText.trim() === '$12.50' &&
+const pass = uploadPriceAfterBlur === '$1,234.50' &&
+  editPriceAfterBlur === '$1,234.50' &&
+  pricedRowPriceText.trim() === '$12.50' &&
   unpricedRowPriceTextBefore.trim() === 'Not priced' &&
   priceInputBefore === '' &&
   unpricedRowPriceTextAfter.trim() === '$7.99' &&

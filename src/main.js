@@ -2494,6 +2494,15 @@ const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digita
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
 });
+// N50: reformat to "$123.45" once the seller leaves the field — leave a
+// blank or not-yet-valid value alone so the submit-time check below still
+// catches it and reports the same error message.
+uploadPriceInput.addEventListener('blur', () => {
+  const dollars = parsePriceInputDollars(uploadPriceInput.value);
+  if (Number.isFinite(dollars) && dollars >= 0) {
+    uploadPriceInput.value = formatDollarsForPriceInput(dollars);
+  }
+});
 const uploadFileInput = document.getElementById('upload-file-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
@@ -2856,7 +2865,7 @@ async function handleUploadDimensionsStep() {
   const priceInput = uploadPriceInput.value.trim();
   let priceCents = null;
   if (priceInput) {
-    const dollars = Number(priceInput);
+    const dollars = parsePriceInputDollars(priceInput);
     if (!Number.isFinite(dollars) || dollars < 0) {
       setUploadStatus('Price must be a non-negative number, or left blank.', true);
       return;
@@ -3744,14 +3753,21 @@ function renderSellerList() {
 
     const priceInput = document.createElement('input');
     priceInput.className = 'seller-price-input';
-    priceInput.type = 'number';
-    priceInput.step = '0.01';
-    priceInput.min = '0';
-    priceInput.placeholder = 'e.g. 12.99, or blank for no price';
+    priceInput.type = 'text';
+    priceInput.inputMode = 'decimal';
     pricePanel.appendChild(priceInput);
 
+    // N50: reformat to "$123.45" once the seller leaves the field — see
+    // parsePriceInputDollars/formatDollarsForPriceInput above.
+    priceInput.addEventListener('blur', () => {
+      const dollars = parsePriceInputDollars(priceInput.value);
+      if (Number.isFinite(dollars) && dollars >= 0) {
+        priceInput.value = formatDollarsForPriceInput(dollars);
+      }
+    });
+
     function fillPriceInput() {
-      priceInput.value = template.priceCents == null ? '' : (template.priceCents / 100).toFixed(2);
+      priceInput.value = template.priceCents == null ? '' : formatDollarsForPriceInput(template.priceCents / 100);
     }
     fillPriceInput();
 
@@ -3770,7 +3786,7 @@ function renderSellerList() {
       const trimmed = priceInput.value.trim();
       let priceCents = null;
       if (trimmed) {
-        const dollars = Number(trimmed);
+        const dollars = parsePriceInputDollars(trimmed);
         if (!Number.isFinite(dollars) || dollars < 0) {
           priceStatus.textContent = 'Price must be a non-negative number, or left blank.';
           priceStatus.classList.add('error');
@@ -5160,6 +5176,21 @@ function formatHiggles(cents) {
 // one.
 function formatPriceCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
+}
+
+// N50: the price fields (upload wizard + Seller "Edit Price") let the
+// seller type a price in whatever format they like — plain digits, a
+// leading $, thousands commas — and reformat it to a consistent
+// "$123,456.78" display once they leave the field, rather than forcing a
+// bare-number native <input type=number> with an "e.g. 12.99" placeholder.
+// Parsing strips the cosmetic $/, characters back out so the existing
+// submit-time validation still sees a plain number.
+function parsePriceInputDollars(raw) {
+  const cleaned = String(raw).trim().replace(/[$,]/g, '');
+  return cleaned === '' ? NaN : Number(cleaned);
+}
+function formatDollarsForPriceInput(dollars) {
+  return dollars.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 // Mirrors worker/index.js's own DIGITAL_GOOD_DISCLAIMER_TEXT (docs/SPEC.md
