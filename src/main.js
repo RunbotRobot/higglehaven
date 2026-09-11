@@ -8825,8 +8825,11 @@ const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
+const shopReturnPolicyLinkEl = document.getElementById('shop-return-policy-link');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
 const shopLandletInfoEl = document.getElementById('shop-landlet-info');
+const refundPolicyModalEl = document.getElementById('refund-policy-modal');
+const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
 const checkoutModalEl = document.getElementById('checkout-modal');
 const checkoutSummaryEl = document.getElementById('checkout-summary');
 const checkoutCardElementEl = document.getElementById('checkout-card-element');
@@ -10552,7 +10555,11 @@ function updateReviewFade() {
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy hint at
     // all rather than one that would just 400 on click.
-    shopBuyHintEl.classList.toggle('visible', tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null);
+    const canBuy = tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null;
+    shopBuyHintEl.classList.toggle('visible', canBuy);
+    // #659: same gate as the Buy hint just above — a return policy only
+    // matters for something with a price to actually refund.
+    shopReturnPolicyLinkEl.classList.toggle('visible', canBuy);
   }
 }
 
@@ -10571,6 +10578,17 @@ function productInfoText(template) {
   // shown right where a shopper would otherwise assume every item ships
   // internationally like the rest of the catalog.
   if (metadata?.domesticOnly) text += ' (ships to United States only)';
+  // #659 (owner, Control Room, 2026-09-11): a shopper had no way to see a
+  // product's own return policy before buying it — this is the same
+  // tap-to-inspect disclosure slot the digital-goods/domestic-only notes
+  // above already use, so a no-returns product reads the same way those
+  // do: right where a shopper would otherwise assume every item can be
+  // returned like the rest of the catalog. A product that DOES accept
+  // returns gets no extra text here — the general 99% refund policy
+  // (see the Return Policy link this same tap also reveals, below) already
+  // covers the default case, and repeating "returns accepted" on every
+  // single product would just be noise.
+  if (metadata?.noReturns) text += ' (no returns)';
   return text;
 }
 
@@ -10916,12 +10934,27 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
   });
 }
 
+// #659: read-only, no submit/confirm action — just the close button, same
+// as every other dismissible modal in this file (see #checkout-modal's
+// own comment on why there's no backdrop-click-to-close convention here).
+shopReturnPolicyLinkEl.addEventListener('click', () => {
+  refundPolicyModalEl.classList.add('visible');
+});
+refundPolicyCloseBtn.addEventListener('click', () => {
+  refundPolicyModalEl.classList.remove('visible');
+});
+
 shopBuyHintEl.addEventListener('click', async () => {
   const review = shopTappedProduct;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
-  const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}?`);
+  // #659: a one-line mention right at the moment of buying, alongside the
+  // full Return Policy link this same tapped product already surfaces
+  // (#shop-return-policy-link, above) — this dialog is a native confirm(),
+  // so it can't carry an actual link, just the fact worth knowing before
+  // saying yes.
+  const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
   const instanceId = review.mesh.userData.instanceId;
