@@ -8858,7 +8858,7 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopReturnPolicyLinkEl = document.getElementById('shop-return-policy-link');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
-const shopLandletInfoEl = document.getElementById('shop-landlet-info');
+const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
 const checkoutModalEl = document.getElementById('checkout-modal');
@@ -10353,12 +10353,12 @@ function updateShopLandletInfo() {
   if (found === shopCurrentLandletEntry) return;
   shopCurrentLandletEntry = found;
   if (!found) {
-    shopLandletInfoEl.classList.remove('visible');
+    accountMenuLandletInfoEl.hidden = true;
     return;
   }
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
-  shopLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
-  shopLandletInfoEl.classList.add('visible');
+  accountMenuLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
+  accountMenuLandletInfoEl.hidden = false;
 }
 
 // myToken pins this call to the specific load that started it (see the
@@ -11190,7 +11190,7 @@ async function enterShopMode() {
   // failure here just leaves shopBuilderLabels empty (falls back to "an
   // unknown builder" per-landlet) rather than blocking Shop mode itself.
   shopCurrentLandletEntry = null;
-  shopLandletInfoEl.classList.remove('visible');
+  accountMenuLandletInfoEl.hidden = true;
   fetchBuilders()
     .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
     .catch(() => {});

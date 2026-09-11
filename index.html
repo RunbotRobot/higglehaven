@@ -380,24 +380,6 @@
         font: 13px/1.4 sans-serif;
         pointer-events: none;
       }
-      /* Which claimed landlet the shopper is currently standing on, and who
-         built it (docs/API.md's "Builders") — otherwise the world gives a
-         shopper no way to tell whose land they're on at all. Reuses the
-         top-right corner the old #build-info HUD element used to occupy
-         (moved into Settings — see that commit) — already confirmed clear
-         of every other overlay in every mode/modal. */
-      #shop-landlet-info {
-        top: 82px;
-        right: 8px;
-        text-align: right;
-        max-width: 55vw;
-        background: rgb(var(--pill-rgb) / 0.55);
-        padding: 6px 12px;
-        border-radius: 8px;
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-        pointer-events: none;
-      }
       /* Only shown while within SIGN_INTERACT_RADIUS_M of a community sign
          (see updateSignFade in src/main.js) — unlike shop-status above,
          this one is a real tappable button, so it doesn't inherit its
@@ -719,6 +701,21 @@
       #account-menu-tax-notice.crossed {
         color: var(--danger);
         opacity: 1;
+      }
+      /* N48 (Control Room, 2026-09-11): "the note 'starter landlet — built
+         by an unknown builder' should be in the menu to declutter the 3D
+         world" — was a fixed top-right HUD overlay (#shop-landlet-info)
+         shown any time the shopper stood on a claimed landlet; moved into
+         the account menu instead, same as #build-info's own earlier move
+         into Settings (see the account-menu-landcap comment above). Kept
+         live-updating (updateShopLandletInfo in src/main.js) even while the
+         menu panel itself is collapsed, so it's current the moment the menu
+         opens rather than stale until the next landlet crossing. */
+      #account-menu-landlet-info {
+        padding: 7px 12px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
       }
       #notifications-badge,
       #friends-badge {
@@ -3273,7 +3270,6 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
-    <div id="shop-landlet-info" class="shop-ui"></div>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
@@ -3308,6 +3304,7 @@
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden></div>
+          <div id="account-menu-landlet-info" hidden></div>
         </div>
       </div>
     </div>
