@@ -361,7 +361,16 @@
         display: block;
       }
       #shop-status {
-        top: 10px;
+        /* Was top: 10px, left: 12px — the exact same spot as #topbar-left's
+           wordmark panel (z-index 21 vs. this row's 16), which sat on top of
+           and clipped this text's leading characters (Control Room N47:
+           "e world..." visible, the rest of "Loading the world…" hidden
+           behind the wordmark). Dropping below the topbar-left row (bottom
+           edge ~44px: wordmark-panel's 26px logo + 4px top/bottom padding,
+           starting at topbar-left's own top: 10px) clears it with margin in
+           both the default and the @media(max-width:480px) shrunk-wordmark
+           case. */
+        top: 56px;
         left: 12px;
         max-width: 60vw;
         background: rgb(var(--pill-rgb) / 0.65);
