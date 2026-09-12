@@ -44,6 +44,7 @@ import {
   fetchBuilders,
   fetchMyBuilder,
   fetchMySeller,
+  fetchMyEquippedAvatar,
   fetchTaxSummary,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
@@ -9844,6 +9845,48 @@ function createShopAvatar() {
   return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
 }
 
+// #681 (sub-issue of #679/#680): the account's own equipped custom avatar
+// model, loaded via the same loadModelInstance pipeline every placed
+// product's real model already goes through (Y-up correction, recenter on
+// bounding-box center). Returns the exact same shape createShopAvatar does
+// so every existing walk/idle/pitch/position call site below keeps working
+// completely unchanged — legPivotL/legPivotR/armPivotL/armPivotR/headPivot
+// are real THREE.Group instances, just never attached to the visible scene
+// graph, so rotating them for limb/head animation is a harmless no-op. That
+// matches this issue's own scope: a custom avatar moves correctly as a
+// rigid whole (root position/rotation on `group`), but per-bone limb
+// animation on its own skeleton is #682's job, not this one's.
+async function createCustomShopAvatar(modelUrl) {
+  const container = await loadModelInstance(modelUrl);
+  // loadModelInstance recenters the model on its own bounding-box center,
+  // so (unlike the procedural avatar, whose local z=0 is already its feet)
+  // this container's local origin sits at its vertical mid-point. Shifting
+  // it up by half its own measured height puts its feet at z=0 instead,
+  // matching shopAvatarPosition's own "feet position" contract — the same
+  // ground-rest convention createMeshForInstance applies to every other
+  // placed model, just measured from the real geometry here rather than a
+  // catalog template's declared height (this endpoint doesn't return one).
+  const box = new THREE.Box3().setFromObject(container);
+  const height = Math.max(box.max.z - box.min.z, 0);
+  container.position.z = height / 2;
+
+  const group = new THREE.Group();
+  group.add(container);
+
+  const afkSprite = makeSignPostSprite('AFK');
+  afkSprite.position.z = height + 0.3;
+  afkSprite.material.opacity = 0;
+  group.add(afkSprite);
+
+  const legPivotL = new THREE.Group();
+  const legPivotR = new THREE.Group();
+  const armPivotL = new THREE.Group();
+  const armPivotR = new THREE.Group();
+  const headPivot = new THREE.Group();
+
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
+}
+
 let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite } — see createShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
@@ -11278,6 +11321,17 @@ async function enterShopMode() {
     activeCatalog = FALLBACK_CATALOG;
   }
 
+  // #681: which custom avatar (if any) this account has equipped — never
+  // blocks Shop mode entry on failure, same as activeCatalog's own
+  // fallback just above; falls back to today's hardcoded default avatar.
+  let equippedAvatarModelUrl = null;
+  try {
+    const avatar = await fetchMyEquippedAvatar();
+    equippedAvatarModelUrl = avatar.modelUrl;
+  } catch (err) {
+    console.warn('Could not fetch equipped avatar, using the default avatar:', err);
+  }
+
   let world;
   let allLandlets;
   try {
@@ -11393,7 +11447,15 @@ async function enterShopMode() {
   // trip before building a fresh one, rather than ending up with two
   // overlapping bodies.
   if (shopAvatar) scene.remove(shopAvatar.group);
-  shopAvatar = createShopAvatar();
+  shopAvatar = null;
+  if (equippedAvatarModelUrl) {
+    try {
+      shopAvatar = await createCustomShopAvatar(equippedAvatarModelUrl);
+    } catch (err) {
+      console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
+    }
+  }
+  if (!shopAvatar) shopAvatar = createShopAvatar();
   scene.add(shopAvatar.group);
   shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
