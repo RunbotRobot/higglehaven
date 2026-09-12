@@ -4891,11 +4891,13 @@ sources — real-money seller payouts and higgles commissions — separately,
 with a combined total). Built so far: the foundational aggregation layer
 (#612), progressive threshold-crossing notices (#613), W-9/W-8BEN
 collection with encrypted-at-rest storage (#614), the earnings gate above
-the reporting threshold (#615, see "Real-money seller payouts" below), and
-the vendor-independent half of actual 1099 generation — a form-record data
-model plus an admin review endpoint (#645, see below). Still open: actual
-IRS e-filing transmission through a vendor (#646), owner-gated on
-provisioning a vendor account.
+the reporting threshold (#615, see "Real-money seller payouts" below), the
+vendor-independent half of actual 1099 generation — a form-record data
+model plus an admin review endpoint (#645, see below) — and the e-filing
+transmission code itself against TaxBandits (#646, see below). Still
+open: the owner actually provisioning a real vendor account and this
+platform's own filer identity — every #646 code path this environment can
+exercise returns `503` until that happens.
 
 ### `GET /api/tax/summary`
 
@@ -5040,13 +5042,13 @@ submission each, the stored ciphertext never containing the plaintext SSN
 or address, resubmission overwriting a prior submission, and
 `taxFormType`/`taxFormCompletedAt` showing up on `GET /api/auth/me`.
 
-### `GET /api/tax/admin-forms` / `POST /api/tax/admin-forms/:formId/approve`
+### `GET /api/tax/admin-forms` / `POST /api/tax/admin-forms/:formId/approve` / `POST /api/tax/admin-forms/:formId/file`
 
-Admin-only (`401` with no session, `403` for a non-admin). The
-vendor-independent half of #616 (sub-issue of #350) — deciding who needs a
-1099 and tracking its draft/approved lifecycle, with no e-filing vendor
-involved anywhere here (that's #646, still owner-gated on provisioning a
-vendor account).
+Admin-only (`401` with no session, `403` for a non-admin). `GET`/`approve`
+are the vendor-independent half of #616 (sub-issue of #350) — deciding who
+needs a 1099 and tracking its draft/approved lifecycle, no e-filing vendor
+involved. `file` is #646's transmission half, built against TaxBandits'
+1099 e-filing API.
 
 `GET ?year=YYYY` (year defaults to the current UTC calendar year, same
 validation as `GET /api/tax/summary`) first (re-)generates draft records
@@ -5116,8 +5118,30 @@ approval on an already-processed form usually means something's out of
 sync), or if a concurrent approval already claimed it first (the same
 atomic `UPDATE ... WHERE status = 'draft'` guard this codebase already
 uses for auction bids/purchase claims). `404` for an unknown `formId`.
-Nothing here files anything anywhere — `status: "approved"` just marks a
-form ready for #646's still-to-be-built e-filing transmission to pick up.
+`status: "approved"` marks a form ready for `POST /:formId/file` to pick up.
+
+`POST /:formId/file` transitions an `"approved"` form to `"filed"`,
+transmitting it to TaxBandits and stamping `filedAt`/`filingReference`
+(the vendor's own submission id) on success. Requires
+`TAX_ID_ENCRYPTION_KEY` (to decrypt the payee's on-file W-9/W-8BEN — see
+`POST /api/tax/id-form` above) and `TAX_1099_EFILING_CLIENT_ID`/
+`TAX_1099_EFILING_CLIENT_SECRET`/`TAX_1099_PAYER_NAME`/`TAX_1099_PAYER_EIN`
+(the vendor account + this platform's own filer identity) all configured —
+`503` otherwise, same guarded-secret shape as `STRIPE_SECRET_KEY`/
+`DIDIT_API_KEY`. Like every other guarded vendor secret here, no session
+can provision the vendor account or set these — that's the owner's own
+action, still outstanding as of this writing. `409` if the form isn't
+currently `"approved"`, or has no tax paperwork on file, or a concurrent
+file attempt already claimed it (the same atomic
+`UPDATE ... WHERE status = 'approved'` guard `/approve` itself uses).
+`404` for an unknown `formId`.
+
+**Unverified against a live vendor**: the OAuth2/JWT-signed request shape
+(`worker/index.js`'s `fetchTax1099EfilingToken`/`transmitTax1099Form`)
+follows TaxBandits' published developer docs, but no session can obtain
+real (even sandbox) client credentials to exercise it against the actual
+API — treat it as a starting point to verify/adjust once the owner
+provisions real credentials, not as already-proven-correct.
 
 #### Testing note
 
@@ -5130,7 +5154,12 @@ a `1099-k` only once the $20,000 threshold is crossed, refreshing a still-draft
 snapshot on regeneration while never touching an already-approved one,
 rejecting an approval with no tax paperwork on file, rejecting a
 double-approval and an unknown `formId`, and the approve endpoint's own
-admin gate.
+admin gate. Its nested "1099 e-filing transmission (#646)" describe block
+covers `file`'s own admin gate, unknown/still-draft-form rejection, and the
+`503` once a form is genuinely `"approved"` but e-filing isn't configured —
+the only path this environment can actually exercise, same convention as
+the existing Stripe/Didit test suites (`TAX_1099_EFILING_CLIENT_ID`/etc.
+are never configured in local dev or CI).
 
 ## D1 schema overview
 
