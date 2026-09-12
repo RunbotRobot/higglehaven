@@ -1255,14 +1255,31 @@ function findTemplate(templateId) {
 // modelUrl fields), not a generic box standing in for every product.
 // Loaded once per URL and cached; every placed instance after the first
 // gets a clone of the cached scene instead of re-fetching/re-parsing it.
+// Cached by the raw parsed GLTF (not just its .scene) so a caller that
+// also needs .animations (#682's avatar rig convention — see
+// loadModelAnimations below) never triggers a second fetch/parse for the
+// same URL.
 const gltfLoader = new GLTFLoader();
-const modelSceneCache = new Map(); // modelUrl -> Promise<THREE.Object3D> (uncloned)
+const modelGltfCache = new Map(); // modelUrl -> Promise<GLTF>
+
+function loadModelGltf(url) {
+  if (!modelGltfCache.has(url)) {
+    modelGltfCache.set(url, gltfLoader.loadAsync(url));
+  }
+  return modelGltfCache.get(url);
+}
 
 function loadModelScene(url) {
-  if (!modelSceneCache.has(url)) {
-    modelSceneCache.set(url, gltfLoader.loadAsync(url).then((gltf) => gltf.scene));
-  }
-  return modelSceneCache.get(url);
+  return loadModelGltf(url).then((gltf) => gltf.scene);
+}
+
+// #682 (sub-issue of #679/#680/#681): the named animation clips (if any)
+// an uploaded model carries — idle/walk/fly, per the convention documented
+// in docs/SPEC.md's "Avatar rig/animation clip convention" — for
+// createCustomShopAvatar to drive via AnimationMixer, and for the upload
+// wizard to surface at upload time (showUploadDimensionPreview).
+function loadModelAnimations(url) {
+  return loadModelGltf(url).then((gltf) => gltf.animations);
 }
 
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
@@ -1314,6 +1331,11 @@ async function loadModelInstance(url) {
 
   const container = new THREE.Group();
   container.add(model);
+  // #682: the actual loaded node, for a caller (createCustomShopAvatar)
+  // that needs to bind a THREE.AnimationMixer to the same hierarchy the
+  // model's own animation clips (if any) were authored against — the
+  // wrapping container itself was never part of that hierarchy.
+  container.userData.model = model;
   return container;
 }
 
@@ -2486,6 +2508,7 @@ const uploadModalTitleEl = document.getElementById('upload-modal-title');
 const uploadStepFileEl = document.getElementById('upload-step-file');
 const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
 const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
+const uploadAnimationsDetectedEl = document.getElementById('upload-animations-detected');
 const uploadNameInput = document.getElementById('upload-name');
 const uploadPriceInput = document.getElementById('upload-price');
 const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
@@ -2558,6 +2581,7 @@ function formatBytes(bytes) {
 
 function disposeUploadDimensionPreview() {
   uploadDimensionsPreviewEl.innerHTML = '';
+  uploadAnimationsDetectedEl.hidden = true;
   if (!uploadDimensionPreview) return;
   uploadDimensionPreview.controls.dispose();
   uploadDimensionPreview.renderer.dispose();
@@ -2721,6 +2745,27 @@ async function showUploadDimensionPreview(modelUrl) {
   const previewObject = await loadModelInstance(modelUrl);
   if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
+
+  // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
+  // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
+  // clip convention" — checked for every upload, not just avatar-category
+  // ones (category isn't chosen until after this step, per #680/#681's
+  // own findings). Stays hidden for the overwhelmingly common case (an
+  // ordinary product with no animations at all, e.g. a chair or a brick)
+  // rather than telling every seller their table doesn't have a "fly"
+  // clip; only speaks up when there's something to actually flag: real
+  // clips present, so either confirming the ones that matched or naming
+  // the gap for a model that clearly tried to animate but used different
+  // clip names, rather than a seller silently discovering that gap only
+  // once it's equipped in-world.
+  loadModelAnimations(modelUrl).then((animations) => {
+    if (myFlowToken !== uploadFlowToken || animations.length === 0) return;
+    const matched = ['idle', 'walk', 'fly'].filter((name) => THREE.AnimationClip.findByName(animations, name));
+    uploadAnimationsDetectedEl.textContent = matched.length > 0
+      ? `Avatar animations detected: ${matched.join(', ')} — these play automatically if this is equipped as an avatar.`
+      : `This model has ${animations.length} animation clip${animations.length === 1 ? '' : 's'}, but none named idle/walk/fly — if equipped as an avatar it'll still move, just without playing them.`;
+    uploadAnimationsDetectedEl.hidden = false;
+  }).catch(() => {});
 
   const box = new THREE.Box3().setFromObject(previewObject);
   const size = box.getSize(new THREE.Vector3());
@@ -9065,6 +9110,15 @@ const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(45 * Math.PI) / 180;
 // tilt reads as part of the same takeoff motion rather than snapping in
 // separately once altitude ramp-up finishes.
 const SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S = 5;
+// #682: the named clips (idle/walk/fly, docs/SPEC.md's own "Avatar rig/
+// animation clip convention") a custom avatar model's own AnimationMixer
+// crossfades between as the locomotion state below changes — see
+// setShopAvatarAnimationState. Same moveMagnitude threshold style as the
+// walk/run blend just above; below it reads as "not really moving" for
+// clip-switching purposes even though the procedural walk-cycle itself
+// (SHOP_AVATAR_SWING_AMPLITUDE_RAD) already scales continuously to zero.
+const SHOP_AVATAR_ANIM_WALK_THRESHOLD = 0.05;
+const SHOP_AVATAR_ANIM_CROSSFADE_S = 0.25;
 // docs/SPEC.md §2's "context-aware idle state machine ... after inactivity,
 // with randomization" — see updateShopAvatarIdle. This pass only covers
 // "stand" (a subtle randomized weight-shift sway + occasional head turn);
@@ -9884,10 +9938,31 @@ async function createCustomShopAvatar(modelUrl) {
   const armPivotR = new THREE.Group();
   const headPivot = new THREE.Group();
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
+  // #682: named idle/walk/fly clips, if the model carries any (see
+  // docs/SPEC.md's "Avatar rig/animation clip convention"). mixer/actions
+  // stay null when the model has none — setShopAvatarAnimationState below
+  // already no-ops on a null actions map, so an avatar with no matching
+  // clips still moves correctly as a rigid whole (today's #681 behavior),
+  // it just never plays anything. Bound to container.userData.model (the
+  // actual loaded node), not container itself, which is only a wrapper
+  // this function added and was never part of the clip-authored hierarchy.
+  const animations = await loadModelAnimations(modelUrl);
+  let mixer = null;
+  let actions = null;
+  if (animations.length > 0) {
+    mixer = new THREE.AnimationMixer(container.userData.model);
+    actions = {};
+    for (const state of ['idle', 'walk', 'fly']) {
+      const clip = THREE.AnimationClip.findByName(animations, state);
+      if (clip) actions[state] = mixer.clipAction(clip);
+    }
+    if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
+  }
+
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite } — see createShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState } — see createShopAvatar/createCustomShopAvatar
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
@@ -9935,6 +10010,32 @@ function updateShopAvatarPose(moveMagnitude, dt) {
   // amplitude than the legs.
   shopAvatar.armPivotL.rotation.x = -swing * 0.7;
   shopAvatar.armPivotR.rotation.x = swing * 0.7;
+}
+
+// #682: crossfades a custom avatar's AnimationMixer from whichever named
+// clip (idle/walk/fly) was playing to `state`'s own, driven by the exact
+// same airborne/moveMagnitude locomotion state updateShopAvatarPose's own
+// root-motion pose already reflects — so a model with matching clips
+// plays them in sync with its procedural root movement, not just
+// alongside it. No-ops entirely for the default procedural avatar (no
+// `actions` at all) and for a custom avatar missing every one of the
+// three clips (`actions` null, per createCustomShopAvatar's own comment)
+// — either way it just keeps moving as a rigid whole via root motion,
+// same as before this clip convention existed. Missing only SOME clips
+// (e.g. idle+walk but no fly) is handled per-transition below: fading out
+// whatever was playing still happens, but fading in only happens if the
+// new state actually has a clip, so at worst a still frame holds where a
+// missing clip's action would have taken over — deliberately not falling
+// back to a different state's own clip in that gap, since a fly-less
+// avatar suddenly still doing its walk-cycle mid-air would read as more
+// broken, not less.
+function setShopAvatarAnimationState(shopAvatar, state) {
+  if (!shopAvatar.actions || shopAvatar.animState === state) return;
+  const previousAction = shopAvatar.actions[shopAvatar.animState];
+  if (previousAction) previousAction.fadeOut(SHOP_AVATAR_ANIM_CROSSFADE_S);
+  const nextAction = shopAvatar.actions[state];
+  if (nextAction) nextAction.reset().fadeIn(SHOP_AVATAR_ANIM_CROSSFADE_S).play();
+  shopAvatar.animState = state;
 }
 
 // docs/SPEC.md §2: "context-aware idle state machine ... after inactivity,
@@ -10278,6 +10379,15 @@ function updateShopMovement(now) {
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
   updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
+  // #682: a custom avatar's own named clips, crossfaded to match the same
+  // grounded-idle/grounded-moving/airborne state the procedural pose just
+  // above already reflects — see setShopAvatarAnimationState's own
+  // comment. mixer.update always runs (a fading-out action's own blend
+  // still needs frames after the state that started it has already
+  // changed), setShopAvatarAnimationState only changes anything on an
+  // actual state transition.
+  shopAvatar.mixer?.update(dt);
+  setShopAvatarAnimationState(shopAvatar, airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle'));
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
   // instead of staying upright; landing eases it back to 0. Applied as
