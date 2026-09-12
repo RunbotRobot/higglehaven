@@ -7837,6 +7837,32 @@ async function ensureSellerIdentity() {
   return id;
 }
 
+// N44 (owner, Control Room, 2026-09-12): "I do want age attestation and
+// credit card to gate login for shopping... restrict minors from using any
+// part of the application" — Shop mode used to need no identity at all,
+// unlike Build/Sell above. Unlike those two, shopping has no separate
+// profile of its own to provision (no builderId/sellerId equivalent) — this
+// just blocks on the same login + #556 verification gate and hands back
+// the verified user, or null if they declined either step. requireLogin/
+// requireVerification already short-circuit once currentAuthUser is set and
+// verified, so — unlike builderId/sellerId above — there's no cheap
+// `if (x) return x` to check first; the flow-promise guard below still
+// exists to collapse concurrent callers (e.g. bootstrap() and a stray
+// re-entry) into one shared prompt instead of two.
+let shopperIdentityFlowPromise = null;
+async function ensureShopperIdentity() {
+  if (!shopperIdentityFlowPromise) {
+    shopperIdentityFlowPromise = (async () => {
+      let user = await requireLogin('signup', 'Sign up (or log in) — age verification is required to use higglehaven.');
+      if (!user) return null;
+      return requireVerification(user);
+    })();
+  }
+  const user = await shopperIdentityFlowPromise;
+  shopperIdentityFlowPromise = null;
+  return user;
+}
+
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
 // dimensions (notifyBuildersOfDimensionChange, worker/index.js). A plain
@@ -8731,6 +8757,16 @@ authLogoutBtn.addEventListener('click', async () => {
   }
 })();
 
+// N44: set before any of this promise's own async work below, so
+// enterShopMode (which awaits authInitPromise before running its own
+// shopper-login gate) can tell whether this load is one of these special
+// account-recovery flows the moment the promise settles, without
+// re-parsing a URL this same IIFE already strips the token from. Shop
+// mode's gate skips itself entirely in that case — see enterShopMode's own
+// comment for why forcing it on top here would actively get in the way,
+// not just look redundant.
+let accountRecoveryFlowActive = false;
+
 const authInitPromise = (async () => {
   const params = new URLSearchParams(location.search);
   const verifyToken = params.get('verifyEmail');
@@ -8742,6 +8778,7 @@ const authInitPromise = (async () => {
     await refreshCurrentUser();
     return;
   }
+  accountRecoveryFlowActive = true;
 
   history.replaceState(null, '', location.pathname);
   await refreshCurrentUser();
@@ -8920,9 +8957,12 @@ const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
 // ALTITUDE_M, 10) so the view actually reads as "above the world," not just
 // a slightly-elevated hover.
 const SHOP_NEW_VISITOR_START_ALTITUDE_M = 80;
-// Shop mode itself needs no login (unlike Build/Sell), so "new" here can
-// only be tracked per-device, not per-account — the same lightweight,
-// no-real-accounts-yet convention shopperLabel() already uses nearby.
+// Shop mode requires a real account too now (N44), but this specific flag
+// stays per-device rather than switching to a per-account field — it's a
+// low-stakes spawn-animation default (flying vs. grounded), not a security
+// gate, so there's no real benefit to a schema change here; a shared
+// device (or a second account on the same browser) just replays the
+// first-visit spawn once more, which is harmless.
 const SHOP_VISITED_BEFORE_KEY = 'higglehaven.shopVisitedBefore';
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
@@ -11138,16 +11178,71 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
   'level-controls', 'connectivity-indicator',
 ];
 
-async function enterShopMode() {
-  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
-    el.classList.add('visible');
-  }
+// N44: the shared "nothing to show, sign in to continue" end state for a
+// declined/failed login or verification — used by enterShopMode's own
+// decline branch below, and by Build/Sell/layoutPreview's own decline
+// branches (bootstrap, enterSellMode, enterLayoutPreviewMode), which used
+// to fall back to a full `enterShopMode()` call. That would now immediately
+// re-trigger Shop's own identical gate (ensureShopperIdentity) a second
+// time in a row, reopening #auth-modal right on top of the one the visitor
+// just closed — confusing at best, and it broke e2e/identity-and-ui-
+// chrome.test.mjs's own "cancel out entirely" assertions outright (the
+// modal it expected gone had already reopened by the time it checked).
+// Landing on this same inert end state instead means declining anywhere
+// always reads the same way, with no redundant second prompt.
+function showShopAccessGate() {
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
-  shopStatusEl.textContent = 'Loading the world…';
   controls.enabled = false;
+  shopStatusEl.classList.add('visible');
+  shopStatusEl.textContent = 'Sign in and complete age verification to continue.';
+}
+
+async function enterShopMode() {
+  // Safe regardless of whether the identity gate just below passes — Build
+  // UI has nothing to do with an identity check, and hiding it before that
+  // gate (rather than after) means a declined/pending login never leaves
+  // Build-mode chrome visible behind the auth modal.
+  for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
+  controls.enabled = false;
+
+  // N44 (owner, Control Room, 2026-09-12): Shop mode used to need no
+  // identity at all — see ensureShopperIdentity's own comment for why that
+  // changed. Gated before any of this function's own scene work below,
+  // matching docs/SPEC.md §6's "gate first, then build the experience"
+  // design (previously only actually applied to Build/Sell's own entry
+  // points, not Shop's).
+  await authInitPromise;
+  // A verify-email/password-reset/Didit-return link visit already opened
+  // its own specific #auth-modal (or #verify-modal) view as part of
+  // authInitPromise above — this gate skips itself entirely rather than
+  // calling requireLogin, which would call openAuthModal and unconditionally
+  // overwrite that view (openAuthModal always calls showAuthView(view) when
+  // logged out), clobbering the very thing the visitor came here to do. The
+  // world still loads normally underneath, exactly as it did before this
+  // gate existed — only the login/verification prompt itself is skipped.
+  if (!accountRecoveryFlowActive) {
+    const shopper = await ensureShopperIdentity();
+    if (!shopper) {
+      // Declined login or verification — this is now a genuine dead end
+      // until the next fresh mode-nav reload retries the gate (see
+      // showShopAccessGate's own comment on why Build/Sell/layoutPreview's
+      // own decline branches land here too, rather than each re-triggering
+      // this same gate a second time).
+      showShopAccessGate();
+      return;
+    }
+  }
+
+  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
+    el.classList.add('visible');
+  }
+  shopStatusEl.textContent = 'Loading the world…';
 
   // The builder scene's placeholder square (see applyLandletShape) has
   // nothing to do with Shop mode's own per-landlet ground meshes.
@@ -11730,9 +11825,11 @@ async function enterLayoutPreviewMode() {
 
   builderId = await ensureBuilderIdentity();
   if (!builderId) {
+    // N44: lands on showShopAccessGate's shared end state, not a full
+    // enterShopMode() call — see that function's own comment for why.
     currentMode = 'shop';
     updateModeNavUI();
-    await enterShopMode();
+    showShopAccessGate();
     return;
   }
   populateLayoutPreviewPasteTarget();
@@ -11826,10 +11923,12 @@ async function enterSellMode() {
   if (!id) {
     // Declined to log in — Sell needs a real seller identity the same way
     // Build needs a builder one (see bootstrap()'s own Build-mode
-    // fallback just below). Nothing left to show here.
+    // fallback just below). Nothing left to show here. N44: lands on
+    // showShopAccessGate's shared end state, not a full enterShopMode()
+    // call — see that function's own comment for why.
     currentMode = 'shop';
     updateModeNavUI();
-    await enterShopMode();
+    showShopAccessGate();
     return;
   }
 
@@ -12411,12 +12510,13 @@ async function bootstrap() {
     return;
   }
 
-  // Only Build/Sell/layoutPreview actually need currentAuthUser settled
-  // before proceeding (see authInitPromise's own comment on the race this
-  // avoids) — deliberately not awaited above, so a Shop-mode visit (the
-  // majority of traffic, and the one path this file already goes out of
-  // its way to render instantly without waiting on the network) is never
-  // held up by it.
+  // Build/Sell/layoutPreview need currentAuthUser settled before proceeding
+  // (see authInitPromise's own comment on the race this avoids) — Shop's
+  // own branch above awaits it too now, inside enterShopMode itself (N44),
+  // so this isn't the scene-renders-instantly shortcut it used to be for
+  // the majority-of-traffic Shop-mode case; it's just not duplicated here
+  // since enterShopMode already covers it before this function ever
+  // reaches this line for the other three modes.
   await authInitPromise;
 
   if (startMode === 'sell') {
@@ -12443,11 +12543,12 @@ async function bootstrap() {
   if (!builderId) {
     // Declined to log in (closed #auth-modal without signing in/up) —
     // Build/Sell both require a real account now (docs/API.md's
-    // "Authentication"), so there's nothing left to build on. Falls back
-    // to Shop mode rather than proceeding with no identity at all.
+    // "Authentication"), so there's nothing left to build on. N44: lands
+    // on showShopAccessGate's shared end state, not a full enterShopMode()
+    // call — see that function's own comment for why.
     currentMode = 'shop';
     updateModeNavUI();
-    await enterShopMode();
+    showShopAccessGate();
     return;
   }
   refreshNotificationsBadge();

@@ -4496,7 +4496,9 @@ auction sale proceeds as a higgle source, even though docs/SPEC.md §5's
 *intended primary* earning path is "Higgles credit instantly to builders
 on sale completion" of a *product*. `POST
 /api/instances/:instanceId/purchase` (`migrations/0051_purchases.sql`)
-lets a shopper "buy" a priced, placed product.
+lets a shopper "buy" a priced, placed product. Requires a real, verified
+session as of N44 (see "Session and verification requirement" below) —
+no longer reachable anonymously, either path.
 
 **Two paths, chosen automatically per product, per the owner's #331
 answer:**
@@ -4527,9 +4529,9 @@ POST /api/instances/:instanceId/purchase
 ```
 
 Both fields are genuinely optional (unlike every other POST body in this
-API) — a missing or empty body just means "buy one, anonymously," not a
-400, since a purchase has no other required input beyond which instance is
-being bought. When present, `buyerLabel` is capped at 100 characters, same
+API) — a missing or empty body just means "buy one," not a 400, since a
+purchase has no other required input beyond which instance is being
+bought. When present, `buyerLabel` is capped at 100 characters, same
 as sign-post/review `authorLabel`. On the simulated path, returns `201`
 with the created `purchase`; on the real-money path, returns `200` with
 `requiresPayment: true` instead — see "Real-money checkout" below.
@@ -4559,15 +4561,23 @@ with the created `purchase`; on the real-money path, returns `200` with
 `paymentIntentId` is only ever non-null for a purchase that went through
 the real-money path below.
 
+**Session and verification requirement (N44, owner direction 2026-09-12):**
+`401` with no session (`Not authenticated`), `403` if the session hasn't
+cleared #556's age-attestation + credit-card-or-ID gate (`assertVerified` —
+same requirement Build/Sell already enforce; see "Age verification" above).
+Per the owner's own reasoning ("restrict minors from using any part of the
+application"), this now applies to Shop mode's own entry/browsing too, not
+just this endpoint — see `src/main.js`'s `ensureShopperIdentity`.
+
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
 buy), the instance sits on an unclaimed lándlet (no builder to credit), or
 `quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
-reasoning as auctions' `durationHours` cap above) against this deliberately
-unauthenticated endpoint turning one request into an unbounded
-`higgles_balance_cents`/land-cap credit. `429` past 30 calls per 15 minutes
-from one client IP (see "Rate limiting" above) closes the other half of
-that gap — repeated smaller requests instead of one large one.
+reasoning as auctions' `durationHours` cap above) against one request
+turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
+past 30 calls per 15 minutes from one account (see "Rate limiting" above)
+closes the other half of that gap — repeated smaller requests instead of
+one large one.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own

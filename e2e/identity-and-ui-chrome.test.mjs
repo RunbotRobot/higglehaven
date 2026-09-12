@@ -17,6 +17,16 @@ const PASSWORD = 'e2e-test-password-123';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
+// N44 (owner, 2026-09-12): Shop mode's own entry now gates on this same
+// login wall (ensureShopperIdentity, src/main.js) — a fresh page load
+// already shows #auth-modal before this test ever clicks anything, so
+// decline it first (closing it the same way "Cancel out entirely" below
+// does) to get back to a clean, logged-out starting point for the actual
+// Sell-nav flow this test is about.
+await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
+await page.click('#auth-close-btn');
+await page.waitForTimeout(300);
+
 // --- Sell nav: active immediately, real login wall shown (#88, #89) ---
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });

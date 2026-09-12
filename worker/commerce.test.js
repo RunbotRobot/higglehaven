@@ -2004,7 +2004,8 @@ describe('Simulated purchases', () => {
   }
 
   it('404s purchasing an instance that does not exist', async () => {
-    const rejected = await api('/instances/purchase-missing-instance/purchase', { method: 'POST' });
+    const account = await signupBuilder('purchase-missing-account');
+    const rejected = await api('/instances/purchase-missing-instance/purchase', account.session({ method: 'POST' }));
     expect(rejected.response.status).toBe(404);
   });
 
@@ -2015,11 +2016,12 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-unpriced-template');
     await placeInstance('purchase-unpriced-instance', 'purchase-unpriced-landlet', 'purchase-unpriced-template', seller);
 
-    const rejected = await api('/instances/purchase-unpriced-instance/purchase', { method: 'POST' });
+    const rejected = await api('/instances/purchase-unpriced-instance/purchase', seller.session({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
 
   it('400s purchasing an instance on an unclaimed lándlet', async () => {
+    const account = await signupBuilder('purchase-unclaimed-account');
     await createGreenbeltLandletWithArea('purchase-unclaimed-landlet', 1000);
     await createTemplate('purchase-unclaimed-template', { priceCents: 500 });
     // Placing an instance through the API now always requires owning the
@@ -2032,7 +2034,7 @@ describe('Simulated purchases', () => {
       VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 1)
     `).bind('purchase-unclaimed-instance', 'purchase-unclaimed-landlet', 'purchase-unclaimed-template').run();
 
-    const rejected = await api('/instances/purchase-unclaimed-instance/purchase', { method: 'POST' });
+    const rejected = await api('/instances/purchase-unclaimed-instance/purchase', account.session({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
 
@@ -2044,28 +2046,28 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-body-instance', 'purchase-body-landlet', 'purchase-body-template', seller);
 
     // No body at all — should default rather than 415/400.
-    const defaulted = await api('/instances/purchase-body-instance/purchase', { method: 'POST' });
+    const defaulted = await api('/instances/purchase-body-instance/purchase', seller.session({ method: 'POST' }));
     expect(defaulted.response.status).toBe(201);
     expect(defaulted.body.purchase).toMatchObject({ quantity: 1, buyerLabel: null, unitPriceCents: 1000, totalCents: 1000 });
 
-    const withBody = await api('/instances/purchase-body-instance/purchase', {
+    const withBody = await api('/instances/purchase-body-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 3, buyerLabel: 'A Shopper' }),
-    });
+    }));
     expect(withBody.response.status).toBe(201);
     expect(withBody.body.purchase).toMatchObject({ quantity: 3, buyerLabel: 'A Shopper', unitPriceCents: 1000, totalCents: 3000 });
 
-    const badQuantity = await api('/instances/purchase-body-instance/purchase', {
+    const badQuantity = await api('/instances/purchase-body-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 0 }),
-    });
+    }));
     expect(badQuantity.response.status).toBe(400);
 
     // Found via backlog audit (#337): buyerLabel had no length cap at all.
-    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', {
+    const badBuyerLabel = await api('/instances/purchase-body-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
-    });
+    }));
     expect(badBuyerLabel.response.status).toBe(400);
   });
 
@@ -2080,17 +2082,17 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-quantity-cap-template', { priceCents: 1000 });
     await placeInstance('purchase-quantity-cap-instance', 'purchase-quantity-cap-landlet', 'purchase-quantity-cap-template', seller);
 
-    const tooMany = await api('/instances/purchase-quantity-cap-instance/purchase', {
+    const tooMany = await api('/instances/purchase-quantity-cap-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 1001 }),
-    });
+    }));
     expect(tooMany.response.status).toBe(400);
     expect(tooMany.body).toEqual({ error: 'quantity must be 1000 or fewer' });
 
-    const atCap = await api('/instances/purchase-quantity-cap-instance/purchase', {
+    const atCap = await api('/instances/purchase-quantity-cap-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 1000 }),
-    });
+    }));
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.quantity).toBe(1000);
   });
@@ -2105,17 +2107,17 @@ describe('Simulated purchases', () => {
 
     // quantity 2 is well within PURCHASE_MAX_QUANTITY (1000), but combined
     // with the price above it produces a totalCents twice MAX_MONEY_CENTS.
-    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', {
+    const tooMuch = await api('/instances/purchase-total-cap-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 2 }),
-    });
+    }));
     expect(tooMuch.response.status).toBe(400);
     expect(tooMuch.body).toEqual({ error: 'total price must be 100000000 cents or fewer' });
 
-    const atCap = await api('/instances/purchase-total-cap-instance/purchase', {
+    const atCap = await api('/instances/purchase-total-cap-instance/purchase', seller.session({
       method: 'POST',
       body: JSON.stringify({ quantity: 1 }),
-    });
+    }));
     expect(atCap.response.status).toBe(201);
     expect(atCap.body.purchase.totalCents).toBe(100_000_000);
   });
@@ -2136,10 +2138,10 @@ describe('Simulated purchases', () => {
 
     const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 30; i++) {
-      const attempt = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+      const attempt = await api('/instances/purchase-rate-limit-instance/purchase', seller.session({ method: 'POST', headers }));
       expect(attempt.response.status).not.toBe(429);
     }
-    const limited = await api('/instances/purchase-rate-limit-instance/purchase', { method: 'POST', headers });
+    const limited = await api('/instances/purchase-rate-limit-instance/purchase', seller.session({ method: 'POST', headers }));
     expect(limited.response.status).toBe(429);
   }, 45000); // matches the sibling burst-race test below — 30 sequential
   // round trips reliably finishes in under a second in isolation, but a
@@ -2163,7 +2165,7 @@ describe('Simulated purchases', () => {
 
     const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     const attempts = await Promise.all(
-      Array.from({ length: 40 }, () => api('/instances/purchase-rate-limit-burst-instance/purchase', { method: 'POST', headers })),
+      Array.from({ length: 40 }, () => api('/instances/purchase-rate-limit-burst-instance/purchase', seller.session({ method: 'POST', headers }))),
     );
     const succeeded = attempts.filter((a) => a.response.status !== 429);
     const limited = attempts.filter((a) => a.response.status === 429);
@@ -2179,7 +2181,7 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-commission-instance', 'purchase-commission-landlet', 'purchase-commission-template', seller);
 
     const before = await builderRow(seller.builderId);
-    const purchased = await api('/instances/purchase-commission-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-commission-instance/purchase', seller.session({ method: 'POST' }));
     expect(purchased.response.status).toBe(201);
     // $100 * 2% = $2 commission, split 50/50 = $1 (100 cents) to the builder.
     expect(purchased.body.purchase).toMatchObject({
@@ -2207,7 +2209,7 @@ describe('Simulated purchases', () => {
     // 0.5% floor on the $1000 total is $5 (500 cents) — the 50% split
     // already clears the floor here, so this exercises the non-floor branch
     // with a large total to confirm rounding stays exact.
-    const purchased = await api('/instances/purchase-floor-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-floor-instance/purchase', seller.session({ method: 'POST' }));
     expect(purchased.body.purchase).toMatchObject({
       totalCents: 100000, commissionCents: 2000, builderShareCents: 1000, platformShareCents: 1000,
     });
@@ -2220,8 +2222,8 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-list-template', { priceCents: 500 });
     await placeInstance('purchase-list-instance', 'purchase-list-landlet', 'purchase-list-template', seller);
 
-    await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
-    await api('/instances/purchase-list-instance/purchase', { method: 'POST' });
+    await api('/instances/purchase-list-instance/purchase', seller.session({ method: 'POST' }));
+    await api('/instances/purchase-list-instance/purchase', seller.session({ method: 'POST' }));
 
     const missingBuilderId = await api('/purchases');
     expect(missingBuilderId.response.status).toBe(400);
@@ -2279,7 +2281,9 @@ describe('Simulated purchases', () => {
     await placeInstance('purchase-malformed-instance', 'purchase-malformed-landlet', 'purchase-malformed-template', seller);
 
     const rejected = await SELF.fetch('https://higglehaven.test/api/instances/purchase-malformed-instance/purchase', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: `hh_session=${seller.sessionToken}` },
+      body: '{not json',
     });
     expect(rejected.status).toBe(400);
   });
@@ -2296,7 +2300,7 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-refund-template', { priceCents: 10000 }); // $100
     await placeInstance('purchase-refund-instance', 'purchase-refund-landlet', 'purchase-refund-template', seller);
 
-    const purchased = await api('/instances/purchase-refund-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-refund-instance/purchase', seller.session({ method: 'POST' }));
     const { purchaseId, builderShareCents } = purchased.body.purchase;
     expect(builderShareCents).toBe(100); // 2% of $100 = $2 commission, 50% = $1
 
@@ -2332,7 +2336,7 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-builder-deleted-template', { priceCents: 4000 });
     await placeInstance('purchase-builder-deleted-instance', 'purchase-builder-deleted-landlet', 'purchase-builder-deleted-template', seller);
 
-    const purchased = await api('/instances/purchase-builder-deleted-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-builder-deleted-instance/purchase', seller.session({ method: 'POST' }));
     const { purchaseId } = purchased.body.purchase;
 
     // migrations/0051's own header comment states purchases are "a
@@ -2362,7 +2366,7 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-refund-no-seller-auth-template', { priceCents: 5000 });
     await placeInstance('purchase-refund-no-seller-auth-instance', 'purchase-refund-no-seller-auth-landlet', 'purchase-refund-no-seller-auth-template', seller);
 
-    const purchased = await api('/instances/purchase-refund-no-seller-auth-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-refund-no-seller-auth-instance/purchase', seller.session({ method: 'POST' }));
     const { purchaseId } = purchased.body.purchase;
 
     const noSession = await api(`/purchases/${purchaseId}/refund`, { method: 'POST' });
@@ -2399,7 +2403,7 @@ describe('Simulated purchases', () => {
     expect(created.response.status).toBe(201);
     await placeInstance('purchase-refund-owner-instance', 'purchase-refund-owner-landlet', 'purchase-refund-owner-template', builder);
 
-    const purchased = await api('/instances/purchase-refund-owner-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-refund-owner-instance/purchase', builder.session({ method: 'POST' }));
     const { purchaseId } = purchased.body.purchase;
 
     const wrongSeller = await api(`/purchases/${purchaseId}/refund`, otherSeller.session({ method: 'POST' }));
@@ -2436,7 +2440,7 @@ describe('Simulated purchases', () => {
     expect(created.response.status).toBe(201);
     await placeInstance('purchase-refund-deleted-seller-instance', 'purchase-refund-deleted-seller-landlet', 'purchase-refund-deleted-seller-template', builder);
 
-    const purchased = await api('/instances/purchase-refund-deleted-seller-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-refund-deleted-seller-instance/purchase', builder.session({ method: 'POST' }));
     const { purchaseId } = purchased.body.purchase;
 
     const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
@@ -2470,7 +2474,7 @@ describe('Simulated purchases', () => {
     }));
     expect(created.response.status).toBe(201);
     await placeInstance('purchase-list-owner-instance', 'purchase-list-owner-landlet', 'purchase-list-owner-template', builder);
-    const purchased = await api('/instances/purchase-list-owner-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-list-owner-instance/purchase', builder.session({ method: 'POST' }));
 
     const noSession = await api('/purchases?templateId=purchase-list-owner-template');
     expect(noSession.response.status).toBe(401);
@@ -2499,7 +2503,7 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-refund-negative-template', { priceCents: 10000 });
     await placeInstance('purchase-refund-negative-instance', 'purchase-refund-negative-landlet', 'purchase-refund-negative-template', seller);
 
-    const purchased = await api('/instances/purchase-refund-negative-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-refund-negative-instance/purchase', seller.session({ method: 'POST' }));
     // Spend down the builder's balance below the commission they're about
     // to have clawed back, so the refund must push it negative.
     await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?').bind(seller.builderId).run();
@@ -2516,7 +2520,7 @@ describe('Simulated purchases', () => {
     await createTemplate('purchase-no-returns-template', { priceCents: 500, metadata: { noReturns: true } });
     await placeInstance('purchase-no-returns-instance', 'purchase-no-returns-landlet', 'purchase-no-returns-template', seller);
 
-    const purchased = await api('/instances/purchase-no-returns-instance/purchase', { method: 'POST' });
+    const purchased = await api('/instances/purchase-no-returns-instance/purchase', seller.session({ method: 'POST' }));
     const rejected = await api(`/purchases/${purchased.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
     expect(rejected.response.status).toBe(400);
   });
@@ -2569,7 +2573,7 @@ describe('Simulated purchases', () => {
         UPDATE sellers SET stripe_account_id = 'acct_test123', stripe_onboarding_status = 'complete' WHERE seller_id = ?
       `).bind(seller.sellerId).run();
 
-      const purchased = await api('/instances/checkout-fallback-instance/purchase', { method: 'POST' });
+      const purchased = await api('/instances/checkout-fallback-instance/purchase', builder.session({ method: 'POST' }));
       expect(purchased.response.status).toBe(201);
       expect(purchased.body.purchase).toMatchObject({ totalCents: 5000, paymentIntentId: null });
       expect(purchased.body.requiresPayment).toBeUndefined();
@@ -2597,7 +2601,7 @@ describe('Simulated purchases', () => {
       await claim('checkout-idempotent-landlet', seller);
       await createTemplate('checkout-idempotent-template', { priceCents: 2000 });
       await placeInstance('checkout-idempotent-instance', 'checkout-idempotent-landlet', 'checkout-idempotent-template', seller);
-      const purchased = await api('/instances/checkout-idempotent-instance/purchase', { method: 'POST' });
+      const purchased = await api('/instances/checkout-idempotent-instance/purchase', seller.session({ method: 'POST' }));
       const { purchaseId } = purchased.body.purchase;
 
       // Directly attaches a payment_intent_id to an existing (simulated)
@@ -2631,7 +2635,7 @@ describe('Simulated purchases', () => {
       await claim('real-refund-landlet', seller);
       await createTemplate('real-refund-template', { priceCents: 8000 });
       await placeInstance('real-refund-instance', 'real-refund-landlet', 'real-refund-template', seller);
-      const purchased = await api('/instances/real-refund-instance/purchase', { method: 'POST' });
+      const purchased = await api('/instances/real-refund-instance/purchase', seller.session({ method: 'POST' }));
       const { purchaseId } = purchased.body.purchase;
 
       // Stands in for a real-money purchase handlePurchaseFinalize would
@@ -2708,7 +2712,7 @@ describe('Simulated purchases', () => {
       }));
       expect(created.response.status).toBe(201);
       await placeInstance(instanceId, landletId, templateId, builder);
-      const purchased = await api(`/instances/${instanceId}/purchase`, { method: 'POST' });
+      const purchased = await api(`/instances/${instanceId}/purchase`, builder.session({ method: 'POST' }));
       expect(purchased.response.status).toBe(201);
       const { purchaseId } = purchased.body.purchase;
       const tokenHash = deliveryConfirmToken ? await sha256Hex(deliveryConfirmToken) : null;
@@ -2789,7 +2793,7 @@ describe('Simulated purchases', () => {
       }));
       expect(simTemplate.response.status).toBe(201);
       await placeInstance('payout-simulated-instance', 'payout-simulated-landlet', 'payout-simulated-template', secondBuilder);
-      const simPurchased = await api('/instances/payout-simulated-instance/purchase', { method: 'POST' });
+      const simPurchased = await api('/instances/payout-simulated-instance/purchase', secondBuilder.session({ method: 'POST' }));
       expect(simPurchased.response.status).toBe(201);
       const simRejected = await api(`/purchases/${simPurchased.body.purchase.purchaseId}/mark-shipped`,
         seller.session({ method: 'POST' }));
@@ -2968,7 +2972,7 @@ describe('Simulated purchases', () => {
           }),
         }));
         await placeInstance(instanceId, landletId, templateId, builder);
-        const purchased = await api(`/instances/${instanceId}/purchase`, { method: 'POST' });
+        const purchased = await api(`/instances/${instanceId}/purchase`, builder.session({ method: 'POST' }));
         expect(purchased.response.status).toBe(201);
 
         const got = await api('/tax/summary', builder.session());

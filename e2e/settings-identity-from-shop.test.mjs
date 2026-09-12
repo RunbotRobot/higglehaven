@@ -20,20 +20,30 @@ const { browser, page, errors } = await launchPage({ promptAnswer: 'Settings Ide
 const email = `settings-identity-shop-${Date.now()}@example.com`;
 
 // --- Sign up entirely from Shop mode, never touching the Build/Sell nav ---
-await page.click('#account-menu-toggle');
-await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
-await page.click('#account-auth-btn');
-await page.waitForSelector('#auth-modal.visible', { timeout: 5000 });
+// N44 (owner, 2026-09-12): Shop mode's own entry now requires this same
+// login + verification gate Build/Sell already had (ensureShopperIdentity,
+// src/main.js), so #auth-modal is already open by the time this page
+// finishes loading — no need to reach it via the account menu's own
+// #account-auth-btn anymore, that path is simply not exercised on a fresh
+// visit now. The regression this test protects against (renderLandCapField/
+// renderAuctionSection leaving builderId unset for an already-logged-in
+// visitor who never took a Build/Sell action) is unchanged either way.
+await page.waitForSelector('#auth-modal.visible', { timeout: 8000 });
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
 await page.fill('#auth-signup-username', 'Settings Identity Suite');
 await page.fill('#auth-signup-email', email);
 await page.fill('#auth-signup-password', 'a fine long password');
 await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
+await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
+// Shop mode's own gate (ensureShopperIdentity) requires clearing the same
+// #556 age/card verification step Build/Sell already did — completing it
+// here is what actually lets enterShopMode finish loading the world below,
+// same as chooseIdentity's own post-signup step in helpers.mjs.
+await clearVerifyModalIfShown(page);
+await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 const btnLabelAfterSignup = await waitForText(page, '#account-auth-btn', 'Settings Identity Suite');
-console.log('account button after signup, still in Shop mode (should be "Settings Identity Suite"):', btnLabelAfterSignup);
-await page.click('#auth-close-btn');
-await page.waitForTimeout(200);
+console.log('account button after signup, in Shop mode (should be "Settings Identity Suite"):', btnLabelAfterSignup);
 
 // --- Open Settings > Build without ever switching mode-nav to Build ---
 await page.click('#account-menu-toggle');
@@ -43,10 +53,13 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
 
 // #556: renderLandCapField's own silent ensureBuilderIdentity() call above
-// now also runs into the age-attestation/credit-card gate (requireLogin's
-// "never pops a login prompt" guarantee this test's own file comment
-// describes doesn't extend to this separate, later gate) — clear it the
-// same way chooseIdentity does, or the Land Cap field below never renders.
+// also runs into the age-attestation/credit-card gate (requireLogin's
+// "never pops a login prompt" guarantee doesn't extend to this separate
+// gate) — this account already cleared it during Shop mode's own entry
+// above (N44), so requireVerification's own early-return means this is a
+// harmless no-op now rather than the thing actually unblocking the Land
+// Cap field below; kept as a defensive no-op in case that ordering ever
+// changes back.
 await clearVerifyModalIfShown(page);
 
 // Land Cap: previously omitted entirely (renderLandCapField returned before

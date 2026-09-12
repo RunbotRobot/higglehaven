@@ -217,15 +217,27 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
 // see worker/index.js's sendEmail dev-mode fallback), and `isNew: false`
 // is for re-entry cases where nothing needs signing up again.
 export async function chooseIdentity(page, { mode, label, isNew = true }) {
-  await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
-  // #540 gave Sell the same real currentMode/reload treatment Build and
-  // Shop already had (src/main.js's #mode-nav click handler no longer
-  // special-cases it) — all three now always reload the page first;
-  // bootstrap() only decides whether a login prompt is needed once that
-  // reload has actually landed, so checking for the modal before it
-  // finishes would race an in-flight navigation.
-  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  const authModalShown = await page.waitForSelector('#auth-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
+  // N44: Shop mode now gates its own entry the same way Build/Sell already
+  // did, and a fresh page load already lands on Shop by default — so the
+  // auth modal it opens can already be showing before this function ever
+  // clicks anything. Skip the click entirely in that case: clicking the
+  // mode-nav button for the mode already active is a no-op on its own
+  // (see its click handler's own `if (target === currentMode) return`),
+  // and the click would otherwise fail outright anyway, since the modal
+  // overlay already sits on top of it intercepting pointer events.
+  const authModalAlreadyShown = (await page.locator('#auth-modal.visible').count()) > 0;
+  if (!authModalAlreadyShown) {
+    await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+    // #540 gave Sell the same real currentMode/reload treatment Build and
+    // Shop already had (src/main.js's #mode-nav click handler no longer
+    // special-cases it) — all three now always reload the page first;
+    // bootstrap() only decides whether a login prompt is needed once that
+    // reload has actually landed, so checking for the modal before it
+    // finishes would race an in-flight navigation.
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
+  const authModalShown = authModalAlreadyShown
+    || (await page.waitForSelector('#auth-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false));
   if (!authModalShown) return; // already logged in — entry proceeds on its own
 
   if (!isNew) {
@@ -250,6 +262,21 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // which Playwright's default "wait for visible" can never satisfy.
   await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
   await clearVerifyModalIfShown(page);
+
+  // N44: an already-showing modal (the branch above that skipped the
+  // mode-nav click) is Shop's own gate, not necessarily the requested
+  // mode's — Shop is the default landing mode, so it's what a fresh page
+  // load always shows first, regardless of which mode this call actually
+  // wants. Login/verification just cleared it, but that only satisfies
+  // Shop's own entry; still sitting in Shop mode, so actually switch into
+  // the requested mode now (a no-op reload for mode: 'shop' itself, since
+  // enterShopMode already picked back up and finished loading on its own).
+  // Once authenticated and verified, ensureBuilderIdentity/
+  // ensureSellerIdentity resolve silently with no further prompt.
+  if (authModalAlreadyShown && mode !== 'shop') {
+    await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
 }
 
 // #556 (docs/SPEC.md §6): age attestation + credit-card verification,

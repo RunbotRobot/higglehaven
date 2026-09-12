@@ -12,12 +12,19 @@
 // tap now, not a double-tap — see bindShopFlyToggle in src/main.js. The
 // spacebar gesture (desktop) still requires a double-press and is covered
 // separately; this file only exercises the button.
-import { launchPage, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Tester' });
 
 // A fresh page load lands in Shop mode by default (see bootstrap() in
-// src/main.js) — no login/identity needed, unlike Build/Sell.
+// src/main.js) — clicking the Shop nav button here is a no-op (already the
+// current mode, per its own click handler), so this only exists to drive
+// chooseIdentity's login/verification flow: N44 (owner, 2026-09-12) gates
+// Shop mode's own entry on the same age-attestation + credit-card-or-ID
+// requirement Build/Sell already had, so the auth modal this triggers is
+// really the one that opened automatically the moment enterShopMode's own
+// gate (ensureShopperIdentity) ran on this page's initial load.
+await chooseIdentity(page, { mode: 'shop', label: 'Flight Tester', isNew: true });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));

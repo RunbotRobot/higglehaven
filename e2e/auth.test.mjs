@@ -25,10 +25,31 @@ const email = `auth-suite-${Date.now()}@example.com`;
 const password = 'a fine long password';
 
 async function openAuthModal(page) {
+  // N44: Shop mode's own entry now gates on this same modal
+  // (ensureShopperIdentity, src/main.js), so on a fresh page load it can
+  // already be open before this function's first call ever reaches the
+  // account-menu route to it — skip the click-through in that case (the
+  // menu route itself would otherwise fail outright, blocked by the modal
+  // overlay already sitting on top of #account-menu-toggle).
+  if ((await page.locator('#auth-modal.visible').count()) > 0) return;
   await page.click('#account-menu-toggle');
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
   await page.click('#account-auth-btn');
   await page.waitForSelector('#auth-modal.visible', { timeout: 5000 });
+}
+
+// N44: a successful signup/login this test drives through #auth-modal is
+// now also the one Shop mode's own concurrent gate (ensureShopperIdentity,
+// src/main.js) is independently awaiting via requireLogin on every fresh
+// page load — that gate's own wrapper closes the modal itself the instant
+// login/signup succeeds (same as it always did for Build/Sell, per
+// helpers.mjs's chooseIdentity's own comment on this), which now often
+// beats this test's own explicit close click to it. Checking visibility
+// first makes every such click a safe no-op instead of a 30s timeout
+// against an already-hidden button.
+async function closeAuthModalIfOpen(page) {
+  if ((await page.locator('#auth-modal.visible').count()) === 0) return;
+  await page.click('#auth-close-btn');
 }
 
 // --- Sign up (dev-mode fallback surfaces the verify link in #auth-status) ---
@@ -45,7 +66,7 @@ console.log('signup dev-mode status (should mention a verify link):', signupStat
 const verifyUrlMatch = signupStatus.match(/(http\S+verifyEmail=[0-9a-f]+)/);
 const btnLabelAfterSignup = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after signup (should be "Ada Suite"):', btnLabelAfterSignup);
-await page.click('#auth-close-btn');
+await closeAuthModalIfOpen(page);
 await page.waitForTimeout(200);
 
 // --- Visiting the verify-email link marks the account verified ---
@@ -54,8 +75,16 @@ const verifyStatus = await waitForText(page, '#auth-status', 'Email verified!');
 console.log('status after visiting the verify link (should say Email verified!):', verifyStatus);
 const urlAfterVerify = page.url();
 console.log('URL stripped of the verifyEmail query param (should have no "?"):', urlAfterVerify);
-await page.click('#auth-close-btn');
+await closeAuthModalIfOpen(page);
 await page.waitForTimeout(200);
+// N44: this account is now logged in (the verify-email link's own
+// authInitPromise handling already resolved currentAuthUser) but not yet
+// #556-verified — Shop mode's own concurrent gate (ensureShopperIdentity)
+// reaches requireVerification next and opens #verify-modal for it, same as
+// chooseIdentity's own post-signup step in helpers.mjs. Clearing it here
+// means every later page load/reload in this test finds the account
+// already verified, so this is the only place this needs handling.
+await clearVerifyModalIfShown(page);
 
 await openAuthModal(page);
 const verifiedText = await page.textContent('#auth-account-verified');
@@ -85,7 +114,7 @@ await page.click('#auth-forgot-form button[type="submit"]');
 const forgotStatus = await waitForText(page, '#auth-status', 'dev mode');
 console.log('forgot-password dev-mode status (should mention a reset link):', forgotStatus);
 const resetUrlMatch = forgotStatus.match(/(http\S+resetPassword=[0-9a-f]+)/);
-await page.click('#auth-close-btn');
+await closeAuthModalIfOpen(page);
 await page.waitForTimeout(200);
 
 await page.goto(resetUrlMatch[1]);
@@ -145,7 +174,19 @@ await page.check('#auth-signup-age-attest');
 await page.click('#auth-signup-form button[type="submit"]');
 const btnLabelAfterSecondSignup = await waitForText(page, '#account-auth-btn', 'Bea Suite');
 console.log('account button after the second account signs up (should be "Bea Suite"):', btnLabelAfterSecondSignup);
-await page.click('#auth-close-btn');
+await closeAuthModalIfOpen(page);
+// N44: this signup happened while Shop mode's own concurrent gate
+// (ensureShopperIdentity) was independently awaiting it too (the earlier
+// logout reloaded into Shop, same as it always has — see authLogoutBtn's
+// own comment), so it immediately chains into requireVerification and
+// opens #verify-modal here, same as the first account's signup did above.
+// Clearing it now (rather than leaving it for the Sell-nav reload just
+// below to deal with) keeps this account's state clean before that reload
+// discards this page's JS entirely — the reload's own enterSellMode/
+// ensureSellerIdentity will still open its own fresh verify-modal
+// regardless, per the trust_tier this clears now, which line 193's own
+// clearVerifyModalIfShown already handles.
+await clearVerifyModalIfShown(page);
 await page.waitForTimeout(200);
 
 // If sellerId were still cached from the first account, ensureSellerIdentity
