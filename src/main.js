@@ -11324,12 +11324,22 @@ async function enterShopMode() {
   // #681: which custom avatar (if any) this account has equipped — never
   // blocks Shop mode entry on failure, same as activeCatalog's own
   // fallback just above; falls back to today's hardcoded default avatar.
+  // Only attempted when actually logged in: the accountRecoveryFlowActive
+  // branch above deliberately skips ensureShopperIdentity, so Shop mode
+  // can still be reached fully anonymous (mid verify-email/password-reset
+  // flow) — calling this endpoint anyway would 401, and unlike a caught
+  // JS exception, Chromium logs a failed resource load as a console error
+  // regardless of the try/catch (found via e2e/auth.test.mjs's own
+  // logout -> reset-password reload tripping its errors.length === 0
+  // check).
   let equippedAvatarModelUrl = null;
-  try {
-    const avatar = await fetchMyEquippedAvatar();
-    equippedAvatarModelUrl = avatar.modelUrl;
-  } catch (err) {
-    console.warn('Could not fetch equipped avatar, using the default avatar:', err);
+  if (currentAuthUser) {
+    try {
+      const avatar = await fetchMyEquippedAvatar();
+      equippedAvatarModelUrl = avatar.modelUrl;
+    } catch (err) {
+      console.warn('Could not fetch equipped avatar, using the default avatar:', err);
+    }
   }
 
   let world;
