@@ -26,6 +26,19 @@ const { browser, page, errors } = await launchPage({ promptAnswer: 'Flight Teste
 // gate (ensureShopperIdentity) ran on this page's initial load.
 await chooseIdentity(page, { mode: 'shop', label: 'Flight Tester', isNew: true });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+// #688: `#shop-fly-btn.visible` (and `#shop-status.visible`, "Loading the
+// world…") both get set at the *start* of enterShopMode's post-gate world
+// build (src/main.js), well before the first-ever-visit flight spawn this
+// test is about to check gets set at the very *end* of it, once
+// fetchCatalog/fetchWorld/fetchAllLandlets and the landlet meshes have
+// actually finished. Before N44/#678 added the login/verification gate
+// above, launchPage's own fixed 1500ms settle time already covered that
+// whole gap incidentally; chooseIdentity's own wait ends the instant the
+// gate itself clears, with no such cushion left before this check. Wait
+// for the one signal enterShopMode only clears once that tail has actually
+// run — `#shop-status` losing `.visible` again (its very last DOM change,
+// right after the flight-state assignment below) — rather than racing it.
+await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
 const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-fly-btn').classList.contains('active'));
