@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>higglehaven Control Room</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #f4f7ef; color: #16240a;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #5a6b52; margin: 0 0 20px; font-size: 13px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  input, textarea, select, button {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
+    background: #fff; color: #16240a;
+  }
+  input[type="search"] { flex: 1 1 220px; min-width: 160px; }
+  button { cursor: pointer; background: #6ca42e; color: #16240a; border-color: #5a8e24; font-weight: 600; }
+  button:hover { background: #5a8e24; }
+  button.secondary { background: #fff; color: #16240a; font-weight: 500; }
+  button.secondary:hover { background: #eef3e6; }
+  button.danger { background: #b3402c; color: #fff; border-color: #93321f; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button { background: #fff; color: #3c4a35; font-weight: 500; }
+  .tabs button.active { background: #16240a; color: #fff; border-color: #16240a; }
+  .compose { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px; margin-bottom: 20px; }
+  .compose-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .compose-row input[name="from"] { flex: 0 0 140px; }
+  .compose-row select { flex: 0 0 120px; }
+  .compose-row input[name="title"] { flex: 1 1 260px; }
+  .card { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; cursor: pointer; }
+  .title { font-weight: 600; flex: 1 1 auto; }
+  .pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .pill-queued { background: #e7ecdf; color: #4a5941; }
+  .pill-in_progress { background: #dbe9fb; color: #1e4f8a; }
+  .pill-done { background: #dcefd0; color: #386418; }
+  .pill-tag { background: #f3e6cf; color: #7a5a12; }
+  .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
+  .pill-waiting-claude { background: #dcefd0; color: #386418; }
+  .meta { color: #6a7a60; font-size: 12px; }
+  .chip { display: inline-block; border: 1px solid #cdd8c0; border-radius: 999px; padding: 1px 7px; font-size: 11px; margin-right: 4px; color: #445; text-decoration: none; }
+  .body { margin-top: 10px; border-top: 1px solid #eef1e8; padding-top: 10px; display: none; }
+  .card.open .body { display: block; }
+  .note { white-space: pre-wrap; margin: 0 0 10px; }
+  .thread { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .msg { background: #f7f9f3; border-radius: 8px; padding: 8px 10px; }
+  .msg-head { font-size: 12px; font-weight: 700; color: #4a5941; margin-bottom: 3px; }
+  .msg-text { white-space: pre-wrap; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .actions button { font-size: 12px; padding: 5px 9px; }
+  .reply-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .reply-row input[name="replyFrom"] { flex: 0 0 120px; }
+  .reply-row textarea { flex: 1 1 260px; min-height: 34px; resize: vertical; }
+  .empty { color: #6a7a60; padding: 30px; text-align: center; }
+  .err { color: #8a2a12; font-size: 13px; margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<h1>higglehaven Control Room</h1>
+<p class="sub" id="statusLine">Loading…</p>
+<p class="err" id="errLine" hidden></p>
+
+<div class="compose">
+  <div class="compose-row">
+    <input name="from" placeholder="From" value="owner" />
+    <select name="kind">
+      <option value="feedback">feedback</option>
+      <option value="question">question</option>
+    </select>
+    <input name="title" placeholder="New message / direction…" />
+    <button id="composeBtn">Post</button>
+  </div>
+</div>
+
+<div class="toolbar">
+  <input type="search" id="search" placeholder="Search title, note, session, tag…" />
+</div>
+<div class="tabs" id="tabs">
+  <button data-status="" class="active">All</button>
+  <button data-status="queued">Queued</button>
+  <button data-status="in_progress">In progress</button>
+  <button data-status="done">Done</button>
+</div>
+
+<div id="list"></div>
+
+<script>
+(function () {
+  const API = '/api/control-room';
+  const POLL_MS = 15000;
+  let tasks = [];
+  let filterStatus = '';
+  let searchTerm = '';
+  const expanded = new Set();
+  const repliesCache = new Map(); // taskId -> replies array
+  // Full re-renders happen often (polling, expanding a card, any mutation)
+  // and rebuild every card's HTML from scratch — including a reply
+  // textarea mid-draft. Without this, an in-flight loadReplies() finishing
+  // right after someone starts typing wipes what they typed before they
+  // can click Send (found via this page's own e2e test flaking on exactly
+  // that race). Tracked by task id, restored into the fresh textarea's
+  // initial content on every render, cleared once that reply actually
+  // sends.
+  const drafts = new Map(); // taskId -> in-progress reply text
+
+  const listEl = document.getElementById('list');
+  const statusLine = document.getElementById('statusLine');
+  const errLine = document.getElementById('errLine');
+
+  function showError(message) {
+    errLine.hidden = false;
+    errLine.textContent = message;
+  }
+  function clearError() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  async function apiCall(path, options) {
+    const response = await fetch(API + path, {
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options && options.headers) },
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) { /* no body */ }
+    if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    return body;
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function relativeTime(iso) {
+    if (!iso) return '';
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.round(diffMs / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return hours + 'h ago';
+    return Math.round(hours / 24) + 'd ago';
+  }
+
+  function taskById(number) {
+    return tasks.find((t) => t.number === number);
+  }
+
+  function subIssueChips(task) {
+    if (!task.subIssues || !task.subIssues.length) return '';
+    return task.subIssues.map((n) => {
+      const sub = taskById(n);
+      const mark = sub ? (sub.status === 'done' ? '✓' : '○') : '';
+      const summary = task.subIssueSummaries && task.subIssueSummaries[n];
+      return '<span class="chip"' + (summary ? ' title="' + escapeHtml(summary) + '"' : '') + '>' +
+        mark + ' #' + n + '</span>';
+    }).join('');
+  }
+
+  function waitingBadge(task) {
+    if (task.status === 'done') return '';
+    if (task.waitingOn === 'owner') return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
+    return '<span class="pill pill-waiting-claude">Ready for Claude</span>';
+  }
+
+  function matchesSearch(task) {
+    if (!searchTerm) return true;
+    const haystack = [task.title, task.note, task.session, task.tag, task.from]
+      .filter(Boolean).join(' ').toLowerCase();
+    return searchTerm.split(/\s+/).every((word) => haystack.includes(word));
+  }
+
+  function threadEntries(task, replies) {
+    const entries = [];
+    if (task.note) {
+      entries.push({ from: task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.createdAt });
+    }
+    (replies || []).forEach((r) => entries.push({ from: r.from, text: r.text, at: r.createdAt }));
+    return entries.sort((a, b) => new Date(a.at) - new Date(b.at));
+  }
+
+  function renderCard(task) {
+    const isOpen = expanded.has(task.id);
+    const replies = repliesCache.get(task.id);
+    const linkTitle = task.url
+      ? '<a href="' + escapeHtml(task.url) + '" target="_blank" rel="noopener">' + escapeHtml(task.title) + '</a>'
+      : escapeHtml(task.title);
+
+    let body = '';
+    if (isOpen) {
+      const entries = threadEntries(task, replies);
+      const threadHtml = entries.length
+        ? entries.map((e) => (
+            '<div class="msg"><div class="msg-head">' + escapeHtml(e.from || '(unknown)') +
+            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + escapeHtml(e.text) + '</div></div>'
+          )).join('')
+        : '<div class="meta">No messages yet.</div>';
+
+      body = '<div class="body">' +
+        '<div class="thread">' + (replies === undefined ? '<div class="meta">Loading thread…</div>' : threadHtml) + '</div>' +
+        '<div class="actions">' +
+          '<button class="secondary" data-action="status" data-value="in_progress" data-task="' + task.id + '">In progress</button>' +
+          '<button class="secondary" data-action="status" data-value="queued" data-task="' + task.id + '">Requeue</button>' +
+          '<button class="secondary" data-action="status" data-value="done" data-task="' + task.id + '">Mark done</button>' +
+          '<button class="secondary" data-action="waitingClaude" data-task="' + task.id + '">Ready for Claude</button>' +
+          '<button class="secondary" data-action="waitingOwner" data-task="' + task.id + '">Waiting on: Owner…</button>' +
+          (task.tag ? '<button class="secondary" data-action="clearTag" data-task="' + task.id + '">Clear tag</button>' : '') +
+        '</div>' +
+        '<div class="reply-row">' +
+          '<input name="replyFrom" value="owner" />' +
+          '<textarea placeholder="Reply…" data-reply-text="' + task.id + '">' + escapeHtml(drafts.get(task.id) || '') + '</textarea>' +
+          '<button data-action="reply" data-task="' + task.id + '">Send</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + task.id + '">' +
+      '<div class="card-head" data-toggle="' + task.id + '">' +
+        '<span class="title">' + linkTitle + '</span>' +
+        '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
+        (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
+        waitingBadge(task) +
+        (task.session ? '<span class="meta">' + escapeHtml(task.session) + '</span>' : '') +
+        '<span class="meta">' + relativeTime(task.createdAt) + '</span>' +
+      '</div>' +
+      (subIssueChips(task) ? '<div style="margin-top:6px">' + subIssueChips(task) + '</div>' : '') +
+      body +
+    '</div>';
+  }
+
+  function render() {
+    const visible = tasks
+      .filter((t) => (filterStatus ? t.status === filterStatus : true))
+      .filter(matchesSearch);
+    statusLine.textContent = tasks.length + ' tasks total · ' + visible.length + ' shown';
+    listEl.innerHTML = visible.length
+      ? visible.map(renderCard).join('')
+      : '<div class="empty">Nothing here.</div>';
+  }
+
+  async function loadTasks() {
+    try {
+      const data = await apiCall('/tasks');
+      tasks = data.tasks;
+      clearError();
+      render();
+    } catch (error) {
+      showError('Could not load tasks: ' + error.message);
+    }
+  }
+
+  async function loadReplies(taskId) {
+    try {
+      const data = await apiCall('/tasks/' + encodeURIComponent(taskId) + '/replies');
+      repliesCache.set(taskId, data.replies);
+      render();
+    } catch (error) {
+      showError('Could not load replies: ' + error.message);
+    }
+  }
+
+  listEl.addEventListener('input', (event) => {
+    const el = event.target.closest('[data-reply-text]');
+    if (el) drafts.set(el.dataset.replyText, el.value);
+  });
+
+  listEl.addEventListener('click', async (event) => {
+    const toggle = event.target.closest('[data-toggle]');
+    if (toggle) {
+      const id = toggle.dataset.toggle;
+      if (expanded.has(id)) {
+        expanded.delete(id);
+      } else {
+        expanded.add(id);
+        if (!repliesCache.has(id)) loadReplies(id);
+      }
+      render();
+      return;
+    }
+
+    const actionBtn = event.target.closest('[data-action]');
+    if (!actionBtn) return;
+    const taskId = actionBtn.dataset.task;
+    const action = actionBtn.dataset.action;
+    try {
+      if (action === 'status') {
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', status: actionBtn.dataset.value }),
+        });
+      } else if (action === 'waitingClaude') {
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'claude' }),
+        });
+      } else if (action === 'waitingOwner') {
+        const reason = window.prompt('Reason for waiting on the owner (required):');
+        if (!reason) return;
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'owner', reason }),
+        });
+      } else if (action === 'clearTag') {
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', tag: null }),
+        });
+      } else if (action === 'reply') {
+        const textEl = listEl.querySelector('[data-reply-text="' + taskId + '"]');
+        const fromEl = textEl.closest('.reply-row').querySelector('input[name="replyFrom"]');
+        const text = textEl.value.trim();
+        if (!text) return;
+        await apiCall('/tasks/' + encodeURIComponent(taskId) + '/replies', {
+          method: 'POST', body: JSON.stringify({ from: fromEl.value.trim() || 'owner', text }),
+        });
+        textEl.value = '';
+        drafts.delete(taskId);
+        repliesCache.delete(taskId);
+        await loadReplies(taskId);
+      }
+      clearError();
+      await loadTasks();
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+
+  document.getElementById('tabs').addEventListener('click', (event) => {
+    const btn = event.target.closest('button[data-status]');
+    if (!btn) return;
+    filterStatus = btn.dataset.status;
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b === btn));
+    render();
+  });
+
+  document.getElementById('search').addEventListener('input', (event) => {
+    searchTerm = event.target.value.trim().toLowerCase();
+    render();
+  });
+
+  document.getElementById('composeBtn').addEventListener('click', async () => {
+    const row = document.querySelector('.compose-row');
+    const from = row.querySelector('input[name="from"]').value.trim() || 'owner';
+    const kind = row.querySelector('select[name="kind"]').value;
+    const titleEl = row.querySelector('input[name="title"]');
+    const title = titleEl.value.trim();
+    if (!title) return;
+    try {
+      await apiCall('/tasks', { method: 'POST', body: JSON.stringify({ from, kind, title }) });
+      titleEl.value = '';
+      clearError();
+      await loadTasks();
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+
+  loadTasks();
+  setInterval(() => {
+    loadTasks();
+    expanded.forEach((id) => loadReplies(id));
+  }, POLL_MS);
+})();
+</script>
+</body>
+</html>

@@ -5,9 +5,9 @@
 // that: every mutating endpoint rejects a call missing a caller name or
 // message text, and setting waitingOn:'owner' is impossible without a
 // reason landing as a real, linked reply in the same request.
-import { applyD1Migrations, env } from 'cloudflare:test';
+import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { api, signupAdmin } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 let adminSession;
 const API_KEY = 'test-control-room-key';
@@ -246,5 +246,45 @@ describe('Control Room replies (#N31)', () => {
     const replies = await api(`/control-room/tasks/${task.id}/replies`, keySession());
     expect(replies.body.replies).toHaveLength(1);
     expect(replies.body.replies[0]).toMatchObject({ from: 'owner', text: 'Sounds good.' });
+  });
+});
+
+// N31 option 3 (owner: "I would like to do option 3. Isn't there a way to
+// do it for free?") — the board served same-origin from this same Worker
+// (GET /admin/control-room), gated by the owner's ordinary admin session
+// cookie instead of a browser-visible CONTROL_ROOM_API_KEY.
+describe('Control Room admin page (/admin/control-room, #N31 option 3)', () => {
+  it('requires sign-in for a caller with no session at all', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/control-room');
+    expect(response.status).toBe(401);
+    expect(response.headers.get('content-type')).toMatch(/text\/html/);
+  });
+
+  it('rejects a signed-in non-admin session', async () => {
+    const builder = await signupBuilder('control-room-non-admin');
+    const response = await SELF.fetch('https://higglehaven.test/admin/control-room', builder.session());
+    expect(response.status).toBe(403);
+  });
+
+  // Only the requireAdmin gate itself is exercised here, not the actual
+  // served page content — this pool's ASSETS binding points at dist/,
+  // which this test suite never builds (unlike e2e/run-all.mjs, which
+  // does), so public/admin-control-room.html may not exist as a built
+  // asset yet in this environment. An admin session reaching past the
+  // gate is proven by getting anything other than the 401/403 an
+  // unauthorized caller gets above — whether that lands on a real 200 or
+  // (locally, pre-build) a 404 from the missing asset depends on build
+  // state this test shouldn't assume either way. The real page's content
+  // and behavior are covered end-to-end by
+  // e2e/control-room-admin-page.test.mjs, which runs against a real build.
+  it("lets the owner's own admin session past the access gate", async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/control-room', adminSession());
+    expect(response.status).not.toBe(401);
+    expect(response.status).not.toBe(403);
+  });
+
+  it('404s a non-GET request to the admin page route', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/control-room', { ...adminSession(), method: 'POST' });
+    expect(response.status).toBe(404);
   });
 });
