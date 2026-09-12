@@ -2003,6 +2003,44 @@ describe('Simulated purchases', () => {
     return env.DB.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   }
 
+  // #683: catalog_templates.category is freeform text with no allowlist,
+  // and neither the placement (batch-create) nor purchase code paths
+  // filter by it — an "avatar"-category template (the product type #679
+  // introduces for sellable custom avatars) should place and purchase
+  // exactly like any other product, with zero special-casing needed.
+  it('places and purchases an avatar-category template with no special-casing (#683)', async () => {
+    const seller = await signupBuilder('avatar-category-seller');
+    await createGreenbeltLandletWithArea('avatar-category-landlet', 1000);
+    await claim('avatar-category-landlet', seller);
+
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'avatar-category-template',
+        name: 'Sellable Avatar',
+        category: 'avatar',
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 2 },
+        priceCents: 500,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.category).toBe('avatar');
+
+    await placeInstance('avatar-category-instance', 'avatar-category-landlet', 'avatar-category-template', seller);
+
+    // Lists normally alongside any other placed instance — nothing filters
+    // an "avatar" category out of the same query a builder's own world view
+    // uses to render everything sitting on their landlet.
+    const listed = await api('/instances?landletId=avatar-category-landlet', seller.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.instances.map((i) => i.instanceId)).toContain('avatar-category-instance');
+
+    const purchased = await api('/instances/avatar-category-instance/purchase', seller.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    expect(purchased.body.purchase).toMatchObject({ unitPriceCents: 500, totalCents: 500 });
+  });
+
   it('404s purchasing an instance that does not exist', async () => {
     const account = await signupBuilder('purchase-missing-account');
     const rejected = await api('/instances/purchase-missing-instance/purchase', account.session({ method: 'POST' }));
