@@ -5407,6 +5407,117 @@ async function generateTax1099Drafts(db, year) {
   ]);
 }
 
+// ---- 1099 e-filing transmission (#646, sub-issue of #616/#350) —
+// TaxBandits is the reference vendor (per #646's own body and this
+// board's Track1099/TaxBandits sandbox research), same guarded-secret
+// shape as STRIPE_SECRET_KEY/DIDIT_API_KEY above: no session can create
+// the vendor account itself (that needs the owner's own business/EIN
+// details, same as every other vendor here), so with any of these unset
+// (never configured in local dev or the automated test suite),
+// tax1099EfilingConfigured(env) is false and the filing route below
+// returns a real 503 rather than a half-working live call. Bundles the
+// vendor credentials AND the platform's own payer identity into one
+// guard, since filing needs both and neither exists without direct owner
+// action.
+//
+// IMPORTANT: the OAuth/REST shape below follows TaxBandits' published
+// developer docs (developer.taxbandits.com) as of this writing, but has
+// never been exercised against a live sandbox — no session can obtain
+// the client ID/secret needed to do that. Treat fetchTax1099EfilingToken
+// and transmitTax1099Form as a best-effort starting point to verify (and
+// adjust the exact endpoint paths/payload fields for, per the current API
+// reference) once the owner actually provisions sandbox credentials,
+// not as already-proven-correct code.
+function tax1099EfilingConfigured(env) {
+  return !!(
+    env.TAX_1099_EFILING_CLIENT_ID && env.TAX_1099_EFILING_CLIENT_SECRET
+    && env.TAX_1099_PAYER_NAME && env.TAX_1099_PAYER_EIN
+  );
+}
+
+const TAX_1099_EFILING_TOKEN_URL = 'https://testoauth.expressauth.net/v2/tbsauth';
+const TAX_1099_EFILING_API_BASE = 'https://sandbox.taxbandits.com/v1.7.3';
+
+function base64UrlEncode(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+// TaxBandits' OAuth2 flow signs a JWS (HS256) with the client secret and
+// GETs it to a dedicated token endpoint, rather than a standard
+// client-credentials POST — see developer.taxbandits.com/docs/
+// apireference/OAuth2.0Authentication. Built fresh per call (tokens
+// expire in ~1h per their docs; admin-only filing calls are expected to
+// be sparse enough that this codebase doesn't cache one across requests).
+async function fetchTax1099EfilingToken(env) {
+  const encoder = new TextEncoder();
+  const header = base64UrlEncode(encoder.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
+  const payload = base64UrlEncode(encoder.encode(JSON.stringify({
+    iss: env.TAX_1099_EFILING_CLIENT_ID,
+    sub: env.TAX_1099_EFILING_CLIENT_ID,
+    aud: 'UserToken',
+    iat: Math.floor(Date.now() / 1000),
+  })));
+  const unsigned = `${header}.${payload}`;
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(env.TAX_1099_EFILING_CLIENT_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
+  const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
+  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authorization: jws } });
+  const data = await response.json();
+  if (!response.ok || !data?.AccessToken) {
+    throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
+  }
+  return data.AccessToken;
+}
+
+// Assembles and transmits one form, returning the vendor's own submission
+// reference to store as filing_reference. payeeTaxId is the decrypted
+// W-9/W-8BEN payload from decryptTaxIdPayload — never logged or returned,
+// only forwarded to the vendor over HTTPS.
+async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
+  const accessToken = await fetchTax1099EfilingToken(env);
+  const endpoint = form.form_type === '1099-nec' ? 'Form1099NEC' : 'Form1099K';
+  const body = {
+    SubmissionManifest: { TaxYear: String(form.tax_year), IsFederalFiling: true },
+    ReturnHeader: {
+      Business: {
+        BusinessNm: env.TAX_1099_PAYER_NAME,
+        EIN: env.TAX_1099_PAYER_EIN,
+      },
+    },
+    ReturnData: [{
+      Payee: {
+        TINType: payeeTaxId.formType === 'w9' ? 'SSN' : 'FOREIGNTIN',
+        TIN: payeeTaxId.taxIdNumber || payeeTaxId.foreignTaxId,
+        PayeeName: payeeTaxId.legalName,
+        Email: payeeEmail,
+        Address: {
+          Line1: payeeTaxId.addressLine1,
+          City: payeeTaxId.city,
+          State: payeeTaxId.state,
+          ZipCd: payeeTaxId.postalCode,
+          CountryCd: payeeTaxId.country || 'US',
+        },
+      },
+      NonEmployeeCompensation: form.form_type === '1099-nec' ? (form.gross_income_cents / 100) : undefined,
+      GrossAmountOfPayments: form.form_type === '1099-k' ? (form.gross_income_cents / 100) : undefined,
+    }],
+  };
+  const response = await fetch(`${TAX_1099_EFILING_API_BASE}/${endpoint}/Create`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok || !data?.SubmissionId) {
+    throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
+  }
+  return data.SubmissionId;
+}
+
 // GET returns the current user's combined gross-income summary (higgles
 // commissions from their builder profile, real-money payouts from their
 // seller profile if they have one) for a given calendar year, defaulting
@@ -5487,6 +5598,45 @@ async function handleTax(request, env, db, route, url) {
     `).bind(approvedAt, approvedAt, formId).run();
     if (result.meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
     return json({ formId, status: 'approved', approvedAt });
+  }
+  // #646: the actual e-filing transmission #645's review flow was built to
+  // feed into. Requires the form to already be 'approved' (the admin
+  // reviewer already confirmed the payee's paperwork is on file at that
+  // step) and both taxIdEncryptionConfigured (to decrypt it) and
+  // tax1099EfilingConfigured (to have somewhere to send it) — same
+  // guarded-secret 503 as every other unconfigured vendor integration
+  // here, not a silent no-op. The status='approved' guard on the UPDATE
+  // itself is the same atomic check-then-act idiom as the approve route
+  // above, so a second concurrent file attempt on the same form can't
+  // double-transmit it.
+  if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'file') {
+    if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    const formId = route[2];
+    const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    if (!form) throw new HttpError('Tax form not found', 404);
+    if (form.status !== 'approved') throw new HttpError(`Cannot file a form in status "${form.status}"`, 409);
+    const payee = await db.prepare('SELECT email, tax_id_encrypted FROM users WHERE user_id = ?').bind(form.user_id).first();
+    if (!payee?.tax_id_encrypted) throw new HttpError('Cannot file: this payee has no W-9/W-8BEN tax paperwork on file', 409);
+    // Configured checks sit here, after every local validation above, so a
+    // typo'd form id or a form that isn't actually ready still gets a real
+    // 404/409 rather than always masking it behind a 503 — same idea as
+    // the Stripe seller-account route validating its payload before ever
+    // reaching stripeConfigured.
+    if (!taxIdEncryptionConfigured(env)) {
+      throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
+    }
+    if (!tax1099EfilingConfigured(env)) {
+      throw new HttpError('1099 e-filing is not configured on this server yet.', 503);
+    }
+    const payeeTaxId = await decryptTaxIdPayload(env, payee.tax_id_encrypted);
+    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: payee.email, payeeTaxId });
+    const filedAt = new Date().toISOString();
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'filed', filed_at = ?, filing_reference = ?, updated_at = ?
+      WHERE form_id = ? AND status = 'approved'
+    `).bind(filedAt, filingReference, filedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
+    return json({ formId, status: 'filed', filedAt, filingReference });
   }
   return json({ error: 'Not found' }, 404);
 }

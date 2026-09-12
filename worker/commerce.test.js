@@ -3266,6 +3266,62 @@ describe('Simulated purchases', () => {
         const rejected = await api('/tax/admin-forms/tax1099-whatever/approve', builder.session({ method: 'POST' }));
         expect(rejected.response.status).toBe(403);
       });
+
+      // #646: the e-filing transmission #645 was built to feed into. The
+      // test environment never configures TAX_1099_EFILING_CLIENT_ID/
+      // _CLIENT_SECRET/TAX_1099_PAYER_NAME/_EIN or TAX_ID_ENCRYPTION_KEY
+      // (same dev-mode-friendly pattern as STRIPE_SECRET_KEY elsewhere in
+      // this file) — these prove every local validation (admin access,
+      // form existence, status, payee paperwork) runs and returns its own
+      // real error before ever reaching either guarded-secret check, and
+      // that a fully valid attempt only fails at the "not configured" step.
+      describe('1099 e-filing transmission (#646)', () => {
+        async function approvedFormFor(builder, builderMeBody) {
+          await grantHiggles(builderMeBody.builder.builderId, 70000);
+          await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ?, tax_id_encrypted = ? WHERE email = ?')
+            .bind('w9', '2026-01-01T00:00:00.000Z', 'aesgcm$00$00', builder.email).run();
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+          const approved = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+          expect(approved.response.status).toBe(200);
+          return form.formId;
+        }
+
+        it('requires admin access to file a form', async () => {
+          const builder = await signupBuilder('tax-1099-file-not-admin');
+          const rejected = await api('/tax/admin-forms/tax1099-whatever/file', builder.session({ method: 'POST' }));
+          expect(rejected.response.status).toBe(403);
+        });
+
+        it('rejects filing a nonexistent form', async () => {
+          const notFound = await api('/tax/admin-forms/tax1099-does-not-exist/file', adminSession({ method: 'POST' }));
+          expect(notFound.response.status).toBe(404);
+        });
+
+        it('rejects filing a form that is still a draft', async () => {
+          const builder = await signupBuilder('tax-1099-file-still-draft');
+          const builderMe = await api('/builders/me', builder.session());
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+
+          const rejected = await api(`/tax/admin-forms/${form.formId}/file`, adminSession({ method: 'POST' }));
+          expect(rejected.response.status).toBe(409);
+          expect(rejected.body.error).toMatch(/status "draft"/);
+        });
+
+        it('returns 503 once a form is approved but e-filing is not configured', async () => {
+          const builder = await signupBuilder('tax-1099-file-unconfigured');
+          const builderMe = await api('/builders/me', builder.session());
+          const formId = await approvedFormFor(builder, builderMe.body);
+
+          const { response, body } = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+          expect(response.status).toBe(503);
+          expect(body.error).toMatch(/not configured/i);
+        });
+      });
     });
   });
 });
