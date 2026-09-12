@@ -546,9 +546,18 @@
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
+        transition: transform 0.2s ease;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
+        /* N45 follow-up (2026-09-12): grounded/flying used to be two
+           different bird glyphs (a dove vs. a standing bird) so the icon
+           itself carried the state change, but the owner flagged that as
+           looking like two different birds (different species/colors).
+           Both states now render the same dove glyph (setShopFlyBtnFlying
+           in src/main.js); this tilt is what carries the "airborne" reading
+           instead, without touching species or color. */
+        transform: translateX(-50%) rotate(-20deg);
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
