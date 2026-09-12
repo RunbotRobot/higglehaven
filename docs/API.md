@@ -6407,6 +6407,47 @@ this one's. A failed model load (bad file, 404, network error) falls back
 to the default avatar rather than leaving Shop mode broken, logged via
 `console.warn` the same way `activeCatalog`'s own fallback is.
 
+### Avatar rig/animation clip convention (#682)
+
+The last of #679's sub-issues. `createCustomShopAvatar` now also loads
+the equipped model's `AnimationClip`s (via a new `loadModelAnimations`,
+sharing the same cached parsed-GLTF promise `loadModelScene` already uses
+for the same URL — one fetch/parse either way, not two) and looks up
+`idle`, `walk`, and `fly` by exact name (`THREE.AnimationClip.
+findByName`). Any that exist become a `THREE.AnimationMixer` action,
+bound to `container.userData.model` — the actual loaded node the clip's
+tracks were authored against, not the wrapping container
+`createCustomShopAvatar` adds around it (see `loadModelInstance`'s own
+comment on why that reference is exposed).
+
+Each frame, `updateShopMovement` calls `shopAvatar.mixer?.update(dt)`
+and `setShopAvatarAnimationState(shopAvatar, state)` right alongside the
+existing procedural `updateShopAvatarPose`/`updateShopAvatarIdle` calls,
+passing the exact same grounded-idle / grounded-moving / airborne state
+those already compute — so a model's own clips play in sync with its
+root-motion movement, not on an independent clock.
+`setShopAvatarAnimationState` crossfades
+(`SHOP_AVATAR_ANIM_CROSSFADE_S`, 0.25s) from whatever action was last
+playing to the new state's own action, and is a complete no-op for the
+default procedural avatar (`actions` is `null`) or a custom avatar with
+none of the three clips (same `null`) — either keeps moving exactly as
+#681 already shipped it, via root motion alone. Missing only *some* of
+the three clips degrades per-transition, not globally: switching to a
+state with no matching action just holds whatever pose was already
+showing, rather than falling back to a different state's own clip (a
+fly-less avatar still playing its walk-cycle mid-air would read as more
+broken, not less).
+
+The upload wizard (`showUploadDimensionPreview`) surfaces this at upload
+time rather than leaving a seller to discover it only once a model's
+equipped in-world: once `loadModelAnimations` resolves, if the file
+carries any animations at all, it shows either which of `idle`/`walk`/
+`fly` were found, or that none of the file's clips matched that
+convention by name. Silent for a model with no animations at all (the
+overwhelmingly common case — an ordinary chair or brick has nothing to
+report), and shown regardless of the template's eventual category, since
+category isn't chosen until after this step (#680/#681's own finding).
+
 ## Automated tests
 
 Run the Worker integration suite with:
