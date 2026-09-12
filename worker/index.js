@@ -6303,7 +6303,7 @@ async function handleLandlets(request, db, route, url) {
       WHERE landlet_id = ?
         AND status = 'greenbelt'
         AND owner_builder_id IS NULL
-        AND land_type != 'water'
+        AND landlet_type != 'water'
         AND NOT EXISTS (
           SELECT 1 FROM landlets AS owned
           WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
@@ -6364,8 +6364,8 @@ async function handleLandlets(request, db, route, url) {
     }
     await db.prepare(`
       INSERT INTO landlets
-        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
-         polygon_json, generated_at, claimable_at, metadata_json, land_type, max_world_radius_m)
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
+         polygon_json, generated_at, claimable_at, metadata_json, landlet_type, max_world_radius_m)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet))).run();
     return json({ landlet }, 201);
@@ -6419,8 +6419,8 @@ async function handleLandlets(request, db, route, url) {
     const result = await db.prepare(`
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
-          land_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          land_type = ?, max_world_radius_m = ?,
+          landlet_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
+          landlet_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
     `).bind(
@@ -6791,7 +6791,7 @@ async function handleLandCandidates(request, db, route, url) {
         throw new HttpError('innerRadiusM and startAngleRad are derived when adjacentToRingId is used', 400);
       }
       adjacentToRingId = stringValue(input.adjacentToRingId, 'adjacentToRingId');
-      const adjacentRing = await db.prepare('SELECT * FROM land_candidate_rings WHERE ring_id = ?')
+      const adjacentRing = await db.prepare('SELECT * FROM landlet_candidate_rings WHERE ring_id = ?')
         .bind(adjacentToRingId).first();
       if (!adjacentRing) throw new HttpError('Adjacent land candidate ring not found', 404);
       if (count !== adjacentRing.candidate_count) {
@@ -6811,7 +6811,7 @@ async function handleLandCandidates(request, db, route, url) {
       distribution = adjacentRing.distribution;
       plots = adjacentCandidates.results.map((row) => ({
         areaM2: row.area_m2,
-        landClass: row.land_class,
+        landClass: row.landlet_class,
         metadata: distribution ? { sizeDistribution: 'power-law-v1' } : {},
       }));
     } else if (distribution === 'power-law') {
@@ -6897,7 +6897,7 @@ async function handleLandCandidates(request, db, route, url) {
     row.ring_id = existing.ring_id;
     const update = db.prepare(`
       UPDATE landlet_candidates
-      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, land_class = ?,
+      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?,
           polygon_json = ?, metadata_json = ?, min_world_radius_m = ?, max_world_radius_m = ?
       WHERE landlet_id = ? AND materialized_at IS NULL
     `).bind(
@@ -6997,7 +6997,7 @@ async function handleLandCandidateRings(request, db, route, url) {
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const { results } = await db.prepare(`
-      SELECT * FROM land_candidate_rings ${where}
+      SELECT * FROM landlet_candidate_rings ${where}
       ORDER BY created_at, ring_id LIMIT ?
     `).bind(...bindings, limit + 1).all();
     const hasMore = results.length > limit;
@@ -7031,7 +7031,7 @@ async function handleLandCandidateRings(request, db, route, url) {
 // to gate.
 async function completeRingGenerationInternal(db, ringId) {
   const ringRow = await db.prepare(`
-    SELECT * FROM land_candidate_rings WHERE ring_id = ?
+    SELECT * FROM landlet_candidate_rings WHERE ring_id = ?
   `).bind(ringId).first();
   if (!ringRow) throw new HttpError('Land candidate ring not found', 404);
 
@@ -7073,14 +7073,14 @@ async function completeRingGenerationInternal(db, ringId) {
 async function getLandCandidateRingWithLifecycle(db, ringId) {
   return db.prepare(`
     SELECT ring.*,
-      (SELECT child.ring_id FROM land_candidate_rings AS child
+      (SELECT child.ring_id FROM landlet_candidate_rings AS child
        WHERE child.adjacent_to_ring_id = ring.ring_id) AS adjacent_child_ring_id,
       COUNT(candidate.landlet_id) AS stored_candidate_count,
       SUM(CASE WHEN candidate.landlet_id IS NOT NULL AND candidate.materialized_at IS NULL THEN 1 ELSE 0 END) AS pending_candidate_count,
       SUM(CASE WHEN candidate.materialized_at IS NOT NULL THEN 1 ELSE 0 END) AS materialized_candidate_count,
       SUM(CASE WHEN landlet.generated_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_landlet_count,
       SUM(CASE WHEN landlet.status = 'greenbelt' THEN 1 ELSE 0 END) AS greenbelt_landlet_count
-    FROM land_candidate_rings AS ring
+    FROM landlet_candidate_rings AS ring
     LEFT JOIN landlet_candidates AS candidate ON candidate.ring_id = ring.ring_id
     LEFT JOIN landlets AS landlet ON landlet.landlet_id = candidate.landlet_id
     WHERE ring.ring_id = ? GROUP BY ring.ring_id
@@ -7094,7 +7094,7 @@ function candidateRowFromLandlet(landlet) {
     area_m2: landlet.areaM2,
     center_x_m: landlet.center.x,
     center_y_m: landlet.center.y,
-    land_class: landlet.landClass,
+    landlet_class: landlet.landClass,
     polygon_json: JSON.stringify(landlet.polygon),
     metadata_json: JSON.stringify(landlet.metadata),
   };
@@ -7103,11 +7103,11 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, land_class, polygon_json, metadata_json,
+      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, polygon_json, metadata_json,
        min_world_radius_m, max_world_radius_m, ring_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
+    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
     row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
 }
@@ -7140,7 +7140,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
   await db.batch([
     db.prepare(`
-      INSERT INTO land_candidate_rings
+      INSERT INTO landlet_candidate_rings
         (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
          boundary_signature, adjacent_to_ring_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -7222,10 +7222,10 @@ async function getLandletCounts(db) {
   return db.prepare(`
     SELECT
       COUNT(*) AS total,
-      SUM(CASE WHEN status = 'greenbelt' AND land_type != 'water' THEN 1 ELSE 0 END) AS greenbelt,
+      SUM(CASE WHEN status = 'greenbelt' AND landlet_type != 'water' THEN 1 ELSE 0 END) AS greenbelt,
       SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
       SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating,
-      SUM(CASE WHEN land_type = 'water' THEN 1 ELSE 0 END) AS water
+      SUM(CASE WHEN landlet_type = 'water' THEN 1 ELSE 0 END) AS water
     FROM landlets
   `).first();
 }
@@ -7270,7 +7270,7 @@ async function expandWorldOnce(db) {
     const placeholders = touchedRingIds.map(() => '?').join(', ');
     const ready = await db.prepare(`
       SELECT candidate.ring_id FROM landlet_candidates AS candidate
-      JOIN land_candidate_rings AS ring ON ring.ring_id = candidate.ring_id
+      JOIN landlet_candidate_rings AS ring ON ring.ring_id = candidate.ring_id
       WHERE candidate.ring_id IN (${placeholders})
       GROUP BY candidate.ring_id, ring.candidate_count
       HAVING COUNT(*) = ring.candidate_count
@@ -7420,7 +7420,7 @@ async function generateRingAtWorldBoundary(db) {
         // (e.g. the Worker was recycled mid-cycle) — reuse that
         // reservation instead of failing outright.
         const existing = await db.prepare(
-          'SELECT outer_radius_m FROM land_candidate_rings WHERE ring_id = ?',
+          'SELECT outer_radius_m FROM landlet_candidate_rings WHERE ring_id = ?',
         ).bind(prefix).first();
         if (!existing) throw err;
         ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
@@ -7457,11 +7457,11 @@ function candidateMaterializationStatements(db, candidates) {
   return candidates.flatMap((row) => [
     db.prepare(`
       INSERT INTO landlets
-        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, land_class,
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
          polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
       VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, NULL, NULL, ?, ?)
     `).bind(
-      row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.land_class,
+      row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
       row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
     ),
     db.prepare(`
@@ -7472,9 +7472,9 @@ function candidateMaterializationStatements(db, candidates) {
 }
 
 async function explainClaimConflict(db, landletId, builderId) {
-  const landlet = await db.prepare('SELECT status, owner_builder_id, land_type FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+  const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!landlet) throw new HttpError('Landlet not found', 404);
-  if (landlet.land_type === 'water') {
+  if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
@@ -9255,8 +9255,8 @@ function landletFromRow(row) {
     center: { x: row.center_x_m, y: row.center_y_m },
     status: row.status,
     ownerBuilderId: row.owner_builder_id,
-    landClass: row.land_class ?? 1,
-    landType: row.land_type ?? 'buildable',
+    landClass: row.landlet_class ?? 1,
+    landType: row.landlet_type ?? 'buildable',
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -9273,7 +9273,7 @@ function candidateFromRow(row) {
     name: row.name,
     areaM2: row.area_m2,
     center: { x: row.center_x_m, y: row.center_y_m },
-    landClass: row.land_class,
+    landClass: row.landlet_class,
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,

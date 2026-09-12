@@ -73,13 +73,13 @@ await openAccountMenu(bidderPage);
 await bidderPage.click('#settings-btn');
 await bidderPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await bidderPage.click('.settings-tab-btn[data-section="build"]');
-// Sell Your Land is itself gated behind an async fetch (a "Loading…"
+// Sell Your Lándlet is itself gated behind an async fetch (a "Loading…"
 // placeholder until it resolves — see renderStartSection in src/main.js) —
 // wait for the actual form rather than guessing a fixed delay, the same
 // class of flake fixed elsewhere in this suite earlier this session.
 await bidderPage.waitForSelector('.auction-start-form', { timeout: 10000 });
 
-// The bidder's OWN landlet has no auction on it — Sell Your Land should
+// The bidder's OWN landlet has no auction on it — Sell Your Lándlet should
 // offer the start form, not show a live auction.
 const bidderOwnStartFormVisible = await bidderPage.locator('.auction-start-form').count();
 console.log('bidder sees their own start form (no auction on their landlet yet, should be 1):', bidderOwnStartFormVisible);
@@ -165,7 +165,7 @@ await bidderSession.browser.close();
 // --- Seller claims a SECOND landlet — #199 already freed their "one
 // claimed landlet" slot the moment the bidder's $15 bid landed above
 // (any starting bid becomes a commitment to sell once a bid exists, not
-// just a $0 one) — and confirms Sell Your Land's picker (#249) lists
+// just a $0 one) — and confirms Sell Your Lándlet's picker (#249) lists
 // both, defaults to the one they're actually in Build mode on (their
 // first, which still has the live auction), and switches to the other
 // landlet's own start form when reselected. ---
@@ -209,4 +209,4 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   defaultPickerText.includes('Your auction is live') &&
   secondLandletFormVisible === 1 &&
   errors.length === 0;
-await finish(sellerSession.browser, { pass, label: 'Land acquisition auctions: start + bid through the real UI, and a multi-landlet Sell Your Land picker (#249)', errors });
+await finish(sellerSession.browser, { pass, label: 'Land acquisition auctions: start + bid through the real UI, and a multi-landlet Sell Your Lándlet picker (#249)', errors });

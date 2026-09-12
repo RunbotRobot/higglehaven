@@ -5193,7 +5193,7 @@ The migrations currently create seventeen main backend tables:
 - `version_instances`: instance transforms captured within each snapshot.
 - `landlet_candidates`: lightweight planned plots awaiting first circle overlap,
   with optional generated-ring membership.
-- `land_candidate_rings`: atomic radial reservations for procedurally generated
+- `landlet_candidate_rings`: atomic radial reservations for procedurally generated
   candidate bands, including boundary signatures that keep adjacent polygonal
   rings seam-compatible and optional parent links for derived ring chains.
 - `notifications`: builder-facing notices, currently only ever created by a

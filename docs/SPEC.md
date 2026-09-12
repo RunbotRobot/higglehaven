@@ -1,6 +1,6 @@
 # higglehaven — Specification Document (v18)
 
-*Renamed from Shoplándia (v9) after a full IP clearance check (USPTO, WIPO, WA Secretary of State, domain, social/marketplace platforms) found real collision risk with the "Shoplándia" name and confirmed "higglehaven" clean across all checks. Naming convention unchanged: plain "a" internally (code, files, DB, APIs — `land`, `landlet`), á reserved for customer-facing display only. The currency term (`higgle`/`higgles`, v18) has no "a" at all, so it's spelled identically everywhere.*
+*Renamed from Shoplándia (v9) after a full IP clearance check (USPTO, WIPO, WA Secretary of State, domain, social/marketplace platforms) found real collision risk with the "Shoplándia" name and confirmed "higglehaven" clean across all checks. Naming convention unchanged: plain "a" internally (code, files, DB, APIs — `landlet`, with `land_cap_m2`/`LAND_CAP_*` kept as the one deliberate exception), á reserved for customer-facing display only. "Lánd" itself is retired as of v18 — "lándlet" is now the sole umbrella term for a plot of any size (see §3). The currency term (`higgle`/`higgles`, v18) has no "a" at all, so it's spelled identically everywhere.*
 
 *Status: the original spec-completion checklist (7 areas, S31) is functionally complete. Remaining open items are listed in §10 — as of this version: lándlet hosting cost validation and Runbot LLC account ownership (leaning, not final). All other previously-open items have been resolved.*
 
@@ -27,29 +27,29 @@
 
 **Coordinates:** floating-point decimal meters (1.0 = 1 meter), not integers.
 
-**Land shape:** irregular, interlocking puzzle-piece tiling with freeform, nature-like curved boundaries; no grid, annular plot bands, or visible border geometry. A boundary is authoritative shared geometry used by both neighbors (never two independently generated approximations), while the visible "border" is purely stylistic contrast between neighbors.
+**Lándlet shape:** irregular, interlocking puzzle-piece tiling with freeform, nature-like curved boundaries; no grid, annular plot bands, or visible border geometry. A boundary is authoritative shared geometry used by both neighbors (never two independently generated approximations), while the visible "border" is purely stylistic contrast between neighbors.
 
 **World boundary — circular expansion model (supersedes earlier "amoeba" adjacency-based growth):**
-- The explorable world is a clean **circle**. Radius grows in fixed **10-meter increments** whenever greenbelt-lánd count falls below **10% of total lánds**. **(v15 addition) Now built literally, not just conceptually:** a Cloudflare Cron Trigger checks this exact condition on a schedule and grows the world automatically — see docs/API.md's "Automatic world growth." Previously this was only a player-triggered dev-mode stand-in (a "Grow the world" button shown when nothing was claimable); that button is retired now that the real mechanism this section always described actually exists.
-- Any lánd fully enclosed by the circle automatically becomes greenbelt-available, regardless of adjacency to claimed land — eliminates a chaining exploit and the resulting maze-like perimeter.
-- The circle is an availability boundary, not a generation or tiling boundary. A lánd may cross it: its complete puzzle-piece shape is decided and stored, but it cannot be selected until the circle fully encloses it. Expansion therefore promotes already-generated crossing lánds rather than clipping them to a new ring.
+- The explorable world is a clean **circle**. Radius grows in fixed **10-meter increments** whenever greenbelt-lándlet count falls below **10% of total lándlets**. **(v15 addition) Now built literally, not just conceptually:** a Cloudflare Cron Trigger checks this exact condition on a schedule and grows the world automatically — see docs/API.md's "Automatic world growth." Previously this was only a player-triggered dev-mode stand-in (a "Grow the world" button shown when nothing was claimable); that button is retired now that the real mechanism this section always described actually exists.
+- Any lándlet fully enclosed by the circle automatically becomes greenbelt-available, regardless of adjacency to claimed land — eliminates a chaining exploit and the resulting maze-like perimeter.
+- The circle is an availability boundary, not a generation or tiling boundary. A lándlet may cross it: its complete puzzle-piece shape is decided and stored, but it cannot be selected until the circle fully encloses it. Expansion therefore promotes already-generated crossing lándlets rather than clipping them to a new ring.
 - After each 10-meter expansion, generation fills newly exposed blank space with complete neighboring puzzle pieces. Those pieces may extend beyond the current circle so the next expansion can reveal established shapes without gaps or boundary-dependent reshaping.
-- **Generation timing (corrected):** a lánd begins generating the moment the expanding circle **first partially overlaps** it — not only once fully enclosed. This avoids a real gap in the original "on-demand at full inclusion" design: as the circle grows, lánds on the advancing edge would otherwise have zero lead time to generate before players reach them. While generating (partially overlapped but not yet fully enclosed), a lánd displays as **shimmery, walkable/flyable, but not yet claimable** — claimability only activates once the circle fully encloses it. This preserves the "on-demand, not speculative" principle while giving each lánd real generation lead time.
-- World-wall shimmer marks the circle's exterior; this same shimmer treatment applies to any lánd still mid-generation per the above.
+- **Generation timing (corrected):** a lándlet begins generating the moment the expanding circle **first partially overlaps** it — not only once fully enclosed. This avoids a real gap in the original "on-demand at full inclusion" design: as the circle grows, lándlets on the advancing edge would otherwise have zero lead time to generate before players reach them. While generating (partially overlapped but not yet fully enclosed), a lándlet displays as **shimmery, walkable/flyable, but not yet claimable** — claimability only activates once the circle fully encloses it. This preserves the "on-demand, not speculative" principle while giving each lándlet real generation lead time.
+- World-wall shimmer marks the circle's exterior; this same shimmer treatment applies to any lándlet still mid-generation per the above.
 
 **Chunk loading:** near band = full 3D geometry; middle band = simplified LOD; far band = a **pre-rendered flat panoramic backdrop image** per region, regenerated offline (daily or on major changes) — primary anti-pop-in strategy. Fog is now secondary/supplementary, blending the middle/far seam.
 
-**Macro-geography:** real, permanent geographic features (lakes, rivers, mountains, biomes) laid out once, early, deliberately. **Water cannot be owned**; shoreline lánds are highly coveted once circle-exposed (anticipated organic "gold rush," e.g., near the real Lake Washington).
+**Macro-geography:** real, permanent geographic features (lakes, rivers, mountains, biomes) laid out once, early, deliberately. **Water cannot be owned**; shoreline lándlets are highly coveted once circle-exposed (anticipated organic "gold rush," e.g., near the real Lake Washington).
 
 **Geographic authenticity rule:** recreate natural pre-human Earth geology (exclude man-made terraforming like canals/mining pits) but populate with **present-day flora** including non-native species — no historical reconstruction. Canonical example: Lake Washington and Puget Sound render as their actual pre-1916 separate water bodies (before the man-made Montlake Cut) — an intentional discoverable detail.
 
 **Vertical construction — tied to land cap, not a separate resource. Correction (P143): cap consumption is asymmetric, not identical above/below ground.**
-- The earlier "below-ground levels count identically to above-ground levels" rule was flat-world thinking and is **wrong at the geometric level** once Earth curvature (already a confirmed §1 world-architecture decision) is taken seriously. A fixed-angular-footprint lánd extended radially through the Earth is a **cone converging on Earth's center**, not a cylinder.
+- The earlier "below-ground levels count identically to above-ground levels" rule was flat-world thinking and is **wrong at the geometric level** once Earth curvature (already a confirmed §1 world-architecture decision) is taken seriously. A fixed-angular-footprint lándlet extended radially through the Earth is a **cone converging on Earth's center**, not a cylinder.
 - **Correct model:** each level **above** ground consumes *increasingly more* land cap per level (cross-sectional area grows moving away from Earth's center); each level **below** ground consumes *increasingly less* land cap per level (area shrinks toward the center).
 - The difference is imperceptible at any near-term realistic scale, but the underlying world architecture must be built correctly from the start.
 - **Hard depth limit:** Earth's radius — a builder physically cannot dig deeper than the planet's core, though reaching that limit is essentially impossible in practice.
 - **Minimum viable footprint:** once a downward level's cross-sectional area would fall below **10 m²**, the builder is blocked from going any deeper (prevents pointless infinitesimal levels).
-- No gaps between adjacent lánds at any given level (including level 10+), and no overlap at deep below-ground levels — the cone geometry must be modeled precisely enough to guarantee this.
+- No gaps between adjacent lándlets at any given level (including level 10+), and no overlap at deep below-ground levels — the cone geometry must be modeled precisely enough to guarantee this.
 - No mechanism exists for a lower ceiling than cap otherwise allows — the earlier line here naming HOA rules as that mechanism predated §3's "No HOA / community-rule governance layer (removed entirely)" and was never updated to match; there is no HOA concept anywhere in this spec now, vertical or otherwise. The land-cap-derived ceiling applies unconditionally.
 - Removing a level frees consumed cap immediately.
 - Vertical chunk-loading uses the same near/middle/far LOD banding as horizontal distance.
@@ -96,21 +96,21 @@
 
 **Universal builder status:** every user is automatically a builder — no separate account types. Every signup can claim **one free 1,000 m² lándlet**, at their discretion, **chosen freely by the builder from any available greenbelt lándlet** (corrected from an earlier random-assignment model — no identified downside to letting new builders pick their own starting spot). **(v14 addition) Now built literally, not just conceptually:** signing up for a real account (§6's login) automatically provisions a linked builder profile — see docs/API.md's "Builders." A seller profile stays deliberately lazy/opt-in instead, provisioned only on first entering Sell mode, matching this section's own "quite apart from whichever builder identity is active" framing below. Build and Sell mode both now require a real, logged-in account to enter at all — the old free-text dev-mode identity picker is retired.
 
-**Land size distribution — power-law, confirmed authoritative (supersedes any other stated ratios):**
+**Lándlet size distribution — power-law, confirmed authoritative (supersedes any other stated ratios).** "Lándlet" is the sole umbrella term for a plot of any size (v18 — "lánd" is retired as a separate word, see the header note above); Class 1 is just the free-starter size every new builder gets, not a distinct category of thing from Class 2+:
 
-| Class | Size Range | % of Lánds |
+| Class | Size Range | % of Lándlets |
 |---|---|---|
-| Lándlet | 1,000 m² (exact) | 90% |
-| Class 2 | 1,001–10,000 m² | 9% |
-| Class 3 | 10,001–100,000 m² | 0.9% |
-| Class 4 | 100,001–1,000,000 m² | 0.09% |
+| 1 (starter) | 1,000 m² (exact) | 90% |
+| 2 | 1,001–10,000 m² | 9% |
+| 3 | 10,001–100,000 m² | 0.9% |
+| 4 | 100,001–1,000,000 m² | 0.09% |
 | ...continues... | (each class 10x the range, 1/10th the population) | ... |
 
-- Population rounds **down**; leftover allocates to lándlets.
+- Population rounds **down**; leftover allocates to Class 1 (starter) lándlets.
 - Within-class size drawn from a **uniform distribution** (not a nested power law).
-- Validated math: a single mega-lánd (1,000 km² class) requires a population near **10 million total lánds** — a distant, deliberate future milestone.
+- Validated math: a single mega-lándlet (1,000 km² class) requires a population near **10 million total lándlets** — a distant, deliberate future milestone.
 
-**Land cap — the growth-gating mechanic (distinct from land acquisition, §5):**
+**Land cap — the growth-gating mechanic (distinct from lándlet acquisition, §5):**
 - Per-builder max total m², gating hosting burden.
 - Grows via a formula converting **trailing-30-day higgle earnings per 1,000 m² owned** into cap increases.
 - **Ratcheting:** once increased, never decreases.
@@ -120,7 +120,7 @@
 
 **Two independent constraints (do not conflate):**
 1. **Land cap** — how much total area, grows only via earnings formula.
-2. **Higgle balance** — which specific already-claimed lánds can be acquired via auction (§5). Never purchasable with real cash.
+2. **Higgle balance** — which specific already-claimed lándlets can be acquired via auction (§5). Never purchasable with real cash.
 
 **Coordinate system within a plot:** floating-point meters, origin at plot center (polygon centroid, snapped to nearest interior point for irregular/concave shapes).
 
@@ -135,17 +135,17 @@
 - **Version-change transition (shoppers present):** old items fade/shrink into ground, new version's items fade/grow up — ~2–4 second animated transition.
 
 **Performance budgets (starting hypothesis, validate empirically):**
-- ~10–25 MB total model+texture data per average lánd; density cap ~1–2 MB per cubic meter concentrated.
+- ~10–25 MB total model+texture data per average lándlet; density cap ~1–2 MB per cubic meter concentrated.
 - **Automated mesh-merging on save:** builder edits fully individual objects; platform auto-generates an optimized merged mesh for delivery (reduces draw calls) — standard "source vs. build" pipeline pattern.
 - Standard pipeline: **GLB** format, CDN delivery, Draco geometry + Basis Universal texture compression, automatic multi-LOD generation.
 
-**No HOA / community-rule governance layer (removed entirely).** The earlier opt-in HOA-style voting system is eliminated in favor of unqualified creative freedom. If a builder dislikes a neighbor's aesthetic, their recourse is to relocate — not to vote it away. higglehaven explicitly embraces the aesthetic outlier over conformity (the stated internal reference point: an Edward Scissorhands house standing out among a row of uniform 1960s pastel homes is treated as *beautiful*, not a problem to solve). No mechanism exists for majority preference to override an individual builder's creative choices on their own lánd.
+**No HOA / community-rule governance layer (removed entirely).** The earlier opt-in HOA-style voting system is eliminated in favor of unqualified creative freedom. If a builder dislikes a neighbor's aesthetic, their recourse is to relocate — not to vote it away. higglehaven explicitly embraces the aesthetic outlier over conformity (the stated internal reference point: an Edward Scissorhands house standing out among a row of uniform 1960s pastel homes is treated as *beautiful*, not a problem to solve). No mechanism exists for majority preference to override an individual builder's creative choices on their own lándlet.
 
 **Ground/flooring as real product:** default grass texture is placeholder; placing a specific real flooring/sod product replaces it within that footprint.
 
 **Founding/pioneer recognition (corrected — no size advantage):** permanent "Pioneer" profile badge (grows in prestige over time) and a permanent "founding history" page (the "nail-chalice" — improvised from limited catalog — preserved as founding lore). **Explicitly no larger starter plot for founding builders** — with a sparse early builder community, an oversized early starter plot would let founders claim what becomes prime real estate later purely by being first, undermining the platform's performance-earned (not first-mover-earned) growth philosophy. Recognition stays reputational/historical only.
 
-**No higglehaven-managed central plaza** — superseded by the circular growth model: the platform's own first-ever claimed lánd (yours) naturally occupies that position organically. New users spawn zoomed-out in flight mode above the world.
+**No higglehaven-managed central plaza** — superseded by the circular growth model: the platform's own first-ever claimed lándlet (yours) naturally occupies that position organically. New users spawn zoomed-out in flight mode above the world.
 
 ---
 
@@ -172,7 +172,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 
 ---
 
-## 5. Commerce, Land Acquisition & Auctions
+## 5. Commerce, Lándlet Acquisition & Auctions
 
 **Universal commission formula:**
 - higglehaven takes a total fee (2% standard for seller-listed products — undercutting Etsy ~9.5%, Amazon 8–15%, eBay 10–13%; explicit seller-recruitment advantage).
@@ -193,18 +193,18 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 - **Returns/refunds return real currency, not higgles** — via Stripe Connect's built-in marketplace refund tooling. **Requires a higgle-commission clawback mechanism** (builder's instant commission on a returned sale is deducted, potentially creating a negative balance to settle).
 - **No-returns-policy respected as seller-set default**, within baseline fraud/dispute protections.
 
-**Land acquisition — simplified auction system (supersedes earlier multi-phase English+Dutch design):**
+**Lándlet acquisition — simplified auction system (supersedes earlier multi-phase English+Dutch design):**
 - Default **24-hour duration** for inactivity-triggered listings; builder-initiated voluntary auctions may set custom duration.
 - **Starting bid defaults to $0** (no calculated-value formula, no reserve price) — reserve prices are "functionally dishonest."
-- **A $0 starting bid = explicit willingness to relinquish for free if no bids arrive.** A ≥$0.01 starting bid = builder wants to retain if unsold; that lánd is NOT greenbelt and land cap is not freed. **Land cap frees once a bid occurs** (any bid guarantees eventual transfer) **— or immediately if the builder set $0 and committed to unconditional relinquishment**, resolving the "free capacity before a slow auction resolves" problem.
+- **A $0 starting bid = explicit willingness to relinquish for free if no bids arrive.** A ≥$0.01 starting bid = builder wants to retain if unsold; that lándlet is NOT greenbelt and land cap is not freed. **Land cap frees once a bid occurs** (any bid guarantees eventual transfer) **— or immediately if the builder set $0 and committed to unconditional relinquishment**, resolving the "free capacity before a slow auction resolves" problem.
 - Higgles raised in a successful auction go to the previously-inactive builder's account, in case they return.
-- "Greenbelt" is a **status flag on any lánd**, not a fixed geographic region.
+- "Greenbelt" is a **status flag on any lándlet**, not a fixed geographic region.
 
 **Cash economy — four settled pillars (state explicitly on the about page, not just ToS):**
 1. **Higgles can never be purchased with cash** — only earned via demonstrated commission. Direct correction to Decentraland's speculative-capital failure mode.
 2. **Land cap grows only via demonstrated performance**, never purchasable.
 3. **Higgle-to-cash redemption is phased**, purely for technical/regulatory sequencing. Priority order once redemption begins: **tax-payment facilitation first** (narrowest scope — convert exactly what's owed in tax), both the most urgent real need and the safest first regulatory step.
-4. **No monetization beyond the commission split** — no premium features, no ads, no higglehaven-operated commercial lánds. The greenbelt specifically is framed as higglehaven's deliberately uncommercial "park."
+4. **No monetization beyond the commission split** — no premium features, no ads, no higglehaven-operated commercial lándlets. The greenbelt specifically is framed as higglehaven's deliberately uncommercial "park."
 
 **Multi-currency Higgles:** internally tracked in **USD as single source of truth**; display/redemption currency user-selected, converts live via Stripe's built-in FX (stays outside SEC/money-transmitter territory — display/payout conversion via an established processor, not currency trading as a service). "Higgle" is the **USD-specific variant** of a broader naming convention (yen/euro equivalents left as an open, potentially crowdsourced creative exercise).
 
@@ -271,8 +271,8 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 ## 8. Shared Infrastructure with Traverse (Runbot's course-mapping product)
 
 1. **Shared geographic data pipeline:** elevation (USGS), hydrological data, regional biome classification — same underlying real-world data serves both. higglehaven needs only the lower fidelity bar; Traverse's higher-fidelity photogrammetry is additive on the same coordinate system.
-2. **3D model/asset reuse:** trees, terrain textures, flora calibrated for a real region in Traverse are directly reusable in higglehaven lánds in the same region.
-3. **Speculative long-range integration (not committed):** higglehaven lánds in Traverse-photogrammetry-covered areas could someday use that real photogrammetry as backdrop instead of procedural generation.
+2. **3D model/asset reuse:** trees, terrain textures, flora calibrated for a real region in Traverse are directly reusable in higglehaven lándlets in the same region.
+3. **Speculative long-range integration (not committed):** higglehaven lándlets in Traverse-photogrammetry-covered areas could someday use that real photogrammetry as backdrop instead of procedural generation.
 
 ---
 
@@ -293,7 +293,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 ## 10. Genuinely Open Items
 
 - **[ ] Lándlet hosting cost validation** — the $3–$5/month trigger (§3) needs validation against real measured costs once live.
-- **[✓] Currency naming beyond "Higgle" — resolved.** Confirmed direction: the in-game currency is named **"higgle"** (plural **"higgles"**) — a callback to the higglehaven brand name itself, replacing "dáller"/"dállers" (a leftover callback to the retired Shoplándia name, per v9). The internal-vs-display accent convention doesn't apply here: "higgle" has no "a" at all, so there's no accented variant to reserve for display — it's spelled identically everywhere, unlike lánd/lándlet.
+- **[✓] Currency naming beyond "Higgle" — resolved.** Confirmed direction: the in-game currency is named **"higgle"** (plural **"higgles"**) — a callback to the higglehaven brand name itself, replacing "dáller"/"dállers" (a leftover callback to the retired Shoplándia name, per v9). The internal-vs-display accent convention doesn't apply here: "higgle" has no "a" at all, so there's no accented variant to reserve for display — it's spelled identically everywhere, unlike lándlet.
 - **[✓] "God Bless higglehaven" lyric fix — resolved.** "Goth lánd" replaced with **"gamer lánd"** — pairs cleanly with "sports lánd" as the two broad, universally-recognized recurring examples, no subculture-specific connotation. ("Teen lánd" confirmed absent from all recovered source material — never a real concern.)
 - **[✓] Builder-chosen ambient music licensing — resolved.** Confirmed direction: a higglehaven-curated royalty-free/pre-cleared music library (YouTube Audio Library / Twitch Soundtrack model), sourced via a licensing aggregator service (e.g. Epidemic Sound, Artlist — confirm marketplace-use terms apply) plus direct artist opt-in at small scale, with Runbot's own music as a natural first entrant.
 - **[ ] Runbot's higglehaven account ownership** — leaning Runbot LLC (updated in §6), not yet final; CPA sign-off required either way.
@@ -301,4 +301,4 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 
 ---
 
-*v4 superseded v1–v3. v5 incorporated P122 and P143. v6 incorporated notebook-recovered content (scale, generation timing, avatar/voice numbers, Path B, HOA removal, pioneer correction, first-lándlet choice, land cap uncapped, W-9 timing, LLC lean, ambient music proposal). v7 resolved the credit-card equity concern via the ID-verification alternative path. v8 closed out "gamer lánd," ambient music licensing, credit-vs-debit-vs-prepaid, and mixed-purchase handling. v9 was a full rename from Shoplándia to higglehaven following IP clearance (USPTO, WIPO, WA Secretary of State, domain, and platform checks all clean). v10 enforces the brand's permanent lowercase styling — "higglehaven" is never capitalized, including at sentence start or in headers, matching the wordmark's intentional lowercase "h." No substantive content changed. v11 removes the day-night cycle (§1) — a dark "night" phase read as ominous rather than the intended lighthearted/bright feel, and confirms the visual brand direction (§1): pale green/yellow primary palette with soft supporting colors, clean/minimalist UI using expanding menus. v12 clarifies that reviews require a verified purchase (§5) — standard marketplace practice, closing a gap the original "Review incentives" wording left implicit. v13 adds real account login — email + password (§6) — as the technical account layer the age/ID-verification requirements will eventually gate; that policy requirement itself is unchanged and still not built (needs a real ID-verification/payment-processor integration this dev-stage backend intentionally doesn't have yet). v14 makes "every user is automatically a builder" (§3) literal: signup now provisions a real, linked builder profile automatically, a seller profile provisions lazily on first entering Sell mode, and both Build and Sell mode require a real logged-in account to enter — retiring the free-text dev-mode identity picker §3's builder-status line originally described only conceptually. v15 makes §1's own world-growth trigger ("radius grows ... whenever greenbelt-lánd count falls below 10%") literal too: a scheduled job now grows the world automatically instead of a player-triggered dev-mode stand-in, and every backend endpoint an authenticated user could act on now checks that they actually own whatever they're modifying (previously spoofable via a client-supplied ID) — closing that gap required introducing a real admin role (`users.is_admin`, granted only via a Worker secret, never self-service) to gate the handful of manual world-generation tooling endpoints that have no other identity concept to check against. Remaining open: lándlet hosting cost validation, currency naming beyond Higgle, Runbot LLC account ownership (leaning but not final). Highest prompt number confirmed received via the original Sections document: P143 — notebook-sourced content in v6–v10 was outside that document. Continue versioning up as further material surfaces. v16 raises §2's running speed from 2.2 m/s to 2.7 m/s (~6 mph) — direct owner feedback that the original number, once actually experienced live, read as too small a gap from walking (1.8 m/s) to feel like a real run. v17 removes §1's stale "HOA rules are the only mechanism for a lower [vertical-construction] ceiling than cap otherwise allows" line — HOA/community-rule governance was already removed entirely per §3 (v6's "HOA removal"), and that §1 line was simply never updated to match; there is no HOA concept anywhere in this spec now. Direct owner confirmation: eliminate the HOA rule concept. v18 (current) resolves §10's "Currency naming beyond Higgle" open item: the currency is renamed from "dáller"/"dállers" to "higgle"/"higgles" throughout, per direct owner confirmation — a callback to the higglehaven brand name itself, replacing the retired Shoplándia-era callback name.*
+*v4 superseded v1–v3. v5 incorporated P122 and P143. v6 incorporated notebook-recovered content (scale, generation timing, avatar/voice numbers, Path B, HOA removal, pioneer correction, first-lándlet choice, land cap uncapped, W-9 timing, LLC lean, ambient music proposal). v7 resolved the credit-card equity concern via the ID-verification alternative path. v8 closed out "gamer lándlet," ambient music licensing, credit-vs-debit-vs-prepaid, and mixed-purchase handling. v9 was a full rename from Shoplándia to higglehaven following IP clearance (USPTO, WIPO, WA Secretary of State, domain, and platform checks all clean). v10 enforces the brand's permanent lowercase styling — "higglehaven" is never capitalized, including at sentence start or in headers, matching the wordmark's intentional lowercase "h." No substantive content changed. v11 removes the day-night cycle (§1) — a dark "night" phase read as ominous rather than the intended lighthearted/bright feel, and confirms the visual brand direction (§1): pale green/yellow primary palette with soft supporting colors, clean/minimalist UI using expanding menus. v12 clarifies that reviews require a verified purchase (§5) — standard marketplace practice, closing a gap the original "Review incentives" wording left implicit. v13 adds real account login — email + password (§6) — as the technical account layer the age/ID-verification requirements will eventually gate; that policy requirement itself is unchanged and still not built (needs a real ID-verification/payment-processor integration this dev-stage backend intentionally doesn't have yet). v14 makes "every user is automatically a builder" (§3) literal: signup now provisions a real, linked builder profile automatically, a seller profile provisions lazily on first entering Sell mode, and both Build and Sell mode require a real logged-in account to enter — retiring the free-text dev-mode identity picker §3's builder-status line originally described only conceptually. v15 makes §1's own world-growth trigger ("radius grows ... whenever greenbelt-lándlet count falls below 10%") literal too: a scheduled job now grows the world automatically instead of a player-triggered dev-mode stand-in, and every backend endpoint an authenticated user could act on now checks that they actually own whatever they're modifying (previously spoofable via a client-supplied ID) — closing that gap required introducing a real admin role (`users.is_admin`, granted only via a Worker secret, never self-service) to gate the handful of manual world-generation tooling endpoints that have no other identity concept to check against. Remaining open: lándlet hosting cost validation, currency naming beyond Higgle, Runbot LLC account ownership (leaning but not final). Highest prompt number confirmed received via the original Sections document: P143 — notebook-sourced content in v6–v10 was outside that document. Continue versioning up as further material surfaces. v16 raises §2's running speed from 2.2 m/s to 2.7 m/s (~6 mph) — direct owner feedback that the original number, once actually experienced live, read as too small a gap from walking (1.8 m/s) to feel like a real run. v17 removes §1's stale "HOA rules are the only mechanism for a lower [vertical-construction] ceiling than cap otherwise allows" line — HOA/community-rule governance was already removed entirely per §3 (v6's "HOA removal"), and that §1 line was simply never updated to match; there is no HOA concept anywhere in this spec now. Direct owner confirmation: eliminate the HOA rule concept. v18 (current) resolves §10's "Currency naming beyond Higgle" open item: the currency is renamed from "dáller"/"dállers" to "higgle"/"higgles" throughout, per direct owner confirmation — a callback to the higglehaven brand name itself, replacing the retired Shoplándia-era callback name.*

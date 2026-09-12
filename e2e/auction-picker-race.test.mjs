@@ -1,4 +1,4 @@
-// Regression test for #442: the "Sell Your Land" landlet picker
+// Regression test for #442: the "Sell Your Lándlet" landlet picker
 // (renderForLandlet/renderAuctionSection in src/main.js, added by #249) had
 // no stale-response guard, unlike its sibling panels this codebase has
 // already fixed for the same shape (#424/#425). Switching the picker before
@@ -94,7 +94,7 @@ await page.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
   { timeout: 10000 },
 );
-// Scoped to the "Sell Your Land" field's own DIRECT children — its
+// Scoped to the "Sell Your Lándlet" field's own DIRECT children — its
 // .auction-row/.auction-start-form sit right under the .settings-field
 // wrapper, unlike the world-wide "Active Auctions" list's own .auction-row
 // items, which are nested one level deeper inside a .auction-list wrapper.
