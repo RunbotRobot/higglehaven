@@ -6377,6 +6377,36 @@ equipped_avatar_template_id` is deliberately not a foreign key into
 reference needs FK enforcement" pattern this app already uses for e.g.
 notifications' own `templateId`).
 
+### Rendering the equipped avatar in-world (#681)
+
+Shop mode's own player character (`createShopAvatar` in `src/main.js`)
+now loads and renders the account's equipped custom avatar model when one
+is set, instead of always building the hardcoded procedural mesh.
+`enterShopMode` fetches `GET /api/builders/me/avatar` once per entry
+(right alongside its existing `activeCatalog` fetch, with the same
+never-block-on-failure fallback) after `ensureShopperIdentity` has
+already guaranteed a verified session, and — when `modelUrl` is set —
+builds the avatar via a new `createCustomShopAvatar(modelUrl)`, which
+loads the model through the exact same `loadModelInstance` pipeline every
+placed product's real model already goes through (Y-up correction,
+recenter on bounding-box center), then shifts it up by half its own
+measured height so its feet sit at the group's local z=0, matching
+`shopAvatarPosition`'s own "feet position" contract.
+
+`createCustomShopAvatar` returns the exact same shape `createShopAvatar`
+does (`{ group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot,
+afkSprite }`), so every existing walk/idle/pitch/root-position call site
+keeps working completely unchanged — `legPivotL`/`legPivotR`/
+`armPivotL`/`armPivotR`/`headPivot` are real `THREE.Group` instances, just
+never attached to the visible scene graph, so rotating them for limb/head
+animation is a harmless no-op. A custom avatar therefore moves correctly
+as a rigid whole (root position/rotation on `group`, exactly like the
+default avatar), just without per-bone limb animation on its own skeleton
+— defining a named-clip convention for that is #682's own scope, not
+this one's. A failed model load (bad file, 404, network error) falls back
+to the default avatar rather than leaving Shop mode broken, logged via
+`console.warn` the same way `activeCatalog`'s own fallback is.
+
 ## Automated tests
 
 Run the Worker integration suite with:

@@ -176,6 +176,29 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
+// #681 (sub-issue of #679/#680): which owned avatar (if any) the current
+// account has equipped — { equippedTemplateId, modelUrl }, both null for
+// the default hardcoded avatar. See docs/API.md's own "Avatar ownership +
+// equip endpoint" section.
+export async function fetchMyEquippedAvatar() {
+  const { avatar } = await requestJson('/builders/me/avatar');
+  return avatar;
+}
+
+export async function equipAvatar(templateId) {
+  const { avatar } = await requestJson('/builders/me/avatar', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ templateId }),
+  });
+  return avatar;
+}
+
+export async function fetchMyOwnedAvatars() {
+  const { avatars } = await requestJson('/builders/me/avatars');
+  return avatars;
+}
+
 // The logged-in account's own seller profile — see fetchMyBuilder's own
 // comment; the one difference is this is lazily created on first call
 // (selling is opt-in), not guaranteed to already exist from signup.
