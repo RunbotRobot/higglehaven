@@ -50,7 +50,7 @@ function extractSessionCookie(response) {
 // (each e2e test file runs as its own process — see run-all.mjs — so this
 // caches per file, not across the whole suite).
 let adminCookiePromise = null;
-async function ensureAdminSession() {
+export async function ensureAdminSession() {
   if (adminCookiePromise) return adminCookiePromise;
   adminCookiePromise = (async () => {
     const email = `e2e-admin-${crypto.randomUUID()}@e2e.test`;

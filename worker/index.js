@@ -263,6 +263,10 @@ export default {
       return new Response(null, { status: 204, headers: JSON_HEADERS });
     }
 
+    if (url.pathname === '/admin/control-room') {
+      return handleControlRoomAdminPage(request, env);
+    }
+
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url).catch((error) => {
         const httpError = error instanceof HttpError ? error : databaseHttpError(error);
@@ -612,6 +616,48 @@ function controlRoomReplyFromRow(row) {
     imageUrl: row.image_url,
     createdAt: row.created_at,
   };
+}
+
+// N31 option 3 (owner, Control Room, 2026-09-11: "I would like to do
+// option 3. Isn't there a way to do it for free?"). Yes — this needs no
+// new hosting or vendor: it's one more route on the same Cloudflare Worker
+// already serving the whole game (worker/index.js's own default export),
+// so it costs nothing extra to run. Serving the board same-origin (instead
+// of from its own Claude Artifact origin) is what actually fixes the
+// blocker 2kf6b67zlbicmreasema's own note found: the owner's existing
+// hh_session admin cookie is SameSite=Lax and this Worker's CORS is
+// wildcarded, so a cross-origin fetch() from the Artifact could never
+// carry that cookie. A same-origin page has no such problem — the browser
+// just sends it, no CORS/SameSite configuration needed at all — so this
+// also means no CONTROL_ROOM_API_KEY (a secret meant to be guarded the
+// same way STRIPE_SECRET_KEY is) ever has to reach browser-visible
+// JavaScript the way option 1 would have required.
+async function handleControlRoomAdminPage(request, env) {
+  if (request.method !== 'GET') return json({ error: 'Not found' }, 404);
+  try {
+    await requireAdmin(request, env.DB);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return htmlResponse(controlRoomSignInPage(error), error.status);
+  }
+  // The page itself (public/admin-control-room.html, a plain static file
+  // Vite copies verbatim into dist/) is fetched through the same ASSETS
+  // binding every other static file already uses — this route only adds
+  // the requireAdmin gate in front of it, not a separate rendering path.
+  return env.ASSETS.fetch(new Request(new URL('/admin-control-room.html', request.url), request));
+}
+
+function controlRoomSignInPage(error) {
+  const message = error.status === 401
+    ? 'Sign in to higglehaven as an admin in another tab, then reload this page.'
+    : 'This page is admin-only.';
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>higglehaven Control Room</title>
+<style>body { font: 15px/1.5 -apple-system, sans-serif; max-width: 32em; margin: 20vh auto; padding: 0 16px; color: #16240a; }</style>
+</head>
+<body><p>${message}</p></body>
+</html>`;
 }
 
 async function handleControlRoom(request, env, route, url) {

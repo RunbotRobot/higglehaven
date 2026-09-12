@@ -6165,9 +6165,8 @@ hook: a session wrote straight through the db capability's own
 with zero explanation attached. The owner asked directly (Control Room
 note N31, 2026-09-11) for a real server that can reject such a call
 outright. `migrations/0082_control_room.sql` and the routes below are
-that server — this doc describes the API; the Artifact-era frontend has
-not yet been rebuilt against it (tracked as follow-up work, see the note
-at the end of this section).
+that server. The board's own frontend has since been rebuilt against this
+API and moved off the Artifact entirely — see "Admin page" below.
 
 ### Access
 
@@ -6239,14 +6238,33 @@ above). `404` if the task doesn't exist. Bumps the parent task's own
 `updatedAt`, the same "a reply counts as activity on its thread" behavior
 the Artifact-era board used for its own sort order.
 
-### Not yet done
+### Admin page: `GET /admin/control-room`
 
-This ships the validating backend only. Still open, tracked as follow-up
-rather than bundled into this same change: migrating the Artifact's
-existing `tasks`/`replies` documents into these tables, and rebuilding the
-board's own frontend (the column/filter/search/compose UI) to call this
-API instead of `window.claude.use('db')`. The owner has been told this
-explicitly rather than having the live Artifact page cut over unannounced.
+The board itself, served same-origin from this same Worker instead of a
+separate Claude Artifact (owner direction, N31, 2026-09-11: "I would like
+to do option 3" — see the git history around `handleControlRoomAdminPage`
+in `worker/index.js` for the full three-option writeup this answered).
+Gated by `requireAdmin` (a plain `401`/`403` HTML page otherwise, not JSON
+— this is a browser destination, not an API caller); the file served is
+`public/admin-control-room.html`, a small dependency-free page that polls
+`GET /api/control-room/tasks` every 15s and calls the rest of this API
+directly. Same-origin is the actual fix, not just a hosting change: the
+owner's ordinary `hh_session` admin cookie (`SameSite=Lax`) is sent
+automatically on every same-origin `fetch()` this page makes, with no
+CORS configuration needed at all — unlike a cross-origin Artifact page,
+which could reach this API only via a static `CONTROL_ROOM_API_KEY`
+embedded in browser-visible JS (the exposure this route avoids) or a
+CORS/cookie relaxation that would have weakened every other
+`requireAdmin`-gated endpoint too. It also needs no new hosting or vendor
+account — it's one more route on the Worker this app already runs.
+
+Old Artifact-era data (`tasks`/`replies` documents) has already been
+migrated into `control_room_tasks`/`control_room_replies` — see the git
+history around migration `0082_control_room.sql` and its own follow-up
+data-migration commit for details. Some of the old Artifact board's finer
+UI (per-viewer highlight/minimize toggles, a few small display niceties)
+was not ported in this first pass; the core task/reply/status/waitingOn
+workflow is fully functional, and polish can follow as its own change.
 
 ## Automated tests
 
