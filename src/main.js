@@ -9008,15 +9008,16 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 // How fast the avatar's swing amplitude eases toward its current target
 // (moving vs. stopped) each frame — see updateShopAvatarPose.
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
-// Owner (Control Room, N46): flying should tip the avatar into a near-
-// Superman posture instead of staying upright — nose (head) forward and
-// down, not fully flat, so it still reads as "flying forward" rather than
-// "lying on an invisible table." Applied as a rotation.x pitch (the local
-// left-right hinge axis every limb already swings around) before
-// rotation.z's own yaw — see the main per-frame update — so the tip happens
-// in the avatar's own local frame first, then the whole tipped body turns
-// to face the current heading, same as a real flight rig would compose it.
-const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(80 * Math.PI) / 180;
+// Owner (Control Room, N46): flying should tip the avatar into a
+// Superman-style posture instead of staying upright — nose (head) forward
+// and down. Applied as a rotation.x pitch (the local left-right hinge axis
+// every limb already swings around) before rotation.z's own yaw — see the
+// main per-frame update — so the tip happens in the avatar's own local
+// frame first, then the whole tipped body turns to face the current
+// heading, same as a real flight rig would compose it. First shipped at
+// ~80deg (near-horizontal); owner follow-up (2026-09-12) asked for 45deg,
+// "halfway between vertical and horizontal," instead.
+const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(45 * Math.PI) / 180;
 // Eases shopAvatarPitch toward the target above (or back to 0 on landing)
 // each frame — same idea as SHOP_AVATAR_SWING_EASE_PER_S, tuned to settle
 // over roughly the same ~1s span as SHOP_FLIGHT_TAKEOFF_DURATION_S so the
@@ -9944,21 +9945,25 @@ function shopFlightSpeedMultiplier(altitudeM) {
   });
 }
 
-// N45 (Control Room, 2026-09-11): the bird button's icon stayed the same
-// dove-in-flight glyph (🕊️) the whole time, grounded or airborne — nothing
-// distinguished "tap to take off" from "tap to land" beyond the .active
-// background tint. Switching to a standing/perched bird (🐦) for the whole
-// takingOff/flying span (the same span .active/.shop-flying already cover)
-// gives the icon itself a "you're up — tap to land" reading, mirroring the
-// grounded dove's "tap to fly" one. Centralized here rather than duplicated
-// across toggleShopFlight's two branches and enterShopMode's first-visit
-// spawn (below) so the icon can never drift out of sync with the classes.
-const SHOP_FLY_BTN_GROUNDED_ICON = '\u{1F54A}'; // 🕊️ dove — tap to fly
-const SHOP_FLY_BTN_FLYING_ICON = '\u{1F426}'; // 🐦 standing bird — tap to land
+// N45 (Control Room, 2026-09-11): originally swapped the icon to a
+// standing bird (🐦) for the whole takingOff/flying span so it read as
+// "you're up — tap to land," distinct from the grounded dove's "tap to
+// fly." Owner follow-up (2026-09-12): "make the in-flight bird and the
+// standing bird look like the same bird" — 🕊️ and 🐦 render as visibly
+// different species/colors across platforms (white dove vs. a often-blue
+// generic bird), which read as a mismatch rather than a state change. Kept
+// a single glyph (the dove, since it already reads as "in flight") for
+// both states and moved the state distinction entirely onto CSS (the
+// .active background tint plus a takeoff/landing tilt — see
+// #shop-fly-btn.active in index.html) so there's no species/color jump.
+// Still centralized here (rather than duplicated across toggleShopFlight's
+// two branches and enterShopMode's first-visit spawn below) so the classes
+// can never drift out of sync with each other.
+const SHOP_FLY_BTN_ICON = '\u{1F54A}'; // 🕊️ dove — same glyph grounded or flying
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtn.textContent = flying ? SHOP_FLY_BTN_FLYING_ICON : SHOP_FLY_BTN_GROUNDED_ICON;
+  shopFlyBtn.textContent = SHOP_FLY_BTN_ICON;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
