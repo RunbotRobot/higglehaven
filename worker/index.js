@@ -2339,6 +2339,17 @@ async function requireSessionBuilder(request, db) {
   return getOrCreateBuilderForUser(db, user);
 }
 
+// N44 (owner, 2026-09-12): shopping/purchasing now requires the same
+// age-attestation + credit-card-or-ID gate as Build/Sell ("restrict minors
+// from using any part of the application"), but a purchase doesn't need a
+// builder or seller profile the way requireSessionBuilder/requireSessionSeller
+// provision — just a real, verified account. Used by handleInstancePurchase.
+async function requireVerifiedSession(request, db) {
+  const user = await requireCurrentUser(request, db);
+  assertVerified(user);
+  return user;
+}
+
 // Thrown wherever an existing row's own owner column doesn't match the
 // session's resolved builder/seller id — the shared shape for every
 // "is this actually yours" check from here on, so each call site reads as
@@ -7895,9 +7906,10 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // commission rate ever does.
 const REFUND_PAYOUT_RATE = 0.99;
 // quantity had no upper bound at all until this was added — a single
-// unauthenticated call with an absurd quantity (there's no shopper account
-// to even attribute it to) could mint an arbitrary amount of a builder's
-// higgles_balance_cents and higgles_earnings_events credit in one request,
+// call with an absurd quantity could mint an arbitrary amount of a
+// builder's higgles_balance_cents and higgles_earnings_events credit in
+// one request (this predates N44's session requirement on the purchase
+// endpoint, and the cap is still worth keeping regardless of who's calling),
 // directly undermining "growth is earned through demonstrated performance,
 // never purchased" (docs/SPEC.md §0) since earnings feed the land cap
 // formula. 1000 stays generous for a legitimate bulk "buy a crate of
@@ -7914,15 +7926,22 @@ const PURCHASE_MAX_QUANTITY = 1000;
 // importantly, keeping every stored value within Number.isSafeInteger
 // range so it can never silently lose precision once persisted.
 const MAX_MONEY_CENTS = 100_000_000;
-// Same per-IP-throttle mitigation as signup/password-reset/model-upload
-// (checkRateLimit) — this is the one other public, repeatable,
-// balance-crediting endpoint that had no throttle at all, unlike every
-// sibling mutation this dev-mode backend has already locked down today.
+// Rate-limited the same way signup/password-reset/model-upload are
+// (checkRateLimit) — a real account behind this gate now (see
+// requireVerifiedSession below) is still capable of looping this endpoint.
 const PURCHASE_RATE_LIMIT_MAX = 30;
 
 async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
-  await checkRateLimit(db, `purchase:${clientIp(request)}`, PURCHASE_RATE_LIMIT_MAX);
+  // N44 (owner, 2026-09-12): shopping/purchasing — real-money or simulated —
+  // now requires the same age-attestation + credit-card-or-ID gate Build/Sell
+  // already enforce ("restrict minors from using any part of the
+  // application"), so this is no longer the unauthenticated endpoint the
+  // comments elsewhere in this file describe; keyed by the resolved
+  // account, not client IP, once a session is required, same as every
+  // other session-gated rate limit in this file.
+  const user = await requireVerifiedSession(request, db);
+  await checkRateLimit(db, `purchase:${user.user_id}`, PURCHASE_RATE_LIMIT_MAX);
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) return json({ error: 'Instance not found' }, 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -7936,9 +7955,9 @@ async function handleInstancePurchase(request, env, instanceId) {
   }
 
   // quantity/buyerLabel are both genuinely optional, and this endpoint has
-  // no other required fields, so a missing or empty body is just "buy one,
-  // anonymously" rather than an error — read it directly instead of through
-  // the shared readJson (which rejects a missing content-type/body).
+  // no other required fields, so a missing or empty body is just "buy one"
+  // rather than an error — read it directly instead of through the shared
+  // readJson (which rejects a missing content-type/body).
   let input = {};
   const contentType = request.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
@@ -7982,12 +8001,12 @@ function computePurchaseAmounts(template, input) {
   // Capped as a sanity bound against a malformed/abusive request producing
   // an absurd totalCents (and the higgles-balance/land-cap credit that
   // flows from it) — not itself a spec requirement, same reasoning as
-  // durationHours' cap above. The simulated endpoint has no session (see
-  // docs/API.md's "Simulated purchases" — deliberately unauthenticated,
-  // there's no real payment backing it), so quantity was the only thing
-  // standing between one request and an unbounded credit before this cap;
-  // checkRateLimit closes the other half of that gap (repeated smaller
-  // requests instead of one large one).
+  // durationHours' cap above. The simulated path still charges no real
+  // money (see docs/API.md's "Simulated purchases"), so quantity remains
+  // the main thing standing between one request and an unbounded credit
+  // even now that a verified session is required (N44) to reach this
+  // endpoint at all; checkRateLimit closes the other half of that gap
+  // (repeated smaller requests instead of one large one).
   if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
   const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
 
