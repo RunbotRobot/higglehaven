@@ -6305,6 +6305,78 @@ UI (per-viewer highlight/minimize toggles, a few small display niceties)
 was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
 
+## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
+
+Owner direction on Control Room (N53): "I do want to allow users to upload
+whatever avatar model they want... also want them to be able to sell them
+as digital products." This is the backend half only — a sellable `avatar`
+category on `catalog_templates` (no schema change needed there; `category`
+is already freeform text, migration 0001) whose purchase grants the buyer
+equippable ownership, distinct from an ordinary decorative placed-instance
+purchase. Rendering the equipped model in-world, and the upload flow
+itself, are separate sub-issues' own scope.
+
+Ownership isn't derived from `purchases` itself: that table has never
+recorded which authenticated account did the buying — only a free-text
+`buyer_label` (migration 0051's own comment on why) — and that stays true
+even after N44 required every purchase to come from a real, verified
+session. Retrofitting a buyer-account column through both the simulated
+and Stripe checkout/finalize/orphaned-purchase paths would be a bigger,
+riskier change than this feature needs. Instead, migration 0083 adds a
+dedicated `owned_avatars(builder_id, template_id, purchased_at)` table,
+granted (`INSERT OR IGNORE`, idempotent across repeat purchases) at the
+same point each purchase-writing path already writes its `purchases` row
+— `writePurchaseRow` and `writeOrphanedPurchaseRow` alike, so it covers
+both the simulated and real-money Stripe paths. The buyer's own builder id
+(not the hosting landlet's seller) is threaded through via
+`createPurchaseCheckout`'s Stripe metadata (`buyerBuilderId`,
+`isAvatarCategory`, snapshotted at checkout time) for the real-money path,
+the same way `isDigitalGood` already is. A stale/deleted buyer builder id
+is checked for existence first and simply skips granting ownership rather
+than aborting the whole purchase-writing batch — `owned_avatars.builder_id`
+is a real foreign key, mirroring the existing `builderStillExists` pattern
+already used for the seller side.
+
+### `GET /api/builders/me/avatars`
+
+Lists every avatar-category template the session-authenticated builder
+owns (i.e. has an `owned_avatars` row for), newest-purchase first. Each
+entry is the same full template shape `GET /api/catalog` already returns
+(`templateId`, `name`, `dimensions`, `modelUrl`, ...), plus `purchasedAt`.
+
+```json
+{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }] }
+```
+
+### `GET /api/builders/me/avatar`
+### `PUT /api/builders/me/avatar`
+
+Reads or sets which owned avatar (if any) the builder currently has
+equipped. `GET` never blocks on verification — like the other simple
+`/builders/me/*` sub-resources (stripe-account, redeem), this only
+requires `requireCurrentUser` + `getOrCreateBuilderForUser`, not the
+world/shop-selling `requireSessionBuilder`'s `assertVerified`, since
+equipping is a settings/menu action rather than a world/shop action.
+
+`PUT` takes `{ "templateId": "avatar-..." }` (or `{ "templateId": null }`
+to revert to the default) and `403`s if the caller doesn't own that
+template per `owned_avatars`. Both directions respond with the same
+shape, resolving the equipped template's live `model_url`:
+
+```json
+{ "avatar": { "equippedTemplateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb" } }
+```
+
+`equippedTemplateId`/`modelUrl` are both `null` for a fresh account (no
+avatar equipped — the existing hardcoded default from `createShopAvatar`
+in `src/main.js` applies, and equipping never touches the instant-default-
+avatar signup flow), and fall back to the same `null`/`null` shape if the
+equipped template is later deleted out from under it (`builders.
+equipped_avatar_template_id` is deliberately not a foreign key into
+`catalog_templates` — validated in the handler instead, same "not every
+reference needs FK enforcement" pattern this app already uses for e.g.
+notifications' own `templateId`).
+
 ## Automated tests
 
 Run the Worker integration suite with:

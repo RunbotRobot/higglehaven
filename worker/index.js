@@ -1979,6 +1979,17 @@ async function handleBuilders(request, env, db, route, url) {
     return handleListSavedLayouts(request, db, url);
   }
 
+  // #680 (sub-issue of #679, N53): every "avatar"-category template this
+  // account has purchased, for a future picker UI (#681) to offer.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'avatars') {
+    return handleMyOwnedAvatars(request, db);
+  }
+
+  // #680: set/get which owned avatar (if any) is currently equipped.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'avatar') {
+    return handleMyAvatar(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
@@ -2303,6 +2314,79 @@ async function handleMyBuilder(request, db) {
   row.land_cap_m2 = nextCap;
   row.owned_area_m2 = ownedAreaM2;
   return json({ builder: builderFromRow(row) });
+}
+
+// #680 (sub-issue of #679, N53): every "avatar"-category catalog template
+// this account currently owns (owned_avatars, migrations/0083) — for a
+// future picker UI to offer, independent of which one (if any) is
+// currently equipped. Same requireCurrentUser-only bar as
+// handleBuilderStripeAccount/handleBuilderRedeem just below (not the
+// full requireSessionBuilder/assertVerified gate) — reading your own
+// purchase history isn't a world/shop-selling action N44 was aimed at.
+async function handleMyOwnedAvatars(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  const { results } = await db.prepare(`
+    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
+    FROM owned_avatars
+    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
+    WHERE owned_avatars.builder_id = ?
+    ORDER BY owned_avatars.purchased_at DESC
+  `).bind(builder.builder_id).all();
+  return json({
+    avatars: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+  });
+}
+
+// #680: which owned avatar (if any) this account currently has equipped
+// as their own in-world character. GET returns the current choice (null
+// means today's hardcoded default — see createShopAvatar in src/main.js
+// and #679's own "assigned instantly at registration" note, unaffected
+// either way). PUT changes it, rejecting anything not already present in
+// owned_avatars so equipping is only ever "pick one you've already paid
+// for," never a way to wear an arbitrary unbought template.
+async function handleMyAvatar(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json({ avatar: await myAvatarJson(db, builder) });
+  }
+
+  if (request.method === 'PUT') {
+    const input = await readJson(request);
+    let templateId = null;
+    if (input.templateId !== null && input.templateId !== undefined) {
+      templateId = labelValue(input.templateId, 'templateId');
+      const owned = await db.prepare(
+        'SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+      ).bind(builder.builder_id, templateId).first();
+      if (!owned) throw new HttpError('You do not own this avatar', 403);
+    }
+    await db.prepare(
+      `UPDATE builders SET equipped_avatar_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
+    ).bind(templateId, builder.builder_id).run();
+    const updated = await requireBuilder(db, builder.builder_id);
+    return json({ avatar: await myAvatarJson(db, updated) });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function myAvatarJson(db, builder) {
+  if (!builder.equipped_avatar_template_id) {
+    return { equippedTemplateId: null, modelUrl: null };
+  }
+  // A template can vanish after being equipped (its seller later deletes
+  // it) — falls back to the default the same way a dangling seller_id/
+  // templateId elsewhere in this app already does, rather than erroring.
+  const template = await db.prepare(
+    'SELECT model_url FROM catalog_templates WHERE template_id = ?',
+  ).bind(builder.equipped_avatar_template_id).first();
+  return {
+    equippedTemplateId: template ? builder.equipped_avatar_template_id : null,
+    modelUrl: template?.model_url || null,
+  };
 }
 
 // docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
@@ -7942,6 +8026,12 @@ async function handleInstancePurchase(request, env, instanceId) {
   // other session-gated rate limit in this file.
   const user = await requireVerifiedSession(request, db);
   await checkRateLimit(db, `purchase:${user.user_id}`, PURCHASE_RATE_LIMIT_MAX);
+  // #680: needed to credit avatar-category purchases to the actual buyer
+  // (see owned_avatars' own migration comment on why `purchases` itself
+  // has nothing to derive that from) — every account already has one
+  // (getOrCreateBuilderForUser, "every user is automatically a builder"),
+  // so this never fails for a session that already passed requireVerifiedSession.
+  const buyerBuilder = await getOrCreateBuilderForUser(db, user);
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
   if (!instance) return json({ error: 'Instance not found' }, 404);
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(instance.template_id).first();
@@ -7986,9 +8076,9 @@ async function handleInstancePurchase(request, env, instanceId) {
     ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
-    return createPurchaseCheckout(env, instance, template, landlet, seller, input);
+    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id);
   }
-  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input));
+  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input), null, false, buyerBuilder.builder_id);
 }
 
 // Shared by the simulated path (handleInstancePurchase's own direct write)
@@ -8062,7 +8152,7 @@ function purchaseIdempotencyKey(instanceId, rawKey) {
   return `purchase:${instanceId}:${rawKey}`;
 }
 
-async function createPurchaseCheckout(env, instance, template, landlet, seller, input) {
+async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId) {
   const amounts = computePurchaseAmounts(template, input);
   // #454: locked in at checkout time, same reasoning as every other amount
   // here — a digital good pays out instantly with no hold, so
@@ -8070,6 +8160,11 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
   // no live template row to re-check this against) both need this snapshot
   // rather than re-deriving it from a template that might change or vanish.
   const isDigitalGood = !!JSON.parse(template.metadata_json || '{}').digitalGoodDisclaimer;
+  // #680: same "snapshot now, no live template lookup later" reasoning as
+  // isDigitalGood just above — whether this purchase grants an equippable
+  // avatar is decided by category AS OF CHECKOUT, not re-derived from a
+  // template row that might change/vanish by the time finalize runs.
+  const isAvatarCategory = template.category === 'avatar';
 
   // Everything handlePurchaseFinalize needs to actually write the purchase
   // travels here, in Stripe's own metadata — set once, server-side, at
@@ -8096,6 +8191,8 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       builderShareCents: String(amounts.builderShareCents),
       platformShareCents: String(amounts.platformShareCents),
       isDigitalGood: String(isDigitalGood),
+      buyerBuilderId: buyerBuilderId || '',
+      isAvatarCategory: String(isAvatarCategory),
     },
   }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
 
@@ -8164,9 +8261,10 @@ async function handlePurchaseFinalize(request, env) {
     platformShareCents: Number(meta.platformShareCents),
   };
   const isDigitalGood = meta.isDigitalGood === 'true';
+  const buyerBuilderId = meta.buyerBuilderId || null;
 
   if (instance && template && landlet?.owner_builder_id) {
-    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood);
+    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood, buyerBuilderId);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -8203,6 +8301,17 @@ async function buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood) {
   return { tokenHash, deliveryConfirmUrl: `${appBaseUrl(env)}/?confirmDelivery=${rawToken}` };
 }
 
+// #680: grants equippable avatar ownership at the same point a purchase
+// itself is written, in the same db.batch — so ownership can never be
+// recorded without the purchase behind it, or vice versa. INSERT OR
+// IGNORE since re-buying (a second unit, or the same buyer purchasing
+// again) grants nothing extra; ownership is boolean, not quantity-based.
+function ownedAvatarStatement(db, buyerBuilderId, templateId) {
+  return db.prepare(
+    'INSERT OR IGNORE INTO owned_avatars (builder_id, template_id) VALUES (?, ?)',
+  ).bind(buyerBuilderId, templateId);
+}
+
 async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
@@ -8219,6 +8328,16 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   const builderId = builderStillExists ? meta.builderId : null;
   const sellerId = meta.sellerId || null;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
+
+  // #680: same existence check as the seller's builderId just above — the
+  // buyer locked into this PaymentIntent's metadata may have since
+  // self-deleted too, and owned_avatars.builder_id is a real foreign key
+  // that would otherwise fail this whole batch (losing the purchase
+  // record itself) rather than just silently skipping the grant.
+  const isAvatarCategory = meta.isAvatarCategory === 'true';
+  const buyerBuilderStillExists = isAvatarCategory && meta.buyerBuilderId
+    ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.buyerBuilderId).first()
+    : null;
 
   const statements = [
     db.prepare(`
@@ -8241,18 +8360,28 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
         `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
     );
   }
+  if (buyerBuilderStillExists) {
+    statements.push(ownedAvatarStatement(db, meta.buyerBuilderId, meta.templateId));
+  }
   await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
-async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false) {
+async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
+  // #680: same defensive existence check as writeOrphanedPurchaseRow's own
+  // (buyerBuilderId can arrive here from Stripe metadata set at checkout
+  // time, same staleness risk as that path — the simulated caller's own
+  // buyerBuilderId is always fresh, but this guards both the same way).
+  const buyerBuilderStillExists = template.category === 'avatar' && buyerBuilderId
+    ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(buyerBuilderId).first()
+    : null;
   await db.batch([
     db.prepare(`
       INSERT INTO purchases
@@ -8267,6 +8396,7 @@ async function writePurchaseRow(env, instance, template, landlet, amounts, payme
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+    ...(buyerBuilderStillExists ? [ownedAvatarStatement(db, buyerBuilderId, template.template_id)] : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
