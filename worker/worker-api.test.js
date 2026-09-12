@@ -1919,7 +1919,7 @@ describe('Worker API', () => {
     expect(missingAdjacent.response.status).toBe(404);
 
     const rings = await env.DB.prepare(`
-      SELECT ring_id, candidate_count FROM land_candidate_rings ORDER BY inner_radius_m
+      SELECT ring_id, candidate_count FROM landlet_candidate_rings ORDER BY inner_radius_m
     `).all();
     expect(rings.results).toEqual([
       { ring_id: 'generated-ring', candidate_count: 6 },
@@ -1960,13 +1960,13 @@ describe('Worker API', () => {
     expect((await api('/land-candidate-rings?cursor=invalid')).response.status).toBe(400);
 
     await expect(env.DB.prepare(`
-      INSERT INTO land_candidate_rings
+      INSERT INTO landlet_candidate_rings
         (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad)
       VALUES ('concurrent-overlap', 201, 202, 3, NULL, 0)
     `).run()).rejects.toThrow(/generated ring radial overlap/);
 
     await expect(env.DB.prepare(`
-      INSERT INTO land_candidate_rings
+      INSERT INTO landlet_candidate_rings
         (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
          boundary_signature, adjacent_to_ring_id)
       VALUES ('bad-parent-ring', 300, 301, 3, NULL, 0, 'bad-signature', 'generated-ring')

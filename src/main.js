@@ -4714,7 +4714,7 @@ async function renderLandCapField() {
     const me = builders.find((b) => b.builderId === builderId);
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
-      'Your cap grows automatically as you earn higgles from selling land via auction — never purchasable with cash.';
+      'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
   } catch (err) {
     status.textContent = err.message || 'Could not load your land cap.';
   }
@@ -4780,7 +4780,7 @@ function renderBuildSettingsSection() {
   savedLayoutsField.appendChild(savedLayoutsLabel);
   const savedLayoutsHint = document.createElement('div');
   savedLayoutsHint.className = 'settings-empty-note';
-  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level land here, so nothing's really lost.";
+  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level lándlet here, so nothing's really lost.";
   savedLayoutsField.appendChild(savedLayoutsHint);
   const savedLayoutsList = document.createElement('div');
   savedLayoutsList.className = 'version-list';
@@ -5251,7 +5251,7 @@ async function renderAuctionSection() {
   const startField = document.createElement('div');
   startField.className = 'settings-field';
   const startLabel = document.createElement('span');
-  startLabel.textContent = 'Sell Your Land';
+  startLabel.textContent = 'Sell Your Lándlet';
   startField.appendChild(startLabel);
   const startStatus = document.createElement('div');
   startStatus.className = 'settings-empty-note';

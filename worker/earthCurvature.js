@@ -110,7 +110,7 @@ export function footprintScaleAtHeight(z, earthRadiusM = DEFAULT_EARTH_RADIUS_M)
   return (earthRadiusM + z) / earthRadiusM;
 }
 
-// docs/SPEC.md §1's "no gaps between adjacent lánds at any given level...
+// docs/SPEC.md §1's "no gaps between adjacent lándlets at any given level...
 // no overlap at deep below-ground levels" requirement (#170, sub-issue of
 // #167) — quantifies how far apart two neighboring lándlets' cone
 // boundaries actually drift once each widens/narrows its own footprint by

@@ -80,5 +80,6 @@
   "0080_saved_level_layouts.sql",
   "0081_tax_1099_forms.sql",
   "0082_control_room.sql",
-  "0083_avatar_ownership.sql"
+  "0083_avatar_ownership.sql",
+  "0084_landlet_terminology_rename.sql"
 ]
