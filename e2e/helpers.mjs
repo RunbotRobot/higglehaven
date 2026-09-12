@@ -262,6 +262,21 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // which Playwright's default "wait for visible" can never satisfy.
   await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
   await clearVerifyModalIfShown(page);
+
+  // N44: an already-showing modal (the branch above that skipped the
+  // mode-nav click) is Shop's own gate, not necessarily the requested
+  // mode's — Shop is the default landing mode, so it's what a fresh page
+  // load always shows first, regardless of which mode this call actually
+  // wants. Login/verification just cleared it, but that only satisfies
+  // Shop's own entry; still sitting in Shop mode, so actually switch into
+  // the requested mode now (a no-op reload for mode: 'shop' itself, since
+  // enterShopMode already picked back up and finished loading on its own).
+  // Once authenticated and verified, ensureBuilderIdentity/
+  // ensureSellerIdentity resolve silently with no further prompt.
+  if (authModalAlreadyShown && mode !== 'shop') {
+    await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
 }
 
 // #556 (docs/SPEC.md §6): age attestation + credit-card verification,
