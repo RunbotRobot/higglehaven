@@ -11239,7 +11239,20 @@ async function enterShopMode() {
     }
   }
 
-  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl]) {
+  // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
+  // here — #119/#688: they used to be, but this app now blocks Shop's own
+  // entry on ensureShopperIdentity (N44/#678) before ever reaching this
+  // point, and the first-ever-visit flying-vs-grounded decision below
+  // still waits on fetchCatalog/fetchWorld/fetchAllLandlets to actually
+  // resolve first. Marking the fly button visible this early let it appear
+  // on screen — already showing its default grounded look — for that
+  // whole fetch window, only flipping to the tilted "flying" look once
+  // setShopFlyBtnFlying(isFirstShopVisit) finally runs: a real, visible
+  // flash of the wrong state for every first-time visitor (and the exact
+  // race #688's own e2e failure caught, once the identity gate made that
+  // window long enough to reliably lose). Made visible below instead,
+  // together with the moment the correct state is actually decided.
+  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl]) {
     el.classList.add('visible');
   }
   shopStatusEl.textContent = 'Loading the world…';
@@ -11427,6 +11440,11 @@ async function enterShopMode() {
   shopDownHeld = false;
   shopVerticalInput = 0;
   setShopFlyBtnFlying(isFirstShopVisit);
+  // Now that the correct grounded/flying look is actually applied, safe to
+  // reveal (see this function's own comment on why these two specifically
+  // wait until here, unlike the other Shop HUD elements above).
+  shopFlyBtn.classList.add('visible');
+  shopVerticalControlsEl.classList.add('visible');
 
   shopYaw = 0;
   shopPitch = -0.12;
