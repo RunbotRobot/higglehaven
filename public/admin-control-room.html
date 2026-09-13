@@ -77,6 +77,14 @@
   </div>
 </div>
 
+<div class="compose">
+  <div class="compose-row">
+    <input type="email" id="grantAdminEmail" placeholder="Account email to make admin" style="flex: 1 1 260px;" />
+    <button id="grantAdminBtn">Grant admin</button>
+  </div>
+  <p class="meta" id="grantAdminStatus" style="margin: 6px 0 0;"></p>
+</div>
+
 <div class="toolbar">
   <input type="search" id="search" placeholder="Search title, note, session, tag…" />
 </div>
@@ -339,6 +347,27 @@
   document.getElementById('search').addEventListener('input', (event) => {
     searchTerm = event.target.value.trim().toLowerCase();
     render();
+  });
+
+  document.getElementById('grantAdminBtn').addEventListener('click', async () => {
+    const emailEl = document.getElementById('grantAdminEmail');
+    const statusEl = document.getElementById('grantAdminStatus');
+    const email = emailEl.value.trim();
+    if (!email) return;
+    statusEl.textContent = 'Working…';
+    try {
+      const response = await fetch('/api/auth/grant-admin', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+      statusEl.textContent = (body.user.email || email) + ' is now an admin.';
+      emailEl.value = '';
+    } catch (error) {
+      statusEl.textContent = 'Error: ' + error.message;
+    }
   });
 
   document.getElementById('composeBtn').addEventListener('click', async () => {
