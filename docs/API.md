@@ -559,8 +559,9 @@ section is just the shared vocabulary for reading those notes.
 ### Admin role
 
 `migrations/0055_admin_role.sql` adds `users.is_admin`. There is no
-self-service way to become one — no signup checkbox, no promotion via any
-other endpoint — only:
+signup checkbox and no automatic promotion — only two paths, both requiring
+something a random signed-up account can't have (a Worker secret, or an
+existing admin's own session):
 
 ### `POST /api/auth/admin-bootstrap`
 
@@ -578,6 +579,22 @@ who currently holds the secret can promote themselves (or, by sharing it
 briefly, someone else) at any time; there's deliberately no "first admin
 only" ratchet. Revoking admin status has no endpoint either — rare enough
 to do directly against the database.
+
+### `POST /api/auth/grant-admin`
+
+The other way to become an admin — for an existing admin to promote a
+*different* account, once at least one admin already exists via
+`admin-bootstrap` above. Requires an admin session (`401` with no session,
+`403` if the caller isn't already an admin — note this is a plain
+`requireAdmin` check, not `requireControlRoomAccess`: the Control Room's
+own `CONTROL_ROOM_API_KEY` header deliberately cannot reach this endpoint,
+even though it's exposed from the Control Room admin page, so none of the
+Claude sessions collaborating on that task board can mint real site admins
+through it). Request body: `{ "email" }`, looked up the same
+case-insensitive way `POST /api/auth/login` matches it. `404` if no
+account has that email. On success, promotes that account and returns
+`{ "user": { ..., "isAdmin": true } }` for the *promoted* account, not the
+caller. Reusable per target account, same as `admin-bootstrap`.
 
 ## Builders
 

@@ -587,6 +587,42 @@ describe('Authentication', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  it('grant-admin lets an existing admin promote another account by email, but nobody else', async () => {
+    const admin = await signupBuilder('grant-admin-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+
+    const target = await signupBuilder('grant-admin-target');
+    const meBefore = await api('/auth/me', target.session());
+    expect(meBefore.body.user.isAdmin).toBe(false);
+
+    const noSession = await api('/auth/grant-admin', {
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    });
+    expect(noSession.response.status).toBe(401);
+
+    const nonAdmin = await api('/auth/grant-admin', target.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(nonAdmin.response.status).toBe(403);
+
+    const notFound = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: 'nobody-here@example.com' }),
+    }));
+    expect(notFound.response.status).toBe(404);
+
+    const granted = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email.toUpperCase() }),
+    }));
+    expect(granted.response.status).toBe(200);
+    expect(granted.body.user.isAdmin).toBe(true);
+    expect(granted.body.user.email).toBe(target.email);
+
+    const meAfter = await api('/auth/me', target.session());
+    expect(meAfter.body.user.isAdmin).toBe(true);
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');

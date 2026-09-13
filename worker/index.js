@@ -5657,6 +5657,9 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
     return handleAdminBootstrap(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'grant-admin') {
+    return handleGrantAdmin(request, db);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
   }
@@ -5800,6 +5803,27 @@ async function handleAdminBootstrap(request, env, db) {
   await db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
     .bind(user.user_id).run();
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(updated) });
+}
+
+// The second way to become an admin, this one for an admin promoting
+// someone else rather than bootstrapping themselves — requireAdmin-gated
+// (a real is_admin session), deliberately NOT reachable via
+// requireControlRoomAccess's CONTROL_ROOM_API_KEY path even though this
+// is exposed from the Control Room admin page: that key exists so the
+// ~12 Claude sessions can read/write the task board, not so any of them
+// could mint real site admins. Same email lookup handleLogin already
+// uses (normalizeEmail against the plain `email` column), so this finds
+// exactly the account that email actually logs into.
+async function handleGrantAdmin(request, db) {
+  await requireAdmin(request, db);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+  await db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
+    .bind(row.user_id).run();
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
   return json({ user: userFromRow(updated) });
 }
 
