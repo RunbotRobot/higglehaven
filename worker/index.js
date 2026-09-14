@@ -692,8 +692,18 @@ async function handleControlRoomTasksList(request, env, db, url) {
   const query = status
     ? db.prepare('SELECT * FROM control_room_tasks WHERE status = ? ORDER BY updated_at DESC LIMIT 500').bind(status)
     : db.prepare('SELECT * FROM control_room_tasks ORDER BY updated_at DESC LIMIT 500');
-  const { results } = await query.all();
-  return json({ tasks: results.map(controlRoomTaskFromRow) });
+  // The query above caps at 500 rows regardless of how many actually match
+  // (the admin page's own list can't usefully render more than that at
+  // once) — a separate, uncapped count so the page can tell "500 tasks
+  // total" from "500 of 1400, capped" instead of confusing the two (owner,
+  // Control Room: the header kept reading "500 tasks total · 500 shown"
+  // even as new tasks kept getting posted, since `tasks.length` is exactly
+  // this same capped result set, not a real total).
+  const countQuery = status
+    ? db.prepare('SELECT COUNT(*) AS total FROM control_room_tasks WHERE status = ?').bind(status)
+    : db.prepare('SELECT COUNT(*) AS total FROM control_room_tasks');
+  const [{ results }, countRow] = await Promise.all([query.all(), countQuery.first()]);
+  return json({ tasks: results.map(controlRoomTaskFromRow), total: countRow.total });
 }
 
 async function handleControlRoomTaskGet(request, env, db, taskId) {

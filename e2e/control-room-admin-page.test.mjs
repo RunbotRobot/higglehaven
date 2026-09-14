@@ -46,6 +46,13 @@ await page.goto(`${BASE_URL}/admin/control-room`, { waitUntil: 'networkidle' });
 const heading = await page.textContent('h1');
 console.log('admin page heading (should be "higglehaven Control Room"):', heading);
 
+// Owner, Control Room: the header used to read "500 tasks total" forever
+// once the board passed 500 rows, since it displayed tasks.length off the
+// same LIMIT-500 result set the page renders from rather than a real,
+// uncapped count from the API. Capture the count before posting and
+// confirm it actually moves by exactly one afterward.
+const totalBefore = Number((await page.textContent('#statusLine')).match(/^(\d+) tasks total/)[1]);
+
 // Post a new message through the compose form — the same validating API
 // worker/control-room.test.js exercises directly, now driven through the
 // real page instead of a raw fetch().
@@ -56,6 +63,9 @@ await page.click('#composeBtn');
 const card = page.locator('.card', { has: page.locator('.title', { hasText: title }) });
 await card.waitFor({ timeout: 10000 });
 console.log('posted message appears in the list: true');
+
+const totalAfter = Number((await page.textContent('#statusLine')).match(/^(\d+) tasks total/)[1]);
+console.log('tasks-total count moved by exactly 1 after posting (actual delta):', totalAfter - totalBefore);
 
 // A freshly-posted task starts unviewed (control_room_tasks.viewed
 // defaults to 0) — its collapsed card-head should show the "New" badge
@@ -91,6 +101,7 @@ console.log('status flipped to done: true');
 
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
+  totalAfter === totalBefore + 1 &&
   newlyPostedIsUnviewed &&
   markedViewedButtonText.trim() === 'Mark unviewed' &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
