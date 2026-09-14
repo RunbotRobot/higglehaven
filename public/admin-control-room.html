@@ -31,7 +31,10 @@
   .compose-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .compose-row input[name="from"] { flex: 0 0 140px; }
   .compose-row select { flex: 0 0 120px; }
-  .compose-row input[name="title"] { flex: 1 1 260px; }
+  .compose-row textarea[name="title"] {
+    flex: 1 1 260px; resize: none; overflow: hidden; max-height: 200px;
+    font: inherit; line-height: 1.4;
+  }
   .card { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
   .card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; cursor: pointer; }
   .title { font-weight: 600; flex: 1 1 auto; }
@@ -72,7 +75,7 @@
       <option value="feedback">feedback</option>
       <option value="question">question</option>
     </select>
-    <input name="title" placeholder="New message / direction…" />
+    <textarea name="title" placeholder="New message / direction…" rows="1"></textarea>
     <button id="composeBtn">Post</button>
   </div>
 </div>
@@ -123,6 +126,15 @@
   function showError(message) {
     errLine.hidden = false;
     errLine.textContent = message;
+  }
+
+  // Grows the new-task textarea to fit its content instead of scrolling
+  // horizontally (owner feedback) — reset to 'auto' first so a shrink
+  // (backspacing a wrapped line away) actually shrinks the box back down,
+  // not just ratchets taller forever off scrollHeight's own prior value.
+  function autoGrowTextarea(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
   }
   function clearError() {
     errLine.hidden = true;
@@ -370,16 +382,19 @@
     }
   });
 
+  const composeTitleEl = document.querySelector('.compose-row textarea[name="title"]');
+  composeTitleEl.addEventListener('input', () => autoGrowTextarea(composeTitleEl));
+
   document.getElementById('composeBtn').addEventListener('click', async () => {
     const row = document.querySelector('.compose-row');
     const from = row.querySelector('input[name="from"]').value.trim() || 'owner';
     const kind = row.querySelector('select[name="kind"]').value;
-    const titleEl = row.querySelector('input[name="title"]');
-    const title = titleEl.value.trim();
+    const title = composeTitleEl.value.trim();
     if (!title) return;
     try {
       await apiCall('/tasks', { method: 'POST', body: JSON.stringify({ from, kind, title }) });
-      titleEl.value = '';
+      composeTitleEl.value = '';
+      autoGrowTextarea(composeTitleEl);
       clearError();
       await loadTasks();
     } catch (error) {
