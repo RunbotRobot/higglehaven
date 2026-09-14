@@ -51,7 +51,7 @@ console.log('admin page heading (should be "higglehaven Control Room"):', headin
 // real page instead of a raw fetch().
 const title = `E2E admin-page message ${Date.now()}`;
 await page.fill('.compose-row input[name="from"]', 'e2e-owner');
-await page.fill('.compose-row input[name="title"]', title);
+await page.fill('.compose-row textarea[name="title"]', title);
 await page.click('#composeBtn');
 const card = page.locator('.card', { has: page.locator('.title', { hasText: title }) });
 await card.waitFor({ timeout: 10000 });
