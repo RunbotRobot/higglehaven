@@ -57,6 +57,12 @@ const card = page.locator('.card', { has: page.locator('.title', { hasText: titl
 await card.waitFor({ timeout: 10000 });
 console.log('posted message appears in the list: true');
 
+// A freshly-posted task starts unviewed (control_room_tasks.viewed
+// defaults to 0) — its collapsed card-head should show the "New" badge
+// right away, no need to expand first.
+const newlyPostedIsUnviewed = await card.locator('.card-head .pill-unviewed').isVisible();
+console.log('freshly-posted task shows the "New" badge (should be true):', newlyPostedIsUnviewed);
+
 // Expand it, post a reply, and mark it done — the actions a real Control
 // Room session exercises most often.
 await card.locator('.card-head').click();
@@ -65,11 +71,28 @@ await card.locator('button[data-action="reply"]').click();
 await card.locator('.msg-text', { hasText: 'A real reply, posted through the page itself.' }).waitFor({ timeout: 10000 });
 console.log('reply landed in the thread: true');
 
+// Mark viewed (Control Room feedback: "we've lost the ability to mark a
+// task as Viewed after migrating from the artifact to the website") — the
+// New badge should disappear and the button should flip to offer the
+// reverse action, then flip back on a second click.
+await card.locator('button[data-action="toggleViewed"]').click();
+await card.locator('.card-head .pill-unviewed').waitFor({ state: 'detached', timeout: 10000 });
+const markedViewedButtonText = await card.locator('button[data-action="toggleViewed"]').textContent();
+console.log('button reads "Mark unviewed" once viewed (actual):', markedViewedButtonText.trim());
+
+await card.locator('button[data-action="toggleViewed"]').click();
+await card.locator('.card-head .pill-unviewed').waitFor({ timeout: 10000 });
+const markedUnviewedButtonText = await card.locator('button[data-action="toggleViewed"]').textContent();
+console.log('button reads "Mark viewed" once unviewed again (actual):', markedUnviewedButtonText.trim());
+
 await card.locator('button[data-action="status"][data-value="done"]').click();
 await card.locator('.pill-done').waitFor({ timeout: 10000 });
 console.log('status flipped to done: true');
 
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
+  newlyPostedIsUnviewed &&
+  markedViewedButtonText.trim() === 'Mark unviewed' &&
+  markedUnviewedButtonText.trim() === 'Mark viewed' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
