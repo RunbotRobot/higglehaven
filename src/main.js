@@ -1221,6 +1221,30 @@ function createGroundTexture() {
   return texture;
 }
 
+// THREE.ShapeGeometry's own UV convention is "world uvs" — literally each
+// vertex's raw local-space (x, y) in meters, not normalized to [0, 1] the
+// way PlaneGeometry/CircleGeometry's UVs are (three.js's own ShapeGeometry
+// source: `uvs.push(vertex.x, vertex.y)`). createGroundTexture()'s shared
+// texture.repeat (8, 8) was tuned against landletGeometry's PlaneGeometry
+// just below, whose UVs really do run 0..1 across its own LANDLET_SIDE_M
+// width — applied to a ShapeGeometry instead, those raw-meter UVs make the
+// same texture repeat hundreds of times across a landlet-sized shape, far
+// more than the GPU's mipmap minification can resolve, which washes the
+// whole surface out to a near-flat average color instead of visible grass
+// speckle (Control Room: "I see the grass ground texture load, then it
+// reverts to the old plain green plane" once applyLandletShape swaps in a
+// real landlet's ShapeGeometry). Dividing by LANDLET_SIDE_M puts a
+// ShapeGeometry's UVs back in that same "one unit per landlet-width" space
+// PlaneGeometry's naturally are, so the shared texture.repeat gives the
+// same physical tile density either way.
+function normalizeGroundShapeUVs(geometry) {
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, uv.getX(i) / LANDLET_SIDE_M, uv.getY(i) / LANDLET_SIDE_M);
+  }
+  uv.needsUpdate = true;
+}
+
 // PlaneGeometry already lies flat in the XY plane by default — which is
 // now our ground plane (Z-up), so unlike before, no rotation is needed. This
 // square is only a placeholder shown before bootstrap() resolves which
@@ -1243,6 +1267,7 @@ scene.add(landlet);
 function applyLandletShape(landletRecord) {
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
+  normalizeGroundShapeUVs(landlet.geometry);
   curveGroundGeometry(landlet.geometry);
   oldGeometry.dispose();
 }
@@ -11568,7 +11593,9 @@ async function enterShopMode() {
     const groundMaterial = plotColorKey === 'greenbelt'
       ? new THREE.MeshStandardMaterial({ map: createGroundTexture() })
       : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
-    const groundMesh = new THREE.Mesh(new THREE.ShapeGeometry(shapeForLandlet(record)), groundMaterial);
+    const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
+    if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
+    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
@@ -11721,6 +11748,7 @@ async function loadSellerShowcasePage(pageIndex) {
     new THREE.Vector2(-groundWidth / 2, groundDepth / 2),
   ]);
   landlet.geometry = new THREE.ShapeGeometry(groundShape);
+  normalizeGroundShapeUVs(landlet.geometry);
   curveGroundGeometry(landlet.geometry);
   oldGeometry.dispose();
 
@@ -12055,6 +12083,7 @@ async function enterLayoutPreviewMode() {
     new THREE.Vector2(-halfWidth, halfDepth),
   ]);
   landlet.geometry = new THREE.ShapeGeometry(groundShape);
+  normalizeGroundShapeUVs(landlet.geometry);
   curveGroundGeometry(landlet.geometry);
   oldGeometry.dispose();
 
