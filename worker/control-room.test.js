@@ -122,6 +122,42 @@ describe('Control Room tasks (#N31)', () => {
     expect(doneList.body.tasks.some((t) => t.id === done.id)).toBe(true);
   });
 
+  // Owner, Control Room: the admin page's header kept reading "500 tasks
+  // total" forever once the board actually passed 500 rows, because it was
+  // displaying tasks.length off the same LIMIT-500 result set the page
+  // renders from rather than a real, uncapped count. `total` is that real
+  // count — independent of the LIMIT and of whatever `status` filter is
+  // applied, so it moves with real inserts even once the list itself is
+  // capped.
+  it('returns a real total count, not just how many rows this call returned', async () => {
+    const before = await api('/control-room/tasks', keySession());
+    const beforeTotal = before.body.total;
+    expect(beforeTotal).toBe(before.body.tasks.length);
+
+    await createTask({ title: 'Counts toward the real total, one' });
+    await createTask({ title: 'Counts toward the real total, two' });
+
+    const after = await api('/control-room/tasks', keySession());
+    expect(after.body.total).toBe(beforeTotal + 2);
+    expect(after.body.total).toBe(after.body.tasks.length);
+  });
+
+  it('scopes total to the same status filter as the list itself', async () => {
+    const done = await createTask({ title: 'Scoped total, done' });
+    await api(`/control-room/tasks/${done.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', status: 'done' }),
+    }));
+    const queuedBefore = await api('/control-room/tasks?status=queued', keySession());
+    const doneBefore = await api('/control-room/tasks?status=done', keySession());
+
+    await createTask({ title: 'Scoped total, another queued one' });
+
+    const queuedAfter = await api('/control-room/tasks?status=queued', keySession());
+    const doneAfter = await api('/control-room/tasks?status=done', keySession());
+    expect(queuedAfter.body.total).toBe(queuedBefore.body.total + 1);
+    expect(doneAfter.body.total).toBe(doneBefore.body.total);
+  });
+
   it('rejects updating a task with no caller name', async () => {
     const task = await createTask();
     const got = await api(`/control-room/tasks/${task.id}`, keySession({

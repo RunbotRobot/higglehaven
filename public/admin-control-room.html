@@ -106,6 +106,7 @@
   const API = '/api/control-room';
   const POLL_MS = 15000;
   let tasks = [];
+  let totalTasks = 0;
   let filterStatus = '';
   let searchTerm = '';
   const expanded = new Set();
@@ -278,7 +279,8 @@
     const visible = tasks
       .filter((t) => (filterStatus ? t.status === filterStatus : true))
       .filter(matchesSearch);
-    statusLine.textContent = tasks.length + ' tasks total · ' + visible.length + ' shown';
+    statusLine.textContent = totalTasks + ' tasks total · ' + visible.length + ' shown' +
+      (tasks.length < totalTasks ? ' (list capped at the ' + tasks.length + ' most recently updated)' : '');
     listEl.innerHTML = visible.length
       ? visible.map(renderCard).join('')
       : '<div class="empty">Nothing here.</div>';
@@ -288,6 +290,7 @@
     try {
       const data = await apiCall('/tasks');
       tasks = data.tasks;
+      totalTasks = data.total;
       clearError();
       render();
     } catch (error) {

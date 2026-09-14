@@ -6244,7 +6244,14 @@ way a builder's or seller's own resources get.
 
 Lists tasks, most-recently-updated first (capped at 500). Optional
 `?status=queued|in_progress|done` query param filters to one column, the
-same three values the board's own three columns use.
+same three values the board's own three columns use. Response also
+includes `total`: the real, uncapped count of tasks matching the same
+`status` filter (or all tasks, unfiltered) — separate from `tasks.length`,
+which is at most 500 regardless of how many actually match. The admin
+page's own "N tasks total" header uses this, not `tasks.length`, so it
+keeps counting up correctly once the board passes 500 rows (owner, Control
+Room: this used to read "500 tasks total" forever once it crossed that
+cap).
 
 ### `POST /api/control-room/tasks`
 
