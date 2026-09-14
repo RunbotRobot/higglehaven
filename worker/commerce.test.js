@@ -3311,7 +3311,8 @@ describe('Simulated purchases', () => {
 
       // #646: the e-filing transmission #645 was built to feed into. The
       // test environment never configures TAX_1099_EFILING_CLIENT_ID/
-      // _CLIENT_SECRET/TAX_1099_PAYER_NAME/_EIN or TAX_ID_ENCRYPTION_KEY
+      // _CLIENT_SECRET/_USER_TOKEN, TAX_1099_PAYER_NAME/_EIN, or
+      // TAX_ID_ENCRYPTION_KEY
       // (same dev-mode-friendly pattern as STRIPE_SECRET_KEY elsewhere in
       // this file) — these prove every local validation (admin access,
       // form existence, status, payee paperwork) runs and returns its own
