@@ -185,6 +185,19 @@
     }).join('');
   }
 
+  // Owner feedback (#8fc45660): a task card showed no number at all, only
+  // its title -- but the owner already refers to tasks by number in their
+  // own replies ("#646", "N43") and this Control Room's own reply/tracking
+  // conventions do the same. A GitHub-issue-backed task carries `number`;
+  // an owner feedback/question note carries `noteNumber` instead (this
+  // board's own sequential "N" numbering, distinct from GitHub's); a plain
+  // session summary/note has neither, so this renders nothing for those.
+  function taskNumberLabel(task) {
+    if (task.number != null) return '#' + task.number;
+    if (task.noteNumber != null) return 'N' + task.noteNumber;
+    return '';
+  }
+
   function waitingBadge(task) {
     if (task.status === 'done') return '';
     if (task.waitingOn === 'owner') return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
@@ -247,6 +260,7 @@
 
     return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + task.id + '">' +
       '<div class="card-head" data-toggle="' + task.id + '">' +
+        (taskNumberLabel(task) ? '<span class="chip">' + escapeHtml(taskNumberLabel(task)) + '</span>' : '') +
         (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
         '<span class="title">' + linkTitle + '</span>' +
         '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
