@@ -5525,23 +5525,38 @@ async function generateTax1099Drafts(db, year) {
 // guard, since filing needs both and neither exists without direct owner
 // action.
 //
-// IMPORTANT: the OAuth/REST shape below follows TaxBandits' published
-// developer docs (developer.taxbandits.com) as of this writing, but has
-// never been exercised against a live sandbox — no session can obtain
-// the client ID/secret needed to do that. Treat fetchTax1099EfilingToken
-// and transmitTax1099Form as a best-effort starting point to verify (and
-// adjust the exact endpoint paths/payload fields for, per the current API
-// reference) once the owner actually provisions sandbox credentials,
-// not as already-proven-correct code.
+// Corrected against TaxBandits' own published docs (developer.taxbandits.com
+// /docs/sandbox/overview, /docs/oauth2.0authentication) once the owner
+// actually had a Sandbox developer account to check against — the original
+// pass had three bugs, now fixed below: TAX_1099_EFILING_API_BASE pointed at
+// the Sandbox *console* host (sandbox.taxbandits.com, a web UI) instead of
+// the actual Sandbox *API* host (testapi.taxbandits.com); the OAuth JWS's
+// `aud` claim needs the account's own User Token value, not the literal
+// string "UserToken" (there was no secret for it at all); and the JWS must
+// be sent in a header literally named `authentication`, not `authorization`.
+//
+// STILL UNVERIFIED against a live call: no session has real credentials to
+// exercise this against TaxBandits' actual Sandbox API, so treat this as
+// doc-verified but not call-verified — confirm the first real Sandbox filing
+// end-to-end once TAX_1099_EFILING_* secrets are set, before ever pointing
+// it at the Live hosts (see the two consts below).
 function tax1099EfilingConfigured(env) {
   return !!(
     env.TAX_1099_EFILING_CLIENT_ID && env.TAX_1099_EFILING_CLIENT_SECRET
-    && env.TAX_1099_PAYER_NAME && env.TAX_1099_PAYER_EIN
+    && env.TAX_1099_EFILING_USER_TOKEN && env.TAX_1099_PAYER_NAME && env.TAX_1099_PAYER_EIN
   );
 }
 
+// Sandbox hosts (a free, separate developer account signed up for at
+// sandbox.taxbandits.com — distinct from the regular taxbandits.com filing
+// account used to actually e-file). Once the owner is certified for Live
+// (which also requires TaxBandits to whitelist this Worker's outbound IPs —
+// confirm with TaxBandits support how that works for a Cloudflare Workers
+// deployment, since it has no single static egress IP), swap these two for
+// the Live hosts: 'https://oauth.expressauth.net/v2/tbsauth' and
+// 'https://api.taxbandits.com/v1.7.3'.
 const TAX_1099_EFILING_TOKEN_URL = 'https://testoauth.expressauth.net/v2/tbsauth';
-const TAX_1099_EFILING_API_BASE = 'https://sandbox.taxbandits.com/v1.7.3';
+const TAX_1099_EFILING_API_BASE = 'https://testapi.taxbandits.com/v1.7.3';
 
 function base64UrlEncode(bytes) {
   let binary = '';
@@ -5555,13 +5570,18 @@ function base64UrlEncode(bytes) {
 // apireference/OAuth2.0Authentication. Built fresh per call (tokens
 // expire in ~1h per their docs; admin-only filing calls are expected to
 // be sparse enough that this codebase doesn't cache one across requests).
+// `aud` is the account's own User Token (Sandbox/Live console → Settings →
+// API Credentials), not a placeholder string — TaxBandits rejects the
+// handshake otherwise. The JWS itself goes in a header literally named
+// `authentication` (not `authorization`); TaxBandits' token endpoint reads
+// that header specifically per their published docs.
 async function fetchTax1099EfilingToken(env) {
   const encoder = new TextEncoder();
   const header = base64UrlEncode(encoder.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
   const payload = base64UrlEncode(encoder.encode(JSON.stringify({
     iss: env.TAX_1099_EFILING_CLIENT_ID,
     sub: env.TAX_1099_EFILING_CLIENT_ID,
-    aud: 'UserToken',
+    aud: env.TAX_1099_EFILING_USER_TOKEN,
     iat: Math.floor(Date.now() / 1000),
   })));
   const unsigned = `${header}.${payload}`;
@@ -5570,7 +5590,7 @@ async function fetchTax1099EfilingToken(env) {
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
-  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authorization: jws } });
+  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
   const data = await response.json();
   if (!response.ok || !data?.AccessToken) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);

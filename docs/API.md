@@ -5152,7 +5152,8 @@ transmitting it to TaxBandits and stamping `filedAt`/`filingReference`
 (the vendor's own submission id) on success. Requires
 `TAX_ID_ENCRYPTION_KEY` (to decrypt the payee's on-file W-9/W-8BEN — see
 `POST /api/tax/id-form` above) and `TAX_1099_EFILING_CLIENT_ID`/
-`TAX_1099_EFILING_CLIENT_SECRET`/`TAX_1099_PAYER_NAME`/`TAX_1099_PAYER_EIN`
+`TAX_1099_EFILING_CLIENT_SECRET`/`TAX_1099_EFILING_USER_TOKEN`/
+`TAX_1099_PAYER_NAME`/`TAX_1099_PAYER_EIN`
 (the vendor account + this platform's own filer identity) all configured —
 `503` otherwise, same guarded-secret shape as `STRIPE_SECRET_KEY`/
 `DIDIT_API_KEY`. Like every other guarded vendor secret here, no session
@@ -5164,11 +5165,21 @@ file attempt already claimed it (the same atomic
 `404` for an unknown `formId`.
 
 **Unverified against a live vendor**: the OAuth2/JWT-signed request shape
-(`worker/index.js`'s `fetchTax1099EfilingToken`/`transmitTax1099Form`)
-follows TaxBandits' published developer docs, but no session can obtain
-real (even sandbox) client credentials to exercise it against the actual
-API — treat it as a starting point to verify/adjust once the owner
-provisions real credentials, not as already-proven-correct.
+(`worker/index.js`'s `fetchTax1099EfilingToken`/`transmitTax1099Form`) has
+been checked against TaxBandits' published developer docs a second time
+(2026-09) — that pass found and fixed three bugs: `TAX_1099_EFILING_API_BASE`
+pointed at the Sandbox *console* host instead of the Sandbox *API* host
+(`testapi.taxbandits.com`), the JWS's `aud` claim needs the account's own
+User Token (now `TAX_1099_EFILING_USER_TOKEN`, a new required secret) rather
+than a placeholder string, and the JWS must be sent in a header literally
+named `authentication` rather than `authorization`. Still, no session has
+had real Sandbox credentials to exercise this against the actual API — treat
+it as doc-verified, not call-verified, until the owner runs a real Sandbox
+filing through it. The two host consts (`TAX_1099_EFILING_TOKEN_URL`/
+`TAX_1099_EFILING_API_BASE`) are hardcoded to TaxBandits' Sandbox hosts;
+switching to Live also requires TaxBandits to whitelist this Worker's
+outbound IP(s), which needs confirming with their support for a serverless/
+edge deployment (no single static egress IP).
 
 #### Testing note
 
