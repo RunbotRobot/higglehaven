@@ -45,6 +45,7 @@
   .pill-tag { background: #f3e6cf; color: #7a5a12; }
   .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
   .pill-waiting-claude { background: #dcefd0; color: #386418; }
+  .pill-unviewed { background: #f6d4cb; color: #8a2a12; }
   .meta { color: #6a7a60; font-size: 12px; }
   .chip { display: inline-block; border: 1px solid #cdd8c0; border-radius: 999px; padding: 1px 7px; font-size: 11px; margin-right: 4px; color: #445; text-decoration: none; }
   .body { margin-top: 10px; border-top: 1px solid #eef1e8; padding-top: 10px; display: none; }
@@ -231,6 +232,9 @@
           '<button class="secondary" data-action="status" data-value="done" data-task="' + task.id + '">Mark done</button>' +
           '<button class="secondary" data-action="waitingClaude" data-task="' + task.id + '">Ready for Claude</button>' +
           '<button class="secondary" data-action="waitingOwner" data-task="' + task.id + '">Waiting on: Owner…</button>' +
+          '<button class="secondary" data-action="toggleViewed" data-task="' + task.id + '">' +
+            (task.viewed ? 'Mark unviewed' : 'Mark viewed') +
+          '</button>' +
           (task.tag ? '<button class="secondary" data-action="clearTag" data-task="' + task.id + '">Clear tag</button>' : '') +
         '</div>' +
         '<div class="reply-row">' +
@@ -243,6 +247,7 @@
 
     return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + task.id + '">' +
       '<div class="card-head" data-toggle="' + task.id + '">' +
+        (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
         '<span class="title">' + linkTitle + '</span>' +
         '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
         (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
@@ -327,6 +332,11 @@
       } else if (action === 'clearTag') {
         await apiCall('/tasks/' + encodeURIComponent(taskId), {
           method: 'PATCH', body: JSON.stringify({ caller: 'owner', tag: null }),
+        });
+      } else if (action === 'toggleViewed') {
+        const task = tasks.find((t) => t.id === taskId);
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', viewed: !(task && task.viewed) }),
         });
       } else if (action === 'reply') {
         const textEl = listEl.querySelector('[data-reply-text="' + taskId + '"]');
