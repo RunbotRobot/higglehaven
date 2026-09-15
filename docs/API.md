@@ -596,6 +596,16 @@ account has that email. On success, promotes that account and returns
 `{ "user": { ..., "isAdmin": true } }` for the *promoted* account, not the
 caller. Reusable per target account, same as `admin-bootstrap`.
 
+### `GET /api/auth/admins`
+
+Lists every current admin account — `requireAdmin`-gated the same way
+`grant-admin` is (`401`/`403` the same way), so any admin can audit who
+currently holds admin access, not just whoever granted it. Returns
+`{ "admins": [{ "userId", "email", "username", "createdAt" }, ...] }`,
+oldest-admin-first — a deliberately narrow shape (never the full user
+object `userFromRow` returns elsewhere) since one admin has no reason to
+see a peer's trust tier, card funding, or tax form status.
+
 ## Builders
 
 A shared, cross-device roster of builder profiles. `GET`/`POST` below stay

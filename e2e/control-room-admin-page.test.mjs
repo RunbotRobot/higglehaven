@@ -46,6 +46,13 @@ await page.goto(`${BASE_URL}/admin/control-room`, { waitUntil: 'networkidle' });
 const heading = await page.textContent('h1');
 console.log('admin page heading (should be "higglehaven Control Room"):', heading);
 
+// Control Room feedback: "Please let admins see a list of all admins" —
+// the page's own admin session should show up in that list without any
+// extra action.
+await page.locator('#adminsList').filter({ hasText: '@' }).waitFor({ timeout: 10000 });
+const adminsListText = await page.textContent('#adminsList');
+console.log('admins list shows at least the current admin session (actual):', adminsListText.trim());
+
 // Owner, Control Room: the header used to read "500 tasks total" forever
 // once the board passed 500 rows, since it displayed tasks.length off the
 // same LIMIT-500 result set the page renders from rather than a real,
@@ -134,6 +141,7 @@ console.log('tapping the pill expanded the blocking task\'s own card (actual):',
 
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
+  adminsListText.includes('@') &&
   totalAfter === totalBefore + 1 &&
   newlyPostedIsUnviewed &&
   markedViewedButtonText.trim() === 'Mark unviewed' &&

@@ -88,6 +88,13 @@
     <button id="grantAdminBtn">Grant admin</button>
   </div>
   <p class="meta" id="grantAdminStatus" style="margin: 6px 0 0;"></p>
+  <div style="margin-top: 10px; border-top: 1px solid #eef1e8; padding-top: 10px;">
+    <div class="compose-row" style="align-items: center; justify-content: space-between;">
+      <strong style="font-size: 13px;">Current admins</strong>
+      <button class="secondary" id="refreshAdminsBtn">Refresh</button>
+    </div>
+    <div id="adminsList" class="meta" style="margin-top: 6px;">Loading…</div>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -440,10 +447,28 @@
       if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
       statusEl.textContent = (body.user.email || email) + ' is now an admin.';
       emailEl.value = '';
+      await loadAdmins();
     } catch (error) {
       statusEl.textContent = 'Error: ' + error.message;
     }
   });
+
+  const adminsListEl = document.getElementById('adminsList');
+  async function loadAdmins() {
+    try {
+      const response = await fetch('/api/auth/admins');
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+      adminsListEl.innerHTML = body.admins.map((a) =>
+        '<div>' + escapeHtml(a.email) +
+          (a.username ? ' (' + escapeHtml(a.username) + ')' : '') +
+          ' <span class="meta">· admin since ' + relativeTime(a.createdAt) + '</span></div>'
+      ).join('') || 'No admins found.';
+    } catch (error) {
+      adminsListEl.textContent = 'Error: ' + error.message;
+    }
+  }
+  document.getElementById('refreshAdminsBtn').addEventListener('click', loadAdmins);
 
   const composeTitleEl = document.querySelector('.compose-row textarea[name="title"]');
   composeTitleEl.addEventListener('input', () => autoGrowTextarea(composeTitleEl));
@@ -466,6 +491,7 @@
   });
 
   loadTasks();
+  loadAdmins();
   setInterval(() => {
     loadTasks();
     expanded.forEach((id) => loadReplies(id));
