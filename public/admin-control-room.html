@@ -45,6 +45,7 @@
   .pill-tag { background: #f3e6cf; color: #7a5a12; }
   .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
   .pill-waiting-claude { background: #dcefd0; color: #386418; }
+  .pill-waiting-subtasks { background: #dce8f6; color: #1a4a7a; font-weight: 800; }
   .pill-blocked-on { background: #f6d4cb; color: #8a2a12; cursor: pointer; text-decoration: underline; }
   .pill-unviewed { background: #f6d4cb; color: #8a2a12; }
   .meta { color: #6a7a60; font-size: 12px; }
@@ -232,9 +233,14 @@
   // actually blocking it. Rendered as its own clickable pill instead;
   // data-jump-to (handled in the click listener below) is what makes
   // tapping it actually jump to the blocking task's own card.
+  // Owner feedback: tracking tasks needed a third waitingOn value distinct
+  // from a single "blocked on #n" link above -- 'subtasks' means "waiting on
+  // this task's own subIssues generally", set from the new button below
+  // rather than by pointing at any one of them.
   function waitingBadge(task) {
     if (task.status === 'done') return '';
     if (task.waitingOn === 'owner') return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
+    if (task.waitingOn === 'subtasks') return '<span class="pill pill-waiting-subtasks">Waiting on: Subtasks</span>';
     if (task.waitingOn && task.waitingOn !== 'claude') {
       return '<span class="pill pill-blocked-on" data-jump-to="' + escapeHtml(task.waitingOn) + '">Blocked on #' + escapeHtml(task.waitingOn) + '</span>';
     }
@@ -281,6 +287,9 @@
           '<button class="secondary" data-action="status" data-value="queued" data-task="' + task.id + '">Requeue</button>' +
           '<button class="secondary" data-action="status" data-value="done" data-task="' + task.id + '">Mark done</button>' +
           '<button class="secondary" data-action="waitingClaude" data-task="' + task.id + '">Ready for Claude</button>' +
+          (task.subIssues && task.subIssues.length
+            ? '<button class="secondary" data-action="waitingSubtasks" data-task="' + task.id + '">Waiting on: Subtasks</button>'
+            : '') +
           '<button class="secondary" data-action="waitingOwner" data-task="' + task.id + '">Waiting on: Owner…</button>' +
           '<button class="secondary" data-action="toggleViewed" data-task="' + task.id + '">' +
             (task.viewed ? 'Mark unviewed' : 'Mark viewed') +
@@ -437,6 +446,10 @@
       } else if (action === 'waitingClaude') {
         await apiCall('/tasks/' + encodeURIComponent(taskId), {
           method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'claude' }),
+        });
+      } else if (action === 'waitingSubtasks') {
+        await apiCall('/tasks/' + encodeURIComponent(taskId), {
+          method: 'PATCH', body: JSON.stringify({ caller: 'owner', waitingOn: 'subtasks' }),
         });
       } else if (action === 'waitingOwner') {
         const reason = window.prompt('Reason for waiting on the owner (required):');
