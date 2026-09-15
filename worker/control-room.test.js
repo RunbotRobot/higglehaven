@@ -240,6 +240,95 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.response.status).toBe(200);
     expect(got.body.task.waitingOn).toBe('claude');
   });
+
+  // Sub-issue links for tracking tasks (e.g. #326 listing #583-#586) --
+  // previously only ever written by a direct D1 query, since neither
+  // create nor update accepted them at all.
+  describe('sub-issue links', () => {
+    it('creates a task with subIssues and subIssueSummaries', async () => {
+      const task = await createTask({
+        title: 'Tracking task',
+        subIssues: [583, 584],
+        subIssueSummaries: { 583: 'Voice signaling', 584: 'Avatar wardrobe' },
+      });
+      expect(task.subIssues).toEqual([583, 584]);
+      expect(task.subIssueSummaries).toEqual({ 583: 'Voice signaling', 584: 'Avatar wardrobe' });
+    });
+
+    it('defaults subIssues and subIssueSummaries to null when omitted', async () => {
+      const task = await createTask({ title: 'No sub-issues' });
+      expect(task.subIssues).toBeNull();
+      expect(task.subIssueSummaries).toBeNull();
+    });
+
+    it('rejects a non-array subIssues', async () => {
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssues: 583 }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/subIssues/);
+    });
+
+    it('rejects a subIssues entry that is not a positive integer', async () => {
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssues: [583, -1] }),
+      }));
+      expect(got.response.status).toBe(400);
+    });
+
+    it('rejects more than 50 subIssues entries', async () => {
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssues: Array.from({ length: 51 }, (_, i) => i + 1) }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/50/);
+    });
+
+    it('rejects a non-object subIssueSummaries', async () => {
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssueSummaries: ['not an object'] }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/subIssueSummaries/);
+    });
+
+    it('rejects a subIssueSummaries key that is not a sub-issue number', async () => {
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssueSummaries: { notanumber: 'Oops' } }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/subIssueSummaries/);
+    });
+
+    it('updates subIssues and subIssueSummaries on an existing task', async () => {
+      const task = await createTask({ title: 'Tracking task, updated later' });
+      const got = await api(`/control-room/tasks/${task.id}`, keySession({
+        method: 'PATCH',
+        body: JSON.stringify({
+          caller: 'higglehaven2',
+          subIssues: [585, 586],
+          subIssueSummaries: { 585: 'Landlet renaming' },
+        }),
+      }));
+      expect(got.response.status).toBe(200);
+      expect(got.body.task.subIssues).toEqual([585, 586]);
+      expect(got.body.task.subIssueSummaries).toEqual({ 585: 'Landlet renaming' });
+    });
+
+    it('clears subIssues and subIssueSummaries by setting them to null', async () => {
+      const task = await createTask({ title: 'Tracking task, then cleared', subIssues: [583] });
+      const got = await api(`/control-room/tasks/${task.id}`, keySession({
+        method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', subIssues: null }),
+      }));
+      expect(got.response.status).toBe(200);
+      expect(got.body.task.subIssues).toBeNull();
+    });
+  });
 });
 
 describe('Control Room replies (#N31)', () => {

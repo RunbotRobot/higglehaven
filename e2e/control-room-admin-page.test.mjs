@@ -132,6 +132,41 @@ await blockingCard.waitFor({ timeout: 10000 });
 const blockingCardIsOpen = await blockingCard.evaluate((el) => el.classList.contains('open'));
 console.log('tapping the pill expanded the blocking task\'s own card (actual):', blockingCardIsOpen);
 
+// Clickable sub-issue chips (owner, Control Room: "make the subtasks listed
+// below a tracking task header clickable, linking to that task"). Reuses
+// the same data-jump-to click handling above -- a tracking task's
+// subIssues chip is only clickable when the sub-issue's own task is
+// actually loaded. Seeded through the same validating API, now that it
+// accepts subIssues/subIssueSummaries on create.
+const subNumber = Math.floor(Date.now() / 1000) % 100000 + 1;
+const trackingTitle = `E2E tracking task ${subNumber}`;
+const subTaskTitle = `E2E sub-task ${subNumber}`;
+await page.evaluate(async ({ number, trackingTitle: tTitle, subTaskTitle: sTitle }) => {
+  const post = (body) => fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await post({ from: 'e2e-owner', kind: 'feedback', number, title: sTitle });
+  await post({
+    from: 'e2e-owner', kind: 'feedback', title: tTitle,
+    subIssues: [number], subIssueSummaries: { [number]: 'A sub-task summary' },
+  });
+}, { number: subNumber, trackingTitle, subTaskTitle });
+
+await page.reload({ waitUntil: 'networkidle' });
+const trackingCard = page.locator('.card', { has: page.locator('.title', { hasText: trackingTitle }) });
+await trackingCard.waitFor({ timeout: 10000 });
+const subChip = trackingCard.locator('.chip-jump', { hasText: '#' + subNumber });
+const subChipVisible = await subChip.isVisible();
+console.log('tracking task shows a clickable sub-issue chip (should be true):', subChipVisible);
+
+await subChip.click();
+const subTaskCard = page.locator('.card', { has: page.locator('.title', { hasText: subTaskTitle }) });
+await subTaskCard.waitFor({ timeout: 10000 });
+const subTaskCardIsOpen = await subTaskCard.evaluate((el) => el.classList.contains('open'));
+console.log('tapping the sub-issue chip expanded the sub-task\'s own card (actual):', subTaskCardIsOpen);
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   totalAfter === totalBefore + 1 &&
@@ -140,5 +175,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
+  subChipVisible &&
+  subTaskCardIsOpen &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
