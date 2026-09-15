@@ -85,7 +85,11 @@ console.log('freshly-posted task shows the "New" badge (should be true):', newly
 await card.locator('.card-head').click();
 await card.locator('textarea[data-reply-text]').fill('A real reply, posted through the page itself.');
 await card.locator('button[data-action="reply"]').click();
-await card.locator('.msg-text', { hasText: 'A real reply, posted through the page itself.' }).waitFor({ timeout: 10000 });
+// A real POST + the reply handler's own loadReplies() + loadTasks() round
+// trips, not just a render off already-fetched data — this file's own
+// most consistently flaky wait under load, so a longer timeout than the
+// simpler DOM-only waits elsewhere in this file.
+await card.locator('.msg-text', { hasText: 'A real reply, posted through the page itself.' }).waitFor({ timeout: 20000 });
 console.log('reply landed in the thread: true');
 
 // Mark viewed (Control Room feedback: "we've lost the ability to mark a
@@ -139,6 +143,74 @@ await blockingCard.waitFor({ timeout: 10000 });
 const blockingCardIsOpen = await blockingCard.evaluate((el) => el.classList.contains('open'));
 console.log('tapping the pill expanded the blocking task\'s own card (actual):', blockingCardIsOpen);
 
+// Quick Look (Control Room feedback: "Let's make a quick-look tab ... that
+// shows the single most important thing needed from me with a textarea
+// for me to respond.") — nothing is waiting on the owner yet in this
+// fresh-per-file D1, so the tab should say so before any exists.
+await page.click('.tabs button[data-status="__quicklook__"]');
+await page.locator('.empty', { hasText: 'Nothing is waiting on you right now.' }).waitFor({ timeout: 10000 });
+console.log('Quick Look says nothing is waiting before any owner-blocked task exists: true');
+
+// Two owner-blocked tasks, posted a beat apart — Quick Look should pick
+// the older (longer-waiting) one first, not whichever was posted last.
+const quickLookOlderTitle = `E2E quick-look older ${Date.now()}`;
+await page.evaluate(async (title) => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner' }),
+  });
+}, quickLookOlderTitle);
+await page.waitForTimeout(200); // comfortably past this board's own millisecond-precision updatedAt
+const quickLookNewerTitle = `E2E quick-look newer ${Date.now()}`;
+await page.evaluate(async (title) => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner' }),
+  });
+}, quickLookNewerTitle);
+
+await page.reload({ waitUntil: 'networkidle' });
+await page.click('.tabs button[data-status="__quicklook__"]');
+const quickLookCard = page.locator('.card', { has: page.locator('.title', { hasText: quickLookOlderTitle }) });
+await quickLookCard.waitFor({ timeout: 10000 });
+const quickLookIsOpen = await quickLookCard.evaluate((el) => el.classList.contains('open'));
+console.log('Quick Look picks the older of two owner-blocked tasks, already expanded (actual):', quickLookIsOpen);
+
+// Replying doesn't clear waitingOn, but it does bump updatedAt — so the
+// just-answered (older) task should lose its "longest waiting" spot to
+// the other one, without Quick Look needing any "already handled"
+// tracking of its own. Deliberately not waiting for the reply to show up
+// inside quickLookCard's own thread first: the reply handler's own
+// trailing loadTasks() naturally re-picks and re-renders Quick Look onto
+// the *other* task once this one's updatedAt bumps past it, which can
+// (correctly) remove this exact card from the DOM before any such wait
+// resolves — racing against this feature's own intended behavior, not a
+// real flake. Waiting directly for the actual next pick sidesteps that.
+const replyText = 'Answered — the other one should be next.';
+await quickLookCard.locator('textarea[data-reply-text]').fill(replyText);
+await quickLookCard.locator('button[data-action="reply"]').click();
+const quickLookAfterReply = page.locator('.card', { has: page.locator('.title', { hasText: quickLookNewerTitle }) });
+await quickLookAfterReply.waitFor({ timeout: 20000 });
+const advancedToOther = await quickLookAfterReply.count();
+console.log('Quick Look advanced to the other owner-blocked task after the first was answered (should be 1):', advancedToOther);
+
+// Confirm the reply actually landed server-side, independent of whatever
+// the UI happened to be showing when it did.
+const quickLookOlderId = await page.evaluate(async (title) => {
+  const res = await fetch('/api/control-room/tasks');
+  const body = await res.json();
+  return body.tasks.find((t) => t.title === title)?.id;
+}, quickLookOlderTitle);
+const quickLookOlderReplies = await page.evaluate(async (id) => {
+  const res = await fetch('/api/control-room/tasks/' + encodeURIComponent(id) + '/replies');
+  const body = await res.json();
+  return body.replies.map((r) => r.text);
+}, quickLookOlderId);
+console.log('reply actually recorded server-side on the older task (actual):', quickLookOlderReplies);
+const replyRecorded = quickLookOlderReplies.includes(replyText);
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -148,5 +220,8 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
+  quickLookIsOpen &&
+  advancedToOther === 1 &&
+  replyRecorded &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });

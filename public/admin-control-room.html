@@ -105,6 +105,7 @@
   <button data-status="queued">Queued</button>
   <button data-status="in_progress">In progress</button>
   <button data-status="done">Done</button>
+  <button data-status="__quicklook__">Quick Look</button>
 </div>
 
 <div id="list"></div>
@@ -113,6 +114,12 @@
 (function () {
   const API = '/api/control-room';
   const POLL_MS = 15000;
+  // Owner feedback: "Let's make a quick-look tab in the Control Room that
+  // shows the single most important thing needed from me with a textarea
+  // for me to respond." Not a real task status — a synthetic tab value
+  // render() special-cases (see renderQuickLook/pickQuickLookTask below)
+  // rather than a filterStatus that ever reaches the API.
+  const QUICK_LOOK = '__quicklook__';
   let tasks = [];
   let totalTasks = 0;
   let filterStatus = '';
@@ -294,7 +301,45 @@
     '</div>';
   }
 
+  // waitingOn:'owner' is already this board's own existing signal for "a
+  // Claude session says it needs the owner" (see waitingBadge's own
+  // comment) — not a new heuristic invented for this tab, just the one
+  // already-intentional field that means exactly that. Oldest updatedAt
+  // first: the longest-neglected ask is the most overdue, not necessarily
+  // whichever was posted most recently. Only searches the same up-to-500
+  // most-recently-updated tasks `tasks` itself is capped to (see render's
+  // own "list capped at" note) — a genuinely stale, long-unanswered ask
+  // outside that window would need a real total/pagination redesign to
+  // reach, which this tab doesn't attempt to solve on its own.
+  function pickQuickLookTask() {
+    const waitingOnOwner = tasks.filter((t) => t.status !== 'done' && t.waitingOn === 'owner');
+    if (waitingOnOwner.length === 0) return null;
+    return waitingOnOwner.slice().sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt))[0];
+  }
+
+  function renderQuickLook() {
+    statusLine.textContent = 'Quick Look — the one thing that has been waiting on you the longest';
+    const task = pickQuickLookTask();
+    if (!task) {
+      listEl.innerHTML = '<div class="empty">Nothing is waiting on you right now.</div>';
+      return;
+    }
+    // Always shown expanded (thread + reply box) — there is no separate
+    // "open this one" step for a tab whose entire point is showing the one
+    // task and a textarea to answer it. Replying bumps its own updatedAt
+    // without clearing waitingOn, so pickQuickLookTask naturally advances
+    // to the next-longest-waiting task once this one's been answered,
+    // rather than needing this tab to track "already handled" itself.
+    expanded.add(task.id);
+    if (!repliesCache.has(task.id)) loadReplies(task.id);
+    listEl.innerHTML = renderCard(task);
+  }
+
   function render() {
+    if (filterStatus === QUICK_LOOK) {
+      renderQuickLook();
+      return;
+    }
     const visible = tasks
       .filter((t) => (filterStatus ? t.status === filterStatus : true))
       .filter(matchesSearch);
