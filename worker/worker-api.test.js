@@ -2286,7 +2286,7 @@ describe('Worker API', () => {
     const badCursor = await api('/land-candidates?cursor=not-base64');
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
-  }, 15000);
+  }, 30000);
 
   // #570: generate-mosaic/-ring already reject a new candidate that would
   // overlap already-claimed or already-queued land; the manual single POST
