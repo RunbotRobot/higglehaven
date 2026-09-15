@@ -623,6 +623,30 @@ describe('Authentication', () => {
     expect(meAfter.body.user.isAdmin).toBe(true);
   });
 
+  it('lists admins for any admin session, but nobody else, without leaking non-admin fields', async () => {
+    const admin = await signupBuilder('list-admins-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+    const nonAdmin = await signupBuilder('list-admins-nonadmin');
+    const nonAdminUserId = (await api('/auth/me', nonAdmin.session())).body.user.userId;
+
+    const noSession = await api('/auth/admins');
+    expect(noSession.response.status).toBe(401);
+
+    const asNonAdmin = await api('/auth/admins', nonAdmin.session());
+    expect(asNonAdmin.response.status).toBe(403);
+
+    const asAdmin = await api('/auth/admins', admin.session());
+    expect(asAdmin.response.status).toBe(200);
+    const listed = asAdmin.body.admins.find((a) => a.userId === adminUserId);
+    expect(listed).toBeTruthy();
+    expect(listed.email).toBe(admin.email);
+    expect(Object.keys(listed).sort()).toEqual(['createdAt', 'email', 'userId', 'username']);
+    expect(asAdmin.body.admins.some((a) => a.userId === nonAdminUserId)).toBe(false);
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');

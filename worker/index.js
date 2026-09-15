@@ -5785,6 +5785,9 @@ async function handleAuth(request, env, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'grant-admin') {
     return handleGrantAdmin(request, db);
   }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admins') {
+    return handleListAdmins(request, db);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
   }
@@ -5950,6 +5953,27 @@ async function handleGrantAdmin(request, db) {
     .bind(row.user_id).run();
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
   return json({ user: userFromRow(updated) });
+}
+
+// Control Room feedback: "Please let admins see a list of all admins in
+// the Control Room" — with (per handleGrantAdmin's own reasoning above)
+// admin status being mintable only via a real session, an admin losing
+// track of who currently holds it is otherwise unrecoverable without
+// direct D1 access. requireAdmin-gated the same way grant-admin is (any
+// admin can see the roster, not just whoever granted it), returning a
+// deliberately narrow shape — userId/email/username/createdAt only, never
+// the full userFromRow (trustTier, cardFunding, taxFormType, ...) every
+// other admin viewing this roster has no reason to see about a peer.
+async function handleListAdmins(request, db) {
+  await requireAdmin(request, db);
+  const { results } = await db.prepare(
+    'SELECT user_id, email, username, created_at FROM users WHERE is_admin = 1 ORDER BY created_at ASC',
+  ).all();
+  return json({
+    admins: results.map((row) => ({
+      userId: row.user_id, email: row.email, username: row.username, createdAt: row.created_at,
+    })),
+  });
 }
 
 async function handleSignup(request, env, db, url) {
