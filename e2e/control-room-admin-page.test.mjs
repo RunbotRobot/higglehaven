@@ -89,10 +89,45 @@ await card.locator('button[data-action="status"][data-value="done"]').click();
 await card.locator('.pill-done').waitFor({ timeout: 10000 });
 console.log('status flipped to done: true');
 
+// Blocked-on jump (Control Room feedback: "When I tap 'blocked on #n', it
+// should jump to that task in the Control Room.") — a task's own waitingOn
+// can hold another task's `number` (a tracking task blocked on a real
+// GitHub-issue-backed sub-task, e.g. #326 waiting on #583), not just
+// 'owner'/'claude'. Seeded directly through the same validating API the
+// compose form itself calls, since the compose form has no field for
+// `number`/`waitingOn` on creation.
+const blockingNumber = Math.floor(Date.now() / 1000) % 100000;
+const blockingTitle = `E2E blocking task ${blockingNumber}`;
+const blockedTitle = `E2E blocked task ${blockingNumber}`;
+await page.evaluate(async ({ number, blockingTitle: bTitle, blockedTitle: kTitle }) => {
+  const post = (body) => fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await post({ from: 'e2e-owner', kind: 'feedback', number, title: bTitle });
+  await post({ from: 'e2e-owner', kind: 'feedback', title: kTitle, waitingOn: String(number) });
+}, { number: blockingNumber, blockingTitle, blockedTitle });
+
+await page.reload({ waitUntil: 'networkidle' });
+const blockedCard = page.locator('.card', { has: page.locator('.title', { hasText: blockedTitle }) });
+await blockedCard.waitFor({ timeout: 10000 });
+const blockedPill = blockedCard.locator('.pill-blocked-on');
+const blockedPillText = (await blockedPill.textContent()).trim();
+console.log('blocked task shows a "Blocked on #n" pill (actual):', blockedPillText);
+
+await blockedPill.click();
+const blockingCard = page.locator('.card', { has: page.locator('.title', { hasText: blockingTitle }) });
+await blockingCard.waitFor({ timeout: 10000 });
+const blockingCardIsOpen = await blockingCard.evaluate((el) => el.classList.contains('open'));
+console.log('tapping the pill expanded the blocking task\'s own card (actual):', blockingCardIsOpen);
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   newlyPostedIsUnviewed &&
   markedViewedButtonText.trim() === 'Mark unviewed' &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
+  blockedPillText === ('Blocked on #' + blockingNumber) &&
+  blockingCardIsOpen &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
