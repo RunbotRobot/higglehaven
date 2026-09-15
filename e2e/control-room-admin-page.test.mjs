@@ -174,6 +174,19 @@ await subTaskCard.waitFor({ timeout: 10000 });
 const subTaskCardIsOpen = await subTaskCard.evaluate((el) => el.classList.contains('open'));
 console.log('tapping the sub-issue chip expanded the sub-task\'s own card (actual):', subTaskCardIsOpen);
 
+// "Waiting on: Subtasks" (owner, Control Room: "make it possible for
+// 'tracking' tasks to be able to change to status 'WAITING ON: SUBTASKS'
+// instead of just 'WAITING ON: OWNER' or 'READY FOR CLAUDE'") — a third
+// waitingOn value, only offered as a button on a task that actually has
+// subIssues of its own.
+await trackingCard.locator('.card-head').click();
+const waitingSubtasksBtn = trackingCard.locator('button[data-action="waitingSubtasks"]');
+await waitingSubtasksBtn.waitFor({ timeout: 10000 });
+await waitingSubtasksBtn.click();
+await trackingCard.locator('.pill-waiting-subtasks').waitFor({ timeout: 10000 });
+const waitingSubtasksPillText = (await trackingCard.locator('.pill-waiting-subtasks').textContent()).trim();
+console.log('tracking task shows the "Waiting on: Subtasks" pill after clicking its button (actual):', waitingSubtasksPillText);
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -185,5 +198,6 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   blockingCardIsOpen &&
   subChipVisible &&
   subTaskCardIsOpen &&
+  waitingSubtasksPillText === 'Waiting on: Subtasks' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
