@@ -49,6 +49,7 @@
   .pill-unviewed { background: #f6d4cb; color: #8a2a12; }
   .meta { color: #6a7a60; font-size: 12px; }
   .chip { display: inline-block; border: 1px solid #cdd8c0; border-radius: 999px; padding: 1px 7px; font-size: 11px; margin-right: 4px; color: #445; text-decoration: none; }
+  .chip-jump { cursor: pointer; text-decoration: underline; }
   .body { margin-top: 10px; border-top: 1px solid #eef1e8; padding-top: 10px; display: none; }
   .card.open .body { display: block; }
   .note { white-space: pre-wrap; margin: 0 0 10px; }
@@ -183,13 +184,22 @@
     return tasks.find((t) => t.number === number);
   }
 
+  // Owner feedback (#ce3d9c55): "make the subtasks listed below a tracking
+  // task header clickable, linking to that task" — reuses the same
+  // data-jump-to click handling PR #699 added for the "Blocked on #n" pill
+  // (see the listEl click listener below), rather than a second mechanism.
+  // Only clickable when the sub-issue's own task is actually loaded (`sub`)
+  // — a summary-only reference to a task this board hasn't fetched (yet, or
+  // ever) has nowhere to jump to, so it stays plain text, same as before.
   function subIssueChips(task) {
     if (!task.subIssues || !task.subIssues.length) return '';
     return task.subIssues.map((n) => {
       const sub = taskById(n);
       const mark = sub ? (sub.status === 'done' ? '✓' : '○') : '';
       const summary = task.subIssueSummaries && task.subIssueSummaries[n];
-      return '<span class="chip"' + (summary ? ' title="' + escapeHtml(summary) + '"' : '') + '>' +
+      const attrs = (summary ? ' title="' + escapeHtml(summary) + '"' : '') +
+        (sub ? ' data-jump-to="' + n + '"' : '');
+      return '<span class="chip' + (sub ? ' chip-jump' : '') + '"' + attrs + '>' +
         mark + ' #' + n + '</span>';
     }).join('');
   }

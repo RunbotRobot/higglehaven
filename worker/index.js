@@ -732,8 +732,8 @@ async function handleControlRoomTaskCreate(request, env, db) {
   await db.prepare(`
     INSERT INTO control_room_tasks
       (task_id, kind, number, note_number, title, status, session, posted_by, tag, url,
-       waiting_on, image_url, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     taskId,
     body.kind ? labelValue(body.kind, 'kind') : 'feedback',
@@ -747,6 +747,8 @@ async function handleControlRoomTaskCreate(request, env, db) {
     body.url ? labelValue(body.url, 'url') : null,
     body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null,
     body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
+    body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
+    body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')),
     now, now,
   ).run();
 
@@ -794,6 +796,12 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   if (body.waitingOn !== undefined) setIfPresent('waiting_on', body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null);
   if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
   if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
+  if (body.subIssues !== undefined) {
+    setIfPresent('sub_issues', body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')));
+  }
+  if (body.subIssueSummaries !== undefined) {
+    setIfPresent('sub_issue_summaries', body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')));
+  }
 
   const now = new Date().toISOString();
   setIfPresent('updated_at', now);
@@ -9478,6 +9486,33 @@ function positiveInteger(value, field) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
   return number;
+}
+
+// Control Room tracking-task sub-issue links (e.g. issue-326 listing #583-
+// #586) — previously only ever written by a direct D1 query (#ce3d9c55's
+// own investigation), since neither handleControlRoomTaskCreate nor
+// handleControlRoomTaskUpdate accepted them at all. Capped the same way
+// every other array/label field in this file already is; the summary map's
+// keys aren't validated against subIssues itself (a summary can outlive its
+// own entry being removed from a later edit without needing both to change
+// in lockstep).
+const MAX_SUB_ISSUES = 50;
+function subIssuesValue(value, field) {
+  if (!Array.isArray(value)) throw new HttpError(`${field} must be an array of positive integers`, 400);
+  if (value.length > MAX_SUB_ISSUES) throw new HttpError(`${field} must have ${MAX_SUB_ISSUES} entries or fewer`, 400);
+  return value.map((n) => positiveInteger(n, field));
+}
+
+function subIssueSummariesValue(value, field) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError(`${field} must be an object mapping a sub-issue number to a short summary`, 400);
+  }
+  const result = {};
+  for (const [key, summary] of Object.entries(value)) {
+    if (!/^\d+$/.test(key)) throw new HttpError(`${field} keys must be sub-issue numbers`, 400);
+    result[key] = labelValue(summary, field);
+  }
+  return result;
 }
 
 function integerValue(value, field) {
