@@ -5209,6 +5209,28 @@ the only path this environment can actually exercise, same convention as
 the existing Stripe/Didit test suites (`TAX_1099_EFILING_CLIENT_ID`/etc.
 are never configured in local dev or CI).
 
+### `GET /api/tax/efiling-connection-test`
+
+Admin-only (`401` with no session, `403` for a non-admin). Added once the
+owner set `TAX_1099_EFILING_CLIENT_ID`/`_CLIENT_SECRET`/`_USER_TOKEN` as
+Worker secrets but before `TAX_1099_PAYER_NAME`/`_EIN` existed (no EIN/
+business name registered yet) — `POST /:formId/file` above stays `503`
+until all five are set, so this route isolates just the vendor OAuth
+handshake (`fetchTax1099EfilingToken`) to let an admin confirm it works the
+moment vendor credentials exist, independent of the platform's own payer
+identity. `503` (`1099 e-filing vendor credentials are not configured on
+this server yet.`) if any of the three credential secrets are missing.
+Otherwise performs the actual OAuth handshake against TaxBandits' Sandbox
+token endpoint and returns `{"connected": true}` on success, or a `502`
+with the vendor's own error message on failure (a real credential/request-
+shape problem, not a local validation gap). Side-effect-free and safe to
+call repeatedly — no filing, no form, no user data touched, just the
+stateless token exchange every real filing call would also need to make
+first. This is the "confirm the first real Sandbox call" step
+`fetchTax1099EfilingToken`'s own comment and the "Unverified against a live
+vendor" paragraph above call for, without requiring the owner's EIN/
+business name to exist yet.
+
 ## D1 schema overview
 
 The migrations currently create seventeen main backend tables:
