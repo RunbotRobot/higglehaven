@@ -110,6 +110,26 @@ await card.locator('button[data-action="status"][data-value="done"]').click();
 await card.locator('.pill-done').waitFor({ timeout: 10000 });
 console.log('status flipped to done: true');
 
+// Keyboard-disappears bug (owner feedback: "the keyboard occasionally
+// disappears" while typing in the feedback input, "presumably because it's
+// happening when the Control Room is updated by a session"). Every render()
+// rebuild -- including the periodic poll -- used to recreate the reply
+// <textarea> from scratch, dropping whatever had focus; on a real device
+// losing focus on a textarea is exactly what makes the on-screen keyboard
+// vanish mid-typing, even though the typed text itself already survived via
+// the `drafts` cache. Type into this still-open card's reply box without
+// sending, wait past one full poll interval (15s), and confirm the same
+// textarea is still focused with its cursor position intact.
+const replyBox = card.locator('textarea[data-reply-text]');
+await replyBox.click();
+await replyBox.fill('Typing without sending, to catch focus loss on the next poll tick.');
+await replyBox.evaluate((el) => el.setSelectionRange(5, 5));
+await page.waitForTimeout(16000);
+const stillFocusedAfterPoll = await replyBox.evaluate((el) => document.activeElement === el);
+const cursorPreservedAfterPoll = await replyBox.evaluate((el) => el.selectionStart === 5 && el.selectionEnd === 5);
+console.log('reply textarea keeps focus across a poll tick (should be true):', stillFocusedAfterPoll);
+console.log('cursor position preserved across a poll tick (should be true):', cursorPreservedAfterPoll);
+
 // Blocked-on jump (Control Room feedback: "When I tap 'blocked on #n', it
 // should jump to that task in the Control Room.") — a task's own waitingOn
 // can hold another task's `number` (a tracking task blocked on a real
@@ -268,6 +288,8 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
+  stillFocusedAfterPoll &&
+  cursorPreservedAfterPoll &&
   quickLookIsOpen &&
   advancedToOther === 1 &&
   replyRecorded &&
