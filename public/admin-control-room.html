@@ -351,7 +351,32 @@
     // rather than needing this tab to track "already handled" itself.
     expanded.add(task.id);
     if (!repliesCache.has(task.id)) loadReplies(task.id);
-    listEl.innerHTML = renderCard(task);
+    setListHTML(renderCard(task));
+  }
+
+  // Owner feedback: "the keyboard occasionally disappears" while typing a
+  // reply -- every poll tick (and any mutation) rebuilds #list's innerHTML
+  // from scratch, destroying and recreating the reply <textarea> mid-
+  // keystroke. `drafts` already preserves the typed *value* across that
+  // rebuild, but never the focus/cursor -- losing focus on a textarea is
+  // exactly what makes a mobile browser dismiss its on-screen keyboard.
+  // This wraps every #list innerHTML rewrite so a reply box that's
+  // currently focused gets refocused (cursor position included) once the
+  // new DOM node exists.
+  function setListHTML(html) {
+    const active = document.activeElement;
+    const wasFocused = active && listEl.contains(active) && active.matches('textarea[data-reply-text]');
+    const focusState = wasFocused
+      ? { taskId: active.dataset.replyText, selectionStart: active.selectionStart, selectionEnd: active.selectionEnd }
+      : null;
+    listEl.innerHTML = html;
+    if (focusState) {
+      const el = listEl.querySelector('textarea[data-reply-text="' + focusState.taskId + '"]');
+      if (el) {
+        el.focus();
+        el.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
+      }
+    }
   }
 
   function render() {
@@ -364,9 +389,9 @@
       .filter(matchesSearch);
     statusLine.textContent = totalTasks + ' tasks total · ' + visible.length + ' shown' +
       (tasks.length < totalTasks ? ' (list capped at the ' + tasks.length + ' most recently updated)' : '');
-    listEl.innerHTML = visible.length
+    setListHTML(visible.length
       ? visible.map(renderCard).join('')
-      : '<div class="empty">Nothing here.</div>';
+      : '<div class="empty">Nothing here.</div>');
   }
 
   async function loadTasks() {
