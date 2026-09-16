@@ -5548,11 +5548,17 @@ async function generateTax1099Drafts(db, year) {
 // doc-verified but not call-verified — confirm the first real Sandbox filing
 // end-to-end once TAX_1099_EFILING_* secrets are set, before ever pointing
 // it at the Live hosts (see the two consts below).
+// Split out from tax1099EfilingConfigured below so the connection-test route
+// can check just the vendor credentials (enough to exercise the previously-
+// unverified OAuth handshake) without also requiring TAX_1099_PAYER_NAME/
+// _EIN -- the owner's own platform payer identity, which needs a real EIN/
+// business name that may not exist yet even once vendor credentials do.
+function tax1099EfilingCredentialsConfigured(env) {
+  return !!(env.TAX_1099_EFILING_CLIENT_ID && env.TAX_1099_EFILING_CLIENT_SECRET && env.TAX_1099_EFILING_USER_TOKEN);
+}
+
 function tax1099EfilingConfigured(env) {
-  return !!(
-    env.TAX_1099_EFILING_CLIENT_ID && env.TAX_1099_EFILING_CLIENT_SECRET
-    && env.TAX_1099_EFILING_USER_TOKEN && env.TAX_1099_PAYER_NAME && env.TAX_1099_PAYER_EIN
-  );
+  return !!(tax1099EfilingCredentialsConfigured(env) && env.TAX_1099_PAYER_NAME && env.TAX_1099_PAYER_EIN);
 }
 
 // Sandbox hosts (a free, separate developer account signed up for at
@@ -5671,6 +5677,23 @@ async function handleTax(request, env, db, route, url) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'id-form') {
     return handleTaxIdForm(request, env, db, user);
+  }
+  // #646 follow-up: lets an admin confirm the vendor OAuth handshake works
+  // against real (Sandbox) credentials the moment they're set as Worker
+  // secrets, without needing TAX_1099_PAYER_NAME/_EIN or an approved form on
+  // file first -- those gate actually transmitting a filing, not the token
+  // exchange itself. Exists specifically because the original integration's
+  // JWS/OAuth request shape was doc-verified but never call-verified (see
+  // fetchTax1099EfilingToken's own comment); this is that verification,
+  // safe to call repeatedly since it performs no filing and touches no user
+  // data, only a stateless handshake against TaxBandits' own token endpoint.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'efiling-connection-test') {
+    if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    if (!tax1099EfilingCredentialsConfigured(env)) {
+      throw new HttpError('1099 e-filing vendor credentials are not configured on this server yet.', 503);
+    }
+    await fetchTax1099EfilingToken(env);
+    return json({ connected: true });
   }
   // #645: admin-only review list -- (re-)generates draft 1099 records for
   // the requested year, then returns every form on file for it, so an

@@ -3309,6 +3309,30 @@ describe('Simulated purchases', () => {
         expect(rejected.response.status).toBe(403);
       });
 
+      // #646 follow-up: lets an admin verify the vendor OAuth handshake
+      // works the moment TAX_1099_EFILING_CLIENT_ID/_CLIENT_SECRET/
+      // _USER_TOKEN are set, independent of TAX_1099_PAYER_NAME/_EIN (the
+      // platform's own payer identity, which may not exist yet even once
+      // vendor credentials do — see tax1099EfilingCredentialsConfigured's
+      // own comment). The test environment never configures any of these,
+      // so this only proves the admin gate and the narrower (credentials-
+      // only) 503 path; the fetchTax1099EfilingToken call this route makes
+      // once configured is exercised by the #646 transmission suite's own
+      // "not configured" boundary below, not repeated here.
+      describe('1099 e-filing connection test (#646 follow-up)', () => {
+        it('requires admin access', async () => {
+          const builder = await signupBuilder('tax-1099-conn-test-not-admin');
+          const rejected = await api('/tax/efiling-connection-test', builder.session());
+          expect(rejected.response.status).toBe(403);
+        });
+
+        it('returns 503 when vendor credentials are not configured', async () => {
+          const { response, body } = await api('/tax/efiling-connection-test', adminSession());
+          expect(response.status).toBe(503);
+          expect(body.error).toMatch(/not configured/i);
+        });
+      });
+
       // #646: the e-filing transmission #645 was built to feed into. The
       // test environment never configures TAX_1099_EFILING_CLIENT_ID/
       // _CLIENT_SECRET/_USER_TOKEN, TAX_1099_PAYER_NAME/_EIN, or
