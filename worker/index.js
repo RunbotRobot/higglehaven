@@ -3200,11 +3200,16 @@ async function handleLandletLevels(request, db, route) {
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
         ) + ? >= (
           ?
-          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(area_m2) FROM landlets AS owned
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
           + COALESCE((
               SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
-              JOIN landlets l ON l.landlet_id = ll.landlet_id
-              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+              JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
             ), 0)
         )
     `).bind(
@@ -3588,11 +3593,16 @@ async function handleAuctionBids(request, db, route) {
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
         ) + ? >= (
           ?
-          + COALESCE((SELECT SUM(area_m2) FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'), 0)
+          + COALESCE((
+              SELECT SUM(area_m2) FROM landlets AS owned
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
           + COALESCE((
               SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
-              JOIN landlets l ON l.landlet_id = ll.landlet_id
-              WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+              JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
             ), 0)
         )
     `).bind(
@@ -3702,6 +3712,15 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
   return Math.max(currentCapM2, candidateCap);
 }
 
+// #706: a landlet the builder has already committed to release via an
+// active auction (a $0 starting bid, or any bid at all — see
+// LANDLET_RELEASED_VIA_AUCTION_SQL, same commitment test #199's claim-
+// eligibility check already uses) is excluded from this owned-area sum.
+// docs/SPEC.md §5 promises land cap "frees" the moment that commitment is
+// made, not only once the auction actually resolves — #489 made land cap
+// gate real actions (bids, levels), so leaving committed-away area in the
+// sum silently broke that promise the moment it started mattering.
+//
 // Returns both the (possibly ratcheted-up) cap itself and the real total
 // owned area (ground + levels) that fed the formula — callers that only
 // care about the cap can ignore ownedAreaM2, but GET /api/builders/me
@@ -3718,12 +3737,15 @@ async function recomputeLandCap(db, builderId) {
       WHERE builder_id = ? AND created_at >= ?
     `).bind(builderId, windowStart).first(),
     db.prepare(`
-      SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
+      SELECT COALESCE(SUM(area_m2), 0) AS total FROM landlets AS owned
+      WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+        AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
     `).bind(builderId).first(),
     db.prepare(`
       SELECT COALESCE(SUM(ll.cap_consumed_m2), 0) AS total FROM landlet_levels ll
-      JOIN landlets l ON l.landlet_id = ll.landlet_id
-      WHERE l.owner_builder_id = ? AND l.status = 'claimed'
+      JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+      WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+        AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
     `).bind(builderId).first(),
   ]);
   const ownedAreaM2 = ownedRow.total + levelsRow.total;
@@ -3754,14 +3776,18 @@ async function recomputeLandCapsBatch(db, rows) {
       WHERE created_at >= ? GROUP BY builder_id
     `).bind(windowStart).all(),
     db.prepare(`
-      SELECT owner_builder_id AS builder_id, COALESCE(SUM(area_m2), 0) AS total FROM landlets
-      WHERE owner_builder_id IS NOT NULL AND status = 'claimed' GROUP BY owner_builder_id
+      SELECT owned.owner_builder_id AS builder_id, COALESCE(SUM(owned.area_m2), 0) AS total FROM landlets AS owned
+      WHERE owned.owner_builder_id IS NOT NULL AND owned.status = 'claimed'
+        AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+      GROUP BY owned.owner_builder_id
     `).all(),
     db.prepare(`
-      SELECT l.owner_builder_id AS builder_id, COALESCE(SUM(ll.cap_consumed_m2), 0) AS total
+      SELECT owned.owner_builder_id AS builder_id, COALESCE(SUM(ll.cap_consumed_m2), 0) AS total
       FROM landlet_levels ll
-      JOIN landlets l ON l.landlet_id = ll.landlet_id
-      WHERE l.owner_builder_id IS NOT NULL AND l.status = 'claimed' GROUP BY l.owner_builder_id
+      JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+      WHERE owned.owner_builder_id IS NOT NULL AND owned.status = 'claimed'
+        AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+      GROUP BY owned.owner_builder_id
     `).all(),
   ]);
   const earningsByBuilder = new Map(earnings.results.map((row) => [row.builder_id, row.total]));
