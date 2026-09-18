@@ -4301,11 +4301,18 @@ a floating, disconnected level partway up or down.
 
 Each level's `capConsumedM2` is computed once at creation (not
 recomputed live) via `worker/earthCurvature.js`'s `footprintScaleAtHeight`,
-sampled at the level's own outer boundary from ground (`levelIndex *
+sampled at the level's own boundary nearest ground (`levelIndex *
 LEVEL_HEIGHT_M`, matching `LANDLET_HEIGHT_M` in `src/main.js` — the
-height of the one buildable level that exists today) — the strictest
-point within that level, since the cone's cross-section only shrinks or
-grows monotonically across one level's height. `recomputeLandCap`/
+height of the one buildable level that exists today), not its outer one.
+For a below-ground level that near-ground boundary is also the deepest,
+smallest-cross-section point within it — the strictest point, matching
+the dig-limit check below. For an above-ground level it's the opposite:
+the cheaper edge shared with the level below, not the pricier far edge
+the cone-widening formula would give at that level's true outer
+boundary — a small, deliberate undercharge (~1e-6 relative error) left
+as-is rather than changed, since re-pricing a live land-cap formula
+isn't a call to make unilaterally (see `levelCapConsumedM2`'s own
+comment in `worker/index.js`). `recomputeLandCap`/
 `recomputeLandCapsBatch` now fold every owned lándlet's levels into the
 same "owned area" figure the land-cap growth formula already normalizes
 against, so building up or down genuinely counts as more area owned, the
