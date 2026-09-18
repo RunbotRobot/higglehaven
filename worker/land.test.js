@@ -1125,6 +1125,65 @@ describe('Land cap', () => {
     expect(beyondBid.response.status).toBe(409);
   });
 
+  // #706: docs/SPEC.md §5 promises land cap "frees" the moment a builder
+  // commits a landlet to an auction with a $0 starting bid — immediately,
+  // not only once the auction actually resolves. Before this fix, the
+  // committed landlet's area kept counting against the seller's own cap
+  // the whole time it sat mid-auction, silently breaking that promise
+  // once #489 made land cap a real gate.
+  it('frees land-cap headroom immediately for a builder\'s own $0-starting auction, letting them bid elsewhere', async () => {
+    const committer = await signupBuilder('land-cap-free-immediate-committer');
+    await fundHiggles(committer);
+    await createGreenbeltLandletWithArea('land-cap-free-immediate-own', 1000);
+    await claim('land-cap-free-immediate-own', committer);
+    await startAuction('land-cap-free-immediate-own', committer); // $0 starting bid
+
+    const target = await signupBuilder('land-cap-free-immediate-target-seller');
+    await createGreenbeltLandletWithArea('land-cap-free-immediate-target', 900);
+    await claim('land-cap-free-immediate-target', target);
+    const targetAuction = await startAuction('land-cap-free-immediate-target', target);
+
+    const bid = await api(`/auctions/${targetAuction.body.auction.auctionId}/bids`, committer.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(bid.response.status).toBe(201);
+  });
+
+  // Same promise, other clause: a >$0-starting auction only frees cap
+  // once an actual bid lands (any bid guarantees eventual transfer) — not
+  // from the moment the auction merely starts.
+  it('frees land-cap headroom for a >$0-starting auction only once a bid actually lands on it', async () => {
+    const committer = await signupBuilder('land-cap-free-on-bid-committer');
+    await fundHiggles(committer);
+    await createGreenbeltLandletWithArea('land-cap-free-on-bid-own', 1000);
+    await claim('land-cap-free-on-bid-own', committer);
+    const ownAuction = await api('/landlets/land-cap-free-on-bid-own/auction', committer.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 100, durationHours: 1 }),
+    }));
+
+    const target = await signupBuilder('land-cap-free-on-bid-target-seller');
+    await createGreenbeltLandletWithArea('land-cap-free-on-bid-target', 900);
+    await claim('land-cap-free-on-bid-target', target);
+    const targetAuction = await startAuction('land-cap-free-on-bid-target', target);
+
+    const tooEarly = await api(`/auctions/${targetAuction.body.auction.auctionId}/bids`, committer.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(tooEarly.response.status).toBe(409);
+
+    const outsideBidder = await signupBuilder('land-cap-free-on-bid-outside-bidder');
+    await fundHiggles(outsideBidder);
+    const landedBid = await api(`/auctions/${ownAuction.body.auction.auctionId}/bids`, outsideBidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(landedBid.response.status).toBe(201);
+
+    const afterBid = await api(`/auctions/${targetAuction.body.auction.auctionId}/bids`, committer.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(afterBid.response.status).toBe(201);
+  });
+
   it('grows a builder\'s land cap from trailing higgles earnings, normalized per 1000 m² owned', async () => {
     const builderId = await createBuilder('Land Cap Formula Builder');
     // $40 of trailing earnings, normalized against zero owned (floored to
@@ -1425,6 +1484,32 @@ describe('Landlet levels', () => {
     await growLandCapHeadroom(owner.builderId);
 
     const up = await api('/landlets/levels-cap-headroom-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up.response.status).toBe(201);
+  });
+
+  // #706: same land-cap-frees-on-commitment fix as the auction-bid tests
+  // above, exercised through the level-add path instead — this is also
+  // the only test that actually round-trips the atomic INSERT guard's own
+  // (separately duplicated) copy of the exclusion, not just the eager
+  // pre-check both paths share via recomputeLandCap.
+  it('frees land-cap headroom for adding a level once another owned landlet is committed via a $0 auction', async () => {
+    const owner = await signupBuilder('levels-cap-free-owner');
+    await createGreenbeltLandletWithArea('levels-cap-free-committed', 1000);
+    await claim('levels-cap-free-committed', owner);
+    await api('/landlets/levels-cap-free-committed/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    })); // $0 starting bid — commits it
+
+    // #199 already lets a builder claim a new landlet once their existing
+    // one is committed via auction — needed here just to have something
+    // to add a level to.
+    await createGreenbeltLandletWithArea('levels-cap-free-new', 10);
+    const claimed = await claim('levels-cap-free-new', owner);
+    expect(claimed.response.status).toBe(200);
+
+    const up = await api('/landlets/levels-cap-free-new/levels', owner.session({
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
     expect(up.response.status).toBe(201);

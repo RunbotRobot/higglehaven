@@ -4088,10 +4088,9 @@ One consequence: a builder can end up owning several claimed landlets at
 once this way (their original one, mid-auction-and-released, plus a newly
 claimed one) — already possible via winning an auction (`migrations/
 0058`), just reachable now from the seller side too. Land cap (see "Land
-cap" below) is the intended long-run check on this kind of accumulation,
-but per its own "Deliberate scope boundary" note it's deliberately
-tracking-only and not enforced yet — not something this issue's scope
-extended to changing.
+cap" below) is the long-run check on this kind of accumulation — #489
+made it a real enforced gate, and #706 made it exclude a landlet already
+committed to release the same way this claim-eligibility check does.
 
 ### Notifications
 
@@ -4188,11 +4187,11 @@ ledger (needed for a genuine trailing-30-day *window*, which the existing
 lifetime `higgles_balance_cents` total, migrations/0045, can't answer on
 its own).
 
-**This is deliberately tracking-only, not enforced against auction bids —
-an explicit, tested, and reverted design decision, not an oversight.** A
-hard block ("reject a bid that would push the bidder over their cap") was
-implemented and then removed after real e2e testing (not speculation)
-surfaced a genuine bootstrapping trap:
+**Was deliberately tracking-only for a long stretch — now a real enforced
+gate (#489, owner-confirmed).** A hard block ("reject a bid/level-add that
+would push the builder over their cap") was originally implemented, then
+reverted after real e2e testing (not speculation) surfaced a genuine
+bootstrapping trap:
 
 - Claiming a lándlet is mandatory to use Build mode at all —
   `resolveLandletId` in `src/main.js` forces the claim flow for any
@@ -4200,28 +4199,36 @@ surfaced a genuine bootstrapping trap:
 - The default cap (`1000`) exactly equals the mandatory starter lándlet's
   own size. So every builder, the moment they exist, is already at 100% of
   their cap.
-- docs/SPEC.md §5 makes clear the *intended primary* higgle-earning path is
-  commerce commissions — "Higgles credit instantly to builders on sale
-  completion" (of a *product*, not of land). But this dev-mode backend has
-  no real checkout/commerce system at all (out of scope, same as real
-  payments generally elsewhere in this project). Auction sale proceeds are
-  the *only* higgle source actually implemented.
-- Hard-enforcing the cap against that one lone source would make growing
-  past your starter lándlet structurally impossible for *every* builder:
-  nobody can ever earn without first having cap headroom to acquire
-  something to resell, and nobody has headroom without having already
-  earned. That's not a faithful implementation of "growth is earned
-  through demonstrated performance" (docs/SPEC.md §0) — it's a dead end
-  that would make the auction system (shipped and working) self-defeating.
+- Back when this was reverted, auction sale proceeds were the *only*
+  higgles source actually implemented (no real checkout/commerce system
+  existed yet) — hard-enforcing the cap against that one lone source would
+  have made growing past your starter lándlet structurally impossible for
+  *every* builder: nobody can ever earn without first having cap headroom
+  to acquire something to resell, and nobody has headroom without having
+  already earned. That's not a faithful implementation of "growth is
+  earned through demonstrated performance" (docs/SPEC.md §0) — it's a dead
+  end that would make the auction system (shipped and working)
+  self-defeating.
+
+#489 lifted this once real checkout existed (#452/#453) — a builder now has
+a real way to earn higgles before ever needing more land cap, so the
+bootstrapping trap's original premise no longer holds. Land cap now
+actually gates both `handleAuctionBids` (a winning bid would take the
+bidder over cap) and `handleLandletLevels` (a new level would). #706
+additionally excludes, from the owned-area sum both checks are computed
+against, any landlet the builder has already committed to release via an
+active auction (see "Lándlet acquisition" above's "Deliberate scope
+boundary" note on `LANDLET_RELEASED_VIA_AUCTION_SQL`) — matching
+docs/SPEC.md §5's "land cap frees once a bid occurs... or immediately for
+a $0 starting bid" promise, which #489 had otherwise silently broken by
+still counting that committed-away area against the seller's own cap.
 
 The formula, the ratchet, and the per-event ledger are all real and
-correctly implemented regardless — `recomputeLandCap` in `worker/index.js`
-runs lazily (the same "no Cloudflare Cron Trigger anywhere in this app"
-pattern auction resolution and scheduled calendar events already use) on
-every `GET /api/builders`, so `landCapM2` on the builder object (see
-"Builders" above) is always current. This is real, visible infrastructure
-ready to gate actual land acquisition the moment a real commerce/commission
-loop exists to make that gate navigable — not a stub.
+correctly implemented — `recomputeLandCap` in `worker/index.js` runs
+lazily (the same "no Cloudflare Cron Trigger anywhere in this app" pattern
+auction resolution and scheduled calendar events already use) on every
+`GET /api/builders`, so `landCapM2` on the builder object (see "Builders"
+above) is always current.
 
 ### The formula (placeholder pending real validation)
 
@@ -4267,12 +4274,14 @@ of sync with each other.
 
 ### Testing note
 
-`worker/land.test.js`'s "Land cap" describe block covers the default,
-the formula's own math, the ratchet surviving earnings aging out of the
+`worker/land.test.js`'s "Land cap" describe block covers the default, the
+formula's own math, the ratchet surviving earnings aging out of the
 trailing window, the per-event ledger actually being credited on a real
-auction sale, the starter claim being unaffected, and — explicitly — that
-a bid exceeding cap is **not** rejected, confirming the tracking-only
-decision is what's actually shipped rather than a leftover TODO.
+auction sale, the starter claim being unaffected, and — since #489 — that
+a bid or level-add exceeding cap **is** rejected (and that headroom
+already held by another of the builder's own active bids counts against
+a new one). Since #706, it also covers a committed-via-auction landlet's
+area being excluded from both the bid and level-add cap checks.
 `e2e/land-cap.test.mjs` covers the Settings display through the real UI.
 
 ## Vertical construction — levels
