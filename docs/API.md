@@ -1310,8 +1310,8 @@ Seller-initiated (there's no shipping-carrier integration to detect this
 automatically) — starts the 7-day payout-hold fallback clock described
 above. Requires a session logged in as this purchase's own seller (`403`
 otherwise). Returns `400` if the purchase isn't real-money
-(`paymentIntentId` unset), is a digital good (nothing to ship), or is
-already marked shipped.
+(`paymentIntentId` unset), is a digital good (nothing to ship), is
+already marked shipped, or has been refunded.
 
 ```json
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
@@ -1337,7 +1337,8 @@ post-shipping hold instead of an early release.
 
 Response: `{ "confirmed": true }`. Idempotent — confirming an
 already-confirmed purchase (a second visit to the same link) is a no-op,
-not an error. Returns `400` if the token doesn't match any purchase.
+not an error. Returns `400` if the token doesn't match any purchase, or if
+the purchase has been refunded.
 
 ## Catalog templates
 
