@@ -53,6 +53,7 @@ import {
   fetchMyOwnedAvatars,
   equipAvatar,
   fetchTaxSummary,
+  submitTaxIdForm,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
   fetchBuilderStripeAccount,
@@ -4867,6 +4868,143 @@ function renderGeneralSettingsSection() {
   versionValue.textContent = BUILD_INFO_TEXT;
   versionField.appendChild(versionValue);
   settingsSectionEl.appendChild(versionField);
+
+  renderTaxPaperworkField();
+}
+
+// #614: POST /api/tax/id-form (W-9/W-8BEN collection) has existed on the
+// backend since #621, and the earnings-threshold gate that actually blocks
+// redemption/payout without it (#615) has been live just as long — but
+// nothing in this file ever called the submission endpoint, leaving a real
+// account with no in-app way to unblock itself once it crosses the
+// threshold (worker/index.js's taxThresholdPayoutBlockedError literally
+// tells the user to call the raw API). Lives in General (not Build/Sell)
+// since the combined threshold spans both a builder's higgles commissions
+// and a seller's real-money payouts.
+async function renderTaxPaperworkField() {
+  if (!currentAuthUser) return;
+
+  const statusField = document.createElement('div');
+  statusField.className = 'settings-field';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Tax Paperwork';
+  statusField.appendChild(statusLabel);
+  const statusNote = document.createElement('div');
+  statusNote.className = 'settings-empty-note';
+  statusField.appendChild(statusNote);
+  settingsSectionEl.appendChild(statusField);
+
+  function refreshStatusNote() {
+    if (currentAuthUser.taxFormType) {
+      const formLabel = currentAuthUser.taxFormType === 'w9' ? 'W-9' : 'W-8BEN';
+      const completedDate = new Date(currentAuthUser.taxFormCompletedAt).toLocaleDateString();
+      statusNote.textContent = `${formLabel} on file since ${completedDate}. Submitting again below replaces it.`;
+    } else {
+      statusNote.textContent = 'No tax paperwork on file yet — required once your combined earnings ' +
+        'cross this year\'s reporting threshold (see the account menu\'s own notice for where you stand).';
+    }
+  }
+  refreshStatusNote();
+
+  const formField = document.createElement('div');
+  formField.className = 'settings-field';
+  settingsSectionEl.appendChild(formField);
+
+  const typeRow = document.createElement('div');
+  typeRow.className = 'settings-radio-row';
+  const typeInputs = {};
+  for (const [value, optionLabel] of [['w9', 'W-9 (US person)'], ['w8ben', 'W-8BEN (non-US person)']]) {
+    const optionLabelEl = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'tax-form-type';
+    radio.value = value;
+    radio.checked = (currentAuthUser.taxFormType || 'w9') === value;
+    optionLabelEl.appendChild(radio);
+    optionLabelEl.appendChild(document.createTextNode(optionLabel));
+    typeRow.appendChild(optionLabelEl);
+    typeInputs[value] = radio;
+  }
+  formField.appendChild(typeRow);
+
+  const commonFields = [
+    ['legalName', 'Legal name', 'text'],
+    ['addressLine1', 'Street address', 'text'],
+    ['city', 'City', 'text'],
+  ];
+  const w9Fields = [
+    ['state', 'State', 'text'],
+    ['postalCode', 'ZIP code', 'text'],
+    ['taxIdNumber', 'SSN or EIN', 'text'],
+  ];
+  const w8benFields = [
+    ['country', 'Country', 'text'],
+    ['countryOfCitizenship', 'Country of citizenship', 'text'],
+    ['foreignTaxId', 'Foreign tax ID', 'text'],
+  ];
+  const form = document.createElement('div');
+  form.className = 'stripe-onboarding-form';
+  const inputs = {};
+  function addFormInputs(specs) {
+    const labels = [];
+    for (const [key, fieldLabel, type] of specs) {
+      const label = document.createElement('label');
+      label.textContent = fieldLabel;
+      const input = document.createElement('input');
+      input.type = type;
+      label.appendChild(input);
+      form.appendChild(label);
+      inputs[key] = input;
+      labels.push(label);
+    }
+    return labels;
+  }
+  addFormInputs(commonFields);
+  const w9Labels = addFormInputs(w9Fields);
+  const w8benLabels = addFormInputs(w8benFields);
+
+  function refreshFieldVisibility() {
+    const isW9 = typeInputs.w9.checked;
+    for (const label of w9Labels) label.hidden = !isW9;
+    for (const label of w8benLabels) label.hidden = isW9;
+  }
+  refreshFieldVisibility();
+  typeInputs.w9.addEventListener('change', refreshFieldVisibility);
+  typeInputs.w8ben.addEventListener('change', refreshFieldVisibility);
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'version-action-btn';
+  submitBtn.textContent = currentAuthUser.taxFormType ? 'Update tax paperwork' : 'Submit tax paperwork';
+  form.appendChild(submitBtn);
+  const formStatus = document.createElement('div');
+  formStatus.className = 'settings-empty-note';
+  form.appendChild(formStatus);
+
+  submitBtn.addEventListener('click', async () => {
+    formStatus.textContent = '';
+    formStatus.classList.remove('error');
+    submitBtn.disabled = true;
+    try {
+      const formType = typeInputs.w9.checked ? 'w9' : 'w8ben';
+      const specificFields = formType === 'w9' ? w9Fields : w8benFields;
+      const payload = { formType };
+      for (const [key] of commonFields) payload[key] = inputs[key].value;
+      for (const [key] of specificFields) payload[key] = inputs[key].value;
+      const result = await submitTaxIdForm(payload);
+      currentAuthUser = { ...currentAuthUser, taxFormType: result.taxFormType, taxFormCompletedAt: result.taxFormCompletedAt };
+      refreshStatusNote();
+      submitBtn.textContent = 'Update tax paperwork';
+      formStatus.textContent = 'Submitted.';
+    } catch (err) {
+      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.classList.add('error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  formField.appendChild(form);
 }
 
 // Land cap (docs/SPEC.md §3, docs/API.md's "Land cap") — a builder-account
@@ -8642,11 +8780,12 @@ async function refreshAccountMenuLandCap() {
 }
 
 // Tax reporting notice (#613, sub-issue of #350) — same "no live polling,
-// refresh on open" approach as refreshAccountMenuLandCap just above. Purely
-// informational: docs/SPEC.md §7's own reporting-threshold paperwork isn't
-// blocking anything yet (see #615 for the actual gate, not built yet), so
-// this only ever tells a builder/seller where they stand, never stops them
-// doing anything.
+// refresh on open" approach as refreshAccountMenuLandCap just above. This
+// notice itself is purely informational and never blocks anything — #615's
+// actual earnings-above-threshold gate (worker/index.js's
+// taxThresholdPayoutBlockedError, both live) re-derives "crossed" straight
+// from the same totalCents/thresholdCents this notice shows, independent of
+// this element ever having been read.
 const accountMenuTaxNoticeEl = document.getElementById('account-menu-tax-notice');
 const TAX_NOTICE_TEXT = {
   early: (total, threshold) =>
