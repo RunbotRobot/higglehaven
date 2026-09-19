@@ -4230,7 +4230,12 @@ sections:
   Now" button appears instead, on any row already past its end time but
   not yet resolved — a narrow gap that can only happen between one
   client's fetch and another's, since `GET /api/auctions` itself already
-  resolves anything due before this list is ever built.
+  resolves anything due before this list is ever built. Each row also
+  has its own "Refresh" button, calling `GET /api/auctions/:id`
+  (`fetchAuction`) to re-fetch just that one auction's current status
+  and swap the row in place, rather than re-fetching and re-rendering
+  the entire list (which would also re-collapse any row's already-open
+  bid history).
 
 ### Testing note
 
