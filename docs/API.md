@@ -3142,9 +3142,13 @@ stranger's home. It only populates once `status` becomes `accepted`.
 ### `GET /api/friendships?builderId=X`
 
 Requires a session. Lists every friendship involving `X`, both directions,
-both `pending` and `accepted`, newest first. `builderId` is optional —
-omitted, it defaults to the session's own builder; if present, it must
-equal the session's own builder ID (`403` otherwise).
+both `pending` and `accepted`, newest first, cursor-paginated (#728) the
+same way as `GET /api/notifications` — `limit` (default and max 100) and
+`cursor`/`nextCursor`, ordered `created_at DESC, friendship_id DESC` (the
+tiebreak matters here for the same reason it does for notifications:
+several friendships can share the same `created_at`). `builderId` is
+optional — omitted, it defaults to the session's own builder; if present,
+it must equal the session's own builder ID (`403` otherwise).
 
 ### `POST /api/friendships`
 

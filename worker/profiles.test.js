@@ -1138,4 +1138,39 @@ describe('Friendships', () => {
     }));
     expect(rejected.response.status).toBe(400);
   });
+
+  // #728: GET /friendships had no LIMIT at all before this — the one list
+  // endpoint #711's sibling-endpoint audit missed. Now cursor-paginated,
+  // newest-first (descending on created_at/friendship_id), same shape
+  // GET /notifications already uses. Paging through with a small limit
+  // should reassemble the exact same set and order a single call (well
+  // under the default 100 cap) returns, with nextCursor turning null
+  // exactly on the last page.
+  it('paginates GET /friendships with a descending cursor', async () => {
+    const requester = await signupBuilder('friendship-page-requester');
+    for (const name of ['friendship-page-a', 'friendship-page-b', 'friendship-page-c']) {
+      const recipient = await signupBuilder(name);
+      await api('/friendships', requester.session({
+        method: 'POST', body: JSON.stringify({ recipientBuilderId: recipient.builderId }),
+      }));
+    }
+
+    const whole = await api('/friendships', requester.session());
+    expect(whole.body.nextCursor).toBeNull();
+    expect(whole.body.friendships).toHaveLength(3);
+
+    const paged = [];
+    let cursor;
+    for (;;) {
+      const query = new URLSearchParams({ limit: '1' });
+      if (cursor) query.set('cursor', cursor);
+      const page = await api(`/friendships?${query}`, requester.session());
+      expect(page.response.status).toBe(200);
+      expect(page.body.friendships.length).toBeLessThanOrEqual(1);
+      paged.push(...page.body.friendships);
+      if (!page.body.nextCursor) break;
+      cursor = page.body.nextCursor;
+    }
+    expect(paged.map((f) => f.friendshipId)).toEqual(whole.body.friendships.map((f) => f.friendshipId));
+  });
 });
