@@ -44,7 +44,10 @@ import {
   fetchBuilders,
   fetchBuildersByIds,
   fetchMyBuilder,
+  renameBuilder,
+  deleteBuilder,
   fetchMySeller,
+  renameSeller,
   fetchMyEquippedAvatar,
   fetchMyOwnedAvatars,
   equipAvatar,
@@ -4864,6 +4867,7 @@ async function renderLandCapField() {
   if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
   if (!builderId) return;
   const field = document.createElement('div');
+  field.id = 'land-cap-field';
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
   fieldLabel.textContent = 'Land Cap';
@@ -4896,12 +4900,125 @@ async function renderLandCapField() {
   }
 }
 
+// #724: renameBuilder/deleteBuilder/renameSeller had real, working,
+// documented backend endpoints (docs/API.md's "Builders"/"Sellers") but no
+// UI ever called any of them. Shared between the Build and Sell settings
+// tabs since a builder identity and a seller identity work identically
+// here — only the fetch/rename/delete calls and the delete warning differ.
+async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning }) {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = `${kind} Identity`;
+  field.appendChild(label);
+  const status = document.createElement('div');
+  status.className = 'settings-empty-note';
+  status.textContent = 'Loading…';
+  field.appendChild(status);
+  settingsSectionEl.appendChild(field);
+
+  let profile;
+  try {
+    profile = await fetchProfile();
+  } catch (err) {
+    status.textContent = err.message || `Could not load your ${kind.toLowerCase()} identity.`;
+    status.classList.add('error');
+    return;
+  }
+
+  const nameRow = document.createElement('div');
+  field.insertBefore(nameRow, status);
+
+  const actions = document.createElement('div');
+  actions.className = 'version-row-actions';
+  field.insertBefore(actions, status);
+
+  const renameBtn = document.createElement('button');
+  renameBtn.type = 'button';
+  renameBtn.className = 'version-action-btn';
+  renameBtn.textContent = 'Rename';
+  actions.appendChild(renameBtn);
+
+  const deleteBtn = document.createElement('button');
+  if (deleteProfile) {
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'version-action-btn';
+    deleteBtn.textContent = 'Delete Account';
+    actions.appendChild(deleteBtn);
+  }
+
+  function renderName() {
+    nameRow.textContent = profile.label;
+  }
+  renderName();
+  status.textContent = '';
+
+  renameBtn.addEventListener('click', async () => {
+    const next = prompt(`Rename your ${kind.toLowerCase()} identity`, profile.label);
+    if (!next || !next.trim() || next.trim() === profile.label) return;
+    status.textContent = '';
+    status.classList.remove('error');
+    renameBtn.disabled = true;
+    try {
+      profile = await renameProfile(profile[idKey], next.trim());
+      renderName();
+    } catch (err) {
+      status.textContent = err.message || 'Could not rename.';
+      status.classList.add('error');
+    } finally {
+      renameBtn.disabled = false;
+    }
+  });
+
+  if (deleteProfile) {
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(deleteWarning)) return;
+      status.textContent = '';
+      status.classList.remove('error');
+      deleteBtn.disabled = true;
+      try {
+        await deleteProfile(profile[idKey]);
+        profile = await fetchProfile();
+        renderName();
+        status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
+      } catch (err) {
+        status.textContent = err.message || 'Could not delete.';
+        status.classList.add('error');
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+  }
+}
+
+function renderBuilderIdentityField() {
+  renderIdentityField('Builder', {
+    fetchProfile: fetchMyBuilder,
+    idKey: 'builderId',
+    renameProfile: (id, label) => renameBuilder(id, label),
+    deleteProfile: (id) => deleteBuilder(id),
+    deleteWarning: "Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.",
+  });
+}
+
+// No deleteSeller endpoint exists (docs/API.md's "Sellers" has DELETE
+// /api/sellers/:sellerId, but src/api.js never wrapped it — out of scope
+// for #724, which only names renameSeller as dead) — Rename only.
+function renderSellerIdentityField() {
+  renderIdentityField('Seller', {
+    fetchProfile: fetchMySeller,
+    idKey: 'sellerId',
+    renameProfile: (id, label) => renameSeller(id, label),
+  });
+}
+
 // Publish + Version History (see docs/API.md's "Landlet drafts"/"Landlet
 // versions") — the one place the already-existing draft/version/activate
 // backend gets a frontend. Only meaningful while actually in Build mode on
 // a claimed landlet (Settings itself stays reachable from Shop too, but
 // there's no landlet to publish from there).
 function renderBuildSettingsSection() {
+  renderBuilderIdentityField();
   renderLandCapField();
   renderAuctionSection();
   if (currentMode !== 'build' || !currentLandletId) {
@@ -5170,6 +5287,8 @@ function renderBuildSettingsSection() {
 // seller-identity concern, not tied to any one landlet the way Build's
 // Publish/Auction sections are.
 async function renderSellSettingsSection() {
+  renderSellerIdentityField();
+
   const statusField = document.createElement('div');
   statusField.className = 'settings-field';
   const statusLabel = document.createElement('span');
