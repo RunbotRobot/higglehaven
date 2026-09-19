@@ -1278,9 +1278,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     return json({ templates: templates.map((template) => byId.get(template.templateId)) }, request.method === 'POST' ? 201 : 200);
   }
 
-  // #329 (backend half only — see this route's own docs/API.md entry for
-  // why the frontend "Prompt mode" entry point isn't built yet): given an
-  // embedding (the same shape POST .../thumbnail stores), ranks every
+  // #329: given an embedding (the same shape POST .../thumbnail stores),
+  // ranks every
   // template that has one by cosine similarity and returns the closest
   // matches. No Vectorize/vector-search binding exists in this project
   // (confirmed via wrangler.jsonc — #327's own comment thread already
@@ -1324,10 +1323,10 @@ async function handleCatalog(request, db, route, url, models, env) {
   // does — a fixed key would fight the immutable cache-control header on
   // GET /uploads/:key once a second prompt happens to produce identical
   // bytes (astronomically unlikely for a generative model, but the
-  // dedup is free either way). Out of scope here (#328's own text):
-  // embedding the result and running it through similarity-search (#329,
-  // already merged) or the placement UI (#330) — this endpoint only ever
-  // turns a prompt into a stored image URL.
+  // dedup is free either way). This endpoint only ever turns a prompt into
+  // a stored image URL — embedding the result and running it through
+  // similarity-search (#329) and placing a chosen candidate (#330) are the
+  // frontend's own job (src/main.js's Prompt mode tab), both shipped.
   if (request.method === 'POST' && route.length === 2 && route[1] === 'concept-image') {
     // Session-gated (not anonymous, unlike similarity-search's read-only
     // query above) and rate-limited per builder — unlike everything else
