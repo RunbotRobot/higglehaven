@@ -4922,7 +4922,7 @@ async function renderLandCapField() {
 // UI ever called any of them. Shared between the Build and Sell settings
 // tabs since a builder identity and a seller identity work identically
 // here — only the fetch/rename/delete calls and the delete warning differ.
-async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning }) {
+async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted }) {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
@@ -4995,6 +4995,13 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
       deleteBtn.disabled = true;
       try {
         await deleteProfile(profile[idKey]);
+        // #738: the caller's cached module-level id (builderId/sellerId)
+        // must be cleared here, before fetchProfile() re-provisions a
+        // fresh identity server-side -- ensureBuilderIdentity()'s own
+        // `if (builderId) return builderId;` short-circuit would otherwise
+        // keep every later action (claim, bid, build) pinned to the
+        // just-deleted, now-nonexistent id until a full page reload.
+        onDeleted?.();
         profile = await fetchProfile();
         renderName();
         status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
@@ -5184,6 +5191,7 @@ function renderBuilderIdentityField() {
     renameProfile: (id, label) => renameBuilder(id, label),
     deleteProfile: (id) => deleteBuilder(id),
     deleteWarning: "Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.",
+    onDeleted: () => { builderId = null; },
   });
 }
 
