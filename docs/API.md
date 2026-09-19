@@ -1639,12 +1639,11 @@ catalog template response once set (see "Catalog template object" above).
 
 ### `POST /api/catalog/similarity-search`
 
-The backend half of #329 — see that issue's own text: it depends on both the
-embedding index (#327, above) **and** the prompt→concept-image endpoint
-(#328, below). Only the frontend "Prompt mode" entry point (#330) genuinely
-needs both to exist together; the similarity-search half is independently
-buildable and testable today by passing any embedding directly, so it's
-shipped ahead of the frontend piece. No UI calls this endpoint yet.
+#329 — depends on both the embedding index (#327, above) and the
+prompt→concept-image endpoint (#328, below). The frontend's "Prompt mode"
+tab (src/main.js) calls this endpoint to search for candidates from a
+generated concept image, then places a chosen result the same way manual
+Build-mode placement does (#330).
 
 Given an embedding (the same shape `POST .../thumbnail` above stores), ranks
 every catalog template that has one by cosine similarity and returns the
@@ -1696,10 +1695,10 @@ per-request.
 ### `POST /api/catalog/concept-image`
 
 #328 — given a builder's free-text prompt, generates a concept image via an
-external image-generation API and stores it. Out of scope here (#328's own
-text): embedding the result and running it through similarity-search above
-(#329, already merged) or the placement UI (#330) — this endpoint only ever
-turns a prompt into a stored image URL. Provider: OpenAI's `gpt-image-1`,
+external image-generation API and stores it. This endpoint only ever turns
+a prompt into a stored image URL — embedding the result and running it
+through similarity-search above (#329) and placing a chosen candidate
+(#330) are the frontend's own job, both shipped. Provider: OpenAI's `gpt-image-1`,
 picked over the cheaper Cloudflare Workers AI option per the owner's own
 stated priority (generation quality over minimizing per-call cost).
 
