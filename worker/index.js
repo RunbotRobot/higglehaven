@@ -4413,6 +4413,13 @@ async function verifyPassword(password, stored) {
   return timingSafeEqual(bytesToHex(new Uint8Array(bits)), hashHex);
 }
 
+// #771: not a real password's derivation, ever compared against a real
+// account — exists only so handleLogin's no-such-user path can burn the
+// same PBKDF2 cost a real verifyPassword call would, so response latency
+// doesn't let an attacker enumerate registered emails despite the
+// identical response body/status that path already returns.
+const DUMMY_PASSWORD_HASH = `pbkdf2$${PBKDF2_ITERATIONS}$${'00'.repeat(16)}$${'00'.repeat(32)}`;
+
 function normalizeEmail(value) {
   return stringValue(value, 'email').toLowerCase();
 }
@@ -6396,9 +6403,15 @@ async function handleLogin(request, db, url) {
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   // Same generic message whether the email doesn't exist or the password
   // is wrong — telling the two apart lets an attacker enumerate which
-  // emails have accounts here.
+  // emails have accounts here. #771: the response *body* being identical
+  // isn't enough on its own — burn the same PBKDF2 cost here that a real
+  // verifyPassword call below would, so response latency can't be used to
+  // tell the two cases apart either.
   const invalidCredentials = () => new HttpError('Invalid email or password', 401);
-  if (!row) throw invalidCredentials();
+  if (!row) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
+    throw invalidCredentials();
+  }
 
   if (row.locked_until && row.locked_until > new Date().toISOString()) {
     throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
