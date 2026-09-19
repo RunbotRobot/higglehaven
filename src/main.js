@@ -90,6 +90,7 @@ import {
   startAuction,
   fetchAuctions,
   fetchAllAuctions,
+  fetchAuctionBids,
   placeBid,
   resolveAuctionNow,
   purchaseInstance,
@@ -5917,6 +5918,65 @@ async function renderAuctionSection() {
       info.className = 'auction-row-info';
       info.textContent = formatAuctionSummary(auction);
       row.appendChild(info);
+
+      // Bid history — GET /auctions already gives every row its own
+      // bidCount (auctionsFromRowsBatch), so this button only renders once
+      // there's actually something to show. The full per-bid list
+      // (amount, bidder, timestamp) itself is fetched lazily via
+      // fetchAuctionBids on first expand, not eagerly for every row in the
+      // list — same "don't fetch what nobody asked to see yet" shape as
+      // the rest of this settings panel.
+      if (auction.bidCount > 0) {
+        const bidHistoryToggle = document.createElement('button');
+        bidHistoryToggle.type = 'button';
+        bidHistoryToggle.className = 'auction-bid-history-btn';
+        bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+        const bidHistoryList = document.createElement('div');
+        bidHistoryList.className = 'auction-bid-history';
+        bidHistoryList.hidden = true;
+        bidHistoryToggle.addEventListener('click', async () => {
+          if (!bidHistoryList.hidden) {
+            bidHistoryList.hidden = true;
+            bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+            return;
+          }
+          bidHistoryToggle.disabled = true;
+          bidHistoryList.hidden = false;
+          bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+          try {
+            const bids = await fetchAuctionBids(auction.auctionId);
+            // Bidder labels resolved via the batch-by-ids lookup (#717/
+            // #720), scoped to just the distinct bidders on this one
+            // auction rather than the whole roster.
+            const labels = new Map(
+              (await fetchBuildersByIds(bids.map((bid) => bid.bidderBuilderId)))
+                .map((b) => [b.builderId, b.label]),
+            );
+            bidHistoryList.innerHTML = '';
+            // Already highest-first from the server (ORDER BY amount_cents
+            // DESC, created_at in handleAuctionBids) — no client-side sort
+            // needed.
+            for (const bid of bids) {
+              const bidRow = document.createElement('div');
+              bidRow.className = 'auction-bid-history-row';
+              const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
+              bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
+              bidHistoryList.appendChild(bidRow);
+            }
+            bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
+          } catch (err) {
+            bidHistoryList.innerHTML = '';
+            const errNote = document.createElement('div');
+            errNote.className = 'settings-empty-note';
+            errNote.textContent = err.message || 'Could not load bid history.';
+            bidHistoryList.appendChild(errNote);
+          } finally {
+            bidHistoryToggle.disabled = false;
+          }
+        });
+        row.appendChild(bidHistoryToggle);
+        row.appendChild(bidHistoryList);
+      }
 
       // GET /auctions already resolves anything past its end time before
       // this list is built (see resolveDueAuctions in worker/index.js) —

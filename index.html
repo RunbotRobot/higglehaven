@@ -2344,7 +2344,7 @@
         background: rgb(var(--ink-rgb) / 0.08);
         color: var(--pill-text);
       }
-      .auction-bid-btn, .auction-start-btn, .auction-resolve-btn {
+      .auction-bid-btn, .auction-start-btn, .auction-resolve-btn, .auction-bid-history-btn {
         align-self: flex-start;
         flex-shrink: 0;
         padding: 5px 12px;
@@ -2354,8 +2354,18 @@
         color: rgb(var(--ink-rgb) / 0.85);
         font: 12px/1.4 sans-serif;
       }
-      .auction-bid-btn:disabled, .auction-start-btn:disabled, .auction-resolve-btn:disabled {
+      .auction-bid-btn:disabled, .auction-start-btn:disabled, .auction-resolve-btn:disabled,
+      .auction-bid-history-btn:disabled {
         opacity: 0.5;
+      }
+      .auction-bid-history {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .auction-bid-history-row {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.7);
       }
       .auction-start-form {
         display: flex;
