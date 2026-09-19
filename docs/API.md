@@ -3887,13 +3887,14 @@ unless set/fired) alongside the existing `eventId`/`instanceId`/
 
 ### `POST /api/instances/:instanceId/events/:eventId/trigger`
 
-The lazy-resolution pattern this codebase already uses for auction
-resolution (see "Land acquisition auctions" below), applied here too: there
-is no Cloudflare Cron Trigger anywhere in this app, so nothing fires a
-scheduled event on a schedule. Instead, any Shop-mode session that happens to
-have the event loaded polls this endpoint periodically, and whichever caller
-happens to hit it first, after `scheduled_at` has passed, is the one that
-fires it:
+The lazy-resolution pattern auction resolution used to rely on exclusively
+(see "Land acquisition auctions" below — that one is now also cron-driven,
+#770), applied here too: this event's own firing isn't on the Cloudflare
+Cron Trigger the app does have (`scheduled()`, `worker/index.js`), so
+nothing fires a scheduled event on a schedule. Instead, any Shop-mode
+session that happens to have the event loaded polls this endpoint
+periodically, and whichever caller happens to hit it first, after
+`scheduled_at` has passed, is the one that fires it:
 
 - Not found → `404`.
 - Not yet due (`scheduled_at` is `NULL`, in the future, or already
@@ -4030,17 +4031,24 @@ neither has anywhere to attach to in this dev-mode backend yet:
   above). The spec's "default 24-hour duration for inactivity-triggered
   listings" still just applies as the uniform default for every auction,
   voluntary or not — there's no separate duration for this path.
-- **No scheduled resolution job.** There's no Cloudflare Cron Trigger
-  wired up. Resolution is purely lazy: `GET /api/auctions` sweeps and
-  resolves due auctions before returning results (`resolveDueAuctions` in
+- ~~No scheduled resolution job~~ — implemented (#770): `resolveDueAuctions`
+  now also runs on the same Cloudflare Cron Trigger as `autoAuctionInactiveLandlets`
+  above (see `scheduled()` near the top of `worker/index.js`), so an auction
+  that expires with nobody viewing auctions still resolves within the next
+  10-minute cycle — this mattered in particular for `autoAuctionInactiveLandlets`'s
+  own auctions, started on landlets whose owner has been inactive 30+ days
+  and so is unlikely to generate the view traffic lazy resolution alone
+  depends on. `GET /api/auctions` still also sweeps and resolves due
+  auctions before returning results (`resolveDueAuctions` in
   `worker/index.js`), capped at `AUCTION_SWEEP_LIMIT` (25) oldest-due-first
   per call so one request can't be forced into unbounded sequential
   resolution work — a backlog larger than that clears over a few calls
-  instead of blocking any single one. Any single-auction read or bid
-  attempt resolves that one auction first if it's due
-  (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists for a
-  frontend "time's up, finalize it" action without waiting for a future
-  read to trigger it as a side effect.
+  instead of blocking any single one, and this fast path still resolves an
+  auction immediately rather than waiting for the next cron cycle. Any
+  single-auction read or bid attempt resolves that one auction first if
+  it's due (`resolveAuctionIfDue`). An explicit `POST .../resolve` exists
+  for a frontend "time's up, finalize it" action without waiting for a
+  future read to trigger it as a side effect.
 
 ### Auction object
 
@@ -4383,10 +4391,10 @@ still counting that committed-away area against the seller's own cap.
 
 The formula, the ratchet, and the per-event ledger are all real and
 correctly implemented — `recomputeLandCap` in `worker/index.js` runs
-lazily (the same "no Cloudflare Cron Trigger anywhere in this app" pattern
-auction resolution and scheduled calendar events already use) on every
-`GET /api/builders`, so `landCapM2` on the builder object (see "Builders"
-above) is always current.
+lazily (the same pattern scheduled calendar events still use, and auction
+resolution used exclusively before #770 added it to `scheduled()` too) on
+every `GET /api/builders`, so `landCapM2` on the builder object (see
+"Builders" above) is always current.
 
 ### The formula (placeholder pending real validation)
 
