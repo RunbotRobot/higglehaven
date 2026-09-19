@@ -81,6 +81,30 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // #717 (sub-issue of #711): GET /builders?ids=... narrows the roster to
+  // exactly the requested (and existing) builders, the batch lookup Shop
+  // mode's per-landlet owner-label map needs once the unfiltered list gets
+  // its own LIMIT (#715).
+  it('filters GET /builders by a comma-separated ids param', async () => {
+    const first = await signupBuilder('ids-filter-first');
+    const second = await signupBuilder('ids-filter-second');
+    await signupBuilder('ids-filter-third');
+
+    const filtered = await api(`/builders?ids=${first.builderId},${second.builderId},builder-does-not-exist`);
+    expect(filtered.response.status).toBe(200);
+    expect(filtered.body.builders.map((b) => b.builderId).sort()).toEqual(
+      [first.builderId, second.builderId].sort(),
+    );
+
+    const empty = await api('/builders?ids=');
+    expect(empty.response.status).toBe(200);
+    expect(empty.body.builders).toEqual([]);
+
+    const tooMany = await api(`/builders?ids=${Array.from({ length: 201 }, (_, i) => `builder-${i}`).join(',')}`);
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: 'ids must contain at most 200 items' });
+  });
+
   // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
   // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
   // session resolves *your* builder profile, mutation or not (per the

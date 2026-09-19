@@ -2009,6 +2009,26 @@ async function handleBuilders(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    const idsParam = url.searchParams.get('ids');
+    // #717 (sub-issue of #711): a bounded batch-by-ids lookup, for a
+    // caller (Shop mode's per-landlet owner-label map) that only needs
+    // labels for a known, small set of builders rather than the entire
+    // roster — added as a prerequisite for eventually paginating the
+    // unfiltered list below (#715). Capped the same way the
+    // catalog-batch handlers above cap templateIds, to keep this from
+    // becoming its own unbounded-query vector.
+    if (idsParam !== null) {
+      const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
+      if (ids.length === 0) return json({ builders: [] });
+      if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
+      const placeholders = ids.map(() => '?').join(', ');
+      const { results } = await db.prepare(
+        `SELECT * FROM builders WHERE builder_id IN (${placeholders}) ORDER BY created_at, builder_id`,
+      ).bind(...ids).all();
+      await recomputeLandCapsBatch(db, results);
+      return json({ builders: results.map(builderFromRow) });
+    }
+
     const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
     // read, rather than on a schedule — the same pattern this app uses
