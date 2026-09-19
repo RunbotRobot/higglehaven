@@ -46,6 +46,8 @@ import {
   fetchMyBuilder,
   fetchMySeller,
   fetchMyEquippedAvatar,
+  fetchMyOwnedAvatars,
+  equipAvatar,
   fetchTaxSummary,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
@@ -4716,6 +4718,93 @@ function renderShopSettingsSection() {
   note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
+
+  renderMyAvatarsField();
+}
+
+// #713 (sub-issue of #710): #679 shipped the backend (GET /api/builders/
+// me/avatars, GET/PUT /api/builders/me/avatar) and in-world rendering of
+// whatever ends up equipped, but nothing in this file ever called any of
+// it — a builder who bought an avatar-category listing (#712 finally made
+// one purchasable through the app) had no way to ever equip it. Lives in
+// the Shop tab, not General, since equipping only ever affects the
+// Shop-mode player character. Reuses Saved Layouts/Version History's own
+// .version-list/.version-row row shape above (a named, actionable list
+// entry is the same kind of thing here).
+function renderMyAvatarsField() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'My Avatars';
+  field.appendChild(label);
+  const hint = document.createElement('div');
+  hint.className = 'settings-empty-note';
+  hint.textContent = 'Equip an avatar you own to replace the default Shop-mode character.';
+  field.appendChild(hint);
+  const list = document.createElement('div');
+  list.className = 'version-list';
+  field.appendChild(list);
+  settingsSectionEl.appendChild(field);
+
+  let myAvatarsLoadToken = 0;
+  async function renderMyAvatarsList() {
+    const myLoadToken = ++myAvatarsLoadToken;
+    list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let avatars;
+    let equipped;
+    try {
+      [avatars, equipped] = await Promise.all([fetchMyOwnedAvatars(), fetchMyEquippedAvatar()]);
+    } catch (err) {
+      if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      list.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load your avatars.';
+      list.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    list.innerHTML = '';
+
+    // The default (no template equipped) is always offered as its own row,
+    // even with zero owned avatars — it's a real, equippable choice (the
+    // revert target from PUT .../avatar's own { templateId: null } shape),
+    // not just a placeholder for an empty list.
+    const rowSpecs = [{ templateId: null, name: 'Default avatar' }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name }))];
+    for (const { templateId, name } of rowSpecs) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const isEquipped = equipped.equippedTemplateId === templateId;
+      info.textContent = isEquipped ? `${name} — equipped` : name;
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const equipBtn = document.createElement('button');
+      equipBtn.type = 'button';
+      equipBtn.className = 'version-action-btn';
+      equipBtn.textContent = 'Equip';
+      equipBtn.disabled = isEquipped;
+      equipBtn.addEventListener('click', async () => {
+        equipBtn.disabled = true;
+        try {
+          const newEquipped = await equipAvatar(templateId);
+          await refreshEquippedShopAvatar(newEquipped.modelUrl);
+          renderMyAvatarsList();
+        } catch (err) {
+          alert(err.message || 'Could not equip this avatar.');
+          equipBtn.disabled = false;
+        }
+      });
+      actions.appendChild(equipBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+  renderMyAvatarsList();
 }
 
 function renderGeneralSettingsSection() {
@@ -10004,6 +10093,36 @@ async function createCustomShopAvatar(modelUrl) {
 }
 
 let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState } — see createShopAvatar/createCustomShopAvatar
+
+// #713 (sub-issue of #710): swaps the live Shop-mode avatar the instant the
+// "My Avatars" settings picker equips a different one, so a builder standing
+// in the world sees the change immediately rather than needing to leave and
+// re-enter Shop mode. enterShopMode's own equipped-avatar fetch already
+// covers every other entry path (a fresh Shop-mode entry always asks the
+// server itself), so this only matters while currentMode is already 'shop'
+// with a shopAvatar already built — a no-op otherwise, the same as equipping
+// from Build/Sell just quietly taking effect next time Shop is entered.
+// updateShopMovement drives group.position/rotation from shopAvatarPosition/
+// shopAvatarFacing/shopAvatarPitch every frame regardless of which avatar
+// instance is in the scene, so the swap itself needs no position handoff.
+async function refreshEquippedShopAvatar(modelUrl) {
+  if (currentMode !== 'shop' || !shopAvatar) return;
+  let nextAvatar;
+  if (modelUrl) {
+    try {
+      nextAvatar = await createCustomShopAvatar(modelUrl);
+    } catch (err) {
+      console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
+      nextAvatar = createShopAvatar();
+    }
+  } else {
+    nextAvatar = createShopAvatar();
+  }
+  scene.remove(shopAvatar.group);
+  shopAvatar = nextAvatar;
+  scene.add(shopAvatar.group);
+}
+
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
