@@ -4035,9 +4035,20 @@ function renderSellerList() {
         refreshSellerShowcase();
         renderSellerList();
       } catch (err) {
-        rowStatus.textContent = err.message?.includes('still in use')
-          ? 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.'
-          : err.message || 'Could not delete.';
+        // #729: a saved-layout or landlet-version-history block (see the
+        // worker's assertCatalogTemplatesDeletable) has nothing placed to
+        // remove -- "remove those instances first" would send the seller
+        // looking for a fix that doesn't exist, so those get their own
+        // wording distinct from the generic "still in use" FK message.
+        if (err.message?.includes('referenced by a saved layout')) {
+          rowStatus.textContent = "Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.";
+        } else if (err.message?.includes("referenced by a landlet's version history")) {
+          rowStatus.textContent = "Used in a landlet's past published version — it can't be deleted while that version history exists.";
+        } else if (err.message?.includes('still in use')) {
+          rowStatus.textContent = 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.';
+        } else {
+          rowStatus.textContent = err.message || 'Could not delete.';
+        }
         rowStatus.classList.add('error');
         deleteBtn.disabled = false;
       }

@@ -1916,6 +1916,128 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #729: saved_layout_instances and version_instances both hold a
+  // template_id under ON DELETE RESTRICT (see migrations/0080 and 0007's
+  // own comments), so a template referenced only by one of these snapshot
+  // tables — with zero live placed_instances left — used to fall through
+  // to a generic "still in use" 409 indistinguishable from a template
+  // that's actually still placed somewhere. Uses freshly-created,
+  // otherwise-unreferenced templates (never 'placeholder-tree', which is
+  // shared across dozens of other tests in this file and must stay
+  // deletable-in-theory for them).
+  describe('Catalog template deletion blocked by a snapshot reference (#729)', () => {
+    async function createTemplate(templateId) {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId,
+          name: `Test template ${templateId}`,
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+      return templateId;
+    }
+
+    it("blocks deleting a template still referenced by a stranger's saved layout, with a distinct message", async () => {
+      const templateId = await createTemplate('template-729-saved-layout');
+      const owner = await signupBuilder('template-729-saved-layout-owner');
+      const landletId = 'template-729-saved-layout-landlet';
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      await growLandCapHeadroom(owner.builderId);
+      await api(`/landlets/${landletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: `${landletId}-upper`, landletId, templateId, x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      expect(placed.response.status).toBe(201);
+      // Removing the level auto-snapshots it into saved_layout_instances
+      // (#633) and deletes the live placed_instances row — the template
+      // has zero live instances left after this, only the snapshot.
+      const removed = await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+      const { results: live } = await env.DB.prepare('SELECT 1 FROM placed_instances WHERE template_id = ?')
+        .bind(templateId).all();
+      expect(live).toHaveLength(0);
+
+      // Deleted by a stranger — not the owner of the saved layout at all —
+      // matching the issue's own "stranger's private saved-layout snapshot"
+      // framing: the blocker isn't visible to this caller in any way.
+      const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(deleted.response.status).toBe(409);
+      expect(deleted.body.error).toMatch(/referenced by a saved layout/);
+      expect(deleted.body.error).not.toMatch(/still in use/);
+
+      const { results: stillExists } = await env.DB.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?')
+        .bind(templateId).all();
+      expect(stillExists).toHaveLength(1);
+    });
+
+    it("blocks deleting a template still referenced by a landlet's version history, with a distinct message", async () => {
+      const templateId = await createTemplate('template-729-version');
+      const owner = await signupBuilder('template-729-version-owner');
+      const landletId = 'template-729-version-landlet';
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: `${landletId}-inst`, landletId, templateId, x: 1, y: 1, z: 0 }),
+      }));
+      expect(placed.response.status).toBe(201);
+      const version = await api(`/landlets/${landletId}/versions`, owner.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      expect(version.response.status).toBe(201);
+      // The live instance is removed afterward, so only the version
+      // snapshot (version_instances) still references the template.
+      const removedInstance = await api(`/instances/${landletId}-inst`, owner.session({ method: 'DELETE' }));
+      expect(removedInstance.response.status).toBe(200);
+
+      const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(deleted.response.status).toBe(409);
+      expect(deleted.body.error).toMatch(/referenced by a landlet's version history/);
+      expect(deleted.body.error).not.toMatch(/still in use/);
+    });
+
+    it('deletes a template cleanly once its only saved-layout reference is gone', async () => {
+      const templateId = await createTemplate('template-729-cleared');
+      const owner = await signupBuilder('template-729-cleared-owner');
+      const landletId = 'template-729-cleared-landlet';
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      await growLandCapHeadroom(owner.builderId);
+      await api(`/landlets/${landletId}/levels`, owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: `${landletId}-upper`, landletId, templateId, x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      await api(`/landlets/${landletId}/levels/1`, owner.session({ method: 'DELETE' }));
+      const { results } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE builder_id = ?')
+        .bind(owner.builderId).all();
+      const savedLayoutId = results[0].saved_layout_id;
+
+      const blocked = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(blocked.response.status).toBe(409);
+
+      const layoutDeleted = await api(`/saved-layouts/${savedLayoutId}`, owner.session({ method: 'DELETE' }));
+      expect(layoutDeleted.response.status).toBe(200);
+
+      const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body.deleted).toBe(true);
+    });
+  });
+
   // Found via backlog audit (#395): the outermost-level DELETE used to run
   // a plain SELECT-then-DELETE with no guard tying the delete to the
   // extent it was read against. Racing two DELETEs against the exact same
