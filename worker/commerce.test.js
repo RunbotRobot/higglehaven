@@ -2745,8 +2745,60 @@ describe('Simulated purchases', () => {
 
       // Once the payout actually lands, deletion is allowed again — same
       // "guard released, not stuck" shape as the builder-deletion guards.
+      // Both paid_out_at and stripe_payout_id, matching what a real
+      // successful payout actually writes (#745's own guard checks both).
+      await env.DB.prepare('UPDATE purchases SET paid_out_at = ?, stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind('2024-01-01T00:00:00.000Z', 'po_unpaid_payout_delete_test', purchaseId).run();
+      const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+    });
+
+    // #745: claimPurchasesForPayout stamps paid_out_at before the Stripe
+    // payout call resolves, so a purchase can sit in an ambiguous
+    // "claimed, not yet confirmed" state (paid_out_at set, stripe_payout_id
+    // still null) for the duration of that outbound call. The original
+    // #732 guard only checked paid_out_at, so a delete landing in that
+    // exact window would have slipped through — reproduced here by writing
+    // that same in-flight state directly, without ever calling the real
+    // payout endpoint.
+    it('rejects deleting a seller whose purchase is claimed for payout but not yet Stripe-confirmed', async () => {
+      const seller = await signupSeller('inflight-payout-delete-seller');
+      const builder = await signupBuilder('inflight-payout-delete-builder');
+      await createGreenbeltLandletWithArea('inflight-payout-delete-landlet', 1000);
+      await claim('inflight-payout-delete-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'inflight-payout-delete-template',
+          name: 'Product mid-payout',
+          color: '#abcdef',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 3000,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('inflight-payout-delete-instance', 'inflight-payout-delete-landlet', 'inflight-payout-delete-template', builder);
+      const purchased = await api('/instances/inflight-payout-delete-instance/purchase', builder.session({ method: 'POST' }));
+      const { purchaseId } = purchased.body.purchase;
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_inflight_payout_delete_test', purchaseId).run();
+
+      // The in-flight state claimPurchasesForPayout leaves a purchase in
+      // for the duration of the (here, never-made) outbound Stripe call.
       await env.DB.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ?')
         .bind('2024-01-01T00:00:00.000Z', purchaseId).run();
+
+      const blocked = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(blocked.response.status).toBe(409);
+      const stillThere = await env.DB.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?')
+        .bind(seller.sellerId).first();
+      expect(stillThere).not.toBeNull();
+
+      // Once stripe_payout_id lands (the claim actually confirmed), deletion
+      // is allowed — same release-not-stuck shape as the base case above.
+      await env.DB.prepare('UPDATE purchases SET stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind('po_inflight_payout_delete_test', purchaseId).run();
       const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
       expect(deleted.response.status).toBe(200);
     });

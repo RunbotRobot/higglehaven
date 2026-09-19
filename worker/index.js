@@ -2648,12 +2648,28 @@ async function handleSellers(request, env, db, route, url) {
     // folded into the DELETE's own WHERE clause (not a separate SELECT
     // first) to close the same check-then-delete race that guard's own
     // comment calls out.
+    //
+    // #745: `paid_out_at IS NULL` alone isn't enough — claimPurchasesForPayout
+    // stamps paid_out_at *before* the Stripe payout call resolves, so a
+    // purchase mid-flight (claimed, but the outbound Stripe request hasn't
+    // succeeded or failed yet) reads as "already paid out" to a guard that
+    // only checks paid_out_at, letting deletion through during that window.
+    // If the Stripe call then fails, releasePurchaseClaim resets paid_out_at
+    // back to NULL on a purchase whose seller_id now points at a deleted
+    // row — the exact "stranded real money" outcome this guard exists to
+    // prevent. stripe_payout_id is only ever set once a payout has actually
+    // succeeded (right after this same claim, never before it), so
+    // requiring it too closes the window: a claimed-but-unconfirmed
+    // purchase still blocks deletion, the same as a never-claimed one.
     const { meta } = await db.prepare(`
       DELETE FROM sellers
       WHERE seller_id = ?
         AND NOT EXISTS (
           SELECT 1 FROM purchases
-          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND paid_out_at IS NULL AND refunded_at IS NULL
+          WHERE seller_id = ?
+            AND payment_intent_id IS NOT NULL
+            AND refunded_at IS NULL
+            AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
         )
     `).bind(route[1], route[1]).run();
     if (meta.changes === 0) {
