@@ -2539,6 +2539,7 @@ const uploadPriceInput = document.getElementById('upload-price');
 const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
 const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
 const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
+const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
@@ -2630,6 +2631,7 @@ function resetUploadModalToFileStep() {
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
   uploadOriginalDimensions = null;
+  uploadAvatarCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
@@ -2991,6 +2993,14 @@ async function handleUploadDimensionsStep() {
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
       sellerId: uploaderSellerId,
+      // #680/#681's own "upload flow itself" was deliberately deferred as
+      // separate scope — until now, category could only ever be set to
+      // 'avatar' via a raw API call, so nothing sold through the app UI
+      // could ever actually be bought and equipped. Omit rather than send
+      // 'placeholder' explicitly, so the server's own default (worker/
+      // index.js's createCatalogTemplate) stays the one source of truth
+      // for what an unchecked listing's category actually is.
+      category: uploadAvatarCategoryCheckbox.checked ? 'avatar' : undefined,
       priceCents,
       metadata,
     });
