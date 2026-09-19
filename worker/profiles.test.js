@@ -136,6 +136,35 @@ describe('Builders', () => {
     expect(ambiguous.body.builders).toHaveLength(2);
   });
 
+  // #715 (sub-issue of #711): GET /builders is now cursor-paginated
+  // (ascending on created_at/builder_id, same shape GET /auctions
+  // already uses) instead of always returning everyone. Paging through
+  // with a small limit should reassemble the exact same set (and order)
+  // a single unbounded-looking call (well under the default 100 cap)
+  // returns, with nextCursor turning null exactly on the last page.
+  it('paginates GET /builders with an ascending cursor', async () => {
+    await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Pagination Fixture A' }) });
+    await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Pagination Fixture B' }) });
+    await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Pagination Fixture C' }) });
+
+    const whole = await api('/builders');
+    expect(whole.body.nextCursor).toBeNull();
+
+    const paged = [];
+    let cursor;
+    for (;;) {
+      const query = new URLSearchParams({ limit: '1' });
+      if (cursor) query.set('cursor', cursor);
+      const page = await api(`/builders?${query}`);
+      expect(page.response.status).toBe(200);
+      expect(page.body.builders.length).toBeLessThanOrEqual(1);
+      paged.push(...page.body.builders);
+      if (!page.body.nextCursor) break;
+      cursor = page.body.nextCursor;
+    }
+    expect(paged.map((b) => b.builderId)).toEqual(whole.body.builders.map((b) => b.builderId));
+  });
+
   // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
   // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
   // session resolves *your* builder profile, mutation or not (per the
@@ -555,10 +584,13 @@ describe('Builders', () => {
     const lateClaim = await api('/landlets/pioneer-late-landlet/claim', late.session({ method: 'POST' }));
     expect(lateClaim.response.status).toBe(200);
 
-    const list = await api('/builders');
-    const lateAfter = list.body.builders.find((b) => b.builderId === late.builderId);
-    expect(lateAfter.isPioneer).toBe(false);
-    expect(lateAfter.pioneerRank).toBeNull();
+    // #715 gave GET /builders its own LIMIT (default 100) — the 100 filler
+    // rows above now fill that page entirely, so the late claimer (the
+    // 101st builder, oldest-first) would never show up in it. Check via
+    // their own GET /builders/me instead, unaffected by the cap.
+    const lateAfter = await api('/builders/me', late.session());
+    expect(lateAfter.body.builder.isPioneer).toBe(false);
+    expect(lateAfter.body.builder.pioneerRank).toBeNull();
   });
 
   // Found via backlog audit (#362): unlike every other public, repeatable
