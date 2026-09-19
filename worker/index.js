@@ -8390,9 +8390,9 @@ async function handleInstancePurchase(request, env, instanceId) {
     ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
-    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id);
+    return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
-  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input), null, false, buyerBuilder.builder_id);
+  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label), null, false, buyerBuilder.builder_id);
 }
 
 // Shared by the simulated path (handleInstancePurchase's own direct write)
@@ -8400,7 +8400,14 @@ async function handleInstancePurchase(request, env, instanceId) {
 // exact same commission math —
 // the only difference between them is WHERE this gets called from and
 // what happens with the resulting numbers, never how they're computed.
-function computePurchaseAmounts(template, input) {
+// #761: fallbackBuyerLabel is the resolved session buyerBuilder's own
+// label — the shipped in-world buy flow (#shop-buy-hint, src/main.js) never
+// sends an explicit buyerLabel in the request body at all, so without this
+// fallback every real purchase lands with buyer_label NULL, and the
+// review-eligibility check (requires an exact buyer_label match) then
+// rejects every real reviewer unconditionally. input.buyerLabel still wins
+// when a caller does supply one (e.g. a test exercising a specific label).
+function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
   const quantity = input.quantity === undefined ? 1 : positiveInteger(input.quantity, 'quantity');
   // Capped as a sanity bound against a malformed/abusive request producing
   // an absurd totalCents (and the higgles-balance/land-cap credit that
@@ -8412,7 +8419,7 @@ function computePurchaseAmounts(template, input) {
   // endpoint at all; checkRateLimit closes the other half of that gap
   // (repeated smaller requests instead of one large one).
   if (quantity > PURCHASE_MAX_QUANTITY) throw new HttpError(`quantity must be ${PURCHASE_MAX_QUANTITY} or fewer`, 400);
-  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : null;
+  const buyerLabel = input.buyerLabel ? labelValue(input.buyerLabel, 'buyerLabel') : (fallbackBuyerLabel || null);
 
   const unitPriceCents = template.price_cents;
   const totalCents = unitPriceCents * quantity;
@@ -8466,8 +8473,8 @@ function purchaseIdempotencyKey(instanceId, rawKey) {
   return `purchase:${instanceId}:${rawKey}`;
 }
 
-async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId) {
-  const amounts = computePurchaseAmounts(template, input);
+async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId, buyerBuilderLabel) {
+  const amounts = computePurchaseAmounts(template, input, buyerBuilderLabel);
   // #454: locked in at checkout time, same reasoning as every other amount
   // here — a digital good pays out instantly with no hold, so
   // handlePurchaseFinalize (and the orphaned-purchase fallback, which has

@@ -2128,17 +2128,25 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(400);
   });
 
-  it('reads quantity and buyerLabel from the request body, defaulting to 1 and anonymous', async () => {
+  it('reads quantity and buyerLabel from the request body, defaulting to 1 and the session builder\'s own label', async () => {
     const seller = await signupBuilder('purchase-body-seller');
     await createGreenbeltLandletWithArea('purchase-body-landlet', 1000);
     await claim('purchase-body-landlet', seller);
     await createTemplate('purchase-body-template', { priceCents: 1000 });
     await placeInstance('purchase-body-instance', 'purchase-body-landlet', 'purchase-body-template', seller);
 
-    // No body at all — should default rather than 415/400.
+    // No body at all — should default rather than 415/400. #761: buyerLabel
+    // defaults to the session's own resolved builder label, not null/
+    // anonymous — the in-world "Simulate Purchase" button (the only real
+    // buy path this app ships) never sends an explicit buyerLabel at all,
+    // so an anonymous default here meant no real purchase could ever back
+    // a product review (the review-eligibility check requires an exact
+    // buyer_label match).
     const defaulted = await api('/instances/purchase-body-instance/purchase', seller.session({ method: 'POST' }));
     expect(defaulted.response.status).toBe(201);
-    expect(defaulted.body.purchase).toMatchObject({ quantity: 1, buyerLabel: null, unitPriceCents: 1000, totalCents: 1000 });
+    expect(defaulted.body.purchase).toMatchObject({
+      quantity: 1, buyerLabel: seller.builder.label, unitPriceCents: 1000, totalCents: 1000,
+    });
 
     const withBody = await api('/instances/purchase-body-instance/purchase', seller.session({
       method: 'POST',
@@ -2159,6 +2167,33 @@ describe('Simulated purchases', () => {
       body: JSON.stringify({ buyerLabel: 'x'.repeat(101) }),
     }));
     expect(badBuyerLabel.response.status).toBe(400);
+  });
+
+  // #761: the in-world "Simulate Purchase" button (src/main.js) — the only
+  // real purchase path this app ships — never sends an explicit buyerLabel
+  // at all, so before this fix every real purchase landed anonymous
+  // (buyer_label NULL) and the review-eligibility check (an exact
+  // buyer_label match, worker/index.js) rejected every real reviewer
+  // unconditionally. This reproduces that exact path — a purchase POST with
+  // no buyerLabel in the body, same as the real button sends — then
+  // confirms the buyer can still leave a review under their own session
+  // builder's label.
+  it('lets a real buyer review the product after a purchase made with no explicit buyerLabel (#761)', async () => {
+    const buyer = await signupBuilder('review-eligibility-buyer');
+    await createGreenbeltLandletWithArea('review-eligibility-landlet', 1000);
+    await claim('review-eligibility-landlet', buyer);
+    await createTemplate('review-eligibility-template', { priceCents: 500 });
+    await placeInstance('review-eligibility-instance', 'review-eligibility-landlet', 'review-eligibility-template', buyer);
+
+    const purchased = await api('/instances/review-eligibility-instance/purchase', buyer.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    expect(purchased.body.purchase.buyerLabel).toBe(buyer.builder.label);
+
+    const reviewed = await api('/catalog/review-eligibility-template/reviews', {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: buyer.builder.label, rating: 5 }),
+    });
+    expect(reviewed.response.status).toBe(201);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded higgles amount', async () => {

@@ -4690,7 +4690,13 @@ Both fields are genuinely optional (unlike every other POST body in this
 API) — a missing or empty body just means "buy one," not a 400, since a
 purchase has no other required input beyond which instance is being
 bought. When present, `buyerLabel` is capped at 100 characters, same
-as sign-post/review `authorLabel`. On the simulated path, returns `201`
+as sign-post/review `authorLabel`. When absent, `buyerLabel` defaults to
+the caller's own session builder's label (#761) — not left anonymous —
+since the in-world "Simulate Purchase" button (the only real purchase
+path this app ships) never sends an explicit `buyerLabel` at all;
+defaulting to blank there meant no real purchase could ever back a
+product review (see "Product reviews" above's exact-`buyer_label`-match
+eligibility check). On the simulated path, returns `201`
 with the created `purchase`; on the real-money path, returns `200` with
 `requiresPayment: true` instead — see "Real-money checkout" below.
 
