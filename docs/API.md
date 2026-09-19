@@ -696,6 +696,16 @@ Unknown IDs are silently omitted rather than erroring; an empty/all-blank
 200 IDs per request (`400` past that), the same shape this file's
 catalog-batch handlers use to cap `templateIds`.
 
+`?label=` (#716) filters to an exact, case-insensitive label match instead
+— still every matching row, not just the first, since labels have no
+uniqueness constraint (migrations/0054's own comment). Used by the "Add
+friend" flow to resolve a typed name without pulling the whole roster
+client-side; unmatched or ambiguous still surfaces as a status message
+the same way it always has, just resolved server-side now. `ids` and
+`label` are independent filters — `ids` is checked first, so passing both
+would just be ignored down to the `ids` behavior; no caller does that
+today.
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the

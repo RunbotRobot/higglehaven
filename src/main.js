@@ -8919,9 +8919,8 @@ friendsAddBtn.addEventListener('click', async () => {
   friendsStatusEl.classList.remove('error');
   friendsAddBtn.disabled = true;
   try {
-    const builders = await fetchBuilders();
     const trimmed = label.trim();
-    const matches = builders.filter((b) => b.label.toLowerCase() === trimmed.toLowerCase());
+    const matches = await fetchBuilders({ label: trimmed });
     if (matches.length === 0) {
       friendsStatusEl.textContent = `No builder named "${trimmed}" found.`;
       friendsStatusEl.classList.add('error');

@@ -144,8 +144,9 @@ export async function fetchCatalog() {
   }
 }
 
-export async function fetchBuilders() {
-  const { builders } = await requestJson('/builders');
+export async function fetchBuilders({ label } = {}) {
+  const query = label ? `?${new URLSearchParams({ label }).toString()}` : '';
+  const { builders } = await requestJson(`/builders${query}`);
   return builders;
 }
 

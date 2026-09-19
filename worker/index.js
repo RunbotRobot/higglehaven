@@ -2029,7 +2029,16 @@ async function handleBuilders(request, env, db, route, url) {
       return json({ builders: results.map(builderFromRow) });
     }
 
-    const { results } = await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
+    // #716: an exact (case-insensitive) label lookup, for the "Add friend"
+    // flow to resolve a typed name without pulling the entire roster just
+    // to filter it client-side. Still returns every matching row, not just
+    // the first — labels have no uniqueness constraint (migrations/0054's
+    // own comment), and the frontend's own "multiple builders share this
+    // name" handling depends on seeing all of them.
+    const label = url.searchParams.get('label');
+    const { results } = label
+      ? await db.prepare('SELECT * FROM builders WHERE LOWER(label) = LOWER(?) ORDER BY created_at, builder_id').bind(label).all()
+      : await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
     // read, rather than on a schedule — the same pattern this app uses
     // everywhere else. Mutating each row in place with the freshly
