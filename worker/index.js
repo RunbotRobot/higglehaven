@@ -2637,7 +2637,30 @@ async function handleSellers(request, env, db, route, url) {
     await requireSeller(db, route[1]);
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
-    await db.prepare('DELETE FROM sellers WHERE seller_id = ?').bind(route[1]).run();
+
+    // #732: getOrCreateSellerForUser looks up by user_id, not seller_id — if
+    // this seller_id is deleted with real-money proceeds still unpaid, a
+    // later GET /sellers/me mints a brand-new seller_id (Stripe account
+    // unset) and the old seller_id's unpaid purchases become unreachable
+    // through the app forever, with no record left of which Stripe account
+    // the money is sitting in. Same "don't strand real money" guard the
+    // builder-deletion handler above already has for auction payouts —
+    // folded into the DELETE's own WHERE clause (not a separate SELECT
+    // first) to close the same check-then-delete race that guard's own
+    // comment calls out.
+    const { meta } = await db.prepare(`
+      DELETE FROM sellers
+      WHERE seller_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM purchases
+          WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND paid_out_at IS NULL AND refunded_at IS NULL
+        )
+    `).bind(route[1], route[1]).run();
+    if (meta.changes === 0) {
+      const stillExists = await db.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(route[1]).first();
+      if (!stillExists) throw new HttpError('Seller not found', 404);
+      throw new HttpError("Cannot delete this seller while a real-money purchase's proceeds are still unpaid — request a payout first", 409);
+    }
     return json({ deleted: true });
   }
 

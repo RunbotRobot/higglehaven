@@ -2699,6 +2699,84 @@ describe('Simulated purchases', () => {
     });
   });
 
+  // #732: unlike DELETE /api/builders/:builderId (which already guards a
+  // pending auction payout), DELETE /api/sellers/:sellerId had no guard at
+  // all against real-money proceeds still owed to the seller — deleting it
+  // strands that money, since getOrCreateSellerForUser is keyed by user_id
+  // and mints a brand-new, Stripe-account-less seller_id on next lookup.
+  describe('Seller deletion (#732)', () => {
+    it('rejects deleting a seller with an unpaid real-money purchase, and allows it again once paid out', async () => {
+      const seller = await signupSeller('unpaid-payout-delete-seller');
+      const builder = await signupBuilder('unpaid-payout-delete-builder');
+      await createGreenbeltLandletWithArea('unpaid-payout-delete-landlet', 1000);
+      await claim('unpaid-payout-delete-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'unpaid-payout-delete-template',
+          name: 'Product with an unpaid real-money sale',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 3000,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('unpaid-payout-delete-instance', 'unpaid-payout-delete-landlet', 'unpaid-payout-delete-template', builder);
+
+      const purchased = await api('/instances/unpaid-payout-delete-instance/purchase', builder.session({ method: 'POST' }));
+      const { purchaseId } = purchased.body.purchase;
+
+      // Stands in for a real-money purchase handlePurchaseFinalize would
+      // have written (same technique as the refund tests above) — the
+      // deletion guard only cares that payment_intent_id is set and
+      // paid_out_at/refunded_at are not.
+      await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
+        .bind('pi_unpaid_payout_delete_test', purchaseId).run();
+
+      const blocked = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(blocked.response.status).toBe(409);
+      expect(blocked.body).toEqual({
+        error: "Cannot delete this seller while a real-money purchase's proceeds are still unpaid — request a payout first",
+      });
+      const stillThere = await env.DB.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?')
+        .bind(seller.sellerId).first();
+      expect(stillThere).not.toBeNull();
+
+      // Once the payout actually lands, deletion is allowed again — same
+      // "guard released, not stuck" shape as the builder-deletion guards.
+      await env.DB.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ?')
+        .bind('2024-01-01T00:00:00.000Z', purchaseId).run();
+      const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+    });
+
+    it('still allows deleting a seller whose only purchase is a simulated (no payment_intent_id) sale', async () => {
+      const seller = await signupSeller('sim-sale-deletable-seller');
+      const builder = await signupBuilder('sim-sale-deletable-builder');
+      await createGreenbeltLandletWithArea('sim-sale-deletable-landlet', 1000);
+      await claim('sim-sale-deletable-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'sim-sale-deletable-template',
+          name: 'Simulated-sale product',
+          color: '#654321',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 1500,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('sim-sale-deletable-instance', 'sim-sale-deletable-landlet', 'sim-sale-deletable-template', builder);
+      const purchased = await api('/instances/sim-sale-deletable-instance/purchase', builder.session({ method: 'POST' }));
+      expect(purchased.body.purchase.paymentIntentId).toBeNull();
+
+      const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+    });
+  });
+
   // #454: seller payout/cash-out hold policy. Same limitation as the
   // "Real-money checkout"/"Real-money refunds" describes above — this
   // suite never configures STRIPE_SECRET_KEY, so the actual Stripe
