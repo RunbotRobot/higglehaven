@@ -5988,6 +5988,30 @@ async function handleTax(request, env, db, route, url) {
     if (result.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
     return json({ formId, status: 'filed', filedAt, filingReference });
   }
+  // #763: the schema (migrations/0081) has anticipated a 'voided' terminal
+  // state from the start, but nothing ever set it -- an admin who approves
+  // a form in error (or a draft that turns out to be wrong, e.g. a bad
+  // income snapshot or a since-discovered duplicate/fraud account) had no
+  // way to correct it, only /file to push it further forward. Deliberately
+  // NOT reachable from 'filed': once actually transmitted to the IRS,
+  // "voiding" it here would be misleading -- a real correction there needs
+  // an actual corrected-1099 filing process, out of scope for this record.
+  if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'void') {
+    if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    const formId = route[2];
+    const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    if (!form) throw new HttpError('Tax form not found', 404);
+    if (form.status !== 'draft' && form.status !== 'approved') {
+      throw new HttpError(`Cannot void a form in status "${form.status}"`, 409);
+    }
+    const updatedAt = new Date().toISOString();
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'voided', updated_at = ?
+      WHERE form_id = ? AND status IN ('draft', 'approved')
+    `).bind(updatedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer draft or approved', 409);
+    return json({ formId, status: 'voided', updatedAt });
+  }
   return json({ error: 'Not found' }, 404);
 }
 
