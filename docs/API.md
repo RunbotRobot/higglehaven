@@ -1092,6 +1092,49 @@ instead of its seller one. A builder and a seller profile on the same
 account have completely independent Stripe Connect accounts; submitting
 one's onboarding never touches the other's.
 
+### `POST /api/auth/stripe-webhook`
+
+#766: `stripe_onboarding_status`/`stripe_requirements_due` on both the
+`sellers`/`builders` GET/POST endpoints above are only ever written when
+the account holder actively resubmits their onboarding form — nothing
+re-checked Stripe on its own, so a previously-`complete` account that
+Stripe later disables (a routine occurrence: re-KYC requests, compliance
+holds, fraud review) read as "fully set up" indefinitely, including at
+the real-money checkout-eligibility gate in
+`POST /api/instances/:id/purchase`.
+
+Stripe's own server-to-server delivery of an `account.updated` event —
+unauthenticated (no session cookie to check), verified instead via the
+signature scheme Stripe documents
+([docs.stripe.com/webhooks#verify-manually](https://docs.stripe.com/webhooks#verify-manually)):
+the `Stripe-Signature` header carries `t=<timestamp>,v1=<hex-hmac>`, and
+the HMAC-SHA256 (keyed by `STRIPE_WEBHOOK_SECRET`) is computed over
+`${timestamp}.${rawBody}` and compared with the same constant-time
+`timingSafeEqual` the `didit-webhook` endpoint above uses. `401` on a
+missing or wrong signature, `503` if `STRIPE_WEBHOOK_SECRET` isn't
+configured.
+
+```sh
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+(A separate Worker secret from `STRIPE_SECRET_KEY`/`STRIPE_PUBLISHABLE_KEY`
+above — the owner still needs to register this endpoint's URL in the
+Stripe dashboard and copy the resulting signing secret here before any of
+this runs for real; the code itself doesn't need to wait for that.)
+
+Only the `account.updated` event type is handled (everything else is a
+no-op `200`). The account id on the event is looked up against both
+`sellers` and `builders` — a given Stripe Custom account belongs to
+exactly one of the two, never both, and the event payload alone doesn't
+say which role created it — and whichever row matches gets its
+`stripe_onboarding_status`/`stripe_requirements_due`/`stripe_updated_at`
+re-derived from the event the same way the `POST` onboarding handlers
+above do (`deriveStripeOnboardingStatus`). An account id matching neither
+table is a safe no-op `200`, not an error — a normal outcome for events on
+Stripe accounts this app never created (a test event in the dashboard, a
+webhook still configured after an account was deleted, etc).
+
 ### `GET /api/builders/me/redeem`
 ### `POST /api/builders/me/redeem`
 
