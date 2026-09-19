@@ -458,7 +458,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'sellers') {
-    return handleSellers(request, env, env.DB, route);
+    return handleSellers(request, env, env.DB, route, url);
   }
 
   if (route[0] === 'tax') {
@@ -2036,9 +2036,36 @@ async function handleBuilders(request, env, db, route, url) {
     // own comment), and the frontend's own "multiple builders share this
     // name" handling depends on seeing all of them.
     const label = url.searchParams.get('label');
-    const { results } = label
-      ? await db.prepare('SELECT * FROM builders WHERE LOWER(label) = LOWER(?) ORDER BY created_at, builder_id').bind(label).all()
-      : await db.prepare('SELECT * FROM builders ORDER BY created_at, builder_id').all();
+    if (label) {
+      const { results } = await db.prepare(
+        'SELECT * FROM builders WHERE LOWER(label) = LOWER(?) ORDER BY created_at, builder_id',
+      ).bind(label).all();
+      await recomputeLandCapsBatch(db, results);
+      return json({ builders: results.map(builderFromRow) });
+    }
+
+    // #715 (sub-issue of #711): cursor-paginated, same ascending
+    // (created_at, id) shape GET /api/auctions already uses — kept
+    // ascending (unlike notifications' newest-first convention) since
+    // that's this endpoint's own pre-existing order and nothing in #711's
+    // investigation found a reason to change it. Landed only once #716/
+    // #717 gave every real frontend caller its own bounded lookup instead
+    // of assuming this list stays unbounded (see #711's own comment).
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (cursor) {
+      conditions.push('(created_at > ? OR (created_at = ? AND builder_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM builders ${where}
+      ORDER BY created_at, builder_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
     // Land cap (docs/SPEC.md §3) is recomputed lazily here, on every list
     // read, rather than on a schedule — the same pattern this app uses
     // everywhere else. Mutating each row in place with the freshly
@@ -2050,8 +2077,12 @@ async function handleBuilders(request, env, db, route, url) {
     // into an N+1 query (3+ awaited round trips per builder) that gets
     // linearly slower as the builder count grows, which is exactly what a
     // "list everyone" endpoint can't afford.
-    await recomputeLandCapsBatch(db, results);
-    return json({ builders: results.map(builderFromRow) });
+    await recomputeLandCapsBatch(db, page);
+    const last = page.at(-1);
+    return json({
+      builders: page.map(builderFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.builder_id) : null,
+    });
   }
 
   if (request.method === 'POST' && route.length === 1) {
@@ -2530,7 +2561,7 @@ async function existingSellerIds(db, sellerIds) {
 // any of their existing templates' seller_id pointing at an ID no longer
 // in the roster, the same way a template can already have a null
 // seller_id for an unclaimed custom upload.
-async function handleSellers(request, env, db, route) {
+async function handleSellers(request, env, db, route, url) {
   if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
     return handleSellerStripeAccount(request, env, db);
   }
@@ -2544,8 +2575,30 @@ async function handleSellers(request, env, db, route) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
-    const { results } = await db.prepare('SELECT * FROM sellers ORDER BY created_at, seller_id').all();
-    return json({ sellers: results.map(sellerFromRow) });
+    // #715 (sub-issue of #711): same cursor-pagination shape as
+    // GET /api/builders just above — see that endpoint's own comment.
+    // No frontend caller of GET /api/sellers exists today, so there's no
+    // unbounded-response assumption to fix first, unlike builders.
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = [];
+    const bindings = [];
+    if (cursor) {
+      conditions.push('(created_at > ? OR (created_at = ? AND seller_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { results } = await db.prepare(`
+      SELECT * FROM sellers ${where}
+      ORDER BY created_at, seller_id LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      sellers: page.map(sellerFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.seller_id) : null,
+    });
   }
 
   if (request.method === 'POST' && route.length === 1) {

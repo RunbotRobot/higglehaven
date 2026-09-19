@@ -684,8 +684,16 @@ plain create/rename), never a stale or silently-wrong figure.
 
 ### `GET /api/builders`
 
-Lists every builder, oldest first. Not paginated — this is a small,
-dev-scale roster, not a growing content collection.
+Lists builders, oldest first. Cursor-paginated the same way
+`GET /api/auctions` is (#715, sub-issue of #711) — `?limit=` (1-100,
+default 100) and an opaque `?cursor=` from a previous page's
+`nextCursor`, ascending on `(createdAt, builderId)` so "created after the
+last row already seen" is a strict greater-than on both; unlike
+`GET /api/notifications`'s newest-first convention, this keeps its
+pre-existing oldest-first order. Landed only once every real frontend
+caller had its own bounded lookup instead of assuming this list stayed
+unbounded — see `ids`/`label` below, and #711's own comment for the full
+investigation.
 
 An optional `ids` query param (comma-separated builder IDs, e.g.
 `?ids=builder-a,builder-b`) narrows the response to exactly those builders
@@ -917,8 +925,11 @@ same login-wall/fallback-to-Shop behavior "Builders" above describes for
 
 ### `GET /api/sellers`
 
-Lists every seller, oldest first. Not paginated, same reasoning as
-`GET /api/builders`.
+Lists sellers, oldest first. Cursor-paginated the same way
+`GET /api/builders` is (#715) — `?limit=`/`?cursor=`, ascending on
+`(createdAt, sellerId)`. No frontend caller of this endpoint exists
+today, so unlike `GET /api/builders` there was no unbounded-response
+assumption to fix first.
 
 ### `POST /api/sellers`
 
