@@ -1199,6 +1199,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (hasUnownedTemplate) {
       await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
+    await assertCatalogTemplatesDeletable(db, templateIds);
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
     ).bind(templateId)));
@@ -1606,6 +1607,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       // anonymous flood (#520).
       await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
+    await assertCatalogTemplatesDeletable(db, [route[1]]);
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
@@ -8935,6 +8937,48 @@ async function assertReferencesExist(db, table, column, values, field) {
   const found = new Set(results.map((row) => row.value));
   const missing = uniqueValues.find((value) => !found.has(value));
   if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
+}
+
+// #729: saved_layout_instances (migrations/0080) and version_instances
+// (migrations/0007) both keep an immutable historical snapshot of a
+// template's placement, and both intentionally use ON DELETE RESTRICT (a
+// snapshot should never silently lose which template it depicted) — so a
+// template referenced only by one of these, with zero live
+// placed_instances left, still fell through to catalog delete's generic
+// databaseHttpError 409 with no way to tell it apart from a template
+// that's genuinely still placed somewhere. Pre-checked here so the caller
+// gets a message pointing at the actual (often invisible to them — a
+// stranger's saved layout, or an old version of a landlet they don't own)
+// blocker instead of the generic "still in use".
+async function assertCatalogTemplatesDeletable(db, templateIds) {
+  const uniqueValues = [...new Set(templateIds)];
+  const placeholders = uniqueValues.map(() => '?').join(', ');
+  const [inSavedLayouts, inVersions] = await Promise.all([
+    db.prepare(
+      `SELECT DISTINCT template_id FROM saved_layout_instances WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
+    db.prepare(
+      `SELECT DISTINCT template_id FROM version_instances WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
+  ]);
+  const blockedBySavedLayout = new Set(inSavedLayouts.results.map((row) => row.template_id));
+  const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
+  for (const templateId of uniqueValues) {
+    if (blockedBySavedLayout.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still referenced by a saved layout `
+        + '(a builder has it saved for reuse, even if nothing placed uses it right now)',
+        409,
+      );
+    }
+    if (blockedByVersion.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still referenced by a landlet's version history `
+        + '(a past published version snapshot used it, even if the current layout does not)',
+        409,
+      );
+    }
+  }
 }
 
 // Shared by assertCropWithinTemplateBounds and assertValidExtensible below

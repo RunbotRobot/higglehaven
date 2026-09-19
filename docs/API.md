@@ -1543,9 +1543,15 @@ requirement already bounds it.
 ### `DELETE /api/catalog/:templateId`
 
 If the template has a non-null `sellerId`, requires a session logged in as
-that seller (`403` otherwise). Deletes a catalog template. D1 foreign-key
-behavior may reject deletion while placed instances still reference the
-template.
+that seller (`403` otherwise). Deletes a catalog template. Rejects with `409`
+if any live `placed_instances` row still references the template (a generic
+"Referenced resource does not exist or is still in use" from D1's foreign-key
+behavior), or with a specific `409` if the template is referenced only by a
+`saved_layout_instances` row (a builder's saved layout, possibly one that
+isn't visible to the caller at all — see #729) or a `version_instances` row
+(a landlet's past published version history) — both of those are immutable
+snapshot tables, kept on `ON DELETE RESTRICT` deliberately, so the template
+can't be deleted out from under them even after every live instance is gone.
 
 Response:
 
@@ -1923,6 +1929,14 @@ need it or not.
   409 from `databaseHttpError`, reworded on the frontend into "still placed
   somewhere — remove those instances first, or Duplicate to edit a copy
   instead") rather than silently orphaning that instance's rendering.
+  `saved_layout_instances` and `version_instances` reference
+  `catalog_templates` the same restrictive way, but are immutable historical
+  snapshots rather than something with live instances to remove — the worker
+  pre-checks those two (`assertCatalogTemplatesDeletable`, #729) and returns
+  a distinct message for each, reworded on the frontend into "still saved in
+  someone's layout library" / "used in a landlet's past published version"
+  rather than the generic wording above, which would send the seller looking
+  for instances to remove that don't exist.
 
 The Extensibility panel itself shows one row per axis (Width/x, Depth/y,
 Height/z) — a checkbox plus a minimum-length field each, independent of the
