@@ -2938,6 +2938,33 @@ describe('Simulated purchases', () => {
       expect(reShipped.response.status).toBe(400);
     });
 
+    // #749: handlePurchaseRefund treats refunded_at as authoritative (it
+    // rejects a second refund), but mark-shipped and confirm-delivery never
+    // checked it at all — a refunded physical order could still be marked
+    // shipped, or delivery-confirmed via the buyer's own token link, leaving
+    // contradictory state on the purchase row.
+    it('rejects marking a refunded purchase as shipped, or confirming its delivery', async () => {
+      const builder = await signupBuilder('payout-refunded-shipped-builder');
+      const seller = await createConnectedSeller('payout-refunded-shipped-seller');
+      const rawToken = `test-refunded-delivery-token-${crypto.randomUUID()}`;
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
+      await env.DB.prepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
+        .bind(purchaseId).run();
+
+      const shipRejected = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(shipRejected.response.status).toBe(400);
+      const row = await env.DB.prepare('SELECT shipped_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.shipped_at).toBeNull();
+
+      const confirmRejected = await api('/purchases/confirm-delivery', {
+        method: 'POST', body: JSON.stringify({ token: rawToken }),
+      });
+      expect(confirmRejected.response.status).toBe(400);
+      const rowAfterConfirm = await env.DB.prepare('SELECT delivery_confirmed_at FROM purchases WHERE purchase_id = ?')
+        .bind(purchaseId).first();
+      expect(rowAfterConfirm.delivery_confirmed_at).toBeNull();
+    });
+
     it('rejects marking a digital good or a simulated purchase as shipped', async () => {
       const builder = await signupBuilder('payout-mark-shipped-reject-builder');
       const seller = await createConnectedSeller('payout-mark-shipped-reject-seller');

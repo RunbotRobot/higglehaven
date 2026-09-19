@@ -8766,6 +8766,9 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (purchase.shipped_at) {
     throw new HttpError('This purchase is already marked shipped', 400);
   }
+  if (purchase.refunded_at) {
+    throw new HttpError('This purchase has been refunded', 400);
+  }
   await db.prepare('UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
     .bind(purchaseId).run();
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -8777,9 +8780,10 @@ async function handlePurchaseConfirmDelivery(request, env) {
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const tokenHash = await sha256Hex(token);
-  const purchase = await db.prepare('SELECT purchase_id, delivery_confirmed_at FROM purchases WHERE delivery_confirm_token_hash = ?')
+  const purchase = await db.prepare('SELECT purchase_id, delivery_confirmed_at, refunded_at FROM purchases WHERE delivery_confirm_token_hash = ?')
     .bind(tokenHash).first();
   if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
+  if (purchase.refunded_at) throw new HttpError('This purchase has been refunded.', 400);
   // Idempotent — clicking an already-confirmed link again (a second visit,
   // a bookmark) is a no-op, not an error.
   if (!purchase.delivery_confirmed_at) {

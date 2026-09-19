@@ -4403,7 +4403,7 @@ function renderSellerList() {
         // — this is the seller's own side of starting that fallback clock.
         // Neither a digital good (nothing to ship) nor a simulated
         // (higgles) sale (no real Stripe balance to ever hold) shows this.
-        if (purchase.paymentIntentId && !purchase.isDigitalGood) {
+        if (purchase.paymentIntentId && !purchase.isDigitalGood && !purchase.refundedAt) {
           const shipping = document.createElement('div');
           shipping.className = 'product-sale-row-shipping';
           if (purchase.deliveryConfirmedAt) {
