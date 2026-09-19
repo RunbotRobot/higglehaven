@@ -90,6 +90,7 @@ import {
   startAuction,
   fetchAuctions,
   fetchAllAuctions,
+  fetchAuction,
   fetchAuctionBids,
   placeBid,
   resolveAuctionNow,
@@ -5923,136 +5924,163 @@ async function renderAuctionSection() {
       return;
     }
     for (const auction of auctions) {
-      const row = document.createElement('div');
-      row.className = 'auction-row';
-      const info = document.createElement('div');
-      info.className = 'auction-row-info';
-      info.textContent = formatAuctionSummary(auction);
-      row.appendChild(info);
-
-      // Bid history — GET /auctions already gives every row its own
-      // bidCount (auctionsFromRowsBatch), so this button only renders once
-      // there's actually something to show. The full per-bid list
-      // (amount, bidder, timestamp) itself is fetched lazily via
-      // fetchAuctionBids on first expand, not eagerly for every row in the
-      // list — same "don't fetch what nobody asked to see yet" shape as
-      // the rest of this settings panel.
-      if (auction.bidCount > 0) {
-        const bidHistoryToggle = document.createElement('button');
-        bidHistoryToggle.type = 'button';
-        bidHistoryToggle.className = 'auction-bid-history-btn';
-        bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
-        const bidHistoryList = document.createElement('div');
-        bidHistoryList.className = 'auction-bid-history';
-        bidHistoryList.hidden = true;
-        bidHistoryToggle.addEventListener('click', async () => {
-          if (!bidHistoryList.hidden) {
-            bidHistoryList.hidden = true;
-            bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
-            return;
-          }
-          bidHistoryToggle.disabled = true;
-          bidHistoryList.hidden = false;
-          bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
-          try {
-            const bids = await fetchAuctionBids(auction.auctionId);
-            // Bidder labels resolved via the batch-by-ids lookup (#717/
-            // #720), scoped to just the distinct bidders on this one
-            // auction rather than the whole roster.
-            const labels = new Map(
-              (await fetchBuildersByIds(bids.map((bid) => bid.bidderBuilderId)))
-                .map((b) => [b.builderId, b.label]),
-            );
-            bidHistoryList.innerHTML = '';
-            // Already highest-first from the server (ORDER BY amount_cents
-            // DESC, created_at in handleAuctionBids) — no client-side sort
-            // needed.
-            for (const bid of bids) {
-              const bidRow = document.createElement('div');
-              bidRow.className = 'auction-bid-history-row';
-              const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
-              bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
-              bidHistoryList.appendChild(bidRow);
-            }
-            bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
-          } catch (err) {
-            bidHistoryList.innerHTML = '';
-            const errNote = document.createElement('div');
-            errNote.className = 'settings-empty-note';
-            errNote.textContent = err.message || 'Could not load bid history.';
-            bidHistoryList.appendChild(errNote);
-          } finally {
-            bidHistoryToggle.disabled = false;
-          }
-        });
-        row.appendChild(bidHistoryToggle);
-        row.appendChild(bidHistoryList);
-      }
-
-      // GET /auctions already resolves anything past its end time before
-      // this list is built (see resolveDueAuctions in worker/index.js) —
-      // this button exists only for the narrow gap between that moment
-      // and the *next* fetch, e.g. a second tab that loaded the list a
-      // moment before this one's own timer ran out. Anyone can trigger
-      // it; resolution is an objective time-based fact, not a seller- or
-      // bidder-specific action.
-      const isPastDue = new Date(auction.endsAt).getTime() <= Date.now();
-      if (isPastDue) {
-        const resolveBtn = document.createElement('button');
-        resolveBtn.type = 'button';
-        resolveBtn.className = 'auction-resolve-btn';
-        resolveBtn.textContent = 'Resolve Now';
-        resolveBtn.addEventListener('click', async () => {
-          resolveBtn.disabled = true;
-          try {
-            await resolveAuctionNow(auction.auctionId);
-            await renderAuctionList();
-            await renderStartSection();
-          } catch (err) {
-            alert(err.message || 'Could not resolve this auction.');
-            resolveBtn.disabled = false;
-          }
-        });
-        row.appendChild(resolveBtn);
-      } else if (auction.sellerBuilderId !== builderId) {
-        // A seller doesn't bid on their own listing — same row, just no
-        // bid form, rather than a disabled one (nothing useful to type
-        // into it).
-        const form = document.createElement('div');
-        form.className = 'auction-row-bid-form';
-        const minCents = auction.highestBidCents !== null ? auction.highestBidCents + 1 : auction.startingBidCents;
-        const bidInput = document.createElement('input');
-        bidInput.type = 'number';
-        bidInput.className = 'auction-row-bid-input';
-        bidInput.min = (minCents / 100).toFixed(2);
-        bidInput.step = '0.01';
-        bidInput.placeholder = `${formatHiggles(minCents)}+`;
-        form.appendChild(bidInput);
-        const bidBtn = document.createElement('button');
-        bidBtn.type = 'button';
-        bidBtn.className = 'auction-bid-btn';
-        bidBtn.textContent = 'Place Bid';
-        bidBtn.addEventListener('click', async () => {
-          const dollars = Number(bidInput.value);
-          if (!Number.isFinite(dollars) || dollars < 0) {
-            alert('Enter a bid amount of zero or more.');
-            return;
-          }
-          bidBtn.disabled = true;
-          try {
-            await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
-            await renderAuctionList();
-            await renderStartSection();
-          } catch (err) {
-            alert(err.message || 'Could not place bid.');
-            bidBtn.disabled = false;
-          }
-        });
-        form.appendChild(bidBtn);
-        row.appendChild(form);
-      }
-      auctionList.appendChild(row);
+      auctionList.appendChild(buildAuctionRow(auction));
     }
+  }
+
+  // Split out of renderAuctionList so a single row can be re-fetched and
+  // swapped in place (see the Refresh button below) without re-rendering
+  // — and re-requesting bid history for — every other row in the list.
+  function buildAuctionRow(auction) {
+    const row = document.createElement('div');
+    row.className = 'auction-row';
+    const info = document.createElement('div');
+    info.className = 'auction-row-info';
+    info.textContent = formatAuctionSummary(auction);
+    row.appendChild(info);
+
+    // Single-auction detail refetch (fetchAuction, #733) — a per-row
+    // way to see this one auction's own current status/highest bid
+    // without waiting for or triggering the full-list refresh already
+    // used after placeBid/resolveAuctionNow below.
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'auction-refresh-btn';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      try {
+        const updated = await fetchAuction(auction.auctionId);
+        row.replaceWith(buildAuctionRow(updated));
+      } catch (err) {
+        alert(err.message || 'Could not refresh this auction.');
+        refreshBtn.disabled = false;
+      }
+    });
+    row.appendChild(refreshBtn);
+
+    // Bid history — GET /auctions already gives every row its own
+    // bidCount (auctionsFromRowsBatch), so this button only renders once
+    // there's actually something to show. The full per-bid list
+    // (amount, bidder, timestamp) itself is fetched lazily via
+    // fetchAuctionBids on first expand, not eagerly for every row in the
+    // list — same "don't fetch what nobody asked to see yet" shape as
+    // the rest of this settings panel.
+    if (auction.bidCount > 0) {
+      const bidHistoryToggle = document.createElement('button');
+      bidHistoryToggle.type = 'button';
+      bidHistoryToggle.className = 'auction-bid-history-btn';
+      bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+      const bidHistoryList = document.createElement('div');
+      bidHistoryList.className = 'auction-bid-history';
+      bidHistoryList.hidden = true;
+      bidHistoryToggle.addEventListener('click', async () => {
+        if (!bidHistoryList.hidden) {
+          bidHistoryList.hidden = true;
+          bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+          return;
+        }
+        bidHistoryToggle.disabled = true;
+        bidHistoryList.hidden = false;
+        bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+        try {
+          const bids = await fetchAuctionBids(auction.auctionId);
+          // Bidder labels resolved via the batch-by-ids lookup (#717/
+          // #720), scoped to just the distinct bidders on this one
+          // auction rather than the whole roster.
+          const labels = new Map(
+            (await fetchBuildersByIds(bids.map((bid) => bid.bidderBuilderId)))
+              .map((b) => [b.builderId, b.label]),
+          );
+          bidHistoryList.innerHTML = '';
+          // Already highest-first from the server (ORDER BY amount_cents
+          // DESC, created_at in handleAuctionBids) — no client-side sort
+          // needed.
+          for (const bid of bids) {
+            const bidRow = document.createElement('div');
+            bidRow.className = 'auction-bid-history-row';
+            const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
+            bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
+            bidHistoryList.appendChild(bidRow);
+          }
+          bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
+        } catch (err) {
+          bidHistoryList.innerHTML = '';
+          const errNote = document.createElement('div');
+          errNote.className = 'settings-empty-note';
+          errNote.textContent = err.message || 'Could not load bid history.';
+          bidHistoryList.appendChild(errNote);
+        } finally {
+          bidHistoryToggle.disabled = false;
+        }
+      });
+      row.appendChild(bidHistoryToggle);
+      row.appendChild(bidHistoryList);
+    }
+
+    // GET /auctions already resolves anything past its end time before
+    // this list is built (see resolveDueAuctions in worker/index.js) —
+    // this button exists only for the narrow gap between that moment
+    // and the *next* fetch, e.g. a second tab that loaded the list a
+    // moment before this one's own timer ran out. Anyone can trigger
+    // it; resolution is an objective time-based fact, not a seller- or
+    // bidder-specific action.
+    const isPastDue = new Date(auction.endsAt).getTime() <= Date.now();
+    if (isPastDue) {
+      const resolveBtn = document.createElement('button');
+      resolveBtn.type = 'button';
+      resolveBtn.className = 'auction-resolve-btn';
+      resolveBtn.textContent = 'Resolve Now';
+      resolveBtn.addEventListener('click', async () => {
+        resolveBtn.disabled = true;
+        try {
+          await resolveAuctionNow(auction.auctionId);
+          await renderAuctionList();
+          await renderStartSection();
+        } catch (err) {
+          alert(err.message || 'Could not resolve this auction.');
+          resolveBtn.disabled = false;
+        }
+      });
+      row.appendChild(resolveBtn);
+    } else if (auction.sellerBuilderId !== builderId) {
+      // A seller doesn't bid on their own listing — same row, just no
+      // bid form, rather than a disabled one (nothing useful to type
+      // into it).
+      const form = document.createElement('div');
+      form.className = 'auction-row-bid-form';
+      const minCents = auction.highestBidCents !== null ? auction.highestBidCents + 1 : auction.startingBidCents;
+      const bidInput = document.createElement('input');
+      bidInput.type = 'number';
+      bidInput.className = 'auction-row-bid-input';
+      bidInput.min = (minCents / 100).toFixed(2);
+      bidInput.step = '0.01';
+      bidInput.placeholder = `${formatHiggles(minCents)}+`;
+      form.appendChild(bidInput);
+      const bidBtn = document.createElement('button');
+      bidBtn.type = 'button';
+      bidBtn.className = 'auction-bid-btn';
+      bidBtn.textContent = 'Place Bid';
+      bidBtn.addEventListener('click', async () => {
+        const dollars = Number(bidInput.value);
+        if (!Number.isFinite(dollars) || dollars < 0) {
+          alert('Enter a bid amount of zero or more.');
+          return;
+        }
+        bidBtn.disabled = true;
+        try {
+          await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
+          await renderAuctionList();
+          await renderStartSection();
+        } catch (err) {
+          alert(err.message || 'Could not place bid.');
+          bidBtn.disabled = false;
+        }
+      });
+      form.appendChild(bidBtn);
+      row.appendChild(form);
+    }
+    return row;
   }
 
   renderStartSection();
