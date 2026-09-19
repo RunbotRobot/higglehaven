@@ -1109,6 +1109,33 @@ describe('Worker API', () => {
     expect(after.water).toBe((before.water || 0) + 1);
   });
 
+  // #755: a water landlet can never become greenbelt or be claimed, so it
+  // shouldn't move the reported/gating ratio at all -- if it only came out
+  // of the numerator (the bug this regresses) while staying in the
+  // denominator, adding one would silently shrink greenbeltRatio even
+  // though nothing claimable actually changed.
+  it("excludes water landlets from the greenbelt ratio's denominator too, not just its numerator", async () => {
+    await createGreenbeltLandlet('greenbelt-ratio-water-buildable-landlet', { x: 6000, y: 2000 });
+    const beforeWater = (await api('/world')).body.world.landletCounts;
+
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'greenbelt-ratio-water-water-landlet',
+        name: 'Greenbelt ratio water landlet',
+        areaM2: 1000,
+        status: 'greenbelt',
+        landType: 'water',
+        center: { x: 5000, y: 1000 },
+      }),
+    }));
+    const afterWater = (await api('/world')).body.world.landletCounts;
+
+    expect(afterWater.total).toBe(beforeWater.total + 1);
+    expect(afterWater.greenbelt).toBe(beforeWater.greenbelt);
+    expect(afterWater.greenbeltRatio).toBe(beforeWater.greenbeltRatio);
+  });
+
   it('returns useful client errors for malformed JSON and D1 conflicts', async () => {
     const malformedJson = await api('/landlets', adminSession({
       method: 'POST',
