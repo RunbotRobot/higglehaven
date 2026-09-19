@@ -3011,25 +3011,55 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 // even once shared; sharing never transfers ownership.
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
     // Two independent listings, not one filtered by both: `shared=true` is
     // the community tab (every builder's shared bundles, not just one
     // builder's), while `builderId` alone is "my bundles" (everything this
     // builder owns, shared or not) — a builder's own shared bundles should
     // keep showing in their own private list too, not move out of it.
     if (url.searchParams.get('shared') === 'true') {
+      const conditions = ['shared = 1'];
+      const bindings = [];
+      // Newest-first, same tiebreak-on-id shape GET /api/notifications
+      // already uses for its own DESC cursor pagination.
+      if (cursor) {
+        conditions.push('(created_at < ? OR (created_at = ? AND bundle_id < ?))');
+        bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      }
       const { results } = await db.prepare(`
-        SELECT * FROM bundles WHERE shared = 1 ORDER BY created_at DESC LIMIT 100
-      `).all();
-      return json({ bundles: results.map(bundleFromRow) });
+        SELECT * FROM bundles WHERE ${conditions.join(' AND ')}
+        ORDER BY created_at DESC, bundle_id DESC LIMIT ?
+      `).bind(...bindings, limit + 1).all();
+      const hasMore = results.length > limit;
+      const page = results.slice(0, limit);
+      const last = page.at(-1);
+      return json({
+        bundles: page.map(bundleFromRow),
+        nextCursor: hasMore ? encodeCursor(last.created_at, last.bundle_id) : null,
+      });
     }
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderIdParam = url.searchParams.get('builderId');
     const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
     assertOwner(builderId, sessionBuilder.builder_id, 'Not your bundles');
+    const conditions = ['builder_id = ?'];
+    const bindings = [builderId];
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND bundle_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
     const { results } = await db.prepare(`
-      SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC LIMIT 100
-    `).bind(builderId).all();
-    return json({ bundles: results.map(bundleFromRow) });
+      SELECT * FROM bundles WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, bundle_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      bundles: page.map(bundleFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.bundle_id) : null,
+    });
   }
 
   if (request.method === 'POST' && route.length === 1) {

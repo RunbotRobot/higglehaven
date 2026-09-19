@@ -3307,15 +3307,23 @@ Two independent listings, not one filtered by both:
 
 - `?builderId=X` (or no query at all) — requires a session; `X` must equal
   the session's own builder ID if present (`403` otherwise), and defaults
-  to it if omitted. That builder's own bundles, newest first, capped at 100
-  (shared or not — a builder's own shared bundles keep showing here too,
-  they just *additionally* surface in the community listing below).
+  to it if omitted. That builder's own bundles, newest first (shared or
+  not — a builder's own shared bundles keep showing here too, they just
+  *additionally* surface in the community listing below).
 - `?shared=true` — the community tab: every builder's shared bundles,
-  newest first, capped at 100, no session required. `builderId` is
-  ignored/not required here.
+  newest first, no session required. `builderId` is ignored/not required
+  here.
 
 Exactly one of the two query parameters is expected per call; there's no
 mode that combines "this builder's bundles, restricted to shared ones."
+
+Both branches are cursor-paginated the same way `GET /api/catalog`/
+`GET /api/notifications` already are: `limit` (default/max 100) and
+`cursor` (from a previous response's own `nextCursor`), with the response
+carrying `nextCursor` (`null` once nothing older is left). Found via a
+backlog audit — this endpoint previously had a bare, unpaginated
+`LIMIT 100` with no way to see anything past it once a builder's own
+bundles (or the platform-wide shared pool) grew past that cap.
 
 ### `POST /api/bundles`
 

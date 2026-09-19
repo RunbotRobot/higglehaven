@@ -1281,6 +1281,58 @@ describe('Bundles', () => {
     expect(aliceOwn.body.bundles.map((b) => b.name).sort()).toEqual(['Alice private', 'Alice shared']);
   });
 
+  // #751: GET /api/bundles used to be a bare, unpaginated LIMIT 100 with no
+  // cursor and no nextCursor in the response — anything past the cap was
+  // silently invisible with zero indication anything was cut off. Both the
+  // "mine" and "shared" branches now cursor-paginate the same way
+  // GET /api/notifications already does (see that endpoint's own test,
+  // worker/profiles.test.js) — this covers both branches.
+  it('cursor-paginates both the "mine" and "shared" bundle listings', async () => {
+    const owner = await signupBuilder('bundle-page-owner');
+    for (const name of ['First', 'Second', 'Third']) {
+      await api('/bundles', owner.session({
+        method: 'POST', body: JSON.stringify(bundleBody({ name, shared: true })),
+      }));
+    }
+
+    const wholeOwn = await api('/bundles', owner.session());
+    expect(wholeOwn.body.bundles).toHaveLength(3);
+    expect(wholeOwn.body.nextCursor).toBeNull(); // under the default limit — nothing more to page to
+
+    const seenOwnIds = [];
+    let ownCursor = null;
+    for (let i = 0; i < wholeOwn.body.bundles.length; i++) {
+      const page = await api(
+        `/bundles?limit=1${ownCursor ? `&cursor=${encodeURIComponent(ownCursor)}` : ''}`,
+        owner.session(),
+      );
+      expect(page.body.bundles).toHaveLength(1);
+      seenOwnIds.push(page.body.bundles[0].bundleId);
+      ownCursor = page.body.nextCursor;
+    }
+    expect(ownCursor).toBeNull(); // exhausted after exactly as many pages as there are rows
+    expect(seenOwnIds).toEqual(wholeOwn.body.bundles.map((b) => b.bundleId)); // same order, one row at a time
+
+    const wholeShared = await api('/bundles?shared=true');
+    expect(wholeShared.body.bundles.length).toBeGreaterThanOrEqual(3);
+    const seenSharedIds = [];
+    let sharedCursor = null;
+    for (let i = 0; i < wholeShared.body.bundles.length; i++) {
+      const page = await api(
+        `/bundles?shared=true&limit=1${sharedCursor ? `&cursor=${encodeURIComponent(sharedCursor)}` : ''}`,
+      );
+      expect(page.body.bundles).toHaveLength(1);
+      seenSharedIds.push(page.body.bundles[0].bundleId);
+      sharedCursor = page.body.nextCursor;
+    }
+    expect(sharedCursor).toBeNull();
+    expect(seenSharedIds).toEqual(wholeShared.body.bundles.map((b) => b.bundleId));
+
+    const invalidCursor = await api('/bundles?cursor=not-base64', owner.session());
+    expect(invalidCursor.response.status).toBe(400);
+    expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
   it('updates name and shared independently on PATCH, and rejects another builder\'s bundle', async () => {
     const owner = await signupBuilder('bundle-patch-owner');
     const other = await signupBuilder('bundle-patch-other');
