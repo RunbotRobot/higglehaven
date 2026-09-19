@@ -51,6 +51,10 @@ import {
   fetchTaxSummary,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
+  fetchBuilderStripeAccount,
+  submitBuilderStripeAccount,
+  fetchBuilderRedeemStatus,
+  redeemHiggles,
   fetchAllLandlets,
   fetchNotifications,
   fetchUnreadNotificationCount,
@@ -4896,6 +4900,175 @@ async function renderLandCapField() {
   }
 }
 
+// #723: #624/#625 shipped GET/POST /api/builders/me/stripe-account and
+// .../redeem — a builder's own exit from higgles to real cash — but
+// nothing in this file ever called either. Lives alongside Land Cap
+// above, not the Sell tab's own payout section, since redeeming a
+// higgles balance is a builder-account concern independent of whether
+// this account also sells anything. Reuses renderSellSettingsSection's
+// own Stripe Custom-account onboarding form almost verbatim (same
+// fields, different account row) rather than sharing code with it, to
+// avoid touching that already-working, real-money-adjacent flow.
+async function renderRedeemHigglesField() {
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId) return;
+
+  const statusField = document.createElement('div');
+  statusField.className = 'settings-field';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Redeem Higgles';
+  statusField.appendChild(statusLabel);
+  const statusNote = document.createElement('div');
+  statusNote.className = 'settings-empty-note';
+  statusNote.textContent = 'Loading…';
+  statusField.appendChild(statusNote);
+  settingsSectionEl.appendChild(statusField);
+
+  const formField = document.createElement('div');
+  formField.className = 'settings-field';
+  settingsSectionEl.appendChild(formField);
+
+  let redeemStatus;
+  try {
+    redeemStatus = await fetchBuilderRedeemStatus();
+  } catch (err) {
+    statusNote.textContent = err.message || 'Could not load your redemption status.';
+    statusNote.classList.add('error');
+    return;
+  }
+
+  function describeAccountStatus() {
+    if (!redeemStatus.configured) {
+      return "Stripe payouts aren't set up on this server yet — check back later.";
+    }
+    if (redeemStatus.status === 'complete') return 'Your payout account is fully set up.';
+    if (redeemStatus.status === 'requirements_due') {
+      return `Stripe needs more information: ${redeemStatus.requirementsCurrentlyDue.join(', ')}`;
+    }
+    if (redeemStatus.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
+    if (redeemStatus.connected) return 'Your account was created — verification is pending.';
+    return 'Not set up yet. Redeeming higgles for cash needs this first.';
+  }
+
+  function refreshStatusNote() {
+    statusNote.textContent = `Available to redeem: ${formatHiggles(redeemStatus.availableCents)} — ${describeAccountStatus()}`;
+    statusNote.classList.remove('error');
+  }
+  refreshStatusNote();
+
+  const fields = [
+    ['firstName', 'First name', 'text'],
+    ['lastName', 'Last name', 'text'],
+    ['dobDay', 'Birth day', 'number'],
+    ['dobMonth', 'Birth month', 'number'],
+    ['dobYear', 'Birth year', 'number'],
+    ['ssnLast4', 'SSN (last 4 digits)', 'text'],
+    ['addressLine1', 'Street address', 'text'],
+    ['addressCity', 'City', 'text'],
+    ['addressState', 'State', 'text'],
+    ['addressPostalCode', 'ZIP code', 'text'],
+    ['addressCountry', 'Country (2-letter code)', 'text'],
+    ['routingNumber', 'Bank routing number', 'text'],
+    ['accountNumber', 'Bank account number', 'text'],
+  ];
+  const inputs = {};
+  const form = document.createElement('div');
+  form.className = 'stripe-onboarding-form';
+  for (const [key, fieldLabel, type] of fields) {
+    const label = document.createElement('label');
+    label.textContent = fieldLabel;
+    const input = document.createElement('input');
+    input.type = type;
+    if (key === 'addressCountry') input.value = 'US';
+    if (key === 'dobMonth') { input.min = '1'; input.max = '12'; }
+    if (key === 'dobDay') { input.min = '1'; input.max = '31'; }
+    label.appendChild(input);
+    form.appendChild(label);
+    inputs[key] = input;
+  }
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'version-action-btn';
+  submitBtn.textContent = redeemStatus.connected ? 'Update payout account' : 'Set up payout account';
+  form.appendChild(submitBtn);
+  const formStatus = document.createElement('div');
+  formStatus.className = 'settings-empty-note';
+  form.appendChild(formStatus);
+
+  submitBtn.addEventListener('click', async () => {
+    formStatus.textContent = '';
+    formStatus.classList.remove('error');
+    submitBtn.disabled = true;
+    try {
+      const updated = await submitBuilderStripeAccount({
+        individual: {
+          firstName: inputs.firstName.value,
+          lastName: inputs.lastName.value,
+          dobDay: Number(inputs.dobDay.value),
+          dobMonth: Number(inputs.dobMonth.value),
+          dobYear: Number(inputs.dobYear.value),
+          ssnLast4: inputs.ssnLast4.value,
+          addressLine1: inputs.addressLine1.value,
+          addressCity: inputs.addressCity.value,
+          addressState: inputs.addressState.value,
+          addressPostalCode: inputs.addressPostalCode.value,
+          addressCountry: inputs.addressCountry.value,
+        },
+        externalAccount: {
+          routingNumber: inputs.routingNumber.value,
+          accountNumber: inputs.accountNumber.value,
+          currency: 'usd',
+        },
+      });
+      // submitBuilderStripeAccount's response is the same shape GET
+      // returns minus availableCents (worker/index.js's
+      // stripeAccountStatusJson never computes it) — merge onto the
+      // existing redeemStatus rather than replacing it outright, so the
+      // balance already loaded above doesn't get clobbered with undefined.
+      redeemStatus = { ...redeemStatus, ...updated };
+      refreshStatusNote();
+      formStatus.textContent = 'Submitted.';
+    } catch (err) {
+      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.classList.add('error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  formField.appendChild(form);
+
+  if (redeemStatus.availableCents > 0) {
+    const redeemBtn = document.createElement('button');
+    redeemBtn.type = 'button';
+    redeemBtn.className = 'version-action-btn';
+    redeemBtn.textContent = 'Redeem';
+    formField.appendChild(redeemBtn);
+    const redeemStatusNote = document.createElement('div');
+    redeemStatusNote.className = 'settings-empty-note';
+    formField.appendChild(redeemStatusNote);
+
+    redeemBtn.addEventListener('click', async () => {
+      redeemBtn.disabled = true;
+      redeemStatusNote.textContent = '';
+      redeemStatusNote.classList.remove('error');
+      try {
+        const result = await redeemHiggles();
+        redeemStatusNote.textContent = `Redeemed ${formatHiggles(result.redeemedCents)}.`;
+      } catch (err) {
+        // Currently always hits here — #653 pauses every redemption
+        // pending a fraud-provenance design, and the server's own error
+        // message already explains that clearly; surfaced as-is rather
+        // than special-cased.
+        redeemStatusNote.textContent = err.message || 'Could not redeem right now.';
+        redeemStatusNote.classList.add('error');
+      } finally {
+        redeemBtn.disabled = false;
+      }
+    });
+  }
+}
+
 // Publish + Version History (see docs/API.md's "Landlet drafts"/"Landlet
 // versions") — the one place the already-existing draft/version/activate
 // backend gets a frontend. Only meaningful while actually in Build mode on
@@ -4903,6 +5076,7 @@ async function renderLandCapField() {
 // there's no landlet to publish from there).
 function renderBuildSettingsSection() {
   renderLandCapField();
+  renderRedeemHigglesField();
   renderAuctionSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
