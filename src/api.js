@@ -260,6 +260,15 @@ export async function renameSeller(sellerId, label) {
   return seller;
 }
 
+// #744: DELETE /api/sellers/:sellerId (worker/index.js, added by #732)
+// existed with no frontend wrapper at all -- unlike deleteBuilder above,
+// this doesn't release any owned resource (a seller has no landlet), it
+// just 409s if real-money proceeds are still unpaid (see the endpoint's
+// own guard).
+export async function deleteSeller(sellerId) {
+  await requestJson(`/sellers/${encodeURIComponent(sellerId)}`, { method: 'DELETE' });
+}
+
 // Stripe Connect (Custom account) payout onboarding — #452. See
 // worker/index.js's own comment: no KYC field submitted here (name, DOB,
 // SSN, bank account) is ever stored on our own seller row, only Stripe's

@@ -48,6 +48,7 @@ import {
   deleteBuilder,
   fetchMySeller,
   renameSeller,
+  deleteSeller,
   fetchMyEquippedAvatar,
   fetchMyOwnedAvatars,
   equipAvatar,
@@ -5219,14 +5220,20 @@ function renderBuilderIdentityField() {
   });
 }
 
-// No deleteSeller endpoint exists (docs/API.md's "Sellers" has DELETE
-// /api/sellers/:sellerId, but src/api.js never wrapped it — out of scope
-// for #724, which only names renameSeller as dead) — Rename only.
 function renderSellerIdentityField() {
   renderIdentityField('Seller', {
     fetchProfile: fetchMySeller,
     idKey: 'sellerId',
     renameProfile: (id, label) => renameSeller(id, label),
+    deleteProfile: (id) => deleteSeller(id),
+    // #744: unlike a builder, a seller owns no landlet to release — the
+    // backend's own guard (worker/index.js's DELETE /api/sellers/:id,
+    // #732) is what actually protects real money here, by 409ing instead
+    // of deleting while a real purchase's proceeds are still unpaid, so
+    // this warning doesn't need to (and can't) disclose an amount at risk
+    // the way renderBuilderIdentityField's higgles-balance warning does.
+    deleteWarning: 'Delete your seller account? This cannot be undone.',
+    onDeleted: () => { sellerId = null; },
   });
 }
 
