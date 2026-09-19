@@ -1,0 +1,17 @@
+-- #754 (found via backlog-exploration pass): handlePurchaseRefund never
+-- revoked an owned_avatars grant on refund, so a buyer keeps a refunded
+-- avatar (and can keep it equipped) forever, free -- the same "buy fake
+-- sale, extract value" shape #651 already closed for higgles commissions,
+-- just at the granted-item level instead. Revoking on refund needs a way
+-- to map a purchases row back to the exact owned_avatars row it granted --
+-- purchases itself deliberately has no buyer-account column (#680's own
+-- migration comment, 0083_avatar_ownership.sql, explains why retrofitting
+-- that would have been a bigger, riskier change than that feature needed),
+-- so this instead adds the link on the smaller, newer owned_avatars table:
+-- which purchase granted this ownership, so a refund can look it up
+-- directly by purchase_id rather than needing to know the buyer at all.
+-- Nullable and SET NULL on delete -- a row granted before this migration
+-- (or whose purchase-id lookup fails for any reason) simply isn't
+-- revocable, an acceptable gap given production has essentially zero real
+-- purchases today (per #668's own investigation).
+ALTER TABLE owned_avatars ADD COLUMN purchase_id TEXT REFERENCES purchases(purchase_id) ON DELETE SET NULL;

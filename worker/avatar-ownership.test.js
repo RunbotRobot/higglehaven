@@ -230,3 +230,98 @@ describe('Equip endpoint (GET/PUT /api/builders/me/avatar, #680)', () => {
     expect(got.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
   });
 });
+
+describe('Refund revokes avatar ownership (#754)', () => {
+  it('deletes the owned_avatars grant and clears an equipped avatar when its purchase is refunded', async () => {
+    const seller = await signupBuilder('avatar-refund-seller');
+    const buyer = await signupBuilder('avatar-refund-buyer');
+    await createGreenbeltLandlet('avatar-refund-landlet');
+    await claim('avatar-refund-landlet', seller);
+    await createAvatarTemplate('avatar-refund-template');
+    await placeInstance('avatar-refund-instance', 'avatar-refund-landlet', 'avatar-refund-template', seller);
+
+    const purchased = await purchase('avatar-refund-instance', buyer);
+    expect(purchased.response.status).toBe(201);
+    const { purchaseId } = purchased.body.purchase;
+
+    const equipped = await api('/builders/me/avatar', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-template' }),
+    }));
+    expect(equipped.response.status).toBe(200);
+
+    // This template has no sellerId (createAvatarTemplate's own default),
+    // so the refund falls to the admin fallback — same pattern as
+    // worker/commerce.test.js's own refund tests.
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+
+    const owned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, 'avatar-refund-template').all();
+    expect(owned.results).toHaveLength(0);
+
+    const got = await api('/builders/me/avatar', buyer.session());
+    expect(got.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+
+    // Re-equipping is rejected — the grant is genuinely gone, not just the
+    // equip cleared out from under it.
+    const reEquip = await api('/builders/me/avatar', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-template' }),
+    }));
+    expect(reEquip.response.status).toBe(403);
+  });
+
+  it('leaves a different builder\'s own equipped grant of the same template untouched', async () => {
+    const seller = await signupBuilder('avatar-refund-scope-seller');
+    const buyerA = await signupBuilder('avatar-refund-scope-buyer-a');
+    const buyerB = await signupBuilder('avatar-refund-scope-buyer-b');
+    await createGreenbeltLandlet('avatar-refund-scope-landlet');
+    await claim('avatar-refund-scope-landlet', seller);
+    await createAvatarTemplate('avatar-refund-scope-template');
+    await placeInstance('avatar-refund-scope-instance-a', 'avatar-refund-scope-landlet', 'avatar-refund-scope-template', seller);
+    await placeInstance('avatar-refund-scope-instance-b', 'avatar-refund-scope-landlet', 'avatar-refund-scope-template', seller);
+
+    const purchasedA = await purchase('avatar-refund-scope-instance-a', buyerA);
+    const { purchaseId: purchaseIdA } = purchasedA.body.purchase;
+    await purchase('avatar-refund-scope-instance-b', buyerB);
+
+    await api('/builders/me/avatar', buyerA.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-scope-template' }),
+    }));
+    await api('/builders/me/avatar', buyerB.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-scope-template' }),
+    }));
+
+    await api(`/purchases/${purchaseIdA}/refund`, adminSession({ method: 'POST' }));
+
+    const gotA = await api('/builders/me/avatar', buyerA.session());
+    expect(gotA.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+    const gotB = await api('/builders/me/avatar', buyerB.session());
+    expect(gotB.body.avatar.equippedTemplateId).toBe('avatar-refund-scope-template');
+
+    const buyerBStillOwns = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyerB.builderId, 'avatar-refund-scope-template').all();
+    expect(buyerBStillOwns.results).toHaveLength(1);
+  });
+
+  it('refunds an ordinary (non-avatar) purchase without touching owned_avatars at all', async () => {
+    const seller = await signupBuilder('avatar-refund-ordinary-seller');
+    await createGreenbeltLandlet('avatar-refund-ordinary-landlet');
+    await claim('avatar-refund-ordinary-landlet', seller);
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'avatar-refund-ordinary-template', name: 'Plain product', color: '#222222',
+        dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 500,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    await placeInstance('avatar-refund-ordinary-instance', 'avatar-refund-ordinary-landlet', 'avatar-refund-ordinary-template', seller);
+    const purchased = await purchase('avatar-refund-ordinary-instance', seller);
+    const { purchaseId } = purchased.body.purchase;
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+  });
+});
