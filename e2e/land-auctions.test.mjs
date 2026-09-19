@@ -132,6 +132,53 @@ await bidderPage.waitForTimeout(500);
 const afterRejectedBidText = await auctionsListItems.first().textContent();
 console.log('auction after a too-low bid attempt (should still say $15.00, not $12.00):', afterRejectedBidText);
 
+// --- Bid history toggle (#736) -- added in 6388d46 with no test coverage
+// of its own until now: expand/collapse, a re-expand (the handler always
+// re-fetches on expand rather than caching -- confirms that still works
+// on a second pass, not just the first), and the error-state render when
+// the bids fetch genuinely fails. ---
+const bidHistoryBtn = auctionsListItems.first().locator('.auction-bid-history-btn');
+await bidHistoryBtn.waitFor({ timeout: 5000 });
+const bidHistoryLabelBeforeExpand = await bidHistoryBtn.textContent();
+console.log('bid history toggle label before expanding (should say "View Bids (1)"):', bidHistoryLabelBeforeExpand);
+
+await bidHistoryBtn.click();
+await auctionsListItems.first().locator('.auction-bid-history-row').first().waitFor({ timeout: 5000 });
+const bidHistoryRowText = await auctionsListItems.first().locator('.auction-bid-history-row').first().textContent();
+console.log('bid history row after expanding (should mention $15.00 and the bidder):', bidHistoryRowText);
+const bidHistoryLabelAfterExpand = await bidHistoryBtn.textContent();
+console.log('bid history toggle label after expanding (should say "Hide Bids (1)"):', bidHistoryLabelAfterExpand);
+
+await bidHistoryBtn.click();
+const bidHistoryHiddenAfterCollapse = await auctionsListItems.first().locator('.auction-bid-history').first().isHidden();
+console.log('bid history list hidden after collapsing (should be true):', bidHistoryHiddenAfterCollapse);
+const bidHistoryLabelAfterCollapse = await bidHistoryBtn.textContent();
+console.log('bid history toggle label reverts after collapsing (should say "View Bids (1)"):', bidHistoryLabelAfterCollapse);
+
+await bidHistoryBtn.click();
+await auctionsListItems.first().locator('.auction-bid-history-row').first().waitFor({ timeout: 5000 });
+const bidHistoryRowTextOnReExpand = await auctionsListItems.first().locator('.auction-bid-history-row').first().textContent();
+console.log('bid history row still correct on re-expand (should mention $15.00 again):', bidHistoryRowTextOnReExpand);
+await bidHistoryBtn.click();
+await bidderPage.waitForTimeout(200);
+
+// Simulate the bids fetch genuinely failing (network-level, not just a
+// non-2xx) -- same route.abort('failed') idiom as
+// e2e/connectivity-indicator.test.mjs -- and confirm the toggle's own
+// catch branch renders an error note instead of leaving the "Loading…"
+// placeholder stuck or throwing an unhandled rejection.
+await bidderPage.route('**/api/auctions/*/bids', (route) => route.abort('failed'));
+await bidHistoryBtn.click();
+await bidderPage.waitForFunction(
+  () => document.querySelector('.auction-bid-history .settings-empty-note') !== null
+    && !document.querySelector('.auction-bid-history .settings-empty-note').textContent.includes('Loading'),
+  { timeout: 5000 },
+);
+const bidHistoryErrorText = await auctionsListItems.first().locator('.auction-bid-history').first().textContent();
+console.log('bid history shows an error note when the bids fetch fails (should not be a real bid row):', bidHistoryErrorText);
+const bidHistoryToggleReenabledAfterError = await bidHistoryBtn.isEnabled();
+console.log('bid history toggle re-enabled after a failed fetch (should be true):', bidHistoryToggleReenabledAfterError);
+
 // --- Back to the seller: confirm the bid shows up on their own view too. ---
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
@@ -202,6 +249,14 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   invalidBidAlertOk &&
   afterBidText.includes('$15.00') && afterBidText.includes('1 bid') &&
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
+  bidHistoryLabelBeforeExpand.includes('View Bids (1)') &&
+  bidHistoryRowText.includes('$15.00') && bidHistoryRowText.includes(BIDDER) &&
+  bidHistoryLabelAfterExpand.includes('Hide Bids (1)') &&
+  bidHistoryHiddenAfterCollapse &&
+  bidHistoryLabelAfterCollapse.includes('View Bids (1)') &&
+  bidHistoryRowTextOnReExpand.includes('$15.00') &&
+  !bidHistoryErrorText.includes('$15.00') && bidHistoryErrorText.length > 0 &&
+  bidHistoryToggleReenabledAfterError &&
   sellerSeesBidText.includes('$15.00') &&
   sellerNoticeText.includes('New bid of $15.00') &&
   secondClaimStatus === 200 &&
