@@ -7447,8 +7447,7 @@ async function handleWorld(request, db, route) {
     await requireAdmin(request, db);
     const settings = await getWorldSettings(db);
     const countsBefore = await getLandletCounts(db);
-    const total = countsBefore.total || 0;
-    const greenbeltRatio = total === 0 ? 0 : (countsBefore.greenbelt || 0) / total;
+    const greenbeltRatio = computeGreenbeltRatio(countsBefore);
     if (greenbeltRatio >= settings.greenbelt_min_ratio) {
       throw new HttpError('Greenbelt reserve is at or above the expansion threshold', 409);
     }
@@ -7501,6 +7500,20 @@ async function getLandletCounts(db) {
       SUM(CASE WHEN landlet_type = 'water' THEN 1 ELSE 0 END) AS water
     FROM landlets
   `).first();
+}
+
+// #755: a water landlet can never become greenbelt or be claimed (see the
+// CASE exclusion above, and POST .../claim's own landlet_type != 'water'
+// check), so it needs to come out of this ratio's denominator too, not
+// just stay out of its numerator -- otherwise every water tile the map
+// ever grows to enclose permanently drags the ratio down without ever
+// being able to satisfy it, since it can never count toward greenbelt.
+// Shared by worldNeedsGrowth, POST /world/expand's gate, and worldFromRow's
+// reported greenbeltRatio so all three keep meaning the same thing:
+// "greenbelt as a fraction of claimable land."
+function computeGreenbeltRatio(counts) {
+  const claimable = (counts?.total || 0) - (counts?.water || 0);
+  return claimable === 0 ? 0 : (counts?.greenbelt || 0) / claimable;
 }
 
 // The actual radius-bump + promotion half of POST /world/expand, split out
@@ -7594,9 +7607,7 @@ const AUTO_RING_CANDIDATE_COUNT = 12;
 async function worldNeedsGrowth(db) {
   const settings = await getWorldSettings(db);
   const counts = await getLandletCounts(db);
-  const total = counts.total || 0;
-  const ratio = total === 0 ? 0 : (counts.greenbelt || 0) / total;
-  return ratio < settings.greenbelt_min_ratio;
+  return computeGreenbeltRatio(counts) < settings.greenbelt_min_ratio;
 }
 
 async function autoGrowWorldIfNeeded(db) {
@@ -9697,7 +9708,7 @@ function worldFromRow(row, counts) {
       claimed: counts.claimed || 0,
       generating: counts.generating || 0,
       water: counts.water || 0,
-      greenbeltRatio: totalLandlets === 0 ? 0 : greenbeltLandlets / totalLandlets,
+      greenbeltRatio: computeGreenbeltRatio(counts),
     } : undefined,
     metadata: JSON.parse(row.metadata_json || '{}'),
     createdAt: row.created_at,

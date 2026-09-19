@@ -2013,8 +2013,8 @@ small API surface that stores the values future generation code will consume.
 The world now grows itself. `worker/index.js`'s `scheduled()` export runs on
 a Cloudflare Cron Trigger (`wrangler.jsonc`'s `triggers.crons`, every 10
 minutes) and calls `autoGrowWorldIfNeeded`, which checks the same condition
-`POST /api/world/expand` gates on — the greenbelt-to-total ratio dropping
-below `greenbeltMinRatio` — and if so, expands the world to enclose any
+`POST /api/world/expand` gates on — the greenbelt-to-claimable-land ratio
+dropping below `greenbeltMinRatio` — and if so, expands the world to enclose any
 already-generating land, or (if nothing greenbelt exists at all) generates
 and completes a fresh ring of land at the current boundary. It's a second
 caller of the same internal primitives the manual endpoints below use
@@ -2092,9 +2092,13 @@ within the next 10-minute cron tick even when nobody deploys for a while.
 Fetches the singleton world settings object and aggregate landlet status counts.
 `water` counts landlets with `landType: "water"` (#218,
 docs/SPEC.md §1's "Water cannot be owned") — included in `total` (it's real,
-generated world content) but excluded from `greenbelt` and therefore from
-`greenbeltRatio`'s numerator, since that ratio specifically means "available
-to claim," not "not currently claimed."
+generated world content) but excluded from both `greenbelt` and
+`greenbeltRatio`'s own denominator (#755), since a water landlet can never
+become greenbelt or be claimed. `greenbeltRatio` means "greenbelt as a
+fraction of claimable land," not "as a fraction of every tile including
+permanently-unclaimable ones," so counting water against the denominator
+without it ever being able to satisfy the numerator would understate real
+greenbelt availability as the map grows to enclose more water.
 
 ### `PUT /api/world`
 ### `PATCH /api/world`
@@ -2134,8 +2138,10 @@ Requires a session logged in as an admin (`403` otherwise). This is the
 manual/troubleshooting path now — see "Automatic world growth" above for
 the mechanism that calls it (well, its internals) day to day. Expands the
 circular world boundary by exactly one configured
-`expansionIncrementM` when the current greenbelt-to-total-landlet ratio is below
-`greenbeltMinRatio`. If the reserve is already at or above the threshold, the
+`expansionIncrementM` when the current greenbelt-to-claimable-land ratio
+(see `greenbeltRatio` under `GET /api/world` above — water landlets count
+toward neither side of it) is below `greenbeltMinRatio`. If the reserve is
+already at or above the threshold, the
 endpoint returns `409` and does not change the radius.
 
 After expanding, generation-complete landlets that are fully enclosed by the
