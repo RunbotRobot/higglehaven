@@ -971,6 +971,46 @@ describe('Authentication', () => {
     expect(wrongPassword.body.error).toBe(unknownEmail.body.error);
   });
 
+  // #771: an identical response body isn't enough on its own — before this
+  // fix, an unknown email skipped verifyPassword's real 100k-iteration
+  // PBKDF2 derivation entirely (a near-instant D1 row-miss), while a wrong
+  // password on a real account always paid that cost, so response latency
+  // alone let an attacker enumerate registered emails. Measures wall-clock
+  // time in-process via SELF.fetch (no real network jitter to contend
+  // with), averaged over several samples to smooth out scheduling noise,
+  // with a generous ratio bound rather than a tight absolute one so this
+  // doesn't flake on a slower CI runner.
+  it('takes roughly as long to reject an unknown email as a wrong password, not just the same response body', async () => {
+    const email = `auth-timing-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'the real password');
+
+    async function timeLoginAttempt(body) {
+      const start = performance.now();
+      await api('/auth/login', { method: 'POST', body: JSON.stringify(body) });
+      return performance.now() - start;
+    }
+
+    // Warm-up call, discarded — first WebCrypto/PBKDF2 invocation in a
+    // fresh isolate can be slower than steady-state.
+    await timeLoginAttempt({ email, password: 'not the real password' });
+
+    const SAMPLES = 5;
+    let wrongPasswordTotalMs = 0;
+    let unknownEmailTotalMs = 0;
+    for (let i = 0; i < SAMPLES; i += 1) {
+      wrongPasswordTotalMs += await timeLoginAttempt({ email, password: 'not the real password' });
+      unknownEmailTotalMs += await timeLoginAttempt({
+        email: `auth-nobody-${crypto.randomUUID()}@example.com`, password: 'anything',
+      });
+    }
+    const wrongPasswordAvgMs = wrongPasswordTotalMs / SAMPLES;
+    const unknownEmailAvgMs = unknownEmailTotalMs / SAMPLES;
+    // Pre-fix this ratio is roughly 10-50x (PBKDF2 vs. an instant row
+    // miss); post-fix both pay the same cost. A 3x floor catches the
+    // real bug with room for jitter.
+    expect(unknownEmailAvgMs).toBeGreaterThan(wrongPasswordAvgMs / 3);
+  });
+
   it('locks the account after repeated failed logins, even with the correct password', async () => {
     const email = `auth-lockout-${crypto.randomUUID()}@example.com`;
     const password = 'the real correct password';

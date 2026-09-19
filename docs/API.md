@@ -367,10 +367,13 @@ first) applies the resulting `trustTier` change.
 `401` with an identical, generic "Invalid email or password" message
 whether the email doesn't exist or the password is wrong — telling the two
 apart would let an attacker enumerate which emails have accounts here.
-`423` if the account is currently locked out (see "Brute-force defense"
-above). On success, sets a fresh `hh_session` cookie (a genuinely new
-session, not a reused one) and returns `{ "user": { ... } }`, same shape as
-signup's response.
+The unknown-email path also burns the same PBKDF2 cost a real password
+check would (#771) rather than returning near-instantly, so response
+*latency* can't be used for the same enumeration even though the response
+body and status are already identical. `423` if the account is currently
+locked out (see "Brute-force defense" above). On success, sets a fresh
+`hh_session` cookie (a genuinely new session, not a reused one) and returns
+`{ "user": { ... } }`, same shape as signup's response.
 
 ### `POST /api/auth/logout`
 
