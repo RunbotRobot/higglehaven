@@ -4989,7 +4989,13 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
 
   if (deleteProfile) {
     deleteBtn.addEventListener('click', async () => {
-      if (!confirm(deleteWarning)) return;
+      // #740: deleteWarning may be a function of the current profile (e.g.
+      // to disclose a real-money-backed balance that's about to be
+      // forfeited) rather than a fixed string — resolved fresh on every
+      // click since `profile` can have changed since renderIdentityField
+      // was first called.
+      const warningText = typeof deleteWarning === 'function' ? deleteWarning(profile) : deleteWarning;
+      if (!confirm(warningText)) return;
       status.textContent = '';
       status.classList.remove('error');
       deleteBtn.disabled = true;
@@ -5190,7 +5196,17 @@ function renderBuilderIdentityField() {
     idKey: 'builderId',
     renameProfile: (id, label) => renameBuilder(id, label),
     deleteProfile: (id) => deleteBuilder(id),
-    deleteWarning: "Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.",
+    // #740: deleteBuilder hard-deletes the builder row, including any
+    // real-money-backed higgles balance on it — nothing preserves or
+    // refunds it. Disclose the actual amount at stake rather than leaving
+    // it a silent side effect of "this can't be undone".
+    deleteWarning: (profile) => {
+      const balanceCents = profile?.higglesBalanceCents ?? 0;
+      const balanceNote = balanceCents > 0
+        ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
+        : '';
+      return `Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote}`;
+    },
     onDeleted: () => { builderId = null; },
   });
 }
