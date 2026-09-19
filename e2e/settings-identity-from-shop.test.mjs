@@ -63,8 +63,11 @@ await page.click('.settings-tab-btn[data-section="build"]');
 await clearVerifyModalIfShown(page);
 
 // Land Cap: previously omitted entirely (renderLandCapField returned before
-// appending anything) whenever builderId was still null.
-const landCapText = await waitForText(page, '#settings-section .settings-field', 'You own');
+// appending anything) whenever builderId was still null. Targeted by its
+// own #land-cap-field id (not just '.settings-field', the first match of
+// which is now #724's Builder Identity field — appended synchronously ahead
+// of Land Cap's own async-gated append in this exact null-builderId path).
+const landCapText = await waitForText(page, '#land-cap-field', 'You own');
 console.log('Land Cap field text for a fresh, already-logged-in visitor (should mention "You own 0m²" of a 1,000m² starter cap):', landCapText);
 
 // Auction section: previously stuck on the dead-end identity message even

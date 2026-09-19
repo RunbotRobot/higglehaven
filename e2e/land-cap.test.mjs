@@ -39,8 +39,10 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // formatArea (src/settings.js) rounds to the nearest whole unit and
 // comma-groups thousands by default (owner feedback) — a 1000m² cap
 // reads as "1,000m²".
-const landCapFieldText = await waitForText(page, '#settings-section .settings-field', 'You own 1,000m²');
-const landCapFieldLabel = await page.locator('#settings-section .settings-field').first().locator('span').textContent();
+// #land-cap-field, not the generic first '.settings-field' match — #724
+// added a Builder Identity field ahead of Land Cap in the Build tab.
+const landCapFieldText = await waitForText(page, '#land-cap-field', 'You own 1,000m²');
+const landCapFieldLabel = await page.locator('#land-cap-field').locator('span').textContent();
 console.log('Land Cap field label (should be "Land Cap"):', landCapFieldLabel);
 console.log('Land Cap field full text (should mention "1,000m²" twice — owned and cap):', landCapFieldText);
 
