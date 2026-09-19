@@ -5114,8 +5114,10 @@ applies to the card-settled seller side, and the correct threshold/form for
 the higgles side specifically still needs a tax professional's confirmation.
 `noticeLevel` is a purely informational, non-blocking signal (#613) — one
 of `"none"` (below 50% of `thresholdCents`), `"early"` (50-79%),
-`"approaching"` (80-99%), or `"crossed"` (100%+). Nothing in the API
-actually gates on this yet — see #615 for the not-yet-built earnings gate.
+`"approaching"` (80-99%), or `"crossed"` (100%+). Nothing reads
+`noticeLevel` itself to gate anything — #615's own earnings gate (see
+"Real-money seller payouts" below) re-derives "crossed the threshold"
+directly from `totalCents`/`thresholdCents`, independent of this field.
 
 The account menu (`#account-menu-tax-notice`, next to the existing land-cap
 line — see "Frontend-only account menu") shows a plain-text notice matching
@@ -5157,10 +5159,17 @@ submission additionally requires `state`, `postalCode`, and `taxIdNumber`
 Returns `{ "taxFormType": "w9", "taxFormCompletedAt": "<ISO timestamp>" }`.
 A later resubmission (e.g. a corrected SSN, or switching from an
 already-filed W-8BEN to a W-9 after becoming a US person) overwrites the
-prior submission outright — this isn't gated on anything yet, since #615
-(the sub-issue that actually restricts access based on whether a form is on
-file) doesn't exist yet, so there's nothing a resubmission could conflict
-with.
+prior submission outright — resubmitting isn't gated on anything, even
+though #615 (see "Real-money seller payouts" above) does now restrict
+access based on whether a form is on file, since a corrected/updated
+submission should always be allowed to replace a stale one.
+
+The Settings modal's General tab (`src/main.js`) is the actual "in-app
+flow" this issue originally asked for — a form choosing W-9 vs. W-8BEN,
+showing the fields each requires, and a status note reporting whatever's
+currently on file. #614 shipped only this backend endpoint at first (see
+this section's own git history); the frontend gap sat open until #614 was
+reopened and finished.
 
 The entire submitted form (name, address, and the SSN/EIN or foreign tax
 ID) is encrypted as one JSON blob with AES-256-GCM before it ever reaches
@@ -5173,8 +5182,8 @@ uses elsewhere in this codebase; the IV is freshly random per encryption,
 since reusing one with the same key breaks AES-GCM's confidentiality
 guarantee. Only the form type and completion timestamp are stored in plain
 `users` columns (`tax_form_type`, `tax_form_completed_at` — migrations/0077)
-since #615's future gating logic and the account view need those without
-ever decrypting anything; nothing currently decrypts the stored blob back
+since #615's gating logic and the account view need those without ever
+decrypting anything; nothing currently decrypts the stored blob back
 (no admin/export endpoint exists yet — that's out of scope for #614).
 
 `GET /api/auth/me` also now returns `taxFormType`/`taxFormCompletedAt` on

@@ -304,6 +304,15 @@ export async function fetchTaxSummary() {
   return requestJson('/tax/summary');
 }
 
+// #614 — voluntary W-9 (US)/W-8BEN (non-US) submission ahead of actually
+// being required to (see docs/API.md's own note on this). Resubmitting
+// overwrites the prior submission outright.
+export async function submitTaxIdForm(payload) {
+  return requestJson('/tax/id-form', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  });
+}
+
 // Seller-initiated once a physical real-money order has actually been
 // shipped — starts the 7-day payout-hold fallback clock (see #454).
 export async function markPurchaseShipped(purchaseId) {

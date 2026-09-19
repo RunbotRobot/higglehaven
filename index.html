@@ -2429,6 +2429,12 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.75);
       }
+      /* Same [hidden]-vs-equal-specificity-author-rule problem .auth-form[hidden]
+         fixes above — the tax-paperwork field toggles individual W-9/W-8BEN-only
+         labels within this form via the hidden attribute. */
+      .stripe-onboarding-form label[hidden] {
+        display: none;
+      }
       .stripe-onboarding-form input {
         flex: 1 1 auto;
         min-width: 0;
