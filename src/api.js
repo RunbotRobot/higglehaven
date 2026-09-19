@@ -150,6 +150,18 @@ export async function fetchBuilders({ label } = {}) {
   return builders;
 }
 
+// #717 (sub-issue of #711): a bounded lookup for exactly the builders a
+// caller already knows it needs (Shop mode's per-landlet owner-label map),
+// instead of fetchBuilders' entire roster. Empty/all-blank ids resolves to
+// an empty list without a round trip, the same short-circuit the server
+// side of this takes.
+export async function fetchBuildersByIds(builderIds) {
+  const ids = [...new Set(builderIds)].filter((id) => id);
+  if (ids.length === 0) return [];
+  const { builders } = await requestJson(`/builders?ids=${ids.map(encodeURIComponent).join(',')}`);
+  return builders;
+}
+
 // The logged-in account's own builder profile (docs/API.md's
 // "Authentication") — auto-provisioned server-side, so there's no
 // separate "create" call needed the way the dev-mode identity picker

@@ -42,6 +42,7 @@ import {
   deleteLandletLevel,
   fetchWorld,
   fetchBuilders,
+  fetchBuildersByIds,
   fetchMyBuilder,
   fetchMySeller,
   fetchMyEquippedAvatar,
@@ -2539,6 +2540,7 @@ const uploadPriceInput = document.getElementById('upload-price');
 const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
 const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
 const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
+const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
@@ -2630,6 +2632,7 @@ function resetUploadModalToFileStep() {
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
   uploadOriginalDimensions = null;
+  uploadAvatarCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
@@ -2991,6 +2994,14 @@ async function handleUploadDimensionsStep() {
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
       sellerId: uploaderSellerId,
+      // #680/#681's own "upload flow itself" was deliberately deferred as
+      // separate scope — until now, category could only ever be set to
+      // 'avatar' via a raw API call, so nothing sold through the app UI
+      // could ever actually be bought and equipped. Omit rather than send
+      // 'placeholder' explicitly, so the server's own default (worker/
+      // index.js's createCatalogTemplate) stays the one source of truth
+      // for what an unchecked listing's category actually is.
+      category: uploadAvatarCategoryCheckbox.checked ? 'avatar' : undefined,
       priceCents,
       metadata,
     });
@@ -4775,14 +4786,19 @@ async function renderLandCapField() {
   settingsSectionEl.appendChild(field);
   try {
     // ownedAreaM2 comes straight from the builder object now (#312) —
-    // the backend's own recomputeLandCapsBatch already sums every owned
+    // the backend's own recomputeLandCap already sums every owned
     // landlet's ground area *and* every level's own cap_consumed_m2
     // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
     // so reading it back here is both more accurate (a frontend-side sum
     // over fetchAllLandlets alone silently ignored level area) and
-    // cheaper (no second paginated fetch needed at all).
-    const builders = await fetchBuilders();
-    const me = builders.find((b) => b.builderId === builderId);
+    // cheaper (no second paginated fetch needed at all). Uses
+    // fetchMyBuilder (GET /api/builders/me) rather than scanning the full
+    // GET /api/builders roster for this account's own row (found via
+    // #711's own investigation: the full-roster fetch this used to do
+    // would silently stop finding a late-signed-up builder's own row the
+    // moment that list endpoint gets capped) — this account's own record
+    // is always exactly what's needed here, never anyone else's.
+    const me = await fetchMyBuilder();
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
       'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
@@ -8094,8 +8110,9 @@ async function refreshAccountMenuLandCap() {
     return;
   }
   try {
-    const builders = await fetchBuilders();
-    const me = builders.find((b) => b.builderId === builderId);
+    // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
+    // renderLandCapField's own comment above on why.
+    const me = await fetchMyBuilder();
     accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
     accountMenuLandCapEl.hidden = false;
   } catch (err) {
@@ -11500,9 +11517,18 @@ async function enterShopMode() {
   // Builder display labels for updateShopLandletInfo — supplementary, so a
   // failure here just leaves shopBuilderLabels empty (falls back to "an
   // unknown builder" per-landlet) rather than blocking Shop mode itself.
+  // #717 (sub-issue of #711): scoped to exactly the owners with a visible
+  // landlet right now, via the already-fetched allLandlets above, instead
+  // of fetchBuilders' entire roster — naturally bounded by how many
+  // distinct owners are on-screen, not the total account count, so this
+  // doesn't need its own pagination once GET /api/builders gets a LIMIT
+  // (#715).
   shopCurrentLandletEntry = null;
   accountMenuLandletInfoEl.hidden = true;
-  fetchBuilders()
+  const visibleOwnerBuilderIds = [...new Set(
+    allLandlets.map((landlet) => landlet.ownerBuilderId).filter((id) => id),
+  )];
+  fetchBuildersByIds(visibleOwnerBuilderIds)
     .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
     .catch(() => {});
 

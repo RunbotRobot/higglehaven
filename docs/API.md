@@ -687,12 +687,24 @@ plain create/rename), never a stale or silently-wrong figure.
 Lists every builder, oldest first. Not paginated — this is a small,
 dev-scale roster, not a growing content collection.
 
+An optional `ids` query param (comma-separated builder IDs, e.g.
+`?ids=builder-a,builder-b`) narrows the response to exactly those builders
+instead — for a caller (Shop mode's per-landlet owner-label map, #717) that
+only needs a bounded, known set of builders rather than the whole roster.
+Unknown IDs are silently omitted rather than erroring; an empty/all-blank
+`ids` returns `{ builders: [] }` without touching the database. Capped at
+200 IDs per request (`400` past that), the same shape this file's
+catalog-batch handlers use to cap `templateIds`.
+
 `?label=` (#716) filters to an exact, case-insensitive label match instead
 — still every matching row, not just the first, since labels have no
 uniqueness constraint (migrations/0054's own comment). Used by the "Add
 friend" flow to resolve a typed name without pulling the whole roster
 client-side; unmatched or ambiguous still surfaces as a status message
-the same way it always has, just resolved server-side now.
+the same way it always has, just resolved server-side now. `ids` and
+`label` are independent filters — `ids` is checked first, so passing both
+would just be ignored down to the `ids` behavior; no caller does that
+today.
 
 ### `POST /api/builders`
 
@@ -6535,8 +6547,26 @@ carries any animations at all, it shows either which of `idle`/`walk`/
 `fly` were found, or that none of the file's clips matched that
 convention by name. Silent for a model with no animations at all (the
 overwhelmingly common case — an ordinary chair or brick has nothing to
-report), and shown regardless of the template's eventual category, since
-category isn't chosen until after this step (#680/#681's own finding).
+report), and shown unconditionally rather than gated on the checkbox
+below, since the async animation check doesn't wait on (or care about)
+whatever the seller ends up choosing there.
+
+### The upload flow itself (#712, sub-issue of #710)
+
+#680's own scope note above ("the upload flow itself" is separate scope)
+went unfilled long enough that #679 closed 100% complete while the
+feature stayed completely unreachable through the app: nothing ever set
+`category: 'avatar'` on a real listing, and nothing ever called
+`fetchMyOwnedAvatars`/`equipAvatar` to browse or equip one (see #710 for
+the full writeup). This sub-issue closes the first half: an "List as an
+equippable avatar" checkbox on the upload wizard's 'dimensions' step
+(right after the animation-detection note above), which sets
+`category: 'avatar'` on `createCatalogTemplate` when checked and omits
+the field entirely otherwise — never hardcoding the server's own
+`'placeholder'` default, so `validateTemplate` (worker/index.js) stays
+the one source of truth for what an unchecked listing's category is. The
+buyer-facing "browse owned avatars and equip one" half is #713's own
+separate scope, not this one's.
 
 ## Automated tests
 
