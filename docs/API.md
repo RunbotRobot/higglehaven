@@ -968,11 +968,16 @@ same as a template that already has a `null` `seller_id` for an unclaimed
 custom upload.
 
 If this seller has any real-money purchase whose proceeds haven't been
-paid out yet (`payment_intent_id` set, not yet `paid_out_at` or
-`refunded_at` — the same set `GET /sellers/me/payouts` sums), deletion is
-rejected outright (`409`) — same "don't strand real money" policy
-`DELETE /api/builders/:builderId` already applies to a pending auction
-payout. Without this, the money would become unreachable: `GET
+paid out yet (`payment_intent_id` set, not `refunded_at`, and either not
+yet `paid_out_at` or claimed for payout but not yet Stripe-confirmed — see
+`stripe_payout_id` below), deletion is rejected outright (`409`) — same
+"don't strand real money" policy `DELETE /api/builders/:builderId` already
+applies to a pending auction payout. `paid_out_at` alone isn't a reliable
+"already paid" signal: `POST /sellers/me/payouts` stamps it before the
+actual Stripe payout call resolves, so requiring `stripe_payout_id` too
+(only ever set once that call actually succeeds — #745) closes the window
+where a purchase mid-payout would otherwise look done. Without this guard,
+the money would become unreachable: `GET
 /sellers/me` (`getOrCreateSellerForUser`) is keyed by `user_id`, so a later
 call just mints a brand-new `seller_id` with no `stripe_account_id`,
 leaving the old `seller_id` — and the unpaid purchases still pointing at
