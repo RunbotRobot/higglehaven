@@ -8579,11 +8579,17 @@ async function buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood) {
 // itself is written, in the same db.batch — so ownership can never be
 // recorded without the purchase behind it, or vice versa. INSERT OR
 // IGNORE since re-buying (a second unit, or the same buyer purchasing
-// again) grants nothing extra; ownership is boolean, not quantity-based.
-function ownedAvatarStatement(db, buyerBuilderId, templateId) {
+// again) grants nothing extra; ownership is boolean, not quantity-based —
+// on that IGNORE path purchase_id deliberately stays whatever the first
+// grant recorded, not this later purchase's id.
+// #754: purchaseId (migrations/0085) is what lets handlePurchaseRefund
+// find and revoke this exact grant later, without needing purchases to
+// carry its own buyer-account column (see that migration's own comment on
+// why this link lives here instead).
+function ownedAvatarStatement(db, buyerBuilderId, templateId, purchaseId) {
   return db.prepare(
-    'INSERT OR IGNORE INTO owned_avatars (builder_id, template_id) VALUES (?, ?)',
-  ).bind(buyerBuilderId, templateId);
+    'INSERT OR IGNORE INTO owned_avatars (builder_id, template_id, purchase_id) VALUES (?, ?, ?)',
+  ).bind(buyerBuilderId, templateId, purchaseId);
 }
 
 async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
@@ -8635,7 +8641,7 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
     );
   }
   if (buyerBuilderStillExists) {
-    statements.push(ownedAvatarStatement(db, meta.buyerBuilderId, meta.templateId));
+    statements.push(ownedAvatarStatement(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
 
@@ -8670,7 +8676,7 @@ async function writePurchaseRow(env, instance, template, landlet, amounts, payme
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
-    ...(buyerBuilderStillExists ? [ownedAvatarStatement(db, buyerBuilderId, template.template_id)] : []),
+    ...(buyerBuilderStillExists ? [ownedAvatarStatement(db, buyerBuilderId, template.template_id, purchaseId)] : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
@@ -8849,7 +8855,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // this function rejected the refund here the same way paid_out_at does
   // above; removed per that direction — the unconditional clawback below
   // is now allowed to drive higgles_balance_cents negative.
-  const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
+  const template = await db.prepare('SELECT name, category, metadata_json FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
     throw new HttpError('This product\'s seller does not accept returns', 400);
@@ -8928,6 +8934,25 @@ async function handlePurchaseRefund(request, env, purchaseId) {
       notificationStatement(db, purchase.builder_id,
         `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
     ]);
+  }
+
+  // #754: without this, a refunded avatar purchase left the buyer holding
+  // (and able to keep equipped) an item they were just refunded for,
+  // forever — nothing else revokes owned_avatars on refund. Looked up by
+  // purchase_id (migrations/0085) rather than blindly deleted, so
+  // equipped_avatar_template_id is only cleared for the builder who
+  // actually held this exact grant (a no-op if the grant predates 0085, or
+  // was never made — e.g. the buyer had self-deleted by finalize time).
+  if (template?.category === 'avatar') {
+    const owned = await db.prepare('SELECT builder_id FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId).first();
+    if (owned) {
+      await db.batch([
+        db.prepare('DELETE FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId),
+        db.prepare(
+          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
+        ).bind(owned.builder_id, purchase.template_id),
+      ]);
+    }
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
