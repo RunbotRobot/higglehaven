@@ -2647,4 +2647,34 @@ describe('Worker API', () => {
       `SELECT COUNT(*) AS count FROM rate_limit_events WHERE bucket_key = 'prune-sweep-stale-bucket'`,
     ).first()).count).toBe(0);
   });
+
+  it('scheduled() resolves due auctions on its own, without needing a GET /api/auctions call first (#770)', async () => {
+    // Regression test for #770: resolveDueAuctions used to run only
+    // reactively, off the top of GET /api/auctions — an auction that
+    // expired with nobody happening to browse auctions afterward stayed
+    // 'active' forever. Seeded directly via the DB (same recipe as the
+    // AUCTION_SWEEP_LIMIT test above), never touching /api/auctions at all
+    // before invoking scheduled(), so this only passes if scheduled()
+    // itself resolves the auction.
+    const seller = await signupBuilder('cron-resolve-seller');
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO landlets (landlet_id, name, status) VALUES ('cron-resolve-landlet', 'Cron resolve', 'claimed')`,
+      ),
+      env.DB.prepare(`
+        INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+        VALUES ('cron-resolve-auction', 'cron-resolve-landlet', ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+      `).bind(seller.builderId),
+    ]);
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    const resolved = await env.DB.prepare(
+      `SELECT status FROM auctions WHERE auction_id = 'cron-resolve-auction'`,
+    ).first();
+    expect(resolved.status).not.toBe('active');
+  });
 });

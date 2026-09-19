@@ -307,6 +307,15 @@ export default {
     ctx.waitUntil(autoAuctionInactiveLandlets(env.DB).catch((error) => {
       console.error('autoAuctionInactiveLandlets failed', error);
     }));
+    // #770: without this, an auction that expires while nobody happens to
+    // load GET /api/auctions (its own reactive sweep, kept below as a fast
+    // path) never resolves — worst case for autoAuctionInactiveLandlets'
+    // own $0 auctions above, started specifically on landlets whose owner
+    // has been inactive 30+ days and so is unlikely to generate the "someone
+    // views this auction" traffic lazy resolution depends on.
+    ctx.waitUntil(resolveDueAuctions(env.DB).catch((error) => {
+      console.error('resolveDueAuctions failed', error);
+    }));
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
@@ -3990,12 +3999,10 @@ async function recomputeLandCapsBatch(db, rows) {
 const AUCTION_SWEEP_LIMIT = 25;
 
 // Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
-// each in turn — the closest this dev-mode backend gets to a real scheduled
-// job (see docs/API.md's own note on why: no Cron Trigger is wired up, so
-// resolution is purely lazy, triggered by whatever request happens to
-// touch auctions next). Called at the top of the list endpoint so a
-// shopper browsing auctions always sees current state without needing to
-// separately poll or trigger resolution themselves.
+// each in turn. Called both from scheduled() (#770 — so an auction resolves
+// even if nobody happens to view auctions after it expires) and at the top
+// of the list endpoint below (so a shopper browsing auctions always sees
+// current state without waiting for the next scheduled() run).
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
     SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
