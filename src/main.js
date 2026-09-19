@@ -4922,7 +4922,7 @@ async function renderLandCapField() {
 // UI ever called any of them. Shared between the Build and Sell settings
 // tabs since a builder identity and a seller identity work identically
 // here — only the fetch/rename/delete calls and the delete warning differ.
-async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted }) {
+async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted, onRenamed }) {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
@@ -4979,6 +4979,10 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
     try {
       profile = await renameProfile(profile[idKey], next.trim());
       renderName();
+      // #741: shopBuilderLabels (a Shop-mode-only cache) has no other way
+      // to learn about a rename that happens mid-session — let the caller
+      // patch whatever cache it keeps, same shape as onDeleted above.
+      onRenamed?.(profile[idKey], profile.label);
     } catch (err) {
       status.textContent = err.message || 'Could not rename.';
       status.classList.add('error');
@@ -5192,6 +5196,10 @@ function renderBuilderIdentityField() {
     deleteProfile: (id) => deleteBuilder(id),
     deleteWarning: "Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.",
     onDeleted: () => { builderId = null; },
+    // #741: keep Shop mode's own "Built by X" attribution (populated once
+    // in enterShopMode) from showing a stale pre-rename label for the rest
+    // of this session.
+    onRenamed: (id, label) => { shopBuilderLabels.set(id, label); },
   });
 }
 
@@ -10007,7 +10015,7 @@ let shopLookY = 0;
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, loadToken, objects }
-let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode — see updateShopLandletInfo
+let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode, patched on an in-session rename (#741) — see updateShopLandletInfo
 let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
@@ -11096,9 +11104,9 @@ function landletContainsPoint(record, worldX, worldY) {
 // Which claimed landlet (if any) the shopper is currently standing on, and
 // who built it — otherwise the world gives a shopper no way to tell whose
 // land they're on at all. shopBuilderLabels is populated once at Shop-mode
-// bootstrap (see enterShopMode); a builder renaming mid-session goes stale
-// here until the next full Shop-mode entry, an acceptable tradeoff for
-// something this rarely changing.
+// bootstrap (see enterShopMode) and patched in place whenever a rename
+// succeeds through the Builder Identity field (#741) — no live-refresh
+// subscription for anyone else's rename, just the common case of your own.
 function updateShopLandletInfo() {
   let found = null;
   for (const entry of shopLandlets.values()) {
