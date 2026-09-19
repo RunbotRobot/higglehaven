@@ -3670,10 +3670,12 @@ anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
 back a review under anyone's name — the shopper needs to have used the
 same label both times, the same "no accounts, just labels" constraint this
 identity system carries everywhere else it's used. `authorLabel` is capped
-at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. Any
-purchase counts,
-refunded or not — but a `template_id`/`author_label` pair (case-insensitive)
-can only ever back **one** review (migrations/0059, a `UNIQUE INDEX`
+at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. A
+refunded purchase does **not** count (`AND refunded_at IS NULL` on the
+eligibility check, #357 — a shopper who was made whole by a refund can't
+also back a "verified purchase" review on that same transaction) — but a
+`template_id`/`author_label` pair (case-insensitive) can only ever back
+**one** review (migrations/0059, a `UNIQUE INDEX`
 enforced at the DB level): the purchase gate above is a one-time
 eligibility check, not a per-review consumption check, so without this cap
 the same purchase could otherwise back an unbounded number of reviews
