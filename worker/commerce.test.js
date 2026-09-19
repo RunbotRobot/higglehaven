@@ -3553,6 +3553,91 @@ describe('Simulated purchases', () => {
         expect(rejected.response.status).toBe(403);
       });
 
+      // #763: the schema (migrations/0081) always had a 'voided' status in
+      // its CHECK constraint, but nothing ever set it until now -- an admin
+      // who approved a form in error (or a draft generated against a bad
+      // snapshot) had no way to correct it.
+      describe('1099 form voiding (#763)', () => {
+        it('requires admin access to void a form', async () => {
+          const builder = await signupBuilder('tax-1099-void-not-admin');
+          const rejected = await api('/tax/admin-forms/tax1099-whatever/void', builder.session({ method: 'POST' }));
+          expect(rejected.response.status).toBe(403);
+        });
+
+        it('rejects voiding a nonexistent form', async () => {
+          const notFound = await api('/tax/admin-forms/tax1099-does-not-exist/void', adminSession({ method: 'POST' }));
+          expect(notFound.response.status).toBe(404);
+        });
+
+        it('voids a draft form', async () => {
+          const builder = await signupBuilder('tax-1099-void-draft');
+          const builderMe = await api('/builders/me', builder.session());
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+
+          const voided = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
+          expect(voided.response.status).toBe(200);
+          expect(voided.body.status).toBe('voided');
+
+          const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          expect(after.body.forms.find((f) => f.email === builder.email).status).toBe('voided');
+        });
+
+        it('voids an approved form', async () => {
+          const builder = await signupBuilder('tax-1099-void-approved');
+          const builderMe = await api('/builders/me', builder.session());
+          await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+            .bind('w9', '2026-01-01T00:00:00.000Z', builder.email).run();
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+          const approved = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+          expect(approved.response.status).toBe(200);
+
+          const voided = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
+          expect(voided.response.status).toBe(200);
+          expect(voided.body.status).toBe('voided');
+        });
+
+        it('rejects voiding an already-voided form', async () => {
+          const builder = await signupBuilder('tax-1099-void-twice');
+          const builderMe = await api('/builders/me', builder.session());
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+
+          const first = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
+          expect(first.response.status).toBe(200);
+          const second = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
+          expect(second.response.status).toBe(409);
+          expect(second.body.error).toMatch(/status "voided"/);
+        });
+
+        // Filing genuinely can't be reached through the real API in this
+        // test environment (no TAX_1099_EFILING_* secrets configured — see
+        // the transmission describe block below), so this seeds a 'filed'
+        // row directly, the same "simulate what a real transaction would
+        // have written" technique this describe block already uses for
+        // #612's refund-exclusion case above.
+        it('rejects voiding an already-filed form', async () => {
+          const builder = await signupBuilder('tax-1099-void-filed');
+          const builderMe = await api('/builders/me', builder.session());
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+          await env.DB.prepare(`UPDATE tax_1099_forms SET status = 'filed' WHERE form_id = ?`).bind(form.formId).run();
+
+          const rejected = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
+          expect(rejected.response.status).toBe(409);
+          expect(rejected.body.error).toMatch(/status "filed"/);
+        });
+      });
+
       // #646 follow-up: lets an admin verify the vendor OAuth handshake
       // works the moment TAX_1099_EFILING_CLIENT_ID/_CLIENT_SECRET/
       // _USER_TOKEN are set, independent of TAX_1099_PAYER_NAME/_EIN (the

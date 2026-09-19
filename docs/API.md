@@ -5225,7 +5225,7 @@ submission each, the stored ciphertext never containing the plaintext SSN
 or address, resubmission overwriting a prior submission, and
 `taxFormType`/`taxFormCompletedAt` showing up on `GET /api/auth/me`.
 
-### `GET /api/tax/admin-forms` / `POST /api/tax/admin-forms/:formId/approve` / `POST /api/tax/admin-forms/:formId/file`
+### `GET /api/tax/admin-forms` / `POST /api/tax/admin-forms/:formId/approve` / `POST /api/tax/admin-forms/:formId/file` / `POST /api/tax/admin-forms/:formId/void`
 
 Admin-only (`401` with no session, `403` for a non-admin). `GET`/`approve`
 are the vendor-independent half of #616 (sub-issue of #350) — deciding who
@@ -5319,6 +5319,21 @@ currently `"approved"`, or has no tax paperwork on file, or a concurrent
 file attempt already claimed it (the same atomic
 `UPDATE ... WHERE status = 'approved'` guard `/approve` itself uses).
 `404` for an unknown `formId`.
+
+`POST /:formId/void` (#763) transitions a `"draft"` or `"approved"` form to
+`"voided"`, stamping `updatedAt` — for an admin correcting a mistaken
+approval, or a draft generated against a snapshot that later turns out to
+be wrong (e.g. a since-discovered duplicate/fraud account). Deliberately
+**not** reachable from `"filed"`: once a form has actually been transmitted
+to the IRS, voiding it here would be misleading — a real correction at that
+point needs an actual corrected-1099 filing process, out of scope for this
+record. `409` if the form is already `"filed"`/`"voided"`, or a concurrent
+void attempt already claimed it (the same atomic
+`UPDATE ... WHERE status IN ('draft', 'approved')` guard idiom as
+`/approve`/`/file`). `404` for an unknown `formId`. A voided form's own
+`user_id`/`tax_year`/`form_type` combination never regenerates a fresh
+draft afterward — same locked-terminal-state behavior as `"approved"`/
+`"filed"` in `upsertTax1099Draft`'s own guard.
 
 **Unverified against a live vendor**: the OAuth2/JWT-signed request shape
 (`worker/index.js`'s `fetchTax1099EfilingToken`/`transmitTax1099Form`) has
