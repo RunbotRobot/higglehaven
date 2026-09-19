@@ -930,6 +930,18 @@ describe('Authentication', () => {
     expect(unconfigured.response.status).toBe(503);
   });
 
+  // #766: same never-configured-in-tests shape as the didit-webhook gate
+  // just above — STRIPE_WEBHOOK_SECRET is never set in this suite (only in
+  // worker/stripe-webhook.test.js's own isolated file), so this proves the
+  // endpoint 503s before ever attempting signature verification.
+  it('gates the stripe-webhook endpoint behind a configured secret', async () => {
+    const unconfigured = await api('/auth/stripe-webhook', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'account.updated', data: { object: { id: 'acct_does_not_exist' } } }),
+    });
+    expect(unconfigured.response.status).toBe(503);
+  });
+
   it('normalizes email casing between signup and login', async () => {
     const email = `Auth-Case-${crypto.randomUUID()}@Example.com`;
     await signup(email, 'a fine long password');

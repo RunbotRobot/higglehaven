@@ -4722,6 +4722,63 @@ function deriveStripeOnboardingStatus(account) {
   return 'pending';
 }
 
+// #766: stripe_onboarding_status/stripe_requirements_due are only ever
+// written by a seller/builder actively resubmitting the onboarding form
+// (handleSellerStripeAccount/handleBuilderStripeAccount above) — nothing
+// ever re-checks Stripe on its own, so a previously-complete account that
+// Stripe later disables (re-KYC, a compliance hold, fraud review) reads as
+// "fully set up" here indefinitely, including at the real-money
+// checkout-eligibility gate (handleInstancePurchase). This mirrors the
+// Didit webhook above: Stripe signs each delivery as
+// `Stripe-Signature: t=<timestamp>,v1=<hex-hmac>`
+// (https://docs.stripe.com/webhooks#verify-manually), the HMAC-SHA256 is
+// computed over `${timestamp}.${rawBody}` keyed by a webhook-specific
+// secret, and verified via the same constant-time timingSafeEqual, never a
+// plain ===. Only `account.updated` is handled — the account id on the
+// event is looked up against both sellers and builders (a Custom account
+// belongs to exactly one, never both) since the event alone doesn't say
+// which role created it.
+async function handleStripeWebhook(request, env, db) {
+  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
+  const rawBody = await request.text();
+  const signatureHeader = request.headers.get('stripe-signature') || '';
+  const signatureParts = Object.fromEntries(
+    signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim())),
+  );
+  if (!signatureParts.t || !signatureParts.v1) throw new HttpError('Invalid webhook signature', 401);
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signedPayload = `${signatureParts.t}.${rawBody}`;
+  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
+  if (!timingSafeEqual(signatureParts.v1, expectedSignature)) {
+    throw new HttpError('Invalid webhook signature', 401);
+  }
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    throw new HttpError('Webhook body is not valid JSON', 400);
+  }
+  if (event.type !== 'account.updated') return json({ received: true });
+  const account = event.data?.object;
+  if (!account?.id) return json({ received: true });
+  const status = deriveStripeOnboardingStatus(account);
+  const requirementsDue = account.requirements?.currently_due || [];
+  const nowIso = new Date().toISOString();
+  await db.batch([
+    db.prepare(`
+      UPDATE sellers SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      WHERE stripe_account_id = ?
+    `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
+    db.prepare(`
+      UPDATE builders SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      WHERE stripe_account_id = ?
+    `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
+  ]);
+  return json({ received: true });
+}
+
 // ---- W-9/W-8BEN tax-ID collection (#614, sub-issue of #350) — the
 // submitted form's sensitive identifying data (SSN/EIN, foreign tax ID,
 // name, address) is encrypted as one JSON blob before it ever reaches D1,
@@ -6054,6 +6111,9 @@ async function handleAuth(request, env, db, route, url) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'didit-webhook') {
     return handleDiditWebhook(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'stripe-webhook') {
+    return handleStripeWebhook(request, env, db);
   }
   return json({ error: 'Not found' }, 404);
 }
