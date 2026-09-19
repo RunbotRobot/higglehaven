@@ -1095,6 +1095,19 @@ both higgles balance and land cap until the bidder is outbid or the
 auction closes, atomically enforced at resolution — see "Land acquisition
 auctions" below.
 
+**#653 (currently paused, unlike #629 above):** `POST` unconditionally
+`503`s past every other validation (`REDEMPTION_PAUSED_PENDING_PROVENANCE`,
+worker/index.js) — `higglesBalanceCents` is one fungible pool with no
+provenance tracking back to real money, so the free/simulated purchase
+path (no real payment ever collected) can mint real-redeemable commission
+exactly like a genuine sale, a zero-capital exploit with no auth or
+capital required at all. Same stopgap-first precedent as #629 above, but
+not yet lifted — needs a provenance-tracking design (or some other bound)
+first, an owner-judgment call. `GET` and `.../stripe-account` above are
+unaffected: a builder can fully connect their payout account and see
+their available balance today, they just can't complete an actual
+redemption yet.
+
 Both require a session (`401` otherwise) and act on the calling account's
 own builder profile.
 
@@ -1154,6 +1167,19 @@ transfer/payout ids) for reconciliation. Response:
 { "redeemedCents": 2000, "stripePayoutId": "po_..." }
 ```
 
+### Frontend wiring (#723)
+
+`#624`/`#625` shipped this backend, but nothing in `src/main.js` ever
+called it until #723 — the same "backend built, frontend never wired" gap
+#710 found for avatar-equip. `renderRedeemHigglesField` (Build settings
+tab, alongside Land Cap — a builder-account concern, not a landlet one)
+shows the available balance, the same Stripe Custom-account onboarding
+form `renderSellSettingsSection` already uses for sellers (duplicated
+rather than shared, to avoid touching that already-working flow), and a
+Redeem button once `availableCents > 0` — whatever `POST` actually
+returns, #653's pause message included, is surfaced as-is rather than
+special-cased in the UI.
+
 #### Testing note
 
 `worker/stripe-connect.test.js`'s "Higgles redemption (#625)" describe
@@ -1166,6 +1192,9 @@ untouched in every rejected case. The actual `transfers`/`payouts` Stripe
 round trip and the atomic-claim race guard aren't covered by any
 automated test in this repo, the same limitation "Real-money checkout"'s
 own testing note already documents for Stripe-dependent code paths.
+`e2e/redeem-higgles-settings.test.mjs` covers #723's frontend end to end
+through the real UI (onboarding submission, balance display, and the
+Redeem button surfacing #653's real pause message).
 
 ### `GET /api/sellers/me/payouts`
 ### `POST /api/sellers/me/payouts`

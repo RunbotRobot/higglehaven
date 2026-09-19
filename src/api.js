@@ -212,6 +212,37 @@ export async function fetchMyOwnedAvatars() {
   return avatars;
 }
 
+// Stripe Connect (Custom account) payout onboarding for a builder's own
+// higgles-to-cash redemption (#624, sub-issue of #349/#324) — same shape
+// as fetchSellerStripeAccount/submitSellerStripeAccount below, against
+// the builders table instead of sellers.
+export async function fetchBuilderStripeAccount() {
+  return requestJson('/builders/me/stripe-account');
+}
+
+export async function submitBuilderStripeAccount(payload) {
+  return requestJson('/builders/me/stripe-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+// Higgles-to-cash redemption (#625) — folds the same onboarding fields
+// fetchBuilderStripeAccount already returns into one call, plus this
+// builder's currently available-to-redeem balance.
+export async function fetchBuilderRedeemStatus() {
+  return requestJson('/builders/me/redeem');
+}
+
+export async function redeemHiggles(amountCents) {
+  return requestJson('/builders/me/redeem', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(amountCents === undefined ? {} : { amountCents }),
+  });
+}
+
 // The logged-in account's own seller profile — see fetchMyBuilder's own
 // comment; the one difference is this is lazily created on first call
 // (selling is opt-in), not guaranteed to already exist from signup.
