@@ -42,6 +42,7 @@ import {
   deleteLandletLevel,
   fetchWorld,
   fetchBuilders,
+  fetchBuildersByIds,
   fetchMyBuilder,
   fetchMySeller,
   fetchMyEquippedAvatar,
@@ -11517,9 +11518,18 @@ async function enterShopMode() {
   // Builder display labels for updateShopLandletInfo — supplementary, so a
   // failure here just leaves shopBuilderLabels empty (falls back to "an
   // unknown builder" per-landlet) rather than blocking Shop mode itself.
+  // #717 (sub-issue of #711): scoped to exactly the owners with a visible
+  // landlet right now, via the already-fetched allLandlets above, instead
+  // of fetchBuilders' entire roster — naturally bounded by how many
+  // distinct owners are on-screen, not the total account count, so this
+  // doesn't need its own pagination once GET /api/builders gets a LIMIT
+  // (#715).
   shopCurrentLandletEntry = null;
   accountMenuLandletInfoEl.hidden = true;
-  fetchBuilders()
+  const visibleOwnerBuilderIds = [...new Set(
+    allLandlets.map((landlet) => landlet.ownerBuilderId).filter((id) => id),
+  )];
+  fetchBuildersByIds(visibleOwnerBuilderIds)
     .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
     .catch(() => {});
 

@@ -687,6 +687,15 @@ plain create/rename), never a stale or silently-wrong figure.
 Lists every builder, oldest first. Not paginated — this is a small,
 dev-scale roster, not a growing content collection.
 
+An optional `ids` query param (comma-separated builder IDs, e.g.
+`?ids=builder-a,builder-b`) narrows the response to exactly those builders
+instead — for a caller (Shop mode's per-landlet owner-label map, #717) that
+only needs a bounded, known set of builders rather than the whole roster.
+Unknown IDs are silently omitted rather than erroring; an empty/all-blank
+`ids` returns `{ builders: [] }` without touching the database. Capped at
+200 IDs per request (`400` past that), the same shape this file's
+catalog-batch handlers use to cap `templateIds`.
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the
