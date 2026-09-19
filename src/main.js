@@ -4776,14 +4776,19 @@ async function renderLandCapField() {
   settingsSectionEl.appendChild(field);
   try {
     // ownedAreaM2 comes straight from the builder object now (#312) —
-    // the backend's own recomputeLandCapsBatch already sums every owned
+    // the backend's own recomputeLandCap already sums every owned
     // landlet's ground area *and* every level's own cap_consumed_m2
     // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
     // so reading it back here is both more accurate (a frontend-side sum
     // over fetchAllLandlets alone silently ignored level area) and
-    // cheaper (no second paginated fetch needed at all).
-    const builders = await fetchBuilders();
-    const me = builders.find((b) => b.builderId === builderId);
+    // cheaper (no second paginated fetch needed at all). Uses
+    // fetchMyBuilder (GET /api/builders/me) rather than scanning the full
+    // GET /api/builders roster for this account's own row (found via
+    // #711's own investigation: the full-roster fetch this used to do
+    // would silently stop finding a late-signed-up builder's own row the
+    // moment that list endpoint gets capped) — this account's own record
+    // is always exactly what's needed here, never anyone else's.
+    const me = await fetchMyBuilder();
     const ownedAreaM2 = me.ownedAreaM2 ?? 0;
     status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
       'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
@@ -8095,8 +8100,9 @@ async function refreshAccountMenuLandCap() {
     return;
   }
   try {
-    const builders = await fetchBuilders();
-    const me = builders.find((b) => b.builderId === builderId);
+    // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
+    // renderLandCapField's own comment above on why.
+    const me = await fetchMyBuilder();
     accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
     accountMenuLandCapEl.hidden = false;
   } catch (err) {
