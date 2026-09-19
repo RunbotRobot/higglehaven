@@ -687,6 +687,13 @@ plain create/rename), never a stale or silently-wrong figure.
 Lists every builder, oldest first. Not paginated — this is a small,
 dev-scale roster, not a growing content collection.
 
+`?label=` (#716) filters to an exact, case-insensitive label match instead
+— still every matching row, not just the first, since labels have no
+uniqueness constraint (migrations/0054's own comment). Used by the "Add
+friend" flow to resolve a typed name without pulling the whole roster
+client-side; unmatched or ambiguous still surfaces as a status message
+the same way it always has, just resolved server-side now.
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the

@@ -81,6 +81,37 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // #716: a real server-side label lookup for the "Add friend" flow, so it
+  // no longer has to pull the entire roster to find one match.
+  it('filters GET /builders by an exact, case-insensitive label match, still returning every match', async () => {
+    const noMatch = await api(`/builders?${new URLSearchParams({ label: 'Nobody Named This' })}`);
+    expect(noMatch.response.status).toBe(200);
+    expect(noMatch.body.builders).toEqual([]);
+
+    const onlyMatch = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ label: 'UniqueLabelForFilterTest' }),
+    });
+    const found = await api(`/builders?${new URLSearchParams({ label: 'uniquelabelforfiltertest' })}`);
+    expect(found.response.status).toBe(200);
+    expect(found.body.builders.map((b) => b.builderId)).toEqual([onlyMatch.body.builder.builderId]);
+
+    // Labels have no uniqueness constraint (migrations/0054's own
+    // comment) — a shared label must still return every matching row, not
+    // just the first, so the frontend's own ambiguous-match handling keeps
+    // working against this filter.
+    const second = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ label: 'Shared Filter Label' }),
+    });
+    const third = await api('/builders', {
+      method: 'POST', body: JSON.stringify({ label: 'Shared Filter Label' }),
+    });
+    const ambiguous = await api(`/builders?${new URLSearchParams({ label: 'Shared Filter Label' })}`);
+    expect(ambiguous.body.builders.map((b) => b.builderId)).toEqual(
+      expect.arrayContaining([second.body.builder.builderId, third.body.builder.builderId]),
+    );
+    expect(ambiguous.body.builders).toHaveLength(2);
+  });
+
   // #336/#325: prerequisite infrastructure for #325's inactivity-triggered
   // auctions — getOrCreateBuilderForUser bumps last_active_at every time a
   // session resolves *your* builder profile, mutation or not (per the
