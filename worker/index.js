@@ -2764,16 +2764,32 @@ async function handleFriendships(request, db, route, url) {
     const builderIdParam = url.searchParams.get('builderId');
     const builderId = builderIdParam === null ? sessionBuilder.builder_id : stringValue(builderIdParam, 'builderId');
     assertOwner(builderId, sessionBuilder.builder_id, 'Not your friendships');
+    // #728: cursor-paginated, same newest-first shape GET /api/notifications
+    // already uses (DESC on both the primary and tiebreak columns) — this
+    // endpoint had no LIMIT at all before, the one list handler in this file
+    // that #711's own sibling-endpoint audit missed.
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = ['(requester_builder_id = ? OR recipient_builder_id = ?)'];
+    const bindings = [builderId, builderId];
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND friendship_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
     const { results } = await db.prepare(`
-      SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ?
-      ORDER BY created_at DESC
-    `).bind(builderId, builderId).all();
-    const otherBuilderIds = results.map((row) =>
+      SELECT * FROM friendships WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, friendship_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const otherBuilderIds = page.map((row) =>
       row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
     const labelsById = await labelsByBuilderId(db, otherBuilderIds);
     const landletsById = await ownedLandletsByBuilderId(db, otherBuilderIds);
+    const last = page.at(-1);
     return json({
-      friendships: results.map((row) => friendshipFromRow(row, builderId, labelsById, landletsById)),
+      friendships: page.map((row) => friendshipFromRow(row, builderId, labelsById, landletsById)),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.friendship_id) : null,
     });
   }
 

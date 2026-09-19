@@ -618,9 +618,23 @@ export async function markAllNotificationsRead() {
 // side of this row am I."
 // No builderId param — the server derives "whose friendships" from the
 // session cookie, never from a client-supplied field.
+// #728: the endpoint itself is now cursor-paginated (previously unbounded),
+// so this pages through every result internally rather than exposing
+// nextCursor to callers — both call sites (renderFriends,
+// refreshFriendsBadge) need the complete list, same as fetchAllLandlets/
+// fetchAllAuctions page internally for their own always-want-everything
+// callers.
 export async function fetchFriendships() {
-  const { friendships } = await requestJson('/friendships');
-  return friendships;
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { friendships, nextCursor } = await requestJson(`/friendships?${query.toString()}`);
+    all.push(...friendships);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 // requesterBuilderId is never sent — the server derives "who's requesting"
