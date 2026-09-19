@@ -45,6 +45,10 @@ await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
 await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
 await page.waitForTimeout(300);
+// #712: the upload wizard's own "List as an equippable avatar" checkbox —
+// exercising the real UI path end to end rather than the PATCH workaround
+// this test used before that checkbox existed.
+await page.check('#upload-avatar-category-checkbox');
 await page.click('#upload-submit-btn');
 await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
 await page.waitForTimeout(500);
@@ -60,18 +64,7 @@ async function fetchJson(pathAndQuery, options) {
 
 const { templates } = (await fetchJson('/api/catalog?limit=100')).body;
 const template = templates.find((t) => t.name === PRODUCT_NAME);
-console.log('uploaded product found in catalog with a real modelUrl:', template?.modelUrl);
-
-// The upload wizard has no category picker — set it directly via the same
-// PATCH the Seller modal's own per-field "Edit ..." panels already use
-// (merges into the existing row, worker/index.js's catalog PATCH handler).
-// "avatar" needs no schema change to be a valid category (freeform text).
-const patched = await fetchJson(`/api/catalog/${template.templateId}`, {
-  method: 'PATCH',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ category: 'avatar' }),
-});
-console.log('category patched to avatar (status should be 200):', patched.status, patched.body.template?.category);
+console.log('uploaded product found in catalog with a real modelUrl and avatar category:', template?.modelUrl, template?.category);
 
 const { builders } = (await fetchJson('/api/builders')).body;
 const builder = builders.find((b) => b.label === LABEL);
@@ -116,7 +109,7 @@ const fallbackWarningLogged = consoleWarnings.some((w) => w.includes('Failed to 
 console.log('no fallback-to-default-avatar warning logged (should be true):', !fallbackWarningLogged);
 
 const pass = !!template?.modelUrl &&
-  patched.status === 200 && patched.body.template?.category === 'avatar' &&
+  template.category === 'avatar' &&
   placed.status === 201 &&
   purchased.status === 201 &&
   equipped.status === 200 &&

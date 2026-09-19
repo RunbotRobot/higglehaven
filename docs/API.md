@@ -6528,8 +6528,26 @@ carries any animations at all, it shows either which of `idle`/`walk`/
 `fly` were found, or that none of the file's clips matched that
 convention by name. Silent for a model with no animations at all (the
 overwhelmingly common case — an ordinary chair or brick has nothing to
-report), and shown regardless of the template's eventual category, since
-category isn't chosen until after this step (#680/#681's own finding).
+report), and shown unconditionally rather than gated on the checkbox
+below, since the async animation check doesn't wait on (or care about)
+whatever the seller ends up choosing there.
+
+### The upload flow itself (#712, sub-issue of #710)
+
+#680's own scope note above ("the upload flow itself" is separate scope)
+went unfilled long enough that #679 closed 100% complete while the
+feature stayed completely unreachable through the app: nothing ever set
+`category: 'avatar'` on a real listing, and nothing ever called
+`fetchMyOwnedAvatars`/`equipAvatar` to browse or equip one (see #710 for
+the full writeup). This sub-issue closes the first half: an "List as an
+equippable avatar" checkbox on the upload wizard's 'dimensions' step
+(right after the animation-detection note above), which sets
+`category: 'avatar'` on `createCatalogTemplate` when checked and omits
+the field entirely otherwise — never hardcoding the server's own
+`'placeholder'` default, so `validateTemplate` (worker/index.js) stays
+the one source of truth for what an unchecked listing's category is. The
+buyer-facing "browse owned avatars and equip one" half is #713's own
+separate scope, not this one's.
 
 ## Automated tests
 
