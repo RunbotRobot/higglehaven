@@ -558,7 +558,7 @@ async function handleApi(request, env, url) {
 // CONTROL_ROOM_API_KEY) exercise the "no access" 401 path by default.
 async function requireControlRoomAccess(request, env, db) {
   const providedKey = request.headers.get('x-control-room-key');
-  if (env.CONTROL_ROOM_API_KEY && providedKey === env.CONTROL_ROOM_API_KEY) {
+  if (env.CONTROL_ROOM_API_KEY && providedKey && timingSafeEqual(providedKey, env.CONTROL_ROOM_API_KEY)) {
     return { via: 'api-key' };
   }
   const user = await currentUser(request, db);
