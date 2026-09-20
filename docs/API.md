@@ -2807,7 +2807,11 @@ draft replacement and immutable version snapshot as one batch, so a validation
 or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
 `Version N`. `versionName` is capped at 100 characters (`400` past that,
-#480 — see the versions endpoint below for why).
+#480 — see the versions endpoint below for why). Rate-limited per builder
+(20 per 15-minute window, `429` past that, #796) — every call creates a new
+version snapshot as a side effect (see "Landlet versions" below), the same
+per-owner ceiling `POST .../versions` itself uses, since both write paths
+share one `landlet-version:<builderId>` bucket.
 
 **Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
 `instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
@@ -2873,6 +2877,11 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 
 Requires a session logged in as the landlet's owner (`403` otherwise).
 Saves the landlet's current placed instances as a new immutable snapshot.
+Rate-limited per builder (20 per 15-minute window, `429` past that, #796),
+sharing the same `landlet-version:<builderId>` bucket as `PUT .../draft`
+above — each save duplicates every placed instance into a new
+`version_instances` snapshot, so an unthrottled caller could otherwise grow
+storage without bound.
 `name` and `metadata` are optional; omitted names default to `Version N`.
 `name` is capped at 100 characters (`400` past that, #480) — the same
 `labelValue`/`optionalLabelValue` short-label cap already applied to

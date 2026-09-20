@@ -1848,6 +1848,17 @@ async function assertUploadedModelExists(bucket, modelUrl) {
   }
 }
 
+// #796: both version-creating write paths below (this POST, and the
+// auto-version side effect of PUT /landlets/:id/draft) had no rate limit at
+// all, unlike every other authenticated per-owner repeatable write in this
+// file (bundle-create, calendar-event, catalog-thumbnail, concept-image) —
+// each save duplicates up to 250 placed_instances rows into a new
+// version_instances snapshot, so an unthrottled caller could grow storage
+// without bound. Both write paths are user-initiated (a Publish button and
+// a Restore button, not an autosave loop — confirmed via src/main.js), so
+// this can be a plain per-owner ceiling like those siblings.
+const LANDLET_VERSION_RATE_LIMIT_MAX = 20;
+
 async function handleLandletVersions(request, db, route, url) {
   const landletId = route[1];
 
@@ -1878,6 +1889,7 @@ async function handleLandletVersions(request, db, route, url) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const versionId = crypto.randomUUID();
     // #480: same "optional user-facing short label, no upper bound" gap
@@ -7071,6 +7083,7 @@ async function handleLandletDraft(request, db, landletId) {
     // there's nothing else to compare against.
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
     if (input.instances.length > 250) throw new HttpError('instances must contain at most 250 items', 400);
