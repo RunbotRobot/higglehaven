@@ -414,9 +414,12 @@ async function handleUploadedAsset(request, env) {
     // used everywhere else here (auction bids, reviews, friendships) — a
     // template referencing this model created between an earlier check and
     // now would otherwise still lose its file out from under it.
+    // #774: model_url and image_url are both content-addressed keys into
+    // this same bucket (the latter written by POST .../thumbnail) — an
+    // object referenced only as a thumbnail must block deletion here too.
     const referenced = await env.DB.prepare(`
-      SELECT template_id FROM catalog_templates WHERE model_url = ? LIMIT 1
-    `).bind(modelUrl).first();
+      SELECT template_id FROM catalog_templates WHERE model_url = ? OR image_url = ? LIMIT 1
+    `).bind(modelUrl, modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced by a catalog template', 409);
     await env.MODELS.delete(key);
     return json({ deleted: true });
@@ -966,12 +969,17 @@ async function handleModelListing(request, env, url) {
   const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
   const references = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   if (modelUrls.length > 0) {
+    // #774: image_url (thumbnails) shares this same bucket/URL scheme as
+    // model_url — checking model_url alone marked every live thumbnail
+    // "unreferenced".
     const placeholders = modelUrls.map(() => '?').join(', ');
     const referenced = await env.DB.prepare(`
-      SELECT template_id, model_url FROM catalog_templates
-      WHERE model_url IN (${placeholders}) ORDER BY template_id
-    `).bind(...modelUrls).all();
-    for (const row of referenced.results) references.get(row.model_url).push(row.template_id);
+      SELECT template_id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
+      UNION ALL
+      SELECT template_id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
+      ORDER BY template_id
+    `).bind(...modelUrls, ...modelUrls).all();
+    for (const row of referenced.results) references.get(row.url).push(row.template_id);
   }
   return json({
     models: listing.objects.map((object) => {
@@ -1031,11 +1039,16 @@ async function handleModelCleanup(request, env) {
     const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
     const referencedUrls = new Set();
     if (modelUrls.length > 0) {
+      // #774: image_url (thumbnails) shares this same bucket/URL scheme as
+      // model_url — checking model_url alone would target live thumbnails
+      // for deletion as "unreferenced".
       const placeholders = modelUrls.map(() => '?').join(', ');
       const referenced = await env.DB.prepare(`
-        SELECT DISTINCT model_url FROM catalog_templates WHERE model_url IN (${placeholders})
-      `).bind(...modelUrls).all();
-      for (const row of referenced.results) referencedUrls.add(row.model_url);
+        SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
+        UNION
+        SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
+      `).bind(...modelUrls, ...modelUrls).all();
+      for (const row of referenced.results) referencedUrls.add(row.url);
     }
     let examinedWholePage = true;
     for (let i = 0; i < listing.objects.length; i++) {
@@ -1065,12 +1078,16 @@ async function handleModelCleanup(request, env) {
   // whatever is still genuinely unreferenced.
   let toDelete = targets;
   if (targets.length > 0) {
+    // #774: same model_url-vs-image_url gap as the scan above — re-checked
+    // here too since this query is independent of it.
     const targetUrls = targets.map((object) => `/uploads/${object.key}`);
     const placeholders = targetUrls.map(() => '?').join(', ');
     const stillReferenced = await env.DB.prepare(`
-      SELECT DISTINCT model_url FROM catalog_templates WHERE model_url IN (${placeholders})
-    `).bind(...targetUrls).all();
-    const rescuedUrls = new Set(stillReferenced.results.map((row) => row.model_url));
+      SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
+      UNION
+      SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
+    `).bind(...targetUrls, ...targetUrls).all();
+    const rescuedUrls = new Set(stillReferenced.results.map((row) => row.url));
     toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
   }
   if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
@@ -1146,6 +1163,13 @@ const CATALOG_PATCH_RATE_LIMIT_MAX = 20;
 // to stay ungated (nothing legitimate deletes the same unowned templates
 // dozens of times over), so this can be a plain, low ceiling.
 const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
+
+// #775: seller-owned, but writes a fresh R2 object per call (a slightly
+// different canvas render hashes differently, defeating the content-
+// addressed dedup below) with no other throttle — same per-seller shape as
+// CONCEPT_IMAGE_RATE_LIMIT_MAX, not IP-keyed like the anonymous-path limits
+// above since a real session always backs this call.
+const THUMBNAIL_UPLOAD_RATE_LIMIT_MAX = 20;
 
 // Backlog audit: POST .../similarity-search (#329) is unauthenticated
 // (deliberately — a read over already-public catalog data, see
@@ -1525,6 +1549,11 @@ async function handleCatalog(request, db, route, url, models, env) {
     }
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+    // #775: this writes into the same MODELS bucket handleModelUpload's own
+    // MAX_TOTAL_STORAGE_BYTES cap protects, and a re-rendered thumbnail
+    // hashes differently each time (defeating the dedup below), so it needs
+    // the same rate limit + reservation dance those paths use.
+    await checkRateLimit(db, `catalog-thumbnail:${sessionSeller.seller_id}`, THUMBNAIL_UPLOAD_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const bytes = decodeThumbnailDataUrl(input.imageDataUrl);
     const embedding = validateThumbnailEmbedding(input.embedding);
@@ -1532,7 +1561,13 @@ async function handleCatalog(request, db, route, url, models, env) {
     const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     const key = `thumbnails/${hash}.png`;
     if (!(await models.head(key))) {
-      await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+      const usage = await getStorageUsage(models);
+      const reservationId = await reserveStorageBudget(db, usage, bytes.byteLength, 'Thumbnail');
+      try {
+        await models.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+      } finally {
+        await db.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
+      }
     }
     const imageUrl = `/uploads/${key}`;
     await db.prepare(`
