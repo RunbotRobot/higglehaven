@@ -68,3 +68,50 @@ describe('Access gate (/__access/login)', () => {
     expect(otherIp.status).toBe(302);
   });
 });
+
+// #780: Stripe/Didit can never present the hh_access cookie a real browser
+// gets after passphrase entry, so their webhook deliveries must reach
+// their own handlers (which verify a signature/HMAC independently) instead
+// of getting a blanket 401 from the gate itself, unlike every other
+// /api/* route.
+describe('Access gate exemptions for inbound webhooks (#780)', () => {
+  it('lets an unauthenticated request reach the Stripe webhook handler instead of the access gate', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', {
+      method: 'POST',
+      body: '{}',
+    });
+    // No hh_access cookie was sent, so a blocked request would be the
+    // gate's own 401 {"error":"Unauthorized"} — this must not be that.
+    // STRIPE_WEBHOOK_SECRET is unset in this test env, so the handler
+    // itself 503s, proving the gate let the request through to it.
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error).not.toBe('Unauthorized');
+  });
+
+  it('lets an unauthenticated request reach the Didit webhook handler instead of the access gate', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/api/auth/didit-webhook', {
+      method: 'POST',
+      body: '{}',
+    });
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error).not.toBe('Unauthorized');
+  });
+
+  it('still blocks an unauthenticated request to an ordinary /api/* route', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/api/health', { method: 'GET' });
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('does not exempt the webhook paths from a GET request', async () => {
+    // The exemption is POST-only (webhooks only ever POST) — a GET to the
+    // same path should still be gated like any other /api/* route.
+    const response = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', { method: 'GET' });
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.error).toBe('Unauthorized');
+  });
+});

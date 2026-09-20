@@ -208,10 +208,22 @@ function htmlResponse(body, status = 200) {
   return new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 
+// Inbound webhook deliveries (Stripe, Didit) can never present the
+// hh_access cookie a real browser gets after passphrase entry — the
+// sending service isn't a browser and has no way to log in. Both routes
+// verify their own signature/HMAC before doing anything, so exempting them
+// here doesn't weaken the gate for real users; it just lets the vendor's
+// server reach a route it authenticates a different way.
+const ACCESS_GATE_EXEMPT_PATHS = new Set(['/api/auth/stripe-webhook', '/api/auth/didit-webhook']);
+
 // Returns a Response to short-circuit the request (unauthorized, or a
 // freshly-granted redirect), or null to let the real routing below handle
 // it — the passphrase check passed.
 async function checkAccessGate(request, url, env) {
+  if (ACCESS_GATE_EXEMPT_PATHS.has(url.pathname) && request.method === 'POST') {
+    return null;
+  }
+
   if (url.pathname === '/__access/login' && request.method === 'POST') {
     try {
       await checkRateLimit(env.DB, `access-login:${clientIp(request)}`, ACCESS_LOGIN_RATE_LIMIT_MAX);

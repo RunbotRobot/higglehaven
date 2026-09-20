@@ -5551,7 +5551,13 @@ Seed data includes:
 Every request — pages, every `/api/*` route, `/uploads/*` — can optionally be
 gated behind a single shared passphrase, entirely at the top of the Worker's
 `fetch` handler in `worker/index.js`, before any of the routing described
-above ever runs.
+above ever runs. The two exceptions are `POST /api/auth/stripe-webhook` and
+`POST /api/auth/didit-webhook`: Stripe's and Didit's servers deliver these
+directly and can never present the gate's cookie, so both are exempted from
+the gate itself and instead verify their own signature/HMAC on every request
+(see "Authentication" above) — exempting them doesn't weaken the gate for
+real users, since a request to either path still can't do anything without
+passing that check.
 
 Configure it by setting the `ACCESS_PASSPHRASE` secret:
 
