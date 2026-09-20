@@ -844,11 +844,21 @@ the next sequential rank on a builder's first-ever claim, as long as the
 cohort isn't full yet:
 
 ```sql
+WITH RECURSIVE seq(n) AS (
+  SELECT 1
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < ?
+)
 UPDATE builders
-SET pioneer_rank = (SELECT COALESCE(MAX(pioneer_rank), 0) + 1 FROM builders)
+SET pioneer_rank = (
+  SELECT MIN(n) FROM seq
+  WHERE n NOT IN (SELECT pioneer_rank FROM builders WHERE pioneer_rank IS NOT NULL)
+)
 WHERE builder_id = ? AND pioneer_rank IS NULL
   AND (SELECT COUNT(*) FROM builders WHERE pioneer_rank IS NOT NULL) < ?
 ```
+
+(the smallest rank `1..PIONEER_COHORT_SIZE` nobody currently holds — not simply `MAX(pioneer_rank) + 1`, since deleting a non-max-ranked pioneer can free a gap in the middle rather than at the tail; see #787.)
 
 No-ops silently once either condition fails: past the 100-builder cutoff,
 or if this builder already holds a rank (claiming a second landlet after
