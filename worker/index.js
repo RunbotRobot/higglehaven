@@ -246,7 +246,7 @@ async function checkAccessGate(request, url, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.hostname === 'www.higglehaven.com') {
@@ -268,7 +268,7 @@ export default {
     }
 
     if (url.pathname.startsWith('/api/')) {
-      return handleApi(request, env, url).catch((error) => {
+      return handleApi(request, env, url, ctx).catch((error) => {
         const httpError = error instanceof HttpError ? error : databaseHttpError(error);
         if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
         console.error(error);
@@ -450,7 +450,7 @@ async function handleUploadedAsset(request, env) {
   return new Response(object.body, { headers });
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, ctx) {
   if (!env.DB) {
     return json({ error: 'D1 binding DB is not configured' }, 500);
   }
@@ -462,7 +462,7 @@ async function handleApi(request, env, url) {
   }
 
   if (route[0] === 'auth') {
-    return handleAuth(request, env, env.DB, route, url);
+    return handleAuth(request, env, env.DB, route, url, ctx);
   }
 
   if (route[0] === 'builders') {
@@ -6121,14 +6121,14 @@ async function handleTax(request, env, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-async function handleAuth(request, env, db, route, url) {
+async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
-    return handleRequestPasswordReset(request, env, db);
+    return handleRequestPasswordReset(request, env, db, ctx);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'reset-password') return handleResetPassword(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'resend-verification') {
@@ -6557,7 +6557,7 @@ async function handleVerifyEmail(request, db) {
   return json({ verified: true });
 }
 
-async function handleRequestPasswordReset(request, env, db) {
+async function handleRequestPasswordReset(request, env, db, ctx) {
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
 
@@ -6577,13 +6577,31 @@ async function handleRequestPasswordReset(request, env, db) {
     await db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
       .bind(tokenHash, row.user_id, expiresAt).run();
     const resetUrl = `${appBaseUrl(env)}/?resetPassword=${token}`;
-    const emailSent = await sendEmail(env, {
+    const emailPayload = {
       to: email,
       subject: 'Reset your higglehaven password',
       html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
       text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
-    });
-    if (!emailSent) devResetUrl = resetUrl;
+    };
+    // #778: awaiting sendEmail here used to put a real Resend API round-trip
+    // on this branch's response path while the no-such-user branch above
+    // returns almost instantly, letting an attacker enumerate registered
+    // emails by latency despite the identical response body — the same bug
+    // class #771 fixed for login's PBKDF2 cost. When Resend is actually
+    // configured (production), fire the send in the background via
+    // ctx.waitUntil instead of awaiting it, so both branches return in
+    // comparable time. In dev/test (RESEND_API_KEY unset), sendEmail
+    // returns false synchronously with no network call — no timing gap to
+    // close — so it stays awaited there, which is what lets devResetUrl
+    // keep working for local testing.
+    if (env.RESEND_API_KEY) {
+      ctx.waitUntil(sendEmail(env, emailPayload).catch((error) => {
+        console.error('Password reset email failed', error);
+      }));
+    } else {
+      const emailSent = await sendEmail(env, emailPayload);
+      if (!emailSent) devResetUrl = resetUrl;
+    }
   }
   return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
 }
