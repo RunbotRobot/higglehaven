@@ -6830,12 +6830,37 @@ async function handleLandlets(request, db, route, url) {
       // PIONEER_COHORT_SIZE ranks have been handed out so far. No-ops
       // silently past the cutoff, or if this builder already has a rank
       // (e.g. claiming a second landlet after releasing an earlier one).
+      //
+      // #787: assigning MAX(pioneer_rank) + 1 only matches the gate's own
+      // live-member COUNT check while ranks stay a contiguous 1..N — but
+      // DELETE /api/builders/:id hard-deletes a builder row with no
+      // pioneer-rank compaction, so a deleted non-max-ranked pioneer
+      // leaves a gap: COUNT drops below PIONEER_COHORT_SIZE while MAX
+      // still sits at the old high watermark, so the next claimer used to
+      // get handed rank 101+ even though live membership never actually
+      // exceeded 100. Naively assigning COUNT + 1 instead doesn't fix
+      // this either — with a gap in the middle (not at the tail), COUNT+1
+      // can collide with a rank some other still-live builder already
+      // holds. The only value that's always both <= PIONEER_COHORT_SIZE
+      // and never a duplicate is the smallest 1..PIONEER_COHORT_SIZE rank
+      // nobody currently holds — which is exactly what "frees one cohort
+      // slot... rather than leaving ranks permanently sparse"
+      // (docs/API.md) describes: reusing the specific freed slot, not
+      // just keeping the live count topped up.
       await db.prepare(`
+        WITH RECURSIVE seq(n) AS (
+          SELECT 1
+          UNION ALL
+          SELECT n + 1 FROM seq WHERE n < ?
+        )
         UPDATE builders
-        SET pioneer_rank = (SELECT COALESCE(MAX(pioneer_rank), 0) + 1 FROM builders)
+        SET pioneer_rank = (
+          SELECT MIN(n) FROM seq
+          WHERE n NOT IN (SELECT pioneer_rank FROM builders WHERE pioneer_rank IS NOT NULL)
+        )
         WHERE builder_id = ? AND pioneer_rank IS NULL
           AND (SELECT COUNT(*) FROM builders WHERE pioneer_rank IS NOT NULL) < ?
-      `).bind(builderId, PIONEER_COHORT_SIZE).run();
+      `).bind(PIONEER_COHORT_SIZE, builderId, PIONEER_COHORT_SIZE).run();
     }
 
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();

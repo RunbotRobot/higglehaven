@@ -593,6 +593,42 @@ describe('Builders', () => {
     expect(lateAfter.body.builder.pioneerRank).toBeNull();
   });
 
+  // #787: the assignment used to hand out MAX(pioneer_rank) + 1, which
+  // only matches the gate's own live-member COUNT check while ranks stay
+  // contiguous. Deleting a non-max-ranked pioneer breaks that — COUNT
+  // drops below the cohort size while MAX doesn't move — so the next
+  // claimer used to get assigned a rank past PIONEER_COHORT_SIZE even
+  // though live membership never actually exceeded it. The fix backfills
+  // the smallest still-unused rank (here, the freed 50 — not 100, which
+  // some other still-live filler already holds and a naive COUNT + 1
+  // would have collided with).
+  it('reuses the specific freed rank instead of exceeding the cohort size after a non-max-ranked pioneer is deleted', async () => {
+    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
+    const fillerValues = Array.from({ length: 100 }, (_, i) => `('builder-cohort-gap-filler-${i}', 'Filler ${i}', ${i + 1})`).join(', ');
+    await env.DB.prepare(`INSERT INTO builders (builder_id, label, pioneer_rank) VALUES ${fillerValues}`).run();
+
+    // Delete a non-max-ranked filler (rank 50, not rank 100) directly via
+    // the DB — equivalent to that builder having self-deleted through
+    // DELETE /api/builders/:id, which does the same plain row delete with
+    // no pioneer-rank compaction.
+    await env.DB.prepare(`DELETE FROM builders WHERE builder_id = 'builder-cohort-gap-filler-49'`).run();
+
+    const late = await signupBuilder('gap-late-claimer');
+    await createGreenbeltLandlet('pioneer-gap-landlet');
+    await api('/landlets/pioneer-gap-landlet/claim', late.session({ method: 'POST' }));
+
+    const lateAfter = await api('/builders/me', late.session());
+    expect(lateAfter.body.builder.isPioneer).toBe(true);
+    expect(lateAfter.body.builder.pioneerRank).toBe(50);
+
+    // Also assert no duplicate ranks exist among the whole live cohort —
+    // the real invariant a naive COUNT + 1 fix would have silently broken.
+    const { results } = await env.DB.prepare(
+      'SELECT pioneer_rank, COUNT(*) AS n FROM builders WHERE pioneer_rank IS NOT NULL GROUP BY pioneer_rank HAVING n > 1',
+    ).all();
+    expect(results).toEqual([]);
+  });
+
   // Found via backlog audit (#362): unlike every other public, repeatable
   // mutation in this file, POST /api/builders (unauthenticated on purpose
   // — see that handler's own comment) had no rate limit and no length cap
