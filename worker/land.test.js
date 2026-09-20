@@ -1279,6 +1279,60 @@ describe('Land cap', () => {
     expect(thirdBid.response.status).toBe(201);
   });
 
+  // #785: resolveAuction used to gate the winner's land cap with a plain
+  // recomputeLandCap() read-then-compare, not an atomic conditional write
+  // (unlike the balance debit right above it in the same function, and
+  // unlike handleAuctionBids' own already-atomic INSERT ... WHERE guard for
+  // the very same check at bid-placement time, #489/#629). Two auctions the
+  // same builder is the sole bidder on can each resolve reading the other's
+  // pre-transfer owned area, so both pass a cap that only actually covers
+  // one of them. Bids are seeded directly rather than placed through the
+  // API because handleAuctionBids' own bid-time hold (#629, already atomic)
+  // would correctly refuse the second bid up front — this test is for
+  // resolveAuction's own independent atomicity, a defense that must hold
+  // regardless of whether some other gate happens to also catch this case.
+  it("never lets a builder's land end up over cap when two of their winning auctions resolve concurrently", async () => {
+    const sellerA = await signupBuilder('land-cap-resolve-race-seller-a');
+    const sellerB = await signupBuilder('land-cap-resolve-race-seller-b');
+    const bidder = await signupBuilder('land-cap-resolve-race-bidder');
+    await fundHiggles(bidder);
+    // A fresh builder's cap is 1000 m² — winning both 700 m² auctions would
+    // be 1400 m², over cap, even though either alone fits comfortably.
+    await createGreenbeltLandletWithArea('land-cap-resolve-race-landlet-a', 700);
+    await createGreenbeltLandletWithArea('land-cap-resolve-race-landlet-b', 700);
+    await claim('land-cap-resolve-race-landlet-a', sellerA);
+    await claim('land-cap-resolve-race-landlet-b', sellerB);
+    const auctionA = await startAuction('land-cap-resolve-race-landlet-a', sellerA);
+    const auctionB = await startAuction('land-cap-resolve-race-landlet-b', sellerB);
+    const auctionIdA = auctionA.body.auction.auctionId;
+    const auctionIdB = auctionB.body.auction.auctionId;
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('land-cap-resolve-race-bid-a', auctionIdA, bidder.builderId, 100),
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('land-cap-resolve-race-bid-b', auctionIdB, bidder.builderId, 100),
+      env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id IN (?, ?)`)
+        .bind(auctionIdA, auctionIdB),
+    ]);
+
+    await Promise.all([
+      api(`/auctions/${auctionIdA}`),
+      api(`/auctions/${auctionIdB}`),
+    ]);
+
+    const { results: landlets } = await env.DB.prepare(
+      `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (?, ?)`,
+    ).bind('land-cap-resolve-race-landlet-a', 'land-cap-resolve-race-landlet-b').all();
+    const wonByBidder = landlets.filter((l) => l.owner_builder_id === bidder.builderId);
+    // Exactly one of the two must have actually transferred — the other
+    // candidate must have lost the atomic land-cap gate and stayed with its
+    // seller, never both landing on the same over-cap builder at once.
+    expect(wonByBidder).toHaveLength(1);
+  });
+
   it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
     // The claim endpoint's own NOT EXISTS guard already limits a builder to
     // exactly one claimed lándlet at a time regardless of land cap, so a

@@ -4123,8 +4123,47 @@ async function resolveAuction(db, auction) {
     `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents).run();
     if (debited.meta.changes === 0) continue;
 
-    const candidateCap = await recomputeLandCap(db, candidate.bidder_builder_id);
-    if (candidateCap.ownedAreaM2 + auctionedLandlet.area_m2 > candidateCap.nextCap + LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2) {
+    // #785: a plain recomputeLandCap() read-then-compare here (like the
+    // balance check above uses a conditional UPDATE, not a read-then-
+    // compare) would let two auctions the same builder is concurrently
+    // winning each read the other's pre-transfer owned area and both pass
+    // — the same stale-snapshot shape #489/#629 already closed for bid
+    // placement (handleAuctionBids' own atomic INSERT ... WHERE, a few
+    // hundred lines up), just never applied here too. Folding the live
+    // land-cap re-derivation into the ownership transfer's own WHERE
+    // clause makes the transfer itself the atomic gate: it only lands if
+    // this candidate is still under cap the instant it's written, exactly
+    // mirroring that INSERT's subquery shape. Run standalone (not
+    // deferred into the statements batch below) for the same reason the
+    // balance debit above is standalone — D1's db.batch can't branch on
+    // an earlier statement's row count within the same call, and the next
+    // candidate needs to know *now* whether to be tried.
+    const transferred = await db.prepare(`
+      UPDATE landlets
+      SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ?
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((
+              SELECT SUM(area_m2) FROM landlets AS owned
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
+        )
+    `).bind(
+      candidate.bidder_builder_id, auction.landlet_id,
+      candidate.bidder_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2,
+      auctionedLandlet.area_m2, candidate.bidder_builder_id, candidate.bidder_builder_id,
+    ).run();
+    if (transferred.meta.changes === 0) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
       continue;
@@ -4137,15 +4176,14 @@ async function resolveAuction(db, auction) {
     db.prepare('UPDATE auctions SET winning_bid_id = ? WHERE auction_id = ?').bind(winner ? winner.bid_id : null, auction.auction_id),
   ];
   if (winner) {
+    // Ownership itself was already transferred above, atomically gated on
+    // the winner's land cap — only the build-cleanup and money/notification
+    // side effects remain, safe to batch together now that the transfer is
+    // confirmed to have actually landed.
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
-      db.prepare(`
-        UPDATE landlets
-        SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ?
-      `).bind(winner.bidder_builder_id, auction.landlet_id),
       db.prepare(`
         UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
       `).bind(winner.amount_cents, auction.seller_builder_id),
