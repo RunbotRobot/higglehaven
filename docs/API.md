@@ -1643,6 +1643,14 @@ otherwise (unlike `PATCH` above, this endpoint never falls open for an
 unowned/orphaned template, since it writes new bytes to storage rather than
 just editing a row). `404` if the template doesn't exist.
 
+Rate-limited per seller (20 per 15-minute window, `429` past that — same
+window `POST /api/models` and `POST .../concept-image` use) and, like those
+two, subject to the same application-level `MAX_TOTAL_STORAGE_BYTES` cap on
+the shared `MODELS` bucket, checked immediately before the R2 write (`507`
+if there's no headroom left) (#775) — a re-rendered thumbnail hashes
+differently from the last one, so nothing here can be deduplicated away
+before it counts against either limit.
+
 Request body:
 
 ```json
@@ -6172,7 +6180,11 @@ the built-in catalog:
   bodies. Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`,
   `deletable`, and sorted `referencedByTemplateIds`. Reference metadata is
   resolved with one bounded D1 query for the R2 page, allowing cleanup
-  tooling to distinguish safe deletions without probing each object.
+  tooling to distinguish safe deletions without probing each object. An
+  object is "referenced" if any catalog template's `model_url` **or**
+  `image_url` matches it (#774) — the same `MODELS` bucket also holds
+  content-addressed product thumbnails (`POST .../thumbnail` below), which
+  are tracked only through `image_url`.
   Listings use a `limit` from 1 to 100, and return the R2-backed opaque
   `nextCursor` for the next page. This is a dev inventory for finding
   uploads that can be reclaimed.
@@ -6194,7 +6206,9 @@ the built-in catalog:
   any object referenced by a template created in the meantime is dropped
   from the response and left alone — narrowing (not eliminating; R2 and D1
   aren't a single transaction) the window for a template creation racing
-  this cleanup. Set boolean `dryRun` to `true` to return the same proposed
+  this cleanup. Both the initial scan and this final re-check match against
+  `model_url` **or** `image_url` (#774), so a live product thumbnail is
+  never treated as unreferenced. Set boolean `dryRun` to `true` to return the same proposed
   targets and reclaimed-byte total without deleting anything (including that
   same final re-check); the response echoes `dryRun`.
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
@@ -6212,7 +6226,9 @@ the built-in catalog:
   return `404`. The referenced-model check runs as the very last step before
   the actual R2 delete (after confirming the object exists), narrowing the
   window against a template referencing this model being created in
-  between. `GET`/`HEAD` above stay unauthenticated — serving an
+  between. Like the listing/cleanup endpoints above, the referenced-model
+  check matches `model_url` **or** `image_url` (#774). `GET`/`HEAD` above
+  stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).

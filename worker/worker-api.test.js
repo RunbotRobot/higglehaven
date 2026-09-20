@@ -286,6 +286,51 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
+  // #774: image_url (a product thumbnail, written by POST .../thumbnail)
+  // shares this same bucket/URL scheme as model_url, but the listing/
+  // cleanup/single-delete reference checks above only ever looked at
+  // model_url — a live thumbnail looked "unreferenced" and cleanup would
+  // delete it out from under its catalog template.
+  it('treats an object referenced only via image_url as still referenced', async () => {
+    const owner = await signupSeller('thumbnail-cleanup-owner');
+    const created = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'thumbnail-cleanup-template',
+        name: 'Thumbnail cleanup test product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: owner.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    const thumbnail = await api('/catalog/thumbnail-cleanup-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('thumbnail-cleanup-test-bytes')}` }),
+    }));
+    expect(thumbnail.response.status).toBe(200);
+    const imageUrl = thumbnail.body.imageUrl;
+
+    const listing = await api('/models?limit=100', adminSession());
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl: imageUrl,
+      referencedByTemplateIds: ['thumbnail-cleanup-template'],
+      deletable: false,
+    }));
+
+    const directDelete = await SELF.fetch(`https://higglehaven.test${imageUrl}`, adminSession({ method: 'DELETE' }));
+    expect(directDelete.status).toBe(409);
+
+    const cleanup = await api('/models/cleanup', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ maxDeletes: 100 }),
+    }));
+    expect(cleanup.response.status).toBe(200);
+    expect(cleanup.body.targetModelUrls).not.toContain(imageUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${imageUrl}`)).status).toBe(200);
+  });
+
   // #540: the seller's own "faux lándlet" 3D array paginates by a
   // cumulative model-file-size cap — this is the field that makes that
   // possible, previously computed by POST /api/models but discarded by

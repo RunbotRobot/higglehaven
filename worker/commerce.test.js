@@ -1826,6 +1826,67 @@ describe('Product-image thumbnail (#327)', () => {
     }));
     expect(first.body.imageUrl).toBe(second.body.imageUrl);
   });
+
+  // #775: this endpoint had no rate limit at all — a seller session could
+  // loop it indefinitely, each call hashing to a distinct R2 key (unlike
+  // the dedup test above) since the whole point here is real-looking
+  // rendered output, not identical bytes.
+  it('rate-limits thumbnail uploads per seller', async () => {
+    const owner = await signupSeller('thumbnail-rate-limit-seller');
+    await createOwnedTemplate('thumbnail-rate-limit-template', owner);
+
+    for (let i = 0; i < 20; i++) {
+      const response = await api('/catalog/thumbnail-rate-limit-template/thumbnail', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+      }));
+      expect(response.response.status).toBe(200);
+    }
+    const limited = await api('/catalog/thumbnail-rate-limit-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: ONE_PIXEL_PNG_DATA_URL }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
+  // #775: this endpoint wrote straight to R2 with no reservation against
+  // MAX_TOTAL_STORAGE_BYTES — same race/cap-overrun exposure the
+  // model-upload and concept-image paths already guard against (see
+  // worker-api.test.js's own "accepts only one of two concurrent uploads"
+  // test for the sibling case on the model-upload path).
+  it('enforces the shared storage cap on thumbnail uploads', async () => {
+    const owner = await signupSeller('thumbnail-storage-cap-seller');
+    await createOwnedTemplate('thumbnail-storage-cap-template', owner);
+
+    const storage = await api('/models/storage', adminSession());
+    const usedBytes = storage.body.usedBytes;
+    const capBytes = 8 * 1024 * 1024 * 1024;
+    // Seed a fake in-flight reservation so effectively no headroom remains.
+    await env.DB.prepare(`
+      INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES (?, ?, ?)
+    `).bind(`test-reservation-${crypto.randomUUID()}`, capBytes - usedBytes, Date.now()).run();
+
+    // Unique bytes, so this doesn't dedup against an object some other
+    // test already put at this content-addressed key — a dedup hit would
+    // skip the reservation check entirely (see the "if (!(await
+    // models.head(key)))" guard in the handler) and this test would pass
+    // for the wrong reason.
+    const uniqueImageDataUrl = `data:image/png;base64,${btoa(`thumbnail-cap-test-${crypto.randomUUID()}`)}`;
+    const rejected = await api('/catalog/thumbnail-storage-cap-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: uniqueImageDataUrl }),
+    }));
+    expect(rejected.response.status).toBe(507);
+
+    // The rejected attempt's own reservation must not linger — only the
+    // fake row seeded above should remain.
+    const remaining = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM model_upload_reservations WHERE size_bytes = ?
+    `).bind(capBytes - usedBytes).first();
+    expect(remaining.count).toBe(1);
+
+    await env.DB.prepare('DELETE FROM model_upload_reservations').run();
+  });
 });
 
 // #329 (backend half only — see docs/API.md for the frontend-scope note).
