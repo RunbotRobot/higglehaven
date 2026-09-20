@@ -927,14 +927,18 @@ describe('Worker API', () => {
     const replaced = await api('/instances/batch', batchBuilder.session({
       method: 'PUT',
       body: JSON.stringify({ instances: [
-        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 10, y: 20 },
+        // #789: x/y must stay within the landlet's buildable footprint
+        // (±~15.81 for a standard 1000 m² landlet) — 10/12 exercises the
+        // same "replace" semantics as the original 10/20 without tripping
+        // the bound this test predates.
+        { instanceId: 'instance-batch-a', landletId: 'instance-batch-landlet', templateId: 'placeholder-tree', x: 10, y: 12 },
         { instanceId: 'instance-batch-c', landletId: 'instance-batch-landlet', templateId: 'placeholder-chair', x: 5, y: 6 },
       ] }),
     }));
     expect(replaced.response.status).toBe(200);
     expect(replaced.body.instances.every((instance) => instance.createdAt && instance.updatedAt)).toBe(true);
     expect((await api('/instances/instance-batch-a')).body.instance).toMatchObject({
-      templateId: 'placeholder-tree', x: 10, y: 20,
+      templateId: 'placeholder-tree', x: 10, y: 12,
     });
     expect((await api('/instances/instance-batch-c')).response.status).toBe(200);
 
