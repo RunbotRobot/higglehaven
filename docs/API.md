@@ -428,6 +428,14 @@ differs, but only in dev mode, and only in a way an attacker could already
 infer from "this dev/test deployment has no email provider configured,"
 not from anything about the specific email address).
 
+An identical response body isn't enough on its own — response *timing*
+also has to match, or the generic body is security theater (#778, same bug
+class #771 fixed for login). In production (`RESEND_API_KEY` configured),
+the outbound email send is fired via `ctx.waitUntil` rather than awaited
+on the response path, so a real account's request returns in comparable
+time to a nonexistent one instead of paying a real Resend API round-trip
+first.
+
 ### `POST /api/auth/reset-password`
 
 ```json
