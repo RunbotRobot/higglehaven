@@ -1788,6 +1788,40 @@ describe('Landlet levels', () => {
     expect(layouts).toHaveLength(0);
   });
 
+  // #794: unlike every comparable repeatable write in this file (sign
+  // posts, calendar events, bundle creation), the #633 snapshot-on-removal
+  // above had no rate limit — and the level-add's own land-cap cost isn't
+  // a real deterrent, since removing the level fully restores that
+  // headroom. An add-level/place-instance/remove-level loop could grow
+  // saved_level_layouts for free.
+  it('rate-limits repeated level-removal saved-layout snapshots from the same builder', async () => {
+    const owner = await signupBuilder('levels-rate-limit-owner');
+    await createGreenbeltLandletWithArea('levels-rate-limit-landlet', 1000);
+    await claim('levels-rate-limit-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+
+    async function sweepOneLevel(instanceId) {
+      await api('/landlets/levels-rate-limit-landlet/levels', owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId, landletId: 'levels-rate-limit-landlet', templateId: 'placeholder-tree',
+          x: 1, y: 1, z: LEVEL_HEIGHT_M * 1.5,
+        }),
+      }));
+      return api('/landlets/levels-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    }
+
+    for (let i = 0; i < 20; i++) {
+      const removed = await sweepOneLevel(`levels-rate-limit-instance-${i}`);
+      expect(removed.response.status).not.toBe(429);
+    }
+    const limited = await sweepOneLevel('levels-rate-limit-instance-final');
+    expect(limited.response.status).toBe(429);
+  });
+
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
   // createGreenbeltLandletWithArea helpers to get a real removed-level

@@ -3357,6 +3357,19 @@ async function landletLevels(db, landletId) {
   return results;
 }
 
+// #794: removing a level with out-of-range instances snapshots them into a
+// brand-new, permanent saved_level_layouts/saved_layout_instances row pair
+// (#633, below) — an unbounded, repeatable write with no rate limit at
+// all, unlike every comparable repeatable write in this file (sign posts
+// #337, calendar events, bundle creation #791). The level-add's own
+// land-cap cost isn't a real deterrent: recomputeLandCap's owned-area sum
+// only counts landlet_levels rows that currently exist, so removing a
+// level fully restores the headroom it just cost — an add-level/place-
+// instance/remove-level loop can grow this table for free. Bucketed by
+// the landlet's own owner, same authenticated-action reasoning as those
+// other limits.
+const SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleLandletLevels(request, db, route) {
   const landletId = route[1];
   if (request.method === 'GET' && route.length === 3) {
@@ -3527,6 +3540,7 @@ async function handleLandletLevels(request, db, route) {
       .bind(landletId, minZ, maxZ).all();
     const statements = [];
     if (outOfRange.results.length > 0) {
+      await checkRateLimit(db, `saved-layout-create:${landlet.owner_builder_id}`, SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX);
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
       statements.push(db.prepare(`
         INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
