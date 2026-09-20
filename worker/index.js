@@ -3064,6 +3064,18 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 // visibility — a shared bundle is still owned by whoever created it, and
 // stays editable/deletable only by its own builder (session-checked below)
 // even once shared; sharing never transfers ownership.
+//
+// #791: unlike every other repeatable write in this file — sign posts
+// (SIGN_POST_RATE_LIMIT_MAX, #337), calendar events
+// (CALENDAR_EVENT_RATE_LIMIT_MAX), friend requests
+// (FRIEND_REQUEST_RATE_LIMIT_MAX) — creating a bundle had no
+// checkRateLimit call at all, letting an authenticated builder insert
+// unlimited bundles rows in a tight loop, each immediately visible,
+// unauthenticated, on the public Community tab once `shared: true`.
+// Bucketed by builder id, not IP, same reasoning as those other
+// authenticated-action limits.
+const BUNDLE_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const limit = queryLimit(url.searchParams.get('limit'), 100);
@@ -3122,6 +3134,7 @@ async function handleBundles(request, db, route, url) {
     // builderId always comes from the session now, never the request body —
     // saving a bundle "as" someone else isn't a feature.
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `bundle-create:${sessionBuilder.builder_id}`, BUNDLE_CREATE_RATE_LIMIT_MAX);
     const builderId = sessionBuilder.builder_id;
     const name = labelValue(input.name, 'name');
     const items = validateBundleItems(input.items);

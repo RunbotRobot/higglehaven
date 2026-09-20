@@ -1201,6 +1201,23 @@ describe('Bundles', () => {
     expect(created.body.bundle.createdAt).toBeTruthy();
   });
 
+  // Found via backlog audit (#791): unlike every other repeatable write in
+  // this file — sign posts (#337), calendar events, friend requests —
+  // creating a bundle had no checkRateLimit call at all.
+  it('rate-limits repeated bundle creations from the same builder', async () => {
+    const builder = await signupBuilder('bundle-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/bundles', builder.session({
+        method: 'POST', body: JSON.stringify(bundleBody({ name: `Bundle ${i}` })),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify(bundleBody({ name: 'One too many' })),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
     const builder = await signupBuilder('bundle-validate');
     const empty = await api('/bundles', builder.session({
