@@ -3276,6 +3276,16 @@ async function handleStartAuction(request, db, landletId) {
 // stacked directly on the previous one.
 const LEVEL_HEIGHT_M = 10;
 
+// #789: matches LANDLET_AREA_M2/LANDLET_SIDE_M in src/main.js — the fixed
+// buildable-interior footprint every landlet has, a square centered at
+// that landlet's own local (0,0), identical for every landlet regardless
+// of its own DB area_m2/landlet_class (those are used only for world-map
+// rendering, claim eligibility, and land-cap billing — never the actual
+// buildable footprint size; see #746). Used by
+// assertInstanceXYWithinLandlet below.
+const LANDLET_AREA_M2 = 1000;
+const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
+
 // Half a level's height, allowed as slack on each end of a landlet's
 // purchased-levels range — an instance's own thickness can carry it
 // slightly past a level's exact z boundary (see levelCapConsumedM2's own
@@ -7046,6 +7056,7 @@ async function handleLandletDraft(request, db, landletId) {
     }
     await assertCropWithinTemplateBounds(db, instances);
     await assertInstanceZWithinLevels(db, instances);
+    assertInstanceXYWithinLandlet(instances);
 
     const versionId = crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
@@ -8099,6 +8110,17 @@ async function handleInstances(request, env, route, url) {
       return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
     });
     await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
+    // Same "only re-check what actually changed" reasoning as crop/z above
+    // — an untouched x/y resent unchanged on an unrelated group move
+    // shouldn't get re-validated against a bound that may have tightened
+    // since (footprintScaleAtHeight shrinks with z, so a level added above
+    // an instance after it was placed could otherwise brick it here).
+    const instancesNeedingXYCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
+        || instance.landletId !== existing.landletId;
+    });
+    assertInstanceXYWithinLandlet(instancesNeedingXYCheck);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
@@ -8176,6 +8198,7 @@ async function handleInstances(request, env, route, url) {
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await assertInstanceZWithinLevels(db, [instance]);
+    assertInstanceXYWithinLandlet([instance]);
     // #456: requireOwnedLandlet above is a point-in-time check — an auction
     // resolving (transferring ownership, wiping placed_instances) in the
     // await gap between it and this write would otherwise let this request
@@ -8235,6 +8258,11 @@ async function handleInstances(request, env, route, url) {
     // instances if a level was ever removed out from under them.
     if (instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
       await assertInstanceZWithinLevels(db, [instance]);
+    }
+    // Same "only re-check what actually changed" reasoning as crop/z above.
+    if (instance.x !== existing.x_m || instance.y !== existing.y_m
+      || instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
+      assertInstanceXYWithinLandlet([instance]);
     }
     // #456: fold the ownership re-check into the write itself — same
     // reasoning as the create endpoints above. Without this, a landlet
@@ -9423,6 +9451,34 @@ async function assertInstanceZWithinLevels(db, instances) {
       throw new HttpError(
         `z (${instance.z}) is outside landlet "${instance.landletId}"'s purchased levels `
         + `(allowed range: ${minZ} to ${maxZ}) — add more levels via POST /landlets/:id/levels first`,
+        400,
+      );
+    }
+  }
+}
+
+// #789: the frontend's own clampToLandlet (src/main.js) already refuses to
+// place an instance outside its landlet's fixed LANDLET_AREA_M2 buildable
+// square — identical for every landlet regardless of the DB's own
+// per-landlet area_m2 column (#746) — but nothing on the server enforced
+// this, so a raw API write could set x/y to any finite value and render
+// arbitrarily far from the landlet it claims to belong to, including
+// inside another builder's landlet. Deliberately looser than
+// clampToLandlet's own bound, which also subtracts the placed template's
+// own half-width/depth so an instance's edges (not just its center) stay
+// inside: the server has no easy access to a template's real mesh
+// dimensions, and a center-point bound alone already closes the actual
+// abuse case (a wildly out-of-range offset) without ever rejecting
+// anything the frontend's own tighter clamp would have produced. No DB
+// lookup needed — unlike assertInstanceZWithinLevels, this bound doesn't
+// depend on which landlet it is, only on this fixed universal footprint.
+function assertInstanceXYWithinLandlet(instances) {
+  for (const instance of instances) {
+    const halfSpan = (LANDLET_SIDE_M / 2) * footprintScaleAtHeight(instance.z);
+    if (Math.abs(instance.x) > halfSpan || Math.abs(instance.y) > halfSpan) {
+      throw new HttpError(
+        `x/y (${instance.x}, ${instance.y}) is outside landlet "${instance.landletId}"'s buildable footprint `
+        + `(allowed range: ±${halfSpan.toFixed(2)})`,
         400,
       );
     }

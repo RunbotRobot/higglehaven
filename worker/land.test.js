@@ -2401,4 +2401,128 @@ describe('Landlet levels', () => {
       expect(accepted.response.status).toBe(200);
     });
   });
+
+  // #789: same underlying gap as #394 above, but for x/y instead of z —
+  // a raw API write could set an instance's horizontal position to any
+  // finite value with nothing server-side enforcing it stays anywhere near
+  // its own landlet, even though the frontend's own clampToLandlet always
+  // has. LANDLET_SIDE_M = sqrt(1000) ≈ 31.62, so ±15.81 is the fixed
+  // buildable-footprint half-span every landlet shares (independent of its
+  // own area_m2 — see #746).
+  describe('instance x/y bounds (#789)', () => {
+    it('allows an instance within its landlet\'s buildable footprint', async () => {
+      const owner = await signupBuilder('instance-xy-within-owner');
+      await createGreenbeltLandletWithArea('instance-xy-within-landlet', 1000);
+      await claim('instance-xy-within-landlet', owner);
+
+      const withinRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-xy-within',
+          landletId: 'instance-xy-within-landlet',
+          templateId: 'placeholder-tree',
+          x: 15, y: -15, z: 0,
+        }),
+      }));
+      expect(withinRange.response.status).toBe(201);
+    });
+
+    it('rejects an instance x/y placed far outside its landlet\'s buildable footprint', async () => {
+      const owner = await signupBuilder('instance-xy-reject-owner');
+      await createGreenbeltLandletWithArea('instance-xy-reject-landlet', 1000);
+      await claim('instance-xy-reject-landlet', owner);
+
+      const tooFarX = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-xy-too-far-x',
+          landletId: 'instance-xy-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 10000, y: 0, z: 0,
+        }),
+      }));
+      expect(tooFarX.response.status).toBe(400);
+      expect(tooFarX.body.error).toMatch(/buildable footprint/);
+
+      const tooFarY = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-xy-too-far-y',
+          landletId: 'instance-xy-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: -10000, z: 0,
+        }),
+      }));
+      expect(tooFarY.response.status).toBe(400);
+    });
+
+    it('rejects moving an existing instance\'s x/y out of range via PATCH, but leaves an untouched out-of-range x/y alone', async () => {
+      const owner = await signupBuilder('instance-xy-patch-owner');
+      await createGreenbeltLandletWithArea('instance-xy-patch-landlet', 1000);
+      await claim('instance-xy-patch-landlet', owner);
+      const created = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-xy-patch-target',
+          landletId: 'instance-xy-patch-landlet',
+          templateId: 'placeholder-tree',
+          x: 1, y: 1, z: 0,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+
+      const movedOutOfRange = await api('/instances/instance-xy-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ x: 10000 }),
+      }));
+      expect(movedOutOfRange.response.status).toBe(400);
+
+      // A grandfathered-in out-of-range x/y (e.g. from before this check
+      // existed) directly seeded — an unrelated field-only PATCH that
+      // never touches x/y must not suddenly start re-validating and
+      // bricking it, the same "only re-check what actually changed"
+      // reasoning already applied to crop/z above.
+      await env.DB.prepare(
+        "UPDATE placed_instances SET x_m = ? WHERE instance_id = 'instance-xy-patch-target'",
+      ).bind(10000).run();
+      const unrelatedPatch = await api('/instances/instance-xy-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ label: 'Renamed' }),
+      }));
+      expect(unrelatedPatch.response.status).toBe(200);
+      expect(unrelatedPatch.body.instance.label).toBe('Renamed');
+      expect(unrelatedPatch.body.instance.x).toBe(10000);
+    });
+
+    it('applies the same x/y bounds to the lándlet draft save and batch endpoints', async () => {
+      const owner = await signupBuilder('instance-xy-draft-owner');
+      await createGreenbeltLandletWithArea('instance-xy-draft-landlet', 1000);
+      await claim('instance-xy-draft-landlet', owner);
+
+      const rejectedDraft = await api('/landlets/instance-xy-draft-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-xy-draft-out-of-range',
+            templateId: 'placeholder-tree',
+            x: 10000, y: 0, z: 0,
+          }],
+        }),
+      }));
+      expect(rejectedDraft.response.status).toBe(400);
+
+      const rejectedBatch = await api('/instances/batch', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-xy-batch-out-of-range',
+            landletId: 'instance-xy-draft-landlet',
+            templateId: 'placeholder-tree',
+            x: 0, y: 10000, z: 0,
+          }],
+        }),
+      }));
+      expect(rejectedBatch.response.status).toBe(400);
+    });
+  });
 });
