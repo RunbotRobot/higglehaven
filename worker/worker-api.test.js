@@ -1414,6 +1414,31 @@ describe('Worker API', () => {
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
+  // #796: PUT .../draft creates a version snapshot as a side effect on
+  // every call (even restoring an old version counts as a save per this
+  // endpoint's own doc comment) and had no rate limit either, sharing the
+  // same landlet-version:<builderId> bucket as POST .../versions above.
+  it('rate-limits repeated landlet draft saves from the same builder', async () => {
+    const builder = await signupBuilder('draft-rate-limit');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'draft-rate-limit-landlet', name: 'Draft rate limit landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5200, y: 1400 },
+      }),
+    }));
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/landlets/draft-rate-limit-landlet/draft', builder.session({
+        method: 'PUT', body: JSON.stringify({ instances: [] }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/landlets/draft-rate-limit-landlet/draft', builder.session({
+      method: 'PUT', body: JSON.stringify({ instances: [] }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // A draft save used to DELETE FROM placed_instances WHERE landlet_id = ?
   // then re-INSERT fresh rows — sign_posts/calendar_events both cascade-
   // delete on their own instance_id (migrations/0041/0042), so even
@@ -1580,6 +1605,31 @@ describe('Worker API', () => {
     expect(versions.response.status).toBe(200);
     expect(versions.body.versions).toHaveLength(1);
     expect(versions.body.versions[0].versionId).toBe(versionId);
+  });
+
+  // #796: neither version-creating write path (this POST, nor the
+  // auto-version side effect of PUT .../draft below) had a rate limit at
+  // all, unlike every other authenticated per-owner repeatable write in
+  // this file.
+  it('rate-limits repeated landlet version saves from the same builder', async () => {
+    const builder = await signupBuilder('landlet-version-rate-limit');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'version-rate-limit-landlet', name: 'Version rate limit landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5100, y: 1400 },
+      }),
+    }));
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/landlets/version-rate-limit-landlet/versions', builder.session({
+        method: 'POST', body: JSON.stringify({ name: `Version ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/landlets/version-rate-limit-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'One too many' }),
+    }));
+    expect(limited.response.status).toBe(429);
   });
 
   // #480: `name`/`versionName` on a landlet version used plain stringValue
