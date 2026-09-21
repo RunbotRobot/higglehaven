@@ -3324,14 +3324,34 @@ async function handleStartAuction(request, db, landletId) {
   // leaving two simultaneously-active auctions that would later both
   // independently resolve and double-transfer the same land (#265). Same
   // idiom already used for product_reviews/auction_bids/friendships.
+  //
+  // #809: this used to only re-check "no active auction" — the same #415
+  // hazard every other landlet-mutating endpoint in this file (version
+  // create/activate, instance batch write) is already hardened against
+  // was missed here. resolveAuction flips an auction's own status to
+  // 'ended' as its own standalone write, well before the landlet's
+  // owner_builder_id actually transfers a few statements later — a
+  // second POST landing in that gap saw a stale owner_builder_id match
+  // and an auction already 'ended' (so NOT EXISTS(active) passed too),
+  // letting the just-outbid former owner open a *second* active auction
+  // on land they no longer owned. Re-pinning status='claimed' AND
+  // owner_builder_id into this same atomic WHERE closes it exactly like
+  // #415's other fixes do.
   const inserted = await db.prepare(`
     INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
     SELECT ?, ?, ?, ?, ?
     WHERE NOT EXISTS (
       SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
     )
-  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt, landletId).run();
+    AND EXISTS (
+      SELECT 1 FROM landlets WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id IS ?
+    )
+  `).bind(auctionId, landletId, builderId, startingBidCents, endsAt, landletId, landletId, builderId).run();
   if (inserted.meta.changes === 0) {
+    const current = await db.prepare('SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+    if (!current || current.status !== 'claimed' || current.owner_builder_id !== builderId) {
+      throw new HttpError('You no longer own this landlet — refetch and retry', 409);
+    }
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
@@ -4272,7 +4292,26 @@ async function resolveAuction(db, auction) {
     // the winner's land cap — only the build-cleanup and money/notification
     // side effects remain, safe to batch together now that the transfer is
     // confirmed to have actually landed.
+    //
+    // #809: this transfer is the true, final say on who owns this landlet
+    // now — but handleStartAuction's own atomic ownership re-check (added
+    // for #809) only ever sees a consistent snapshot, never the exact
+    // instant of *this* UPDATE. A new auction from the old seller can
+    // still legitimately commit its own INSERT in the genuinely-still-
+    // seller-owned window between this function's earlier status='ended'
+    // write and this transfer, then get orphaned the moment this transfer
+    // lands a beat later — the same "old owner's content surviving under
+    // the new owner" shape the placed_instances/landlet_versions/
+    // landlet_levels wipes just below already guard against, just for
+    // auctions instead of build content. Ending any other still-active
+    // auction on this same landlet here — the one place that already
+    // knows, atomically, that ownership has genuinely just moved — closes
+    // that residual gap regardless of exactly how the race landed.
     statements.push(
+      db.prepare(`
+        UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND status = 'active' AND auction_id != ?
+      `).bind(auction.landlet_id, auction.auction_id),
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
@@ -4293,6 +4332,14 @@ async function resolveAuction(db, auction) {
     );
   } else if (candidates.length === 0 && auction.starting_bid_cents === 0) {
     statements.push(
+      // #809: same reasoning as the winner branch above — this release
+      // to greenbelt is the true, final say on this landlet's ownership
+      // changing (to none at all), so any other active auction a
+      // concurrent request managed to create on it needs ending here too.
+      db.prepare(`
+        UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND status = 'active' AND auction_id != ?
+      `).bind(auction.landlet_id, auction.auction_id),
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
