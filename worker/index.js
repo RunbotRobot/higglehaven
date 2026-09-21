@@ -2505,14 +2505,26 @@ async function handleMyAvatar(request, db) {
     let templateId = null;
     if (input.templateId !== null && input.templateId !== undefined) {
       templateId = labelValue(input.templateId, 'templateId');
+      // Eager check for a clear 403 in the common case — the atomic guard
+      // folded into the UPDATE's own WHERE clause below is the real race
+      // guard (#801): without it, a refund's owned_avatars revocation
+      // landing between this SELECT and the UPDATE could still let this
+      // request equip an item that was just revoked out from under it,
+      // same non-atomic-check-then-write class of bug this file guards
+      // against elsewhere (e.g. the refund's own conditional UPDATE).
       const owned = await db.prepare(
         'SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
       ).bind(builder.builder_id, templateId).first();
       if (!owned) throw new HttpError('You do not own this avatar', 403);
     }
-    await db.prepare(
-      `UPDATE builders SET equipped_avatar_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
-    ).bind(templateId, builder.builder_id).run();
+    const result = await db.prepare(`
+      UPDATE builders SET equipped_avatar_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ?
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?))
+    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('You do not own this avatar', 403);
+    }
     const updated = await requireBuilder(db, builder.builder_id);
     return json({ avatar: await myAvatarJson(db, updated) });
   }
@@ -9331,16 +9343,27 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // equipped_avatar_template_id is only cleared for the builder who
   // actually held this exact grant (a no-op if the grant predates 0085, or
   // was never made — e.g. the buyer had self-deleted by finalize time).
-  if (template?.category === 'avatar') {
-    const owned = await db.prepare('SELECT builder_id FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId).first();
-    if (owned) {
-      await db.batch([
-        db.prepare('DELETE FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId),
-        db.prepare(
-          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
-        ).bind(owned.builder_id, purchase.template_id),
-      ]);
-    }
+  //
+  // #801: this used to be gated behind `template?.category === 'avatar'`,
+  // re-deriving "was this an avatar purchase" from catalog_templates' own
+  // *live* category — but category is an ordinary mutable field (PATCH
+  // /api/catalog/:id), so a seller changing it away from 'avatar' after the
+  // sale silently skipped this whole block, letting the buyer keep the item
+  // (and their refund) forever, the exact fraud shape #754 existed to
+  // close. The owned_avatars row keyed by purchase_id is already the
+  // correct, purchase-time-locked signal (migrations/0085's own comment:
+  // "look it up directly by purchase_id... rather than needing to know the
+  // buyer at all") — it only ever exists when the template genuinely was
+  // category 'avatar' at purchase time, so checking it directly is both
+  // sufficient and immune to a later category edit.
+  const owned = await db.prepare('SELECT builder_id FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId).first();
+  if (owned) {
+    await db.batch([
+      db.prepare('DELETE FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId),
+      db.prepare(
+        'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
+      ).bind(owned.builder_id, purchase.template_id),
+    ]);
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();

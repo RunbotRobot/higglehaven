@@ -271,6 +271,49 @@ describe('Refund revokes avatar ownership (#754)', () => {
     expect(reEquip.response.status).toBe(403);
   });
 
+  // #801: revocation used to be gated on the template's *live* category
+  // instead of the purchase-time-locked owned_avatars row — a seller
+  // changing category away from 'avatar' between purchase and refund
+  // silently skipped revocation entirely, letting the buyer keep the item
+  // (and their refund) forever.
+  it('still revokes ownership on refund even if the template\'s category was changed away from avatar first', async () => {
+    const seller = await signupBuilder('avatar-refund-recat-seller');
+    const buyer = await signupBuilder('avatar-refund-recat-buyer');
+    await createGreenbeltLandlet('avatar-refund-recat-landlet');
+    await claim('avatar-refund-recat-landlet', seller);
+    await createAvatarTemplate('avatar-refund-recat-template');
+    await placeInstance('avatar-refund-recat-instance', 'avatar-refund-recat-landlet', 'avatar-refund-recat-template', seller);
+
+    const purchased = await purchase('avatar-refund-recat-instance', buyer);
+    expect(purchased.response.status).toBe(201);
+    const { purchaseId } = purchased.body.purchase;
+
+    const equipped = await api('/builders/me/avatar', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-recat-template' }),
+    }));
+    expect(equipped.response.status).toBe(200);
+
+    // The template has no sellerId (createAvatarTemplate's own default),
+    // so this PATCH is reachable unauthenticated too — same as the real
+    // exploit path (a seller who has since deleted their account).
+    const recategorized = await api('/catalog/avatar-refund-recat-template', {
+      method: 'PATCH', body: JSON.stringify({ category: 'furniture' }),
+    });
+    expect(recategorized.response.status).toBe(200);
+    expect(recategorized.body.template.category).toBe('furniture');
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+
+    const owned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, 'avatar-refund-recat-template').all();
+    expect(owned.results).toHaveLength(0);
+
+    const got = await api('/builders/me/avatar', buyer.session());
+    expect(got.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+  });
+
   it('leaves a different builder\'s own equipped grant of the same template untouched', async () => {
     const seller = await signupBuilder('avatar-refund-scope-seller');
     const buyerA = await signupBuilder('avatar-refund-scope-buyer-a');
