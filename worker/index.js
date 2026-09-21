@@ -36,6 +36,10 @@ const GLB_JSON_CHUNK = 0x4e4f534a;
 // aggregate budget the way concurrent large model uploads could race it.
 const MAX_THUMBNAIL_BYTES = 300 * 1024;
 const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
+// #823: the 8-byte PNG signature (89 50 4E 47 0D 0A 1A 0A) — same idea as
+// GLB_MAGIC above, checked against the actual decoded bytes rather than
+// trusting the data-URL prefix's own claimed "image/png".
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 // R2's free tier is 10GB of storage per month. This is our OWN
 // application-level backstop well under that — checked live against R2's
@@ -444,6 +448,10 @@ async function handleUploadedAsset(request, env) {
   object.writeHttpMetadata(headers);
   headers.set('etag', object.httpEtag);
   headers.set('access-control-allow-origin', '*');
+  // #823: defense-in-depth for the whole /uploads/* surface — stops a
+  // browser from MIME-sniffing stored bytes into something other than the
+  // Content-Type this server itself set at write time.
+  headers.set('x-content-type-options', 'nosniff');
   // Uploaded files are content-addressed (SHA-256 key, never overwritten in
   // place — see handleModelUpload) and never change once
   // stored, so a long-lived cache is always safe.
@@ -9976,6 +9984,12 @@ function decodeThumbnailDataUrl(imageDataUrl) {
   }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  // #823: the data-URL prefix only says the client *claims* this is a PNG —
+  // check the real signature before it's ever written to R2, same posture
+  // as validateGlb's binary check for .glb model uploads.
+  const hasPngSignature = bytes.length >= PNG_SIGNATURE.length
+    && PNG_SIGNATURE.every((byte, i) => bytes[i] === byte);
+  if (!hasPngSignature) throw new HttpError('imageDataUrl is not a valid PNG image', 400);
   return bytes;
 }
 

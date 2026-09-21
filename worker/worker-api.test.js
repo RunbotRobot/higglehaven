@@ -309,7 +309,7 @@ describe('Worker API', () => {
 
     const thumbnail = await api('/catalog/thumbnail-cleanup-template/thumbnail', owner.session({
       method: 'POST',
-      body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('thumbnail-cleanup-test-bytes')}` }),
+      body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('\x89PNG\r\n\x1a\nthumbnail-cleanup-test-bytes')}` }),
     }));
     expect(thumbnail.response.status).toBe(200);
     const imageUrl = thumbnail.body.imageUrl;
