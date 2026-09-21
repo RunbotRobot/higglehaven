@@ -614,6 +614,53 @@ describe('Auctions', () => {
     expect(targetInstances.body.instances).toEqual([]);
   });
 
+  // #809: resolveAuction's transfer/greenbelt-release is the true, final
+  // say on a landlet's ownership changing — but a racing POST .../auction
+  // from the old seller can still legitimately commit its own INSERT in
+  // the genuinely-still-seller-owned window between resolveAuction's own
+  // earlier `status = 'ended'` write and this transfer (the atomic guard
+  // above only ever sees a consistent snapshot, never that exact instant).
+  // Unlike placed_instances/landlet_versions/landlet_levels, an active
+  // auction row isn't touched by the transfer at all otherwise, so it
+  // would survive forever as an orphaned active auction under a seller
+  // who no longer owns the land. Simulates that legitimately-created
+  // second auction directly (the same outcome a real race could produce,
+  // without needing to force a genuine interleave) and drives the real
+  // resolveAuction code via the actual /resolve endpoint to confirm its
+  // own cleanup closes it.
+  it('ends a stray active auction left by a race, the moment the winning auction it raced against actually resolves', async () => {
+    const seller = await signupBuilder('auction-resolve-cleanup-seller');
+    const bidder = await signupBuilder('auction-resolve-cleanup-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('auction-resolve-cleanup-landlet');
+    await claim('auction-resolve-cleanup-landlet', seller);
+    const started = await api('/landlets/auction-resolve-cleanup-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // The stray second auction a racing POST would have created while the
+    // landlet was still genuinely seller-owned, just before this resolve.
+    const strayAuctionId = `auction-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
+      VALUES (?, ?, ?, 0, ?)
+    `).bind(strayAuctionId, 'auction-resolve-cleanup-landlet', seller.builderId, new Date(Date.now() + 3600_000).toISOString()).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+
+    const landlet = await api('/landlets/auction-resolve-cleanup-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+
+    const stray = await env.DB.prepare('SELECT status FROM auctions WHERE auction_id = ?').bind(strayAuctionId).first();
+    expect(stray.status).toBe('ended');
+  });
+
   it('resolves a winning auction even when the bidder already owns a claimed landlet, without poisoning the list endpoint', async () => {
     const owner = await signupBuilder('resolve-existing-owner-owner');
     const bidder = await signupBuilder('resolve-existing-owner-bidder');
