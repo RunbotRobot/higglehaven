@@ -50,9 +50,11 @@ const { templates } = (await fetchJson('/api/catalog?limit=100')).body;
 const template = templates.find((t) => t.name === PRODUCT_NAME);
 console.log('uploaded, priced product found in catalog (priceCents should be 2500):', template?.priceCents);
 
-const { builders } = (await fetchJson('/api/builders')).body;
-const builder = builders.find((b) => b.label === LABEL);
-console.log('builder found by label:', !!builder);
+// #807: GET /api/builders no longer returns higglesBalanceCents (it's
+// unauthenticated) — read the same signed-in account's own balance via
+// /me instead, using the session cookie the browser already carries.
+const { builder } = (await fetchJson('/api/builders/me')).body;
+console.log('builder found by label:', builder?.label === LABEL);
 const balanceBefore = builder.higglesBalanceCents;
 
 const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${builder.builderId}&limit=100`)).body;
@@ -79,8 +81,7 @@ console.log('purchase response (status should be 201):', purchased.status, purch
 // cents to the builder (well above the 0.5% floor of 25 cents on $50).
 const { purchase } = purchased.body;
 
-const { builders: buildersAfter } = (await fetchJson('/api/builders')).body;
-const builderAfter = buildersAfter.find((b) => b.builderId === builder.builderId);
+const { builder: builderAfter } = (await fetchJson('/api/builders/me')).body;
 console.log('builder\'s higgles balance before/after (should differ by 50):', balanceBefore, builderAfter.higglesBalanceCents);
 
 const { purchases } = (await fetchJson(`/api/purchases?builderId=${builder.builderId}`)).body;

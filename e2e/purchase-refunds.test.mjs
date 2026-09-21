@@ -53,8 +53,10 @@ const { templates } = (await fetchJson('/api/catalog?limit=100')).body;
 const template = templates.find((t) => t.name === PRODUCT_NAME);
 console.log('uploaded, priced product found in catalog:', !!template);
 
-const { builders } = (await fetchJson('/api/builders')).body;
-const builder = builders.find((b) => b.label === LABEL);
+// #807: GET /api/builders no longer returns higglesBalanceCents (it's
+// unauthenticated) — read the same signed-in account's own balance via
+// /me instead, using the session cookie the browser already carries.
+const { builder } = (await fetchJson('/api/builders/me')).body;
 const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${builder.builderId}&limit=100`)).body;
 const landlet = landlets[0];
 
@@ -73,7 +75,7 @@ const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   body: JSON.stringify({ buyerLabel: 'A Refund Shopper' }),
 });
 console.log('purchase created (status should be 201):', purchased.status);
-const balanceAfterSale = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).higglesBalanceCents;
+const balanceAfterSale = (await fetchJson('/api/builders/me')).body.builder.higglesBalanceCents;
 
 // Open the product's row and its Sales panel.
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -99,7 +101,7 @@ const refundBtnCountAfter = await row().locator('.product-sale-row-refund-btn').
 console.log('rows showing "Refunded" after clicking refund (should be 1):', refundedLabelCount);
 console.log('refund buttons remaining (should be 0 — nothing left to refund again):', refundBtnCountAfter);
 
-const balanceAfterRefund = (await fetchJson('/api/builders')).body.builders.find((b) => b.builderId === builder.builderId).higglesBalanceCents;
+const balanceAfterRefund = (await fetchJson('/api/builders/me')).body.builder.higglesBalanceCents;
 console.log('builder balance before/after refund (should differ by exactly the commission clawed back):', balanceAfterSale, balanceAfterRefund);
 
 const { purchases: serverPurchases } = (await fetchJson(`/api/purchases?templateId=${template.templateId}`)).body;
