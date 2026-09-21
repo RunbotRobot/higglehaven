@@ -1692,6 +1692,18 @@ async function handleCatalog(request, db, route, url, models, env) {
 // review on that template in an unbounded flood.
 const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
 
+// #804: review creation itself had no rate limit at all — the one outlier
+// among comparable free-text-identity writes in this file (sign posts,
+// calendar events, purchases, builder/seller creation, and even this
+// endpoint's own DELETE branch below all have one). authorLabel is
+// arbitrary free text checked only against purchases.buyer_label (also
+// free text), so a caller can cheaply mint many distinct "verified
+// purchaser" identities against a non-Stripe-connected template and post
+// one review under each — the same rating-skewing abuse the #59
+// unique-index migration closed for a single identity, left open across
+// identities without a throttle on creation itself.
+const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -1723,6 +1735,7 @@ async function handleProductReviews(request, db, route) {
   if (request.method === 'POST' && route.length === 3) {
     const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
+    await checkRateLimit(db, `product-review-create:${clientIp(request)}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     // Standard practice on real marketplaces — a review is only credible

@@ -447,6 +447,30 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #804: review *creation* itself had no rate limit at all, unlike its own
+  // sibling DELETE branch (tested just above) and every comparable write in
+  // this file — a caller could cheaply mint many distinct "verified
+  // purchaser" labels and post one review under each, with nothing
+  // throttling the create path itself.
+  it('rate-limits repeated review creations from the same client', async () => {
+    const templateId = await createTemplate('review-create-rate-limit');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      await createPurchase(templateId, `Rate Limit Shopper ${i}`);
+      const attempt = await api(`/catalog/${templateId}/reviews`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ authorLabel: `Rate Limit Shopper ${i}`, rating: 5 }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    await createPurchase(templateId, 'One Too Many Shopper');
+    const limited = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ authorLabel: 'One Too Many Shopper', rating: 5 }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
