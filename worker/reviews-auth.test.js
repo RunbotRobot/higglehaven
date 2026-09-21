@@ -645,6 +645,16 @@ describe('Authentication', () => {
 
     const meAfter = await api('/auth/me', target.session());
     expect(meAfter.body.user.isAdmin).toBe(true);
+
+    // #814: grant-admin is privilege escalation — it must leave a record of
+    // which admin granted it, not just that it happened.
+    const meAdmin = await api('/auth/me', admin.session());
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('grant_admin', granted.body.user.userId).first();
+    expect(logRow.admin_user_id).toBe(meAdmin.body.user.userId);
+    expect(logRow.target_type).toBe('user');
+    expect(JSON.parse(logRow.detail_json)).toEqual({ granteeEmail: target.email });
   });
 
   it('lists admins for any admin session, but nobody else, without leaking non-admin fields', async () => {

@@ -4390,6 +4390,26 @@ function notificationStatement(db, builderId, message) {
   ).bind(`notification-${crypto.randomUUID()}`, builderId, message);
 }
 
+// #814: accountability record for an admin-gated mutation — who did what,
+// not just whether it was allowed. Returns a statement (same shape as
+// notificationStatement above) so call sites can batch it atomically
+// alongside their own mutation rather than risk the mutation succeeding
+// with no log row if a separate .run() failed. detail is any small
+// JSON-serializable context worth keeping (e.g. the affected email/amount);
+// optional since not every action needs it.
+function adminActionLogStatement(db, adminUserId, actionType, targetType, targetId, detail) {
+  return db.prepare(
+    'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id, detail_json) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(
+    `admin-action-${crypto.randomUUID()}`,
+    adminUserId,
+    actionType,
+    targetType ?? null,
+    targetId ?? null,
+    detail !== undefined ? JSON.stringify(detail) : null,
+  );
+}
+
 function formatCents(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
@@ -6491,13 +6511,19 @@ async function handleAdminBootstrap(request, env, db) {
 // uses (normalizeEmail against the plain `email` column), so this finds
 // exactly the account that email actually logs into.
 async function handleGrantAdmin(request, db) {
-  await requireAdmin(request, db);
+  const admin = await requireAdmin(request, db);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!row) throw new HttpError('No account with that email', 404);
-  await db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
-    .bind(row.user_id).run();
+  // #814: this is privilege escalation with a real security blast radius
+  // (see admin_action_log's own migration comment) — log who granted it,
+  // batched with the grant itself so the two can never diverge.
+  await db.batch([
+    db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
+      .bind(row.user_id),
+    adminActionLogStatement(db, admin.user_id, 'grant_admin', 'user', row.user_id, { granteeEmail: email }),
+  ]);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
   return json({ user: userFromRow(updated) });
 }

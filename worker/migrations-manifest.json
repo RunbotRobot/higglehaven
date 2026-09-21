@@ -83,5 +83,6 @@
   "0083_avatar_ownership.sql",
   "0084_landlet_terminology_rename.sql",
   "0085_owned_avatars_purchase_id.sql",
-  "0086_higgles_redemptions_builder_id_set_null.sql"
+  "0086_higgles_redemptions_builder_id_set_null.sql",
+  "0087_admin_action_log.sql"
 ]
