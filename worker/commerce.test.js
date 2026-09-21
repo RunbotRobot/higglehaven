@@ -254,9 +254,8 @@ describe('Auctions', () => {
     const instances = await api('/instances?landletId=auction-resolve-win-landlet');
     expect(instances.body.instances).toEqual([]);
 
-    const builders = await api('/builders');
-    const sellerAfter = builders.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfter.higglesBalanceCents).toBe(2500);
+    const sellerAfter = await api('/builders/me', owner.session());
+    expect(sellerAfter.body.builder.higglesBalanceCents).toBe(2500);
 
     const sellerNotices = await api('/notifications', owner.session());
     expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $25.00'))).toBe(true);
@@ -272,9 +271,8 @@ describe('Auctions', () => {
     const resolveAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
     expect(resolveAgain.response.status).toBe(200);
     expect(resolveAgain.body.auction.winningBidId).toBe(resolved.body.auction.winningBidId);
-    const buildersAfterSecondResolve = await api('/builders');
-    const sellerAfterSecondResolve = buildersAfterSecondResolve.body.builders.find((b) => b.builderId === owner.builderId);
-    expect(sellerAfterSecondResolve.higglesBalanceCents).toBe(2500);
+    const sellerAfterSecondResolve = await api('/builders/me', owner.session());
+    expect(sellerAfterSecondResolve.body.builder.higglesBalanceCents).toBe(2500);
     const earningsCount = await env.DB.prepare(
       'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(owner.builderId).first();
@@ -1057,12 +1055,11 @@ describe('Auctions', () => {
       // The second-highest bidder wins instead, since they can actually pay.
       expect(landlet.body.landlet.ownerBuilderId).toBe(secondBidder.builderId);
 
-      const builders = await api('/builders');
-      const sellerAfter = builders.body.builders.find((b) => b.builderId === seller.builderId);
+      const sellerAfter = await api('/builders/me', seller.session());
       // Credited the second bidder's own 500, never the drained leader's 800.
-      expect(sellerAfter.higglesBalanceCents).toBe(500);
-      const secondBidderAfter = builders.body.builders.find((b) => b.builderId === secondBidder.builderId);
-      expect(secondBidderAfter.higglesBalanceCents).toBe(500); // 1000 - 500
+      expect(sellerAfter.body.builder.higglesBalanceCents).toBe(500);
+      const secondBidderAfter = await api('/builders/me', secondBidder.session());
+      expect(secondBidderAfter.body.builder.higglesBalanceCents).toBe(500); // 1000 - 500
     });
 
     it('keeps the land with the seller if no bidder can actually cover their bid by resolution time', async () => {
