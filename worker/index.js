@@ -6610,7 +6610,14 @@ async function issueEmailVerification(env, db, userId, email) {
     html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
     text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
   });
-  return { emailSent, devVerifyUrl: emailSent ? null : verifyUrl };
+  // #811: devVerifyUrl must reflect whether Resend is *configured*, not
+  // whether the send happened to succeed — sendEmail returns false for both
+  // "no RESEND_API_KEY" (dev/test) and a genuine production send failure, so
+  // gating on emailSent alone would echo the real single-use token back to
+  // the client mislabeled as a harmless dev-mode convenience whenever Resend
+  // has a transient failure. Mirrors handleRequestPasswordReset's existing
+  // env.RESEND_API_KEY gate for the identical sendEmail ambiguity.
+  return { emailSent, devVerifyUrl: env.RESEND_API_KEY ? null : verifyUrl };
 }
 
 async function handleResendVerification(request, env, db) {
