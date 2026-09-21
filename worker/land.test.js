@@ -151,6 +151,105 @@ describe('Landlet updates', () => {
     expect(generating.response.status).toBe(201);
     expect(generating.body.landlet).toMatchObject({ status: 'generating', ownerBuilderId: null });
   });
+
+  // #799: the self-owned branch of POST /api/landlets grants the exact same
+  // fully-buildable outcome as POST .../claim (requireOwnedLandlet only
+  // ever checks owner_builder_id, never status) — but until this fix it
+  // enforced none of that endpoint's invariants. This is the "owner implies
+  // claimed" half: an owner set together with any other status would dodge
+  // recomputeLandCap's own `status = 'claimed'` filter while still passing
+  // every downstream ownership check, i.e. free, permanently uncounted land.
+  it('rejects creating an owned landlet with a non-claimed status via POST', async () => {
+    const builder = await signupBuilder('self-claim-status-mismatch-builder');
+    const rejected = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-status-mismatch-landlet', name: 'Should never exist', areaM2: 1000,
+        status: 'greenbelt', ownerBuilderId: builder.builderId,
+      }),
+    }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body).toEqual({ error: 'An owned landlet must have status "claimed"' });
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('self-claim-status-mismatch-landlet').first();
+    expect(stored).toBeNull();
+  });
+
+  // #799: the "at most one claimed landlet per builder" half of the same
+  // invariant — mirrors POST .../claim's own NOT EXISTS guard a few dozen
+  // lines up, which this creation path granted the same outcome as but
+  // never actually enforced.
+  it('rejects a second self-claimed landlet via POST from a builder who already owns one', async () => {
+    const builder = await signupBuilder('self-claim-double-builder');
+    const first = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-double-first', name: 'First', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9000, y: 0 },
+      }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const second = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-double-second', name: 'Second', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9100, y: 0 },
+      }),
+    }));
+    expect(second.response.status).toBe(409);
+    expect(second.body).toEqual({ error: 'You already own a claimed landlet' });
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('self-claim-double-second').first();
+    expect(stored).toBeNull();
+  });
+
+  // #799: unlike every other repeatable write in this file, this path
+  // (fully caller-controlled, no real greenbelt/world-generation backing it)
+  // had no rate limit at all — a builder could flood the table even though
+  // each individual claimed row is itself rejected past their first, since
+  // that rejection is a normal 409, not a hard stop.
+  it('rate-limits repeated self-claim creations from the same builder', async () => {
+    const builder = await signupBuilder('self-claim-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      // Each attempt is deliberately a fresh landlet id for a builder that
+      // already owns a claimed landlet, so every one *would* 409 on the
+      // ownership invariant — the rate limit must still trigger before that
+      // check ever gets returned as this specific error, i.e. must be
+      // checked first, or this loop would never actually reach 429.
+      if (i === 0) {
+        const seed = await api('/landlets', builder.session({
+          method: 'POST',
+          body: JSON.stringify({
+            landletId: 'self-claim-rate-limit-seed', name: 'Seed', areaM2: 1000,
+            status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9200, y: 0 },
+          }),
+        }));
+        expect(seed.response.status).toBe(201);
+        continue;
+      }
+      const attempt = await api('/landlets', builder.session({
+        method: 'POST',
+        body: JSON.stringify({
+          landletId: `self-claim-rate-limit-${i}`, name: `Attempt ${i}`, areaM2: 1000,
+          status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9200 + i, y: 0 },
+        }),
+      }));
+      expect(attempt.response.status).toBe(409);
+    }
+    const limited = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-rate-limit-final', name: 'One too many', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9300, y: 0 },
+      }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Community signs', () => {
