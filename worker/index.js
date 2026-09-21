@@ -2108,7 +2108,7 @@ async function handleBuilders(request, env, db, route, url) {
         `SELECT * FROM builders WHERE builder_id IN (${placeholders}) ORDER BY created_at, builder_id`,
       ).bind(...ids).all();
       await recomputeLandCapsBatch(db, results);
-      return json({ builders: results.map(builderFromRow) });
+      return json({ builders: results.map(publicBuilderFromRow) });
     }
 
     // #716: an exact (case-insensitive) label lookup, for the "Add friend"
@@ -2123,7 +2123,7 @@ async function handleBuilders(request, env, db, route, url) {
         'SELECT * FROM builders WHERE LOWER(label) = LOWER(?) ORDER BY created_at, builder_id',
       ).bind(label).all();
       await recomputeLandCapsBatch(db, results);
-      return json({ builders: results.map(builderFromRow) });
+      return json({ builders: results.map(publicBuilderFromRow) });
     }
 
     // #715 (sub-issue of #711): cursor-paginated, same ascending
@@ -2162,7 +2162,7 @@ async function handleBuilders(request, env, db, route, url) {
     await recomputeLandCapsBatch(db, page);
     const last = page.at(-1);
     return json({
-      builders: page.map(builderFromRow),
+      builders: page.map(publicBuilderFromRow),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.builder_id) : null,
     });
   }
@@ -2397,6 +2397,29 @@ async function handleBuilders(request, env, db, route, url) {
 
 function builderFromRow(row) {
   return {
+    ...publicBuilderFromRow(row),
+    // Land acquisition auctions (docs/SPEC.md §5, migrations/0045) — a
+    // real, persisted ledger credited when this builder sells a landlet
+    // via auction. See migrations/0045's own note on why bidding itself
+    // isn't gated by having a sufficient balance yet. A real Stripe-
+    // redeemable balance (handleBuilderRedeem) — never include this in a
+    // shape returned from an unauthenticated or cross-account lookup (#807:
+    // it was leaking through GET /api/builders and its ids/label variants,
+    // none of which are gated on the caller owning the row).
+    higglesBalanceCents: row.higgles_balance_cents,
+  };
+}
+
+// #807: the subset of builderFromRow safe to hand back for a lookup that
+// isn't scoped to the caller's own account — GET /api/builders and its
+// ?ids=/?label= variants (used by the "Add friend" name lookup, the Shop
+// mode owner-label map, and the auction bid-history label map), none of
+// which call requireCurrentUser. landCapM2/ownedAreaM2 stay in this public
+// shape (unlike higglesBalanceCents) since landlet ownership and its cap
+// are already visible to any Shop-mode visitor by design — only the real
+// money balance is the sensitive field here.
+function publicBuilderFromRow(row) {
+  return {
     builderId: row.builder_id,
     label: row.label,
     // pioneerRank is the founding-cohort position (1 = very first claimer);
@@ -2406,14 +2429,9 @@ function builderFromRow(row) {
     // recognition").
     pioneerRank: row.pioneer_rank ?? null,
     isPioneer: row.pioneer_rank !== null,
-    // Land acquisition auctions (docs/SPEC.md §5, migrations/0045) — a
-    // real, persisted ledger credited when this builder sells a landlet
-    // via auction. See migrations/0045's own note on why bidding itself
-    // isn't gated by having a sufficient balance yet.
-    higglesBalanceCents: row.higgles_balance_cents,
     // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
     // area this builder may own at once, distinct from higglesBalanceCents
-    // above (which land-specific lándlets can be acquired via auction).
+    // (which land-specific lándlets can be acquired via auction).
     landCapM2: row.land_cap_m2,
     // The real total currently counted against that cap — ground-level
     // landlet area plus every level's own cap_consumed_m2 (docs/API.md's

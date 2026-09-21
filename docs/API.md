@@ -725,6 +725,16 @@ the same way it always has, just resolved server-side now. `ids` and
 would just be ignored down to the `ids` behavior; no caller does that
 today.
 
+None of these three branches (unfiltered list, `ids`, `label`) require a
+session — anyone can look up any builder this way. Because of that, they
+return a narrower shape than `GET /api/builders/me`: `builderId`, `label`,
+`pioneerRank`/`isPioneer`, `landCapM2`, `ownedAreaM2`, `createdAt`,
+`updatedAt` — but never `higglesBalanceCents` (#807). That field is a real,
+Stripe-redeemable money balance; the others are already visible to any
+Shop-mode visitor via landlet ownership, so only the balance needed
+stripping out here. `higglesBalanceCents` stays on `GET /api/builders/me`
+and any other response scoped to the caller's own session.
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the
