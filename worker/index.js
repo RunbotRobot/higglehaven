@@ -6759,6 +6759,16 @@ const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
     ))
 )`;
 
+// #799: the self-owned "claimed" branch of POST /api/landlets grants the
+// exact same fully-buildable outcome as POST .../claim — so, unlike the
+// unauthenticated unowned-creation branch beside it, it needs the same two
+// guards that endpoint enforces: at most one claimed landlet per builder,
+// and a rate limit (this is otherwise the one landlet-creation path with no
+// real greenbelt/world-generation backing it at all, so nothing else stops
+// a builder from flooding it). Bucketed by the session builder id, same
+// reasoning as every other repeatable-write limit in this file.
+const LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX = 20;
+
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
     return handleLandletVersions(request, db, route, url);
@@ -6931,9 +6941,21 @@ async function handleLandlets(request, db, route, url) {
     // to this creation path too. Creating a landlet already claimed by
     // *yourself* is still allowed (existing test/dev-tooling usage relies
     // on it), only ever as the session's own builder.
+    let sessionBuilder = null;
     if (landlet.ownerBuilderId !== null) {
-      const sessionBuilder = await requireSessionBuilder(request, db);
+      sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(landlet.ownerBuilderId, sessionBuilder.builder_id, 'Can only create a landlet owned by yourself');
+      // #799: an owner with any status other than 'claimed' would dodge
+      // recomputeLandCap's own `status = 'claimed'` filter (a few hundred
+      // lines up) while still passing every ownership check downstream
+      // (requireOwnedLandlet only ever looks at owner_builder_id) — free,
+      // permanently uncounted land. The "claimed implies owner" half of
+      // this invariant is enforced below for the unowned branch; this is
+      // its "owner implies claimed" other half.
+      if (landlet.status !== 'claimed') {
+        throw new HttpError('An owned landlet must have status "claimed"', 400);
+      }
+      await checkRateLimit(db, `landlet-self-claim-create:${sessionBuilder.builder_id}`, LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX);
     } else if (landlet.status === 'claimed') {
       // The same "claimed implies non-null owner" invariant PUT/PATCH
       // already protects (see that handler's own comment, and #224) —
@@ -6946,12 +6968,31 @@ async function handleLandlets(request, db, route, url) {
       // this back to, so this rejects outright instead.
       throw new HttpError('A claimed landlet must have an ownerBuilderId', 400);
     }
-    await db.prepare(`
+    // #799: folded into the INSERT's own WHERE clause (same atomic idiom as
+    // POST .../claim's UPDATE a few dozen lines up, and the landlet-level
+    // add's own INSERT) rather than a separate SELECT-then-INSERT, so two
+    // concurrent self-claiming creates from the same builder can't both
+    // pass a stale "don't already own a claimed landlet" check. The `? = 0`
+    // guard skips the subquery (and the still-null ownerBuilderId bind)
+    // entirely for the ordinary unowned-creation path, where it never
+    // applies.
+    const inserted = await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
          polygon_json, generated_at, claimable_at, metadata_json, landlet_type, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet))).run();
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE ? = 0 OR NOT EXISTS (
+        SELECT 1 FROM landlets AS owned
+        WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+          AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+      )
+    `).bind(
+      ...landletParams(landlet), landletMaxWorldRadius(candidateRowFromLandlet(landlet)),
+      sessionBuilder ? 1 : 0, landlet.ownerBuilderId,
+    ).run();
+    if (sessionBuilder && inserted.meta.changes === 0) {
+      throw new HttpError('You already own a claimed landlet', 409);
+    }
     return json({ landlet }, 201);
   }
 
