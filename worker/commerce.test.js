@@ -1818,6 +1818,15 @@ describe('Product-image thumbnail (#327)', () => {
       body: JSON.stringify({ imageDataUrl: huge }),
     }));
     expect(tooBig.response.status).toBe(413);
+
+    // #823: well-formed base64 under the size cap, but not actually a PNG
+    // (wrong magic bytes) — must be rejected before ever reaching R2.
+    const notActuallyPng = await api('/catalog/thumbnail-validation-template/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('not a real png file')}` }),
+    }));
+    expect(notActuallyPng.response.status).toBe(400);
+    expect(notActuallyPng.body.error).toMatch(/not a valid PNG/);
   });
 
   it('rejects a malformed embedding', async () => {
@@ -1932,7 +1941,7 @@ describe('Product-image thumbnail (#327)', () => {
     // skip the reservation check entirely (see the "if (!(await
     // models.head(key)))" guard in the handler) and this test would pass
     // for the wrong reason.
-    const uniqueImageDataUrl = `data:image/png;base64,${btoa(`thumbnail-cap-test-${crypto.randomUUID()}`)}`;
+    const uniqueImageDataUrl = `data:image/png;base64,${btoa(`\x89PNG\r\n\x1a\nthumbnail-cap-test-${crypto.randomUUID()}`)}`;
     const rejected = await api('/catalog/thumbnail-storage-cap-template/thumbnail', owner.session({
       method: 'POST',
       body: JSON.stringify({ imageDataUrl: uniqueImageDataUrl }),
