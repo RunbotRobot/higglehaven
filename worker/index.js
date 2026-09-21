@@ -2361,13 +2361,19 @@ async function handleBuilders(request, env, db, route, url) {
   // they're testing) need a way to grant it directly, the same escape
   // hatch POST /api/landlets already gives land-setup fixtures.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'land-cap-grants') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     await requireBuilder(db, route[1]);
     const input = await readJson(request);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    await db.prepare(`
-      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
-    `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents).run();
+    // #816 (sub-issue of #813): an admin-only real-money-equivalent
+    // top-up, batched with its own log row for the same "can never
+    // diverge" reason #814's grant-admin fix already established.
+    await db.batch([
+      db.prepare(`
+        INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+      `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents),
+      adminActionLogStatement(db, admin.user_id, 'land_cap_grant', 'builder', route[1], { amountCents }),
+    ]);
     const { nextCap } = await recomputeLandCap(db, route[1]);
     return json({ landCapM2: nextCap }, 201);
   }
@@ -2381,13 +2387,17 @@ async function handleBuilders(request, env, db, route, url) {
   // Purely a balance top-up, no earnings-ledger entry — this isn't meant
   // to simulate real income the way land-cap-grants' event is.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'higgles-grants') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     await requireBuilder(db, route[1]);
     const input = await readJson(request);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    await db.prepare(`
-      UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-    `).bind(amountCents, route[1]).run();
+    // #816 (sub-issue of #813): same reasoning as land-cap-grants above.
+    await db.batch([
+      db.prepare(`
+        UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
+      `).bind(amountCents, route[1]),
+      adminActionLogStatement(db, admin.user_id, 'higgles_grant', 'builder', route[1], { amountCents }),
+    ]);
     const builder = await requireBuilder(db, route[1]);
     return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
   }

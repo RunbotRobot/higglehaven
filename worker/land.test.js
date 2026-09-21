@@ -1483,6 +1483,16 @@ describe('Land cap', () => {
       method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
     }));
     expect(missingBuilder.response.status).toBe(404);
+
+    // #816 (sub-issue of #813): a real-money-equivalent admin top-up must
+    // leave a record of which admin granted it.
+    const me = await api('/auth/me', adminSession());
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('land_cap_grant', builder).first();
+    expect(logRow.admin_user_id).toBe(me.body.user.userId);
+    expect(logRow.target_type).toBe('builder');
+    expect(JSON.parse(logRow.detail_json)).toEqual({ amountCents: 100000 });
   });
 
   // #629: bidding now also requires the bidder to hold enough
@@ -1528,6 +1538,18 @@ describe('Land cap', () => {
       method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
     }));
     expect(missingBuilder.response.status).toBe(404);
+
+    // #816 (sub-issue of #813): same accountability record as
+    // land-cap-grants above — one row per grant, most recent last.
+    const me = await api('/auth/me', adminSession());
+    const { results: logRows } = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ? ORDER BY created_at',
+    ).bind('higgles_grant', builder).all();
+    expect(logRows).toHaveLength(2);
+    expect(logRows[0].admin_user_id).toBe(me.body.user.userId);
+    expect(logRows[0].target_type).toBe('builder');
+    expect(JSON.parse(logRows[0].detail_json)).toEqual({ amountCents: 100000 });
+    expect(JSON.parse(logRows[1].detail_json)).toEqual({ amountCents: 50000 });
   });
 });
 
