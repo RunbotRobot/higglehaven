@@ -6943,7 +6943,7 @@ async function handleLandlets(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
@@ -6952,14 +6952,17 @@ async function handleLandlets(request, db, route, url) {
 
     const settings = await getWorldSettings(db);
     const enclosed = landletMaxWorldRadius(existing) <= settings.radius_m;
-    await db.prepare(`
-      UPDATE landlets
-      SET generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-          status = CASE WHEN ? THEN 'greenbelt' ELSE status END,
-          claimable_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE claimable_at END,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ? AND status = 'generating' AND generated_at IS NULL
-    `).bind(enclosed ? 1 : 0, enclosed ? 1 : 0, route[1]).run();
+    await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            status = CASE WHEN ? THEN 'greenbelt' ELSE status END,
+            claimable_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE claimable_at END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND status = 'generating' AND generated_at IS NULL
+      `).bind(enclosed ? 1 : 0, enclosed ? 1 : 0, route[1]),
+      adminActionLogStatement(db, admin.user_id, 'landlet_generation_complete', 'landlet', route[1]),
+    ]);
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });
   }
@@ -7462,7 +7465,7 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
 
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -7534,6 +7537,7 @@ async function handleLandCandidates(request, db, route, url) {
       ),
       ...rows.map((row) => candidateInsertStatement(db, row)),
       ...candidateMaterializationStatements(db, overlapping),
+      adminActionLogStatement(db, admin.user_id, 'generate_mosaic', 'landlet_candidate_prefix', prefix, { count: rows.length + 1 }),
     ]);
     const stored = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
@@ -7546,7 +7550,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -7598,7 +7602,7 @@ async function handleLandCandidates(request, db, route, url) {
     }
     const result = await generateLandletRingCandidates(db, {
       prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId,
-    });
+    }, admin.user_id);
     return json(result, 201);
   }
 
@@ -7641,7 +7645,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const existing = await db.prepare(`
       SELECT materialized_at, ring_id FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -7651,11 +7655,16 @@ async function handleLandCandidates(request, db, route, url) {
     const result = await db.prepare('DELETE FROM landlet_candidates WHERE landlet_id = ? AND materialized_at IS NULL')
       .bind(route[1]).run();
     if (result.meta.changes === 0) throw new HttpError('Land candidate started generation during deletion', 409);
+    // Logged only after the delete is confirmed to have actually happened
+    // (not batched with it) — this statement's own race guard above means
+    // the delete can still lose a race and throw, and a log row for an
+    // action that didn't happen would misattribute it to this admin.
+    await adminActionLogStatement(db, admin.user_id, 'delete_land_candidate', 'landlet_candidate', route[1]).run();
     return json({ deleted: true });
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const existing = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -7691,6 +7700,7 @@ async function handleLandCandidates(request, db, route, url) {
       ...(started ? candidateMaterializationStatements(db, [row]) : []),
     ]);
     if (results[0].meta.changes === 0) throw new HttpError('Land candidate started generation during update', 409);
+    await adminActionLogStatement(db, admin.user_id, 'update_land_candidate', 'landlet_candidate', route[1]).run();
     const updated = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -7702,7 +7712,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const input = await readJson(request);
     if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
     if (input.candidates.length === 0) throw new HttpError('candidates must contain at least one item', 400);
@@ -7724,6 +7734,7 @@ async function handleLandCandidates(request, db, route, url) {
     await db.batch([
       ...rows.map((row) => candidateInsertStatement(db, row)),
       ...candidateMaterializationStatements(db, overlapping),
+      adminActionLogStatement(db, admin.user_id, 'create_land_candidates_batch', 'landlet_candidate_batch', null, { landletIds: [...ids] }),
     ]);
     const placeholders = landlets.map(() => '?').join(', ');
     const storedCandidates = await db.prepare(`
@@ -7739,7 +7750,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 1) {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
@@ -7749,6 +7760,7 @@ async function handleLandCandidates(request, db, route, url) {
     await db.batch([
       candidateInsertStatement(db, row),
       ...(started ? candidateMaterializationStatements(db, [row]) : []),
+      adminActionLogStatement(db, admin.user_id, 'create_land_candidate', 'landlet_candidate', landlet.landletId),
     ]);
 
     const candidate = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(landlet.landletId).first();
@@ -7898,7 +7910,11 @@ function candidateInsertStatement(db, row) {
 // startAngleRad/distribution/plots/adjacentToRingId (the HTTP handler does
 // this for a real request; autoGrowWorldIfNeeded's own caller constructs
 // them directly, always with adjacentToRingId null).
-async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId }) {
+// adminUserId is optional and present only when called from the admin HTTP
+// handler above — omitted by autoGrowWorldIfNeeded's own call below, so an
+// auto-generated ring never gets misattributed to whichever admin happens
+// to be logged in (there isn't one; it's the trusted server itself).
+async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId }, adminUserId) {
   const settings = await getWorldSettings(db);
   if (innerRadiusM < settings.radius_m) {
     throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
@@ -7929,6 +7945,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
     ),
     ...rows.map((row) => candidateInsertStatement(db, row)),
     ...candidateMaterializationStatements(db, overlapping),
+    ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_ring', 'landlet_candidate_ring', prefix, { count })] : []),
   ]);
   const storedCandidates = await db.prepare(`
     SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY created_at, landlet_id
@@ -7950,19 +7967,19 @@ async function handleWorld(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'expand') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const settings = await getWorldSettings(db);
     const countsBefore = await getLandletCounts(db);
     const greenbeltRatio = computeGreenbeltRatio(countsBefore);
     if (greenbeltRatio >= settings.greenbelt_min_ratio) {
       throw new HttpError('Greenbelt reserve is at or above the expansion threshold', 409);
     }
-    const result = await expandWorldOnce(db);
+    const result = await expandWorldOnce(db, admin.user_id);
     return json(result);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const existing = await getWorldSettings(db);
     const input = await readJson(request);
     const world = validateWorld({ ...worldFromRow(existing), ...input });
@@ -7977,12 +7994,15 @@ async function handleWorld(request, db, route) {
     if (world.radiusM < existing.radius_m) {
       throw new HttpError('World radius cannot be decreased', 400);
     }
-    await db.prepare(`
-      UPDATE world_settings
-      SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
-          day_cycle_hours = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE world_id = 'default-world'
-    `).bind(world.radiusM, world.expansionIncrementM, world.greenbeltMinRatio, world.coordinateRotationDeg, world.dayCycleHours, JSON.stringify(world.metadata)).run();
+    await db.batch([
+      db.prepare(`
+        UPDATE world_settings
+        SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
+            day_cycle_hours = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE world_id = 'default-world'
+      `).bind(world.radiusM, world.expansionIncrementM, world.greenbeltMinRatio, world.coordinateRotationDeg, world.dayCycleHours, JSON.stringify(world.metadata)),
+      adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world'),
+    ]);
     const updated = await getWorldSettings(db);
     return json({ world: worldFromRow(updated) });
   }
@@ -8026,8 +8046,11 @@ function computeGreenbeltRatio(counts) {
 // so autoGrowWorldIfNeeded (below) can expand the world itself without
 // going through an HTTP request or its ratio-gate 409 — the caller decides
 // whether expanding is warranted (the HTTP handler checks once up front;
-// the auto-grow loop below checks on every iteration).
-async function expandWorldOnce(db) {
+// the auto-grow loop below checks on every iteration). adminUserId is
+// optional and present only when called from the admin HTTP handler —
+// autoGrowWorldIfNeeded's own calls below omit it, so an automatic
+// expansion never gets logged as if some admin triggered it.
+async function expandWorldOnce(db, adminUserId) {
   const settings = await getWorldSettings(db);
   const previousRadiusM = settings.radius_m;
   const newRadiusM = previousRadiusM + settings.expansion_increment_m;
@@ -8055,6 +8078,9 @@ async function expandWorldOnce(db) {
       WHERE landlet_id = ? AND status = 'generating'
     `).bind(row.landlet_id)),
     ...candidateMaterializationStatements(db, overlapping),
+    ...(adminUserId
+      ? [adminActionLogStatement(db, adminUserId, 'expand_world', 'world', 'default-world', { previousRadiusM, newRadiusM })]
+      : []),
   ]);
   const touchedRingIds = [...new Set(overlapping.map((row) => row.ring_id).filter(Boolean))];
   let readyRingIds = [];
@@ -9363,11 +9389,18 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // the same way — otherwise a refund on a purchase whose seller has since
   // deleted their account would 403 forever, since no live session can
   // ever match an id that no longer exists in `sellers`.
+  // Tracked only for the admin-override branch below (undefined on an
+  // ordinary seller-initiated refund) — used to write an accountability
+  // log entry for this specific override once the refund actually goes
+  // through, per #813/#817: refunding on a seller's behalf, with no
+  // record of which admin acted, is exactly the kind of sensitive
+  // ownerless-fallback mutation that tracking issue exists to close.
+  let admin;
   if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
   } else {
-    await requireAdmin(request, db);
+    admin = await requireAdmin(request, db);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
@@ -9504,6 +9537,17 @@ async function handlePurchaseRefund(request, env, purchaseId) {
         'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
       ).bind(owned.builder_id, purchase.template_id),
     ]);
+  }
+
+  // Logged last, only once every step above (including the real Stripe
+  // reversal) has actually completed — not batched with any of them, since
+  // several are conditional or already have their own atomicity concerns
+  // (see the refunded_at guard's own comment above) and a log entry for a
+  // refund that didn't actually complete would misattribute it to this
+  // admin. `admin` is only set on the ownerless-fallback branch above; an
+  // ordinary seller-initiated refund logs nothing here.
+  if (admin) {
+    await adminActionLogStatement(db, admin.user_id, 'refund_override', 'purchase', purchaseId, { templateName }).run();
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
