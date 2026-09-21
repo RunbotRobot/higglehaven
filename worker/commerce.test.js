@@ -2561,6 +2561,17 @@ describe('Simulated purchases', () => {
     const after = await builderRow(seller.builderId);
     expect(before.higgles_balance_cents - after.higgles_balance_cents).toBe(builderShareCents);
 
+    // #813/#817: this refund only went through via the ownerless-fallback
+    // admin branch (no live seller to own it) — that must leave a record
+    // of which admin acted, same as every other sensitive admin-only
+    // mutation this tracking issue covers.
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('refund_override', purchaseId).first();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('purchase');
+
     // Refunding twice is rejected — the clawback already happened once.
     // This is also the observable contract #192's fix protects under real
     // concurrency (two requests racing on a stale refunded_at read): this
@@ -2687,6 +2698,14 @@ describe('Simulated purchases', () => {
     const refunded = await api(`/purchases/${purchaseId}/refund`, owningSeller.session({ method: 'POST' }));
     expect(refunded.response.status).toBe(200);
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
+
+    // #813/#817: only the ownerless-fallback admin branch logs an
+    // accountability entry — an ordinary seller-initiated refund (this one)
+    // never touches admin_action_log at all, since no admin acted.
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('refund_override', purchaseId).first();
+    expect(logRow).toBeNull();
   });
 
   // DELETE /api/sellers/:sellerId deliberately leaves catalog_templates

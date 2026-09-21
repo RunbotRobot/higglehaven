@@ -13,11 +13,13 @@ import {
 // account for the whole file rather than a fresh one per test, since
 // admin status carries no per-test state of its own to isolate.
 let adminSession;
+let adminUserId;
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   const admin = await signupAdmin('shared-admin');
   adminSession = admin.session;
+  adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
 });
 
 function createGreenbeltLandlet(landletId, center) {
@@ -1861,6 +1863,12 @@ describe('Worker API', () => {
       SELECT min_world_radius_m FROM landlet_candidates WHERE landlet_id = 'inside-candidate'
     `).first();
     expect(stored.min_world_radius_m).toBe(0);
+
+    // #813/#817
+    const createLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('create_land_candidate', 'inside-candidate').first();
+    expect(createLog.admin_user_id).toBe(adminUserId);
   });
 
   it('rejects manual/batch land candidates that would overlap existing land (#570)', async () => {
@@ -1938,6 +1946,12 @@ describe('Worker API', () => {
     const absent = await api('/land-candidates/cancelled-candidate');
     expect(absent.response.status).toBe(404);
 
+    // #813/#817
+    const deleteLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_land_candidate', 'cancelled-candidate').first();
+    expect(deleteLog.admin_user_id).toBe(adminUserId);
+
     const materialized = await api('/land-candidates/inside-candidate', adminSession({ method: 'DELETE' }));
     expect(materialized.response.status).toBe(409);
     expect(materialized.body).toEqual({ error: 'Materialized land candidates cannot be deleted' });
@@ -1978,6 +1992,13 @@ describe('Worker API', () => {
       materializedAt: null,
       metadata: { generated: true, generator: 'annular-ring-v1', ringIndex: 0 },
     });
+
+    // #813/#817
+    const ringLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('generate_ring', 'generated-ring').first();
+    expect(ringLog.admin_user_id).toBe(adminUserId);
+    expect(JSON.parse(ringLog.detail_json)).toEqual({ count: 6 });
 
     const listed = await api('/land-candidates/generated-ring-006');
     expect(listed.response.status).toBe(200);
@@ -2123,6 +2144,13 @@ describe('Worker API', () => {
 
     const mosaicIndices = generated.body.candidates.map((candidate) => candidate.metadata.mosaicIndex);
     expect(new Set(mosaicIndices).size).toBe(15);
+
+    // #813/#817
+    const mosaicLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('generate_mosaic', 'organic-patch').first();
+    expect(mosaicLog.admin_user_id).toBe(adminUserId);
+    expect(JSON.parse(mosaicLog.detail_json)).toEqual({ count: 16 });
 
     const starter = await api('/landlets/starter-landlet');
     expect(starter.body.landlet.polygon.length).toBeGreaterThanOrEqual(12);
@@ -2290,6 +2318,12 @@ describe('Worker API', () => {
     `).first();
     expect(queuedRadius.min_world_radius_m).toBeGreaterThan(200);
 
+    // #813/#817
+    const updateLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('update_land_candidate', 'corrected-candidate').first();
+    expect(updateLog.admin_user_id).toBe(adminUserId);
+
     const started = await api('/land-candidates/corrected-candidate', adminSession({
       method: 'PATCH',
       body: JSON.stringify({ center: { x: 0, y: 0 } }),
@@ -2340,6 +2374,13 @@ describe('Worker API', () => {
     expect(created.body.landlets[0]).toMatchObject({ landletId: 'batch-inside', status: 'generating' });
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-inside').materializedAt).not.toBeNull();
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-outside').materializedAt).toBeNull();
+
+    // #813/#817
+    const batchLog = await env.DB.prepare(
+      `SELECT * FROM admin_action_log WHERE action_type = 'create_land_candidates_batch' ORDER BY created_at DESC LIMIT 1`,
+    ).first();
+    expect(batchLog.admin_user_id).toBe(adminUserId);
+    expect(JSON.parse(batchLog.detail_json).landletIds.sort()).toEqual(['batch-inside', 'batch-outside']);
 
     const invalid = await api('/land-candidates/batch', adminSession({
       method: 'POST',
@@ -2533,6 +2574,14 @@ describe('Worker API', () => {
     expect(completed.body.landlet.generatedAt).not.toBeNull();
     expect(completed.body.landlet.claimableAt).toBeNull();
 
+    // #813/#817: accountability record for this world-generation tooling —
+    // who marked it complete, not just that it happened.
+    const generationCompleteLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('landlet_generation_complete', 'edge-candidate').first();
+    expect(generationCompleteLog.admin_user_id).toBe(adminUserId);
+    expect(generationCompleteLog.target_type).toBe('landlet');
+
     const noSession = await api('/world/expand', { method: 'POST' });
     expect(noSession.response.status).toBe(401);
     const nonAdmin = await signupBuilder('non-admin-expander');
@@ -2544,6 +2593,11 @@ describe('Worker API', () => {
       body: JSON.stringify({ greenbeltMinRatio: 1 }),
     }));
     const previousRadiusM = configured.body.world.radiusM;
+    const worldPatchLog = await env.DB.prepare(
+      `SELECT * FROM admin_action_log WHERE action_type = 'update_world_settings' ORDER BY created_at DESC LIMIT 1`,
+    ).first();
+    expect(worldPatchLog.admin_user_id).toBe(adminUserId);
+    expect(worldPatchLog.target_type).toBe('world');
 
     const expanded = await api('/world/expand', adminSession({ method: 'POST' }));
     expect(expanded.response.status).toBe(200);
@@ -2555,6 +2609,11 @@ describe('Worker API', () => {
       startedGeneratingLandletIds: ['queued-edge-candidate'],
       readyRingIds: [],
     });
+    const expandLog = await env.DB.prepare(
+      `SELECT * FROM admin_action_log WHERE action_type = 'expand_world' ORDER BY created_at DESC LIMIT 1`,
+    ).first();
+    expect(expandLog.admin_user_id).toBe(adminUserId);
+    expect(JSON.parse(expandLog.detail_json)).toEqual({ previousRadiusM, newRadiusM: previousRadiusM + 10 });
 
     const promoted = await api('/landlets/edge-candidate');
     expect(promoted.body.landlet.status).toBe('greenbelt');
@@ -2681,6 +2740,15 @@ describe('Worker API', () => {
       `UPDATE world_settings SET greenbelt_min_ratio = 1 WHERE world_id = 'default-world'`,
     ).run();
 
+    // #813/#817: expandWorldOnce is shared between this cron path and the
+    // admin-triggered POST /world/expand, which does log — captured as a
+    // before/after count (rather than asserting zero rows outright) since
+    // an earlier test in this file may have already logged its own manual
+    // expansion.
+    const logsBefore = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = 'expand_world'`,
+    ).first()).count;
+
     const controller = createScheduledController();
     const ctx = createExecutionContext();
     await worker.scheduled(controller, env, ctx);
@@ -2691,6 +2759,14 @@ describe('Worker API', () => {
     expect(promoted.body.landlet.claimableAt).not.toBeNull();
     const worldAfter = (await api('/world')).body.world;
     expect(worldAfter.radiusM).toBeGreaterThan(worldBefore.radiusM);
+
+    // An automatic, unattended expansion like this one must never get
+    // logged as if some admin triggered it (there wasn't one; scheduled()
+    // runs unauthenticated, as the trusted server itself).
+    const logsAfter = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = 'expand_world'`,
+    ).first()).count;
+    expect(logsAfter).toBe(logsBefore);
 
     // Restore a sane ratio so no later test in this file sees a world
     // that thinks it always needs to grow.
