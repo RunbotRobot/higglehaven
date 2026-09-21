@@ -2562,6 +2562,34 @@ describe('Simulated purchases', () => {
     expect(refunded.body.purchase.refundedAt).not.toBeNull();
   });
 
+  // #803: migrations/0079's own comment says higgles_redemptions is "a
+  // permanent record of each real-money cash-out... mirroring the 'keep
+  // the record, drop the live reference' reasoning purchases' own
+  // stripe_payout_id/paid_out_at columns already use" -- but unlike
+  // purchases.builder_id (fixed by migrations/0062, tested just above),
+  // this table's builder_id was still ON DELETE CASCADE until #803. A row
+  // is only ever inserted after real Stripe transfers/payouts calls
+  // succeed, so losing it on self-delete erases a real payout's only
+  // record. Inserted directly (mirroring this file's own approach for
+  // purchases above) rather than driving a full Stripe Connect
+  // onboarding + redeem flow, which isn't this test's own concern.
+  it('keeps a higgles_redemptions record (with a nulled builderId) after the builder deletes their account', async () => {
+    const builder = await signupBuilder('redemption-builder-deleted');
+    const redemptionId = `redemption-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+      VALUES (?, ?, 500000, ?, ?)
+    `).bind(redemptionId, builder.builderId, `tr_${crypto.randomUUID()}`, `po_${crypto.randomUUID()}`).run();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT * FROM higgles_redemptions WHERE redemption_id = ?').bind(redemptionId).first();
+    expect(row).not.toBeNull();
+    expect(row.builder_id).toBeNull();
+    expect(row.amount_cents).toBe(500000);
+  });
+
   it('rejects refunding a purchase with no seller without an admin session', async () => {
     const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
     await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
