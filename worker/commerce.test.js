@@ -3655,6 +3655,16 @@ describe('Simulated purchases', () => {
         expect(approved.response.status).toBe(200);
         expect(approved.body.status).toBe('approved');
 
+        // #815: approving a real tax record is a sensitive, real-money-
+        // adjacent action — it must leave a record of which admin did it.
+        const meAdmin = await api('/auth/me', adminSession());
+        const logRow = await env.DB.prepare(
+          'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+        ).bind('approve_1099_form', draft.formId).first();
+        expect(logRow.admin_user_id).toBe(meAdmin.body.user.userId);
+        expect(logRow.target_type).toBe('tax_1099_form');
+        expect(JSON.parse(logRow.detail_json)).toMatchObject({ formType: draft.formType });
+
         // More income posts after approval — the now-locked-in snapshot must
         // not silently drift.
         await grantHiggles(builderMe.body.builder.builderId, 100000);
@@ -3733,6 +3743,16 @@ describe('Simulated purchases', () => {
 
           const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
           expect(after.body.forms.find((f) => f.email === builder.email).status).toBe('voided');
+
+          // #815: voiding a real tax record is a correction with real
+          // accountability weight — it must leave a record of which admin did it.
+          const meAdmin = await api('/auth/me', adminSession());
+          const logRow = await env.DB.prepare(
+            'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+          ).bind('void_1099_form', form.formId).first();
+          expect(logRow.admin_user_id).toBe(meAdmin.body.user.userId);
+          expect(logRow.target_type).toBe('tax_1099_form');
+          expect(JSON.parse(logRow.detail_json)).toMatchObject({ formType: form.formType, previousStatus: 'draft' });
         });
 
         it('voids an approved form', async () => {
