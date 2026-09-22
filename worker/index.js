@@ -8953,6 +8953,11 @@ const MAX_MONEY_CENTS = 100_000_000;
 // (checkRateLimit) — a real account behind this gate now (see
 // requireVerifiedSession below) is still capable of looping this endpoint.
 const PURCHASE_RATE_LIMIT_MAX = 30;
+// #839: handlePurchaseFinalize is unauthenticated by design (no buyer
+// account exists in this app), so this is keyed by client IP the same way
+// every other unauthenticated repeatable write in this file is, rather than
+// by builder_id like PURCHASE_RATE_LIMIT_MAX above.
+const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
 
 async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
@@ -9182,6 +9187,15 @@ async function handlePurchaseFinalize(request, env) {
   // were ever revoked in between.
   const existing = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (existing) return json({ purchase: purchaseFromRow(existing) });
+
+  // #839: every other unauthenticated repeatable write in this file is
+  // rate-limited, but this one — which makes a real outbound Stripe API
+  // call using the platform's own secret key on every request — wasn't.
+  // Placed after the idempotency lookup above (a legitimate retry for an
+  // already-completed purchase never gets throttled) but before the Stripe
+  // call below (so an anonymous flood of garbage paymentIntentIds can't
+  // burn Worker time or exhaust the shared Stripe API key's own limit).
+  await checkRateLimit(db, `purchase-finalize:${clientIp(request)}`, PURCHASE_FINALIZE_RATE_LIMIT_MAX);
 
   if (!stripeConfigured(env)) {
     throw new HttpError('Stripe payments are not configured on this server yet.', 503);
