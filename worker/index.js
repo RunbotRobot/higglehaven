@@ -8337,6 +8337,24 @@ async function explainClaimConflict(db, landletId, builderId) {
   throw new HttpError('Landlet could not be claimed', 409);
 }
 
+// #827: unlike almost every other authenticated write in this file
+// (landlet-version, bundle-create, saved-layout-create, friend-request,
+// calendar-event, landlet-self-claim-create, ...), none of the placed_instances
+// mutations below ever called checkRateLimit — a compromised/scripted builder
+// session could flood single or batch creates/updates/deletes with zero
+// throttling. This bucket needs a much higher ceiling than those endpoints'
+// (10-30 per RATE_LIMIT_WINDOW_MS): unlike a one-off friend request or bundle,
+// src/main.js's syncUpdate fires on every discrete drag/rotate/resize/rename
+// commit during ordinary active building, easily dozens of times in a few
+// minutes — a low threshold copied from those endpoints would throttle a
+// legitimately active builder mid-session, the same trap PR #381 hit (and
+// was superseded by #382 for) when it tried a naive per-IP limit on catalog
+// creation. One shared bucket per builder across every write shape (single
+// or batch — a batch of up to 100 instances counts as one hit, same as
+// every other batch endpoint in this file) still bounds a genuine flood
+// while leaving generous headroom for real interactive editing.
+const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
+
 async function handleInstances(request, env, route, url) {
   const db = env.DB;
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
@@ -8347,6 +8365,7 @@ async function handleInstances(request, env, route, url) {
     const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     const placeholders = instanceIds.map(() => '?').join(', ');
     const { results } = await db.prepare(`
       SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
@@ -8372,6 +8391,7 @@ async function handleInstances(request, env, route, url) {
       throw new HttpError('instanceId values must be unique', 400);
     }
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     const existingInstances = await getInstancesById(db, instanceIds);
@@ -8481,6 +8501,7 @@ async function handleInstances(request, env, route, url) {
     const input = await readJson(request);
     const instance = validateInstance(input, crypto.randomUUID());
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
@@ -8511,6 +8532,7 @@ async function handleInstances(request, env, route, url) {
     const input = await readJson(request);
     const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
@@ -8581,6 +8603,7 @@ async function handleInstances(request, env, route, url) {
     const existing = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(route[1]).run();
     return json({ deleted: true });

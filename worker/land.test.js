@@ -465,6 +465,51 @@ describe('Community signs', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #827: unlike almost every other authenticated write in this file,
+  // placed_instances creates/updates/deletes (single and batch alike) had no
+  // checkRateLimit call at all. INSTANCE_WRITE_RATE_LIMIT_MAX is deliberately
+  // much higher than this file's other rate-limit constants (dozens of
+  // legitimate syncUpdate commits can happen in one active building session),
+  // so pre-seeding rate_limit_events directly rather than looping hundreds of
+  // real requests keeps this test fast — same approach as the
+  // prune-sweep-stale-bucket test's own direct table access.
+  it('rate-limits repeated instance writes from the same builder', async () => {
+    const writeBuilder = await signupBuilder('instance-write-rate-limit-builder');
+    await createGreenbeltLandlet('instance-write-rate-limit-landlet');
+    const claimed = await api('/landlets/instance-write-rate-limit-landlet/claim', writeBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const bucketKey = `instance-write:${writeBuilder.builderId}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 499 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/instances', writeBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-write-rate-limit-instance',
+        landletId: 'instance-write-rate-limit-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+      }),
+    }));
+    expect(atLimit.response.status).toBe(201);
+
+    const limited = await api('/instances', writeBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-write-rate-limit-instance-2',
+        landletId: 'instance-write-rate-limit-landlet',
+        templateId: 'placeholder-tree',
+        x: 2,
+        y: 1,
+      }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // Found via backlog audit (#356): the list above was `ORDER BY created_at`
   // with no `DESC` — ascending, so once a sign passed 200 posts, `LIMIT 200`
   // always kept the *oldest* 200, permanently hiding every post made after
