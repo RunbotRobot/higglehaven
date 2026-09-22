@@ -32,6 +32,25 @@ console.log('initial level label (should be Ground):', initialLabel);
 console.log('Remove button hidden at ground (should be true):', removeHiddenAtGround);
 console.log('Build button shows a cost preview at ground (should mention "m²"):', buildBtnAtGround);
 
+// #831: delay only the very next level-creation request so there's a
+// reliable window to observe the concurrent-click guard's disabled state
+// below while it's still in flight — reading it immediately after click()
+// otherwise races an in-memory-D1 response that can resolve faster than a
+// loaded CI runner's own automation round-trip, making this flaky under
+// load despite the guard itself working correctly (mirrors the same
+// delay-the-request idiom upload-cancel-race.test.mjs already uses). Scoped
+// to a one-shot flag rather than page.unroute()-ing it afterward — unrouting
+// while the delayed handler's own route.continue() is still pending races
+// Playwright's own route resolution and throws "Route is already handled!".
+let delayedOnce = false;
+await page.route('**/api/landlets/*/levels', async (route) => {
+  if (!delayedOnce) {
+    delayedOnce = true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await route.continue();
+});
+
 // Build a level up.
 await page.click('#level-build-btn');
 // Concurrent-click guard (issue #403): Dig/Remove (not just Build itself)
