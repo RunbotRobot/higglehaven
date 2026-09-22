@@ -2589,6 +2589,18 @@ anyone could fabricate an already-claimed landlet (any polygon, any
 location) under any builder's id straight from the request body, bypassing
 every invariant `POST .../claim` enforces.
 
+On this self-claim path (`ownerBuilderId` set to yourself, `status:
+"claimed"`) the request's own `areaM2` is ignored and always overwritten
+with the real fixed buildable-footprint constant (1000) before the
+landlet is stored (#825) — the real buildable interior always comes from
+that same fixed constant regardless of a landlet's own stored `area_m2`
+(see "Vertical construction" below), so trusting a client-supplied value
+here let it be set arbitrarily low, making every subsequent level add
+(billed against the landlet's own `area_m2`) cost almost nothing against
+the land cap. `POST .../claim` (the real player-facing claim flow) never
+accepted a client-supplied area at all, so this only closes a gap in this
+lower-level creation path, not a change to normal claiming.
+
 Request body example:
 
 ```json

@@ -7128,6 +7128,17 @@ async function handleLandlets(request, db, route, url) {
       if (landlet.status !== 'claimed') {
         throw new HttpError('An owned landlet must have status "claimed"', 400);
       }
+      // #825: this is the one path where a landlet's own `area_m2` is
+      // fully client-controlled, yet `levelCapConsumedM2` bills vertical
+      // construction against exactly that value while the real buildable
+      // footprint (assertInstanceXYWithinLandlet) always uses the fixed
+      // LANDLET_AREA_M2 constant regardless — an attacker-chosen tiny
+      // areaM2 would grant the real 1000m² footprint for near-zero land-cap
+      // cost per level, unboundedly. The real `POST .../claim` flow never
+      // lets the client set area at all, so there's nothing legitimate to
+      // preserve here; every existing test already passes exactly
+      // LANDLET_AREA_M2 for this branch.
+      landlet.areaM2 = LANDLET_AREA_M2;
       await checkRateLimit(db, `landlet-self-claim-create:${sessionBuilder.builder_id}`, LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX);
     } else if (landlet.status === 'claimed') {
       // The same "claimed implies non-null owner" invariant PUT/PATCH

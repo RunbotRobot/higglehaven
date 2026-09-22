@@ -208,6 +208,35 @@ describe('Landlet updates', () => {
     expect(stored).toBeNull();
   });
 
+  // #825: the self-claim branch used to trust the client's areaM2 outright.
+  // Since the real buildable footprint always comes from the fixed
+  // LANDLET_AREA_M2 constant (assertInstanceXYWithinLandlet), not this row's
+  // own area_m2, a tiny attacker-chosen areaM2 got the same real footprint
+  // while contributing ~0 to ownedAreaM2 and making every subsequent level
+  // add (levelCapConsumedM2 multiplies against area_m2) functionally free —
+  // unlimited vertical construction for near-zero land-cap cost.
+  it('ignores a self-claimed landlet\'s client-supplied areaM2, forcing the real fixed footprint area', async () => {
+    const builder = await signupBuilder('self-claim-area-spoof-builder');
+    const created = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-area-spoof-landlet', name: 'Tiny on paper', areaM2: 0.0001,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9400, y: 0 },
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.landlet.areaM2).toBe(1000);
+
+    const stored = await env.DB.prepare(
+      'SELECT area_m2 FROM landlets WHERE landlet_id = ?',
+    ).bind('self-claim-area-spoof-landlet').first();
+    expect(stored.area_m2).toBe(1000);
+
+    // ownedAreaM2 reflects the real footprint, not the spoofed value.
+    const me = await api('/builders/me', builder.session());
+    expect(me.body.builder.ownedAreaM2).toBe(1000);
+  });
+
   // #799: unlike every other repeatable write in this file, this path
   // (fully caller-controlled, no real greenbelt/world-generation backing it)
   // had no rate limit at all — a builder could flood the table even though
