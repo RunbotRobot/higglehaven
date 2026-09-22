@@ -420,7 +420,7 @@ async function handleUploadedAsset(request, env) {
     // object outright, unlike every other mutating endpoint in this file,
     // has no owning builder/seller to check against, so "logged in" alone
     // isn't a meaningful bar here.
-    await requireAdmin(request, env.DB);
+    const admin = await requireAdmin(request, env.DB);
     const modelUrl = `/uploads/${key}`;
     const existing = await env.MODELS.head(key);
     if (!existing) return json({ error: 'Not found' }, 404);
@@ -438,6 +438,9 @@ async function handleUploadedAsset(request, env) {
     `).bind(modelUrl, modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced by a catalog template', 409);
     await env.MODELS.delete(key);
+    // #829: same missed-audit-trail gap as /api/models/cleanup above — this
+    // single-object delete never recorded which admin ran it.
+    await adminActionLogStatement(env.DB, admin.user_id, 'delete_uploaded_asset', 'model_upload', modelUrl).run();
     return json({ deleted: true });
   }
 
@@ -1042,7 +1045,7 @@ async function handleModelCleanup(request, env) {
   // Same bar as the world/land-candidate tooling above. (handleApi already
   // guarantees env.DB is configured before routing here, unlike
   // handleUploadedAsset below, which sits outside handleApi entirely.)
-  await requireAdmin(request, env.DB);
+  const admin = await requireAdmin(request, env.DB);
   const input = await readJson(request);
   const maxDeletes = positiveInteger(input.maxDeletes ?? 100, 'maxDeletes');
   if (maxDeletes > 100) throw new HttpError('maxDeletes must be at most 100', 400);
@@ -1111,10 +1114,19 @@ async function handleModelCleanup(request, env) {
     toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
   }
   if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
+  const reclaimedBytes = toDelete.reduce((sum, object) => sum + object.size, 0);
+  // #829: this bulk-deletes unreferenced R2 objects outright (destructive,
+  // irreversible) but, unlike every other admin-gated mutation this file's
+  // #813 audit-trail effort covered, never recorded which admin ran it or
+  // what got deleted — logged even on a dryRun, since that still records who
+  // asked and with what parameters.
+  await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
+    maxDeletes, dryRun, targetCount: toDelete.length, reclaimedBytes,
+  }).run();
   return json({
     targetModelUrls: toDelete.map((object) => `/uploads/${object.key}`),
     targetCount: toDelete.length,
-    reclaimedBytes: toDelete.reduce((sum, object) => sum + object.size, 0),
+    reclaimedBytes,
     completeScan,
     dryRun,
   });
@@ -7837,8 +7849,12 @@ async function handleLandCandidateRings(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
-    await requireAdmin(request, db);
+    const admin = await requireAdmin(request, db);
     const result = await completeRingGenerationInternal(db, route[1]);
+    // #829: unlike its landlet-level sibling (see that handler's own
+    // adminActionLogStatement call), this endpoint never logged who
+    // completed a ring's generation — missed by #817's own sweep.
+    await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
     return json(result);
   }
 

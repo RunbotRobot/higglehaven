@@ -234,6 +234,13 @@ describe('Worker API', () => {
     const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
+    // #829: this single-object delete never recorded which admin ran it.
+    const adminMe = await api('/auth/me', adminSession());
+    const deleteLogRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_uploaded_asset', uploaded.modelUrl).first();
+    expect(deleteLogRow.admin_user_id).toBe(adminMe.body.user.userId);
+    expect(deleteLogRow.target_type).toBe('model_upload');
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`)).status).toBe(404);
     expect((await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }))).status).toBe(404);
     const afterRemoval = await api('/models', adminSession());
@@ -280,6 +287,19 @@ describe('Worker API', () => {
       dryRun: false,
     });
     expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
+    // #829: this bulk delete never recorded which admin ran it, or with what
+    // parameters — logged even on the dryRun preview above.
+    const { results: cleanupLogRows } = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id IS NULL ORDER BY created_at',
+    ).bind('model_cleanup').all();
+    expect(cleanupLogRows).toHaveLength(2);
+    expect(cleanupLogRows.every((row) => row.admin_user_id === adminMe.body.user.userId)).toBe(true);
+    expect(JSON.parse(cleanupLogRows[0].detail_json)).toEqual({
+      maxDeletes: 1, dryRun: true, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+    });
+    expect(JSON.parse(cleanupLogRows[1].detail_json)).toEqual({
+      maxDeletes: 1, dryRun: false, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+    });
     expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
     }))).response.status).toBe(400);
@@ -2258,6 +2278,15 @@ describe('Worker API', () => {
       completedLandlets: 3,
       greenbeltLandlets: 0,
     });
+
+    // #829: unlike its landlet-level sibling, this ring-level
+    // generation-complete never recorded which admin ran it.
+    const me = await api('/auth/me', adminSession());
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('ring_generation_complete', 'completion-ring').first();
+    expect(logRow.admin_user_id).toBe(me.body.user.userId);
+    expect(logRow.target_type).toBe('landlet_candidate_ring');
 
     const retry = await api('/land-candidate-rings/completion-ring/generation-complete', adminSession({ method: 'POST' }));
     expect(retry.response.status).toBe(200);
