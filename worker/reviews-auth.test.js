@@ -1096,6 +1096,29 @@ describe('Authentication', () => {
     expect(lockedOut.response.status).toBe(423);
   });
 
+  // #833: unlike every sibling auth endpoint, login had no per-IP rate
+  // limit at all — only the per-account lockout above, which does nothing
+  // to stop spraying one password across many different emails from the
+  // same IP. Bucketed by IP alone (not ip+email like signup/password-reset),
+  // so a fresh email per attempt still hits the same shared bucket.
+  it('rate-limits repeated login attempts from the same IP across different emails', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 10; i++) {
+      const attempt = await api('/auth/login', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email: `login-rate-limit-${i}@example.com`, password: 'anything' }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/auth/login', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email: 'login-rate-limit-final@example.com', password: 'anything' }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('verifies email with a valid token, and rejects an invalid or reused one', async () => {
     const email = `auth-verify-${crypto.randomUUID()}@example.com`;
     const signedUp = await signup(email, 'a fine long password');

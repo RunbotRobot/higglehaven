@@ -6718,7 +6718,20 @@ async function handleResendVerification(request, env, db) {
   return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
+// #833: every sibling auth endpoint in this file rate-limits by IP
+// (signup/password-reset key by ip+email; access-login's passphrase gate
+// keys by ip alone) — this one had neither, unlike them with no comment
+// explaining an exemption. The per-account lockout below (failed_login_
+// attempts >= threshold) stops brute-forcing *one* known account, but does
+// nothing against spraying one guessed/leaked password across many
+// different emails from the same IP, since each email gets its own
+// independent lockout budget. Bucketed by IP alone (not ip+email, unlike
+// signup/password-reset) specifically because spraying across many emails
+// is the attack this needs to stop.
+const LOGIN_RATE_LIMIT_MAX = 10;
+
 async function handleLogin(request, db, url) {
+  await checkRateLimit(db, `login:${clientIp(request)}`, LOGIN_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const password = typeof input.password === 'string' ? input.password : '';
