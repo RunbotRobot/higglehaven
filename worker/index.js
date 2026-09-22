@@ -8108,10 +8108,39 @@ function computeGreenbeltRatio(counts) {
 // optional and present only when called from the admin HTTP handler —
 // autoGrowWorldIfNeeded's own calls below omit it, so an automatic
 // expansion never gets logged as if some admin triggered it.
+// #837: previousRadiusM/newRadiusM used to be computed from a plain read
+// here, with the actual radius_m write further down a bare SET with no
+// guard tying it back to that read — two genuinely concurrent calls (an
+// admin double-click, a retried request, or an HTTP call racing an
+// internal auto-growth one) could both read the same previousRadiusM and
+// both write the same newRadiusM, silently dropping one whole increment
+// of growth while logging two separate admin_action_log entries both
+// claiming the same transition. Claiming the radius bump via a
+// WHERE-guarded conditional UPDATE first (same idiom this file already
+// uses for auctions — see resolveAuction/handleStartAuction) closes that
+// race: only the caller whose read is still current gets to proceed, and
+// a loser retries against fresh state rather than corrupting the log or
+// the enclosed/materialized landlet sets it computes from a stale radius.
+const EXPAND_WORLD_CONCURRENT_RETRY_LIMIT = 5;
+
 async function expandWorldOnce(db, adminUserId) {
-  const settings = await getWorldSettings(db);
-  const previousRadiusM = settings.radius_m;
-  const newRadiusM = previousRadiusM + settings.expansion_increment_m;
+  let previousRadiusM;
+  let newRadiusM;
+  let settings;
+  for (let attempt = 0; ; attempt++) {
+    settings = await getWorldSettings(db);
+    previousRadiusM = settings.radius_m;
+    newRadiusM = previousRadiusM + settings.expansion_increment_m;
+    const claimed = await db.prepare(`
+      UPDATE world_settings
+      SET radius_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE world_id = 'default-world' AND radius_m = ?
+    `).bind(newRadiusM, previousRadiusM).run();
+    if (claimed.meta.changes > 0) break;
+    if (attempt >= EXPAND_WORLD_CONCURRENT_RETRY_LIMIT) {
+      throw new HttpError('World expansion is being updated concurrently — please retry', 409);
+    }
+  }
   const { results } = await db.prepare(`
     SELECT * FROM landlets
     WHERE status = 'generating' AND generated_at IS NOT NULL
@@ -8123,12 +8152,7 @@ async function expandWorldOnce(db, adminUserId) {
     WHERE materialized_at IS NULL AND min_world_radius_m <= ?
   `).bind(newRadiusM).all();
   const overlapping = pending.results.filter((row) => landletMinWorldRadius(row) <= newRadiusM);
-  await db.batch([
-    db.prepare(`
-      UPDATE world_settings
-      SET radius_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE world_id = 'default-world'
-    `).bind(newRadiusM),
+  const followUpStatements = [
     ...enclosed.map((row) => db.prepare(`
       UPDATE landlets
       SET status = 'greenbelt', claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -8139,7 +8163,8 @@ async function expandWorldOnce(db, adminUserId) {
     ...(adminUserId
       ? [adminActionLogStatement(db, adminUserId, 'expand_world', 'world', 'default-world', { previousRadiusM, newRadiusM })]
       : []),
-  ]);
+  ];
+  if (followUpStatements.length > 0) await db.batch(followUpStatements);
   const touchedRingIds = [...new Set(overlapping.map((row) => row.ring_id).filter(Boolean))];
   let readyRingIds = [];
   if (touchedRingIds.length > 0) {
