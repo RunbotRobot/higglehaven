@@ -338,6 +338,14 @@ export default {
     ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
       console.error('checkMigrationDrift failed', error);
     }));
+    // #848: without this, only a manually-triggered admin POST ever
+    // reclaims unreferenced R2 uploads (most notably concept-image's own
+    // guaranteed-unreferenced generated PNGs), so the shared
+    // MAX_TOTAL_STORAGE_BYTES cap eventually fills from ordinary,
+    // encouraged usage and starts 507ing every writer into the bucket.
+    ctx.waitUntil(scheduledModelCleanup(env).catch((error) => {
+      console.error('scheduledModelCleanup failed', error);
+    }));
   },
 };
 
@@ -1053,7 +1061,41 @@ async function handleModelCleanup(request, env) {
     throw new HttpError('dryRun must be a boolean', 400);
   }
   const dryRun = input.dryRun || false;
+  const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
+  await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
+    maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+  }).run();
+  return json({ ...result, dryRun });
+}
 
+// #848: scheduled()'s own periodic sweep — see its call site below.
+// Every writer into the MODELS bucket (model uploads, catalog thumbnails,
+// concept-image generation, #602) shares one MAX_TOTAL_STORAGE_BYTES cap,
+// but concept-image's own generated PNGs are *never* meant to be
+// referenced by a catalog_templates row (they're pure scratch input to
+// similarity-search, see concept-image's own comment) — every generation
+// is therefore a guaranteed-permanent, guaranteed-unreferenced object
+// with no automatic path to reclaim it, previously only cleaned up if an
+// admin happened to run POST /api/models/cleanup by hand. Left
+// unattended, ordinary encouraged usage (iterating on a concept-image
+// prompt) eventually exhausts the shared cap and 507s every writer,
+// model uploads and catalog thumbnails included, until an admin notices.
+// adminUserId is null here (a real admin_user_id FK wouldn't exist for a
+// cron-triggered action) — admin_action_log.admin_user_id already allows
+// NULL for exactly this "no longer identifiable/no admin acted" shape
+// (migrations/0087's own ON DELETE SET NULL reasoning).
+export async function scheduledModelCleanup(env) {
+  if (!env.MODELS) return;
+  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false });
+  if (result.targetCount > 0) {
+    await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
+      maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+      trigger: 'scheduled',
+    }).run();
+  }
+}
+
+async function cleanupUnreferencedModels(env, { maxDeletes, dryRun }) {
   const targets = [];
   let cursor;
   let completeScan = false;
@@ -1115,21 +1157,12 @@ async function handleModelCleanup(request, env) {
   }
   if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
   const reclaimedBytes = toDelete.reduce((sum, object) => sum + object.size, 0);
-  // #829: this bulk-deletes unreferenced R2 objects outright (destructive,
-  // irreversible) but, unlike every other admin-gated mutation this file's
-  // #813 audit-trail effort covered, never recorded which admin ran it or
-  // what got deleted — logged even on a dryRun, since that still records who
-  // asked and with what parameters.
-  await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
-    maxDeletes, dryRun, targetCount: toDelete.length, reclaimedBytes,
-  }).run();
-  return json({
+  return {
     targetModelUrls: toDelete.map((object) => `/uploads/${object.key}`),
     targetCount: toDelete.length,
     reclaimedBytes,
     completeScan,
-    dryRun,
-  });
+  };
 }
 
 function validateGlb(bytes) {
