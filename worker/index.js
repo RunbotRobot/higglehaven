@@ -2339,7 +2339,16 @@ async function handleBuilders(request, env, db, route, url) {
             WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
               AND l.owner_builder_id = ?
           )
-      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
+          -- #852: handleBuilderRedeem inserts this claim row before either
+          -- Stripe call, with stripe_payout_id only ever set once the
+          -- payout has actually succeeded (same idiom as purchases'
+          -- paid_out_at/stripe_payout_id pair above) — so a still-NULL
+          -- payout id means a redemption is genuinely mid-flight right now,
+          -- not just claimed-and-forgotten.
+          AND NOT EXISTS (
+            SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
+          )
+      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       ...landletIds.flatMap((landletId) => [
         db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
         db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
@@ -2397,6 +2406,12 @@ async function handleBuilders(request, env, db, route, url) {
       `).bind(route[1]).first();
       if (sellingWithBids) {
         throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
+      }
+      const redemptionInFlight = await db.prepare(`
+        SELECT redemption_id FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL LIMIT 1
+      `).bind(route[1]).first();
+      if (redemptionInFlight) {
+        throw new HttpError('Cannot delete this builder while a higgles redemption is still being paid out', 409);
       }
       throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
@@ -5656,6 +5671,22 @@ async function handleBuilderRedeem(request, env, db) {
       throw new HttpError('Your higgles balance changed — try again.', 409);
     }
 
+    // #852: inserted before either Stripe call, not after both succeed —
+    // this is what lets DELETE /api/builders/:id's own guard (see its
+    // comment) detect a redemption that's mid-flight (claimed, but not yet
+    // confirmed by a payout) the same way the seller-side
+    // claimPurchasesForPayout/paid_out_at claim already does. Without a
+    // persisted row this early, a builder deleted in the window between the
+    // balance claim above and the Stripe calls below used to let real money
+    // move with the INSERT then failing outright on the now-missing
+    // builder_id's FK, and the catch block's own refund below silently
+    // no-op (0 rows) against a builder that no longer exists.
+    const redemptionId = `redemption-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+      VALUES (?, ?, ?, NULL, NULL)
+    `).bind(redemptionId, sessionBuilder.builder_id, amountCents).run();
+
     let payout;
     try {
       // Two real Stripe calls, unlike a seller's own payout: higgles were
@@ -5671,19 +5702,28 @@ async function handleBuilderRedeem(request, env, db) {
         { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
         `builder-redeem-transfer:${sessionBuilder.builder_id}:${crypto.randomUUID()}`,
       );
+      await db.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ? WHERE redemption_id = ?')
+        .bind(transfer.id, redemptionId).run();
       payout = await stripeRequest(
         env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' }, undefined, sessionBuilder.stripe_account_id,
       );
-      await db.prepare(`
-        INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
-        VALUES (?, ?, ?, ?, ?)
-      `).bind(`redemption-${crypto.randomUUID()}`, sessionBuilder.builder_id, amountCents, transfer.id, payout.id).run();
+      await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
+        .bind(payout.id, redemptionId).run();
     } catch (err) {
       // The claim above already debited the balance — release it so a
       // failed Stripe call never strands real higgles the builder still
       // has, the same undo-on-failure pattern releasePurchaseClaim uses.
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(amountCents, sessionBuilder.builder_id).run();
+      // Only delete the claim row if the transfer itself never went
+      // through — nothing happened, so there's nothing to keep a record
+      // of. If the transfer succeeded but the payout failed, real money
+      // already moved into the builder's connected account; leave the row
+      // (transfer id set, payout id still NULL) as the one trace of that
+      // rather than erasing it, and it keeps blocking builder deletion via
+      // the same guard until someone follows up.
+      await db.prepare('DELETE FROM higgles_redemptions WHERE redemption_id = ? AND stripe_transfer_id IS NULL')
+        .bind(redemptionId).run();
       throw err;
     }
 
