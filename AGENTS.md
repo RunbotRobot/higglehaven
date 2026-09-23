@@ -83,45 +83,50 @@ name is its one branch, always.
 **Issue #25 and Issue #157 are retired as of 2026-09-06.** Their history
 is worth reading once for context, but stop posting new comments to
 either — status updates, inter-session messages, and owner direction all
-moved to one place: the **Higglehaven Control Room**, a published
-Artifact with a live shared database, at
-`https://claude.ai/code/artifact/ec1068bb-c339-43c5-bd29-d7bc861472ee`.
+moved to one place: the **Higglehaven Control Room**.
 
-This replaces the GitHub-comment-thread version of both issues because a
-160-comment thread that everyone has to skim to find what's addressed to
-them was exactly the friction this exists to remove — the owner
-shouldn't have to open GitHub *and* the Claude app to stay in the loop,
-and neither should you. GitHub Issues themselves are unaffected: file,
-self-assign, and close backlog items exactly as before — only the
-running commentary moves.
+**As of N31 (owner, 2026-09-11) the Control Room is a real part of this
+app, not a Claude Artifact.** It started as a published Artifact using
+that platform's own shared-`db` capability, but the owner asked directly
+for a real server that could reject a malformed write outright (a bare
+`waitingOn: "owner"` with zero explanation was reaching the board
+undetected — see `migrations/0082_control_room.sql`'s own comment for
+the full quote). That migration shipped months ago: the board now lives
+behind this Worker at `GET /admin/control-room`
+(`public/admin-control-room.html`), backed by D1 tables
+`control_room_tasks`/`control_room_replies`, fronted by a validating
+`/api/control-room/...` HTTP API. **Full route-by-route documentation is
+in `docs/API.md`'s "Control Room API (N31)" section — read that, not
+this summary, for exact request/response shapes.** Old Artifact-era data
+was already migrated into these tables; the Artifact URL this section
+used to point at is decommissioned — don't use it.
 
-You don't need a browser to use it — call it the same way you'd call any
-other tool, using the Artifact tool's `read_db`/`write_db` actions
-against the URL above.
+Access: `requireControlRoomAccess` takes either a `CONTROL_ROOM_API_KEY`
+Worker secret via the `x-control-room-key` header, or an authenticated
+admin session cookie — neither of which a session automatically has. If
+you don't have a way to authenticate to the real API, direct D1 access
+(e.g. a D1 query tool against the `control_room_tasks`/
+`control_room_replies` tables, database id in your own environment
+config) is the practical fallback the fleet has been using — **but be
+aware this bypasses the API's own validation** (the `from`/`title`
+required on task-create, `caller` required on task-update, and
+crucially the non-empty `reason` the API now requires before it'll let
+`waitingOn` become `"owner"` — the exact gap N31 was raised to close).
+Prefer the real API when you can reach it; when you can't, hold yourself
+to the same discipline it would enforce (below) rather than relying on
+it to catch a bad write for you. See issue #854 if you want the history
+here, and flag it as an open question rather than silently picking one
+or the other if it matters for what you're doing.
 
-**As of 2026-09-07 there is only one collection — `messages` was
-eliminated and folded into `tasks`**, per an explicit owner request
-("eliminate duplication of information between messages and tasks...
-maintain all messages inside the task thread"). Every board item, GitHub-
-backed or not, is a `tasks` doc now, and every reply/discussion thread on
-it lives in a separate flat `replies` collection:
+Field shapes carried over from the Artifact-era board 1:1, so the
+semantics below are unchanged — only the storage/transport is different
+(a `tasks`/`replies` "collection" below now means the
+`control_room_tasks`/`control_room_replies` table; an `add`/`.doc().set()`
+call now means a `POST`/`PATCH` to the API, or the equivalent `INSERT`/
+`UPDATE` if you're on the direct-D1 fallback):
 
-If you ever find the `messages` collection non-empty again: this is not
-data loss. The live Control Room page has never read from `messages`
-since this migration — it only subscribes to `tasks`/`replies` — so a
-non-empty `messages` collection is inert, stale, pre-migration content,
-not a sign anything is broken or missing. (This happened once already,
-2026-09-07 ~23:30 UTC: a session mistook the deletion for corruption and
-restored a ~19:36 UTC snapshot from a cached read, which just re-created
-exactly the duplication the owner asked to eliminate, all of it already
-present and current in `tasks`/`replies`. It was deleted again for that
-reason.) Before treating a non-empty `messages` collection as an incident,
-diff its content against `tasks`/`replies` first — if everything in it is
-already represented there, it's safe to delete outright with no
-sign-off needed.
-
-- **`tasks` collection**, one doc per issue/PR/feedback/question. A
-  GitHub-backed doc (id `issue-<N>` or `pr-<N>`) has `number`, `kind`
+- **`control_room_tasks`**, one row per issue/PR/feedback/question. A
+  GitHub-backed row (id `issue-<N>` or `pr-<N>`) has `number`, `kind`
   (`"issue"`|`"pr"`), `title`, `status` (`"queued"`|`"in_progress"`|
   `"done"`), `session` (your own session name), `url`, `updatedAt` (ISO
   timestamp) — write or update it the moment you self-assign, when you
@@ -140,64 +145,59 @@ sign-off needed.
   ("just now" on days-old content) and, separately, misattributed to the
   owner because an empty `session: ''` (routine on a card you've stood
   down from) was read as falsy. The board falls back to `updatedAt` for
-  older docs that predate `noteUpdatedAt` — no regression, just no longer
-  the only signal once you set it. A message-shaped doc
+  older rows that predate `noteUpdatedAt` — no regression, just no longer
+  the only signal once you set it. A message-shaped row
   (freeform direction/feedback/a question with no GitHub issue behind
-  it — `add` it with an auto id, or `.doc('feedback-<id>').set(...)` if
-  you're claiming an existing feedback item per "Claiming a task" below)
+  it — create it with a fresh id, or reuse `feedback-<id>` if you're
+  claiming an existing feedback item per "Claiming a task" below)
   instead carries `kind` (`"feedback"`|`"question"`), `tag` (`"note"`|
   `"question"`, purely cosmetic), `title` (the message text itself),
   `from` (your session name, or `"owner"`), `status` (same three
   values — `"queued"` for anything still open/unresolved, `"done"` once
   it's resolved), `session: ''`, `viewed`/`awaitingClaude` (bool, the
   board's own triage state), `createdAt`/`updatedAt`, optionally
-  `imageUrl`. Check it for unresolved owner direction — `where("kind",
-  "==", "feedback").where("status", "!=", "done")`, or just read the
-  whole (still modest-sized) collection — whenever you look for your next
-  task; the owner's direction (`from: "owner"`) lands here via the page's
-  compose form, which now writes directly into `tasks`. If you have a
-  genuine blocking question of your own, `add` a `kind: "question"` doc
-  instead of just stopping — see "Continuing without a prompt" below for
-  how to wait on it without going idle. A `kind: "question"` task still
-  showing `status: "queued"` is unanswered; the board itself renders it
-  with an inline "Needs your answer" tag so the owner doesn't have to
-  scan for it.
-- **`replies` collection**, one doc per reply to any task (a GitHub one
-  or a message-shaped one alike) — fields `taskId` (the task doc it
+  `imageUrl`. Check it for unresolved owner direction — filter to
+  `kind = 'feedback' AND status != 'done'`, or just read the whole
+  (still modest-sized) table — whenever you look for your next task; the
+  owner's direction (`from: "owner"`) lands here via the admin page's
+  own compose form. If you have a genuine blocking question of your own,
+  create a `kind: "question"` row instead of just stopping — see
+  "Continuing without a prompt" below for how to wait on it without
+  going idle. A `kind: "question"` task still showing `status: "queued"`
+  is unanswered; the board itself renders it with an inline "Needs your
+  answer" tag so the owner doesn't have to scan for it.
+- **`control_room_replies`**, one row per reply to any task (a GitHub
+  one or a message-shaped one alike) — fields `taskId` (the task row it
   replies to), `from` (your session name, or `"owner"`), `text`,
   `createdAt`, optionally `imageUrl`. This is where you post progress
-  updates, answers, or follow-up discussion on a task — `add` a doc here
-  with `taskId` set to the task's own id rather than editing the task
-  doc's own fields (the board renders replies nested under their task's
-  card, newest-thread-activity-first). Replying to a task the owner has
-  it marked `viewed: true` should also flip that back to `viewed: false`
-  so your reply doesn't sit hidden — see the page's own compose handler
-  for the exact pattern.
-
-Read `db.d.ts`'s call contract (linked from the `artifact-capabilities`
-skill) if you need anything beyond simple reads/writes — `where`/`limit`
-queries, batched writes, etc.
+  updates, answers, or follow-up discussion on a task — create a row
+  here with `taskId` set to the task's own id rather than editing the
+  task row's own fields (the board renders replies nested under their
+  task's card, newest-thread-activity-first). Replying to a task the
+  owner has marked `viewed: true` should also flip that back to
+  `viewed: false` so your reply doesn't sit hidden.
 
 **Posting a periodic work summary (e.g. an hourly recap of merged PRs):
-file it as its own new `tasks` doc, not a reply on a recurring one.** The
-owner's own instruction (2026-09-09): "provide the hourly summaries each
-as their new task that is 'WAITING ON OWNER'. I should be able to mark
-tasks as done myself, then you won't have to bother with the task again."
-A reply buried under an old task's thread is easy to miss and leaves the
-owner unable to dismiss it without replying back; a fresh `kind:
-"feedback"`, `tag: "summary"` (or similar) doc with `status: "queued"`,
-`waitingOn: "owner"` puts it in the Queued column on its own, where the
-owner can mark it `"done"` directly — no reply needed from either side.
+file it as its own new `control_room_tasks` row, not a reply on a
+recurring one.** The owner's own instruction (2026-09-09): "provide the
+hourly summaries each as their new task that is 'WAITING ON OWNER'. I
+should be able to mark tasks as done myself, then you won't have to
+bother with the task again." A reply buried under an old task's thread
+is easy to miss and leaves the owner unable to dismiss it without
+replying back; a fresh `kind: "feedback"`, `tag: "summary"` (or similar)
+row with `status: "queued"`, `waitingOn: "owner"` puts it in the Queued
+column on its own, where the owner can mark it `"done"` directly — no
+reply needed from either side.
 
 ### Continuing without a prompt
 
 The owner would rather you keep working through the backlog than sit
 idle between their check-ins — so don't wait for one. When you finish a
 task (merged, control room updated), immediately look for your next one
-the same way you would if freshly prompted: check the control room's
-`tasks` collection for unresolved owner direction (`kind: "feedback"`/
-`"question"`, `status` not `"done"`) first, then the GitHub Issues
-backlog per "Claiming a task" below.
+the same way you would if freshly prompted: check `control_room_tasks`
+for unresolved owner direction (`kind: "feedback"`/`"question"`,
+`status` not `"done"`) first, then the GitHub Issues backlog per
+"Claiming a task" below.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
@@ -225,12 +225,13 @@ detection or backoff for this; it's not a condition you can observe from
 inside a stopped turn.
 
 For a genuine blocking question you can't resolve alone (the owner's
-judgment call, not yours to make): `add` a `kind: "question"` doc to the
-control room's `tasks` collection, then keep your own hourly Routine
-running rather than stopping — its next firing will find your answer (a
-`replies` doc with `taskId` set to your question's id, and/or the
-question's own `status` flipped to `"done"`) if one has arrived, or find
-nothing yet and just check again next hour. Either way you're never
+judgment call, not yours to make): create a `kind: "question"` row in
+`control_room_tasks`, then keep your own hourly Routine running rather
+than stopping — its next firing will find your answer (a
+`control_room_replies` row with `taskId` set to your question's id,
+and/or the question's own `status` flipped to `"done"`) if one has
+arrived, or find nothing yet and just check again next hour. Either way
+you're never
 sitting fully idle waiting on it.
 
 If you ever end up producing bad output under this — a broken merge, a
@@ -316,16 +317,16 @@ cost when it happens anyway:
   state immediately before pushing or opening a PR, not only at claim
   time; catching a collision here is far cheaper than discovering it
   from a merge conflict on an already-open PR.
-- **Treat the `tasks` collection and the issue's `assignees` field as
-  the authoritative checks, not any comment thread.** A fast-moving
+- **Treat `control_room_tasks` and the issue's `assignees` field as the
+  authoritative checks, not any comment thread.** A fast-moving
   conversation is what everyone actually skims in practice, but it can
-  bury or delay a "Starting X" message; a `tasks` doc's `status`/
-  `session` fields and a GitHub issue's `assignees` are each a single
-  fact you can check directly before adding yourself to either. Check
-  the `tasks` collection for an existing doc on the item *before*
-  creating one — that's the fast, single-query check the rest of this
-  fleet is already reading every cycle, so it catches a same-minute
-  collision that a GitHub API round-trip alone might not.
+  bury or delay a "Starting X" message; a task row's `status`/`session`
+  fields and a GitHub issue's `assignees` are each a single fact you can
+  check directly before adding yourself to either. Check
+  `control_room_tasks` for an existing row on the item *before* creating
+  one — that's the fast, single-query check the rest of this fleet is
+  already reading every cycle, so it catches a same-minute collision
+  that a GitHub API round-trip alone might not.
 - **Set `waitingOn` back to `"owner"` yourself the moment your own reply
   hands a decision back to them — the Control Room can't do this for
   you.** Its own compose-form code auto-clears `waitingOn` from `"owner"`
@@ -418,7 +419,9 @@ cost when it happens anyway:
   and posting a confirming reply on each, only to find them "inexplicably"
   back to `"WAITING ON: OWNER"` later — repeatedly enough ("dozens of
   times") that they wondered whether the whole board needed migrating off
-  this Artifact-based platform to a real server. It doesn't: the
+  the (then still Artifact-based) platform to a real server — it later
+  was (N31, see "The control room" above), but for an unrelated
+  validation gap, not this one: the
   `knownDoneRefs`/`clearIfWaitingOnDone` auto-flip code in the page's own
   script explicitly never touches `waitingOn: "owner"`
   (`if (!w || w === 'claude' || w === 'owner') return;`), so the page
