@@ -7439,10 +7439,36 @@ async function handleLandletDraft(request, db, landletId) {
       if (ids.has(instance.instanceId)) throw new HttpError('instanceId values must be unique', 400);
       ids.add(instance.instanceId);
     }
-    await assertCropWithinTemplateBounds(db, instances);
-    await assertInstanceZWithinLevels(db, instances);
-    assertInstanceXYWithinLandlet(instances);
-    assertInstanceScaleWithinBounds(instances);
+    // #860: same "only re-check what actually changed" reasoning as the
+    // instances/batch endpoint's own fix above — this endpoint always
+    // resends the landlet's *entire* current draft (every instance, not
+    // just touched ones, per this endpoint's own "atomically replaces the
+    // landlet's entire live draft" contract), so validating every assert
+    // unconditionally would brick every future save on the whole landlet
+    // — not just an edit to the affected instance — the moment a template
+    // shrinks or a level/bound tightens under an already-placed instance.
+    const existingInstances = await getInstancesById(db, [...ids]);
+    const instancesNeedingCropCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
+    });
+    await assertCropWithinTemplateBounds(db, instancesNeedingCropCheck);
+    const instancesNeedingZCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
+    });
+    await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
+    const instancesNeedingXYCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
+        || instance.landletId !== existing.landletId;
+    });
+    assertInstanceXYWithinLandlet(instancesNeedingXYCheck);
+    const instancesNeedingScaleCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.scale !== existing.scale;
+    });
+    assertInstanceScaleWithinBounds(instancesNeedingScaleCheck);
 
     const versionId = crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
