@@ -8897,6 +8897,7 @@ async function handleSignPosts(request, db, route) {
     // authorLabel is free text) — matches "the frontend only shows a delete
     // control to the sign's own landlet's builder."
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
@@ -8989,6 +8990,7 @@ async function handleCalendarEvents(request, db, route) {
     // Same moderation gate as sign posts above — the calendar's own hosting
     // landlet's owner, not the event's free-text author.
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
