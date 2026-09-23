@@ -11898,6 +11898,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutStatusEl.textContent = 'Loading payment form…';
     checkoutStatusEl.classList.remove('error');
     checkoutPayBtn.disabled = true;
+    checkoutCancelBtn.disabled = false;
     checkoutModalEl.classList.add('visible');
 
     checkoutCancelBtn.onclick = () => {
@@ -11915,6 +11916,13 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
 
       checkoutPayBtn.onclick = async () => {
         checkoutPayBtn.disabled = true;
+        // #841: the card is genuinely charged once confirmCardPayment
+        // resolves, so Cancel can't stay clickable during this await —
+        // otherwise a cancel-click here settles this promise as rejected
+        // while the charge (and the finalize call below) still goes
+        // through for real, silently reporting a completed purchase as
+        // cancelled.
+        checkoutCancelBtn.disabled = true;
         checkoutStatusEl.textContent = 'Processing…';
         checkoutStatusEl.classList.remove('error');
         try {
@@ -11927,6 +11935,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
           checkoutStatusEl.textContent = err.message || 'Payment failed.';
           checkoutStatusEl.classList.add('error');
           checkoutPayBtn.disabled = false;
+          checkoutCancelBtn.disabled = false;
         }
       };
     }).catch((err) => {
