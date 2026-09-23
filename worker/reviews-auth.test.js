@@ -1209,6 +1209,31 @@ describe('Authentication', () => {
     expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
   });
 
+  it('#843: completing a reset invalidates any other outstanding reset link for the same account', async () => {
+    const email = `auth-reset-sibling-${crypto.randomUUID()}@example.com`;
+    await signup(email, 'the original password');
+
+    // Two separate reset requests (e.g. "the first email didn't arrive"),
+    // producing two distinct valid tokens for the same account.
+    const requestedFirst = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    const firstToken = new URL(requestedFirst.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+    const requestedSecond = await api('/auth/request-password-reset', { method: 'POST', body: JSON.stringify({ email }) });
+    const secondToken = new URL(requestedSecond.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+    expect(firstToken).not.toBe(secondToken);
+
+    // Completing the reset with the second (newer) link should invalidate
+    // the first, still-unexpired one too — otherwise it could silently
+    // undo this reset and re-hijack the account afterward.
+    const reset = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: secondToken, newPassword: 'a brand new password' }) });
+    expect(reset.response.status).toBe(200);
+
+    const reusedFirstToken = await api('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: firstToken, newPassword: 'attacker-chosen password' }),
+    });
+    expect(reusedFirstToken.response.status).toBe(400);
+  });
+
   it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {
     const requested = await api('/auth/request-password-reset', {
       method: 'POST',

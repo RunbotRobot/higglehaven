@@ -6932,6 +6932,12 @@ async function handleResetPassword(request, db) {
     // the right call if the reset was prompted by a compromised password:
     // an attacker who was riding an existing session loses it too.
     db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id),
+    // #843: also invalidate any other outstanding reset tokens for this
+    // account — otherwise an older, still-unexpired link from an earlier
+    // request remains valid and can silently undo this reset afterward,
+    // the same account-takeover shape the session wipe above exists to
+    // close, just via an old email link instead of an old session.
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(row.user_id),
   ]);
   return json({ reset: true });
 }
