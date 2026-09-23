@@ -7353,6 +7353,7 @@ async function handleLandletDraft(request, db, landletId) {
     await assertCropWithinTemplateBounds(db, instances);
     await assertInstanceZWithinLevels(db, instances);
     assertInstanceXYWithinLandlet(instances);
+    assertInstanceScaleWithinBounds(instances);
 
     const versionId = crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
@@ -8489,6 +8490,12 @@ async function handleInstances(request, env, route, url) {
         || instance.landletId !== existing.landletId;
     });
     assertInstanceXYWithinLandlet(instancesNeedingXYCheck);
+    // Same "only re-check what actually changed" reasoning as crop/z/xy above.
+    const instancesNeedingScaleCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.scale !== existing.scale;
+    });
+    assertInstanceScaleWithinBounds(instancesNeedingScaleCheck);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
@@ -8568,6 +8575,7 @@ async function handleInstances(request, env, route, url) {
     await assertCropWithinTemplateBounds(db, [instance]);
     await assertInstanceZWithinLevels(db, [instance]);
     assertInstanceXYWithinLandlet([instance]);
+    assertInstanceScaleWithinBounds([instance]);
     // #456: requireOwnedLandlet above is a point-in-time check — an auction
     // resolving (transferring ownership, wiping placed_instances) in the
     // await gap between it and this write would otherwise let this request
@@ -8633,6 +8641,10 @@ async function handleInstances(request, env, route, url) {
     if (instance.x !== existing.x_m || instance.y !== existing.y_m
       || instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
       assertInstanceXYWithinLandlet([instance]);
+    }
+    // Same "only re-check what actually changed" reasoning as crop/z/xy above.
+    if (instance.scale !== existing.scale) {
+      assertInstanceScaleWithinBounds([instance]);
     }
     // #456: fold the ownership re-check into the write itself — same
     // reasoning as the create endpoints above. Without this, a landlet
@@ -10256,13 +10268,37 @@ function validateInstance(input, fallbackId) {
 // A real uniform Resize (see docs/API.md's "Frontend-only Resize"),
 // entirely separate from crop's per-axis shortening — 1 means "rendered
 // at the template's own declared size." Bounded (loosely) against zero,
-// negative, and non-finite values reaching the database at all; the
-// frontend applies its own tighter [0.001, 1000] clamp for what a drag or
-// typed value can actually produce, so this is a backstop against a
-// malformed request, not the real UX limit.
+// negative, and non-finite values reaching the database at all — the real
+// [0.001, 1000] range is enforced separately by
+// assertInstanceScaleWithinBounds below, conditionally (only when scale
+// actually changed), so this stays a backstop against a malformed request
+// rather than a hard parse-time reject.
 function validateScale(value) {
   if (value === undefined || value === null) return 1;
   return positiveNumber(value, 'scale');
+}
+
+// #845: bounded to the same [0.001, 1000] range the now-removed Resize
+// gizmo itself used to enforce client-side (docs/API.md's "Legacy
+// per-instance Resize scale") — every legitimately-created value already
+// falls inside this range, so this only rejects what a raw API call could
+// otherwise smuggle in. An unbounded scale defeats
+// assertInstanceXYWithinLandlet's center-point check entirely, since scale
+// multiplies the rendered mesh's real-world size well past that check's
+// fixed footprint bound. Called conditionally (only when scale actually
+// changed vs. the stored row) at every write site, same "only re-check
+// what actually changed" idiom as assertInstanceXYWithinLandlet/
+// assertCropWithinTemplateBounds — an untouched scale resent unchanged on
+// an unrelated edit must not start bricking a pre-existing out-of-range
+// row.
+const MIN_INSTANCE_SCALE = 0.001;
+const MAX_INSTANCE_SCALE = 1000;
+function assertInstanceScaleWithinBounds(instances) {
+  for (const instance of instances) {
+    if (instance.scale < MIN_INSTANCE_SCALE || instance.scale > MAX_INSTANCE_SCALE) {
+      throw new HttpError(`scale must be between ${MIN_INSTANCE_SCALE} and ${MAX_INSTANCE_SCALE}`, 400);
+    }
+  }
 }
 
 // { x?: number, y?: number, z?: number } — how far a builder has cropped
