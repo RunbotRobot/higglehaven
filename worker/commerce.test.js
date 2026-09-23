@@ -2921,6 +2921,31 @@ describe('Simulated purchases', () => {
       expect(finalized.response.status).toBe(200);
       expect(finalized.body.purchase.purchaseId).toBe(purchaseId);
     });
+
+    // #839: this endpoint makes a real outbound Stripe API call on every
+    // invocation and is unauthenticated by design (no buyer account exists
+    // in this app), so it's keyed by client IP the same way every other
+    // unauthenticated repeatable write in this file is rate-limited.
+    it('rate-limits finalize attempts per client IP', async () => {
+      const ip = `test-finalize-rate-limit-${crypto.randomUUID()}`;
+      for (let i = 0; i < 20; i++) {
+        const response = await api('/purchases/finalize', {
+          method: 'POST',
+          body: JSON.stringify({ paymentIntentId: `pi_rate_limit_probe_${i}` }),
+          headers: { 'cf-connecting-ip': ip },
+        });
+        // 503 (Stripe not configured in this suite) either way -- the point
+        // is that the rate limiter itself, not Stripe config, is what
+        // eventually returns 429 below.
+        expect(response.response.status).toBe(503);
+      }
+      const limited = await api('/purchases/finalize', {
+        method: 'POST',
+        body: JSON.stringify({ paymentIntentId: 'pi_rate_limit_probe_final' }),
+        headers: { 'cf-connecting-ip': ip },
+      });
+      expect(limited.response.status).toBe(429);
+    });
   });
 
   // #348: refunding a real-money purchase (one with a paymentIntentId, see
