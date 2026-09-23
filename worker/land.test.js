@@ -2754,4 +2754,128 @@ describe('Landlet levels', () => {
       expect(rejectedBatch.response.status).toBe(400);
     });
   });
+
+  describe('instance scale bounds (#845)', () => {
+    it('allows an instance with scale within the legacy Resize gizmo\'s [0.001, 1000] range', async () => {
+      const owner = await signupBuilder('instance-scale-within-owner');
+      await createGreenbeltLandletWithArea('instance-scale-within-landlet', 1000);
+      await claim('instance-scale-within-landlet', owner);
+
+      const withinRange = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-scale-within',
+          landletId: 'instance-scale-within-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: 0, z: 0,
+          scale: 500,
+        }),
+      }));
+      expect(withinRange.response.status).toBe(201);
+    });
+
+    it('rejects an instance scale far outside the legacy Resize gizmo\'s range', async () => {
+      const owner = await signupBuilder('instance-scale-reject-owner');
+      await createGreenbeltLandletWithArea('instance-scale-reject-landlet', 1000);
+      await claim('instance-scale-reject-landlet', owner);
+
+      // Without this bound, x=0/y=0 sails through assertInstanceXYWithinLandlet's
+      // center-point check even though the rendered object would be enormous.
+      const tooLarge = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-scale-too-large',
+          landletId: 'instance-scale-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: 0, z: 0,
+          scale: 1e6,
+        }),
+      }));
+      expect(tooLarge.response.status).toBe(400);
+      expect(tooLarge.body.error).toMatch(/scale must be between/);
+
+      const tooSmall = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-scale-too-small',
+          landletId: 'instance-scale-reject-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: 0, z: 0,
+          scale: 1e-7,
+        }),
+      }));
+      expect(tooSmall.response.status).toBe(400);
+    });
+
+    it('rejects changing an existing instance\'s scale out of range via PATCH, but leaves an untouched out-of-range scale alone', async () => {
+      const owner = await signupBuilder('instance-scale-patch-owner');
+      await createGreenbeltLandletWithArea('instance-scale-patch-landlet', 1000);
+      await claim('instance-scale-patch-landlet', owner);
+      const created = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-scale-patch-target',
+          landletId: 'instance-scale-patch-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: 0, z: 0,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+
+      const scaledOutOfRange = await api('/instances/instance-scale-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ scale: 1e6 }),
+      }));
+      expect(scaledOutOfRange.response.status).toBe(400);
+
+      // A grandfathered-in out-of-range scale (e.g. from before this bound
+      // existed) directly seeded — an unrelated field-only PATCH that never
+      // touches scale must not suddenly start re-validating and bricking
+      // it, the same "only re-check what actually changed" reasoning
+      // already applied to crop/z/xy above.
+      await env.DB.prepare(
+        "UPDATE placed_instances SET scale = ? WHERE instance_id = 'instance-scale-patch-target'",
+      ).bind(1e6).run();
+      const unrelatedPatch = await api('/instances/instance-scale-patch-target', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ label: 'Renamed' }),
+      }));
+      expect(unrelatedPatch.response.status).toBe(200);
+      expect(unrelatedPatch.body.instance.label).toBe('Renamed');
+      expect(unrelatedPatch.body.instance.scale).toBe(1e6);
+    });
+
+    it('applies the same scale bounds to the lándlet draft save and batch endpoints', async () => {
+      const owner = await signupBuilder('instance-scale-draft-owner');
+      await createGreenbeltLandletWithArea('instance-scale-draft-landlet', 1000);
+      await claim('instance-scale-draft-landlet', owner);
+
+      const rejectedDraft = await api('/landlets/instance-scale-draft-landlet/draft', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-scale-draft-out-of-range',
+            templateId: 'placeholder-tree',
+            x: 0, y: 0, z: 0,
+            scale: 1e6,
+          }],
+        }),
+      }));
+      expect(rejectedDraft.response.status).toBe(400);
+
+      const rejectedBatch = await api('/instances/batch', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instances: [{
+            instanceId: 'instance-scale-batch-out-of-range',
+            landletId: 'instance-scale-draft-landlet',
+            templateId: 'placeholder-tree',
+            x: 0, y: 0, z: 0,
+            scale: 1e6,
+          }],
+        }),
+      }));
+      expect(rejectedBatch.response.status).toBe(400);
+    });
+  });
 });
