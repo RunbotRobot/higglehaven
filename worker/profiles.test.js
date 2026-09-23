@@ -1172,6 +1172,13 @@ describe('Friendships', () => {
     expect(declined.response.status).toBe(200);
     expect(declined.body).toEqual({ deleted: true });
 
+    // #857: same "no passive way to find out" gap #319 already fixed for
+    // request/accept — a decline previously left the requester with
+    // nothing but re-polling GET /api/friendships to notice.
+    const aNoticesAfterDecline = await api('/notifications', a.session());
+    expect(aNoticesAfterDecline.body.notifications.some(
+      (n) => n.message === 'friendship-decline-b declined your friend request.')).toBe(true);
+
     // Declining frees the pair up to request again — proves the DELETE
     // really removed the row rather than just marking it something else.
     const resent = await api('/friendships', a.session({

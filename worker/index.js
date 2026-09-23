@@ -3124,7 +3124,23 @@ async function handleFriendships(request, db, route, url) {
       && sessionBuilder.builder_id !== existing.recipient_builder_id) {
       throw new HttpError('Not your friendship', 403);
     }
-    await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
+    const deleteStatement = db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]);
+    // #857: same "no passive way to find out" gap #319 already fixed for
+    // request/accept — a decline left the original requester with nothing
+    // but re-polling GET /api/friendships to notice the row just vanished.
+    // Scoped to an actual decline (still pending, recipient is the one
+    // deleting it) — the requester cancelling their own pending request,
+    // and unfriending an already-accepted friendship, are deliberately out
+    // of scope here (see #858 for the unfriend-notification question).
+    if (existing.status === 'pending' && sessionBuilder.builder_id === existing.recipient_builder_id) {
+      await db.batch([
+        deleteStatement,
+        notificationStatement(db, existing.requester_builder_id,
+          `${sessionBuilder.label} declined your friend request.`),
+      ]);
+    } else {
+      await deleteStatement.run();
+    }
     return json({ deleted: true });
   }
 
