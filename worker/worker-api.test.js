@@ -308,6 +308,31 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
+  // #848: scheduled() now automatically reclaims unreferenced R2 uploads
+  // (previously only reachable via the admin-only POST above) — otherwise
+  // concept-image's own guaranteed-unreferenced generated PNGs eventually
+  // fill the shared MAX_TOTAL_STORAGE_BYTES cap with no automatic recovery.
+  it('scheduled() automatically cleans up an unreferenced upload', async () => {
+    const orphanForm = new FormData();
+    orphanForm.set('file', glbFile({ json: '{"scheduledCleanupOrphan":true}' }));
+    const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
+    const orphan = await orphanUpload.json();
+    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
+    const logRow = await env.DB.prepare(
+      `SELECT * FROM admin_action_log WHERE action_type = 'model_cleanup' AND admin_user_id IS NULL
+       AND detail_json LIKE '%"trigger":"scheduled"%' ORDER BY created_at DESC LIMIT 1`,
+    ).first();
+    expect(logRow).toBeTruthy();
+    expect(JSON.parse(logRow.detail_json).targetCount).toBeGreaterThanOrEqual(1);
+  });
+
   // #774: image_url (a product thumbnail, written by POST .../thumbnail)
   // shares this same bucket/URL scheme as model_url, but the listing/
   // cleanup/single-delete reference checks above only ever looked at
