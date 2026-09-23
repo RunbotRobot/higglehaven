@@ -1189,6 +1189,93 @@ describe('Extensibility (crop floor)', () => {
     }));
     expect(realCropChange.response.status).toBe(400);
   });
+
+  // #860: same fix as the two tests directly above, but for
+  // PUT /landlets/:id/draft, which never got it either -- this endpoint
+  // always resends the landlet's *entire* current draft on every save
+  // (autosave included), untouched instances alongside whatever the
+  // request actually meant to change, so unconditionally re-validating
+  // crop there would brick *every future save on the whole landlet*, not
+  // just the affected instance/batch -- the same bricking #338/#597 fixed
+  // at their own narrower scopes.
+  it('does not re-validate an unchanged crop value in a lándlet draft save that also adds an unrelated instance', async () => {
+    const builder = await signupBuilder('draft-crop-revalidation-builder');
+    await createGreenbeltLandlet('draft-crop-revalidation-landlet');
+    await api('/landlets/draft-crop-revalidation-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'draft-crop-revalidation-template',
+        name: 'Shrinkable extensible product',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+
+    const placed = await api('/landlets/draft-crop-revalidation-landlet/draft', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'draft-crop-revalidation-instance',
+          templateId: 'draft-crop-revalidation-template',
+          x: 1, y: 1,
+          crop: { x: 2 },
+        }],
+      }),
+    }));
+    expect(placed.response.status).toBe(200);
+
+    // Shrink the template — the stale crop.x=2 no longer fits (width 4 -> 1.5).
+    const shrunk = await api('/catalog/draft-crop-revalidation-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 1.5, depth: 1, height: 1 } }),
+    });
+    expect(shrunk.response.status).toBe(200);
+
+    // A draft save that resends this instance's full current state (crop
+    // included, unchanged) alongside a brand-new, unrelated instance must
+    // still succeed -- a presence-only check would wrongly re-reject the
+    // whole save, not just the affected instance.
+    const saved = await api('/landlets/draft-crop-revalidation-landlet/draft', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [
+          {
+            instanceId: 'draft-crop-revalidation-instance',
+            templateId: 'draft-crop-revalidation-template',
+            x: 5, y: 5,
+            crop: { x: 2 },
+          },
+          {
+            instanceId: 'draft-crop-revalidation-new-instance',
+            templateId: 'placeholder-tree',
+            x: 2, y: 2,
+          },
+        ],
+      }),
+    }));
+    expect(saved.response.status).toBe(200);
+    const savedMoved = saved.body.instances.find((i) => i.instanceId === 'draft-crop-revalidation-instance');
+    expect(savedMoved.crop).toEqual({ x: 2 });
+    expect(savedMoved).toMatchObject({ x: 5, y: 5 });
+
+    // But actually changing the crop value in a draft save still correctly
+    // 400s -- 1.6 is above the shrunk template's own width (1.5).
+    const realCropChange = await api('/landlets/draft-crop-revalidation-landlet/draft', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'draft-crop-revalidation-instance',
+          templateId: 'draft-crop-revalidation-template',
+          x: 5, y: 5,
+          crop: { x: 1.6 },
+        }],
+      }),
+    }));
+    expect(realCropChange.response.status).toBe(400);
+  });
 });
 
 describe('Land cap', () => {
