@@ -7566,7 +7566,6 @@ async function handleLandCandidates(request, db, route, url) {
     await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
 
     const settings = await getWorldSettings(db);
-    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     // Every other cell in the mosaic reaches greenbelt/claimable the normal
     // way: materialize as 'generating' (candidateMaterializationStatements,
     // above), then a later generation-complete/world-expand call promotes
@@ -7597,15 +7596,18 @@ async function handleLandCandidates(request, db, route, url) {
         centralEnclosed ? 1 : 0, centralEnclosed ? 1 : 0,
       ),
       ...rows.map((row) => candidateInsertStatement(db, row)),
-      ...candidateMaterializationStatements(db, overlapping),
+      ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
       adminActionLogStatement(db, admin.user_id, 'generate_mosaic', 'landlet_candidate_prefix', prefix, { count: rows.length + 1 }),
     ]);
     const stored = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
     `).bind(`${prefix}-001`, `${prefix}-999`).all();
+    const materializedLandletIds = stored.results
+      .filter((row) => row.materialized_at)
+      .map((row) => row.landlet_id);
     return json({
       candidates: stored.results.map(candidateFromRow),
-      materializedLandletIds: overlapping.map((row) => row.landlet_id),
+      materializedLandletIds,
       starterLandletId: 'starter-landlet',
     }, 201);
   }
@@ -7754,18 +7756,16 @@ async function handleLandCandidates(request, db, route, url) {
       JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
       landletMinWorldRadius(row), landletMaxWorldRadius(row), route[1],
     );
-    const settings = await getWorldSettings(db);
-    const started = landletMinWorldRadius(row) <= settings.radius_m;
     const results = await db.batch([
       update,
-      ...(started ? candidateMaterializationStatements(db, [row]) : []),
+      ...candidateMaterializationSweepStatements(db, [route[1]]),
     ]);
     if (results[0].meta.changes === 0) throw new HttpError('Land candidate started generation during update', 409);
     await adminActionLogStatement(db, admin.user_id, 'update_land_candidate', 'landlet_candidate', route[1]).run();
     const updated = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
-    const materialized = started ? await requireLandlet(db, route[1]) : null;
+    const materialized = updated.materialized_at ? await requireLandlet(db, route[1]) : null;
     return json({
       candidate: candidateFromRow(updated),
       landlet: materialized ? landletFromRow(materialized) : null,
@@ -7790,11 +7790,9 @@ async function handleLandCandidates(request, db, route, url) {
     const rows = landlets.map(candidateRowFromLandlet);
     await assertLandCandidatesDontOverlapExisting(db, rows, 'One or more candidates would overlap existing land');
     await assertLandCandidatesDontOverlapEachOther(rows, 'One or more candidates would overlap each other');
-    const settings = await getWorldSettings(db);
-    const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
     await db.batch([
       ...rows.map((row) => candidateInsertStatement(db, row)),
-      ...candidateMaterializationStatements(db, overlapping),
+      ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
       adminActionLogStatement(db, admin.user_id, 'create_land_candidates_batch', 'landlet_candidate_batch', null, { landletIds: [...ids] }),
     ]);
     const placeholders = landlets.map(() => '?').join(', ');
@@ -7816,16 +7814,14 @@ async function handleLandCandidates(request, db, route, url) {
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
     await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land');
-    const settings = await getWorldSettings(db);
-    const started = landletMinWorldRadius(row) <= settings.radius_m;
     await db.batch([
       candidateInsertStatement(db, row),
-      ...(started ? candidateMaterializationStatements(db, [row]) : []),
+      ...candidateMaterializationSweepStatements(db, [row.landlet_id]),
       adminActionLogStatement(db, admin.user_id, 'create_land_candidate', 'landlet_candidate', landlet.landletId),
     ]);
 
     const candidate = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(landlet.landletId).first();
-    const materialized = started ? await requireLandlet(db, landlet.landletId) : null;
+    const materialized = candidate.materialized_at ? await requireLandlet(db, landlet.landletId) : null;
     return json({ candidate: candidateFromRow(candidate), landlet: materialized ? landletFromRow(materialized) : null }, 201);
   }
 
@@ -7968,6 +7964,54 @@ function candidateInsertStatement(db, row) {
   );
 }
 
+// #849: the call sites below used to decide "does this candidate qualify
+// for immediate materialization" in JS, from a `settings.radius_m` read
+// taken before ever entering the db.batch() transaction that inserts the
+// candidate. If a concurrent expandWorldOnce (an admin action, or the
+// 10-minute auto-growth cron) committed a radius increase in the window
+// between that read and this batch's own commit, a candidate whose
+// min_world_radius_m qualified under the *current* radius but not the
+// stale snapshot landed as materialized_at IS NULL with no guaranteed
+// catch-up — it would sit un-materialized until some *future* expansion
+// happened to re-sweep it (expandWorldOnce's own pending-candidate query
+// is unconditional over the whole table, so it does eventually catch up,
+// but only on the next expansion, which may be long delayed or may never
+// come if growth stops).
+//
+// This closes that window the same way expandWorldOnce closes its own
+// (see its comment above): the materialize-or-not decision is made by SQL
+// reading world_settings live, inside the very same db.batch() transaction
+// as the candidate insert/update it's paired with, instead of by a JS
+// filter computed beforehand. Scoped to the specific landlet_ids the
+// caller just wrote (rather than sweeping every pending candidate
+// globally) so behavior for those rows is decided exactly once, atomically,
+// at the moment they're written — callers determine what actually
+// materialized via a post-batch SELECT of just these ids, not from a
+// pre-batch JS list.
+function candidateMaterializationSweepStatements(db, landletIds) {
+  if (landletIds.length === 0) return [];
+  const placeholders = landletIds.map(() => '?').join(', ');
+  return [
+    db.prepare(`
+      INSERT INTO landlets
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
+         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
+             polygon_json, NULL, NULL, metadata_json, max_world_radius_m
+      FROM landlet_candidates
+      WHERE landlet_id IN (${placeholders})
+        AND materialized_at IS NULL
+        AND min_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world')
+    `).bind(...landletIds),
+    db.prepare(`
+      UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id IN (${placeholders})
+        AND materialized_at IS NULL
+        AND min_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world')
+    `).bind(...landletIds),
+  ];
+}
+
 // The actual generation + persistence half of POST /land-candidates/
 // generate-ring, split out so autoGrowWorldIfNeeded (below) can generate a
 // ring itself without going through an HTTP request — the caller is
@@ -7997,7 +8041,6 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
-  const overlapping = rows.filter((row) => landletMinWorldRadius(row) <= settings.radius_m);
   await db.batch([
     db.prepare(`
       INSERT INTO landlet_candidate_rings
@@ -8009,16 +8052,19 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
       generated.boundarySignature, adjacentToRingId,
     ),
     ...rows.map((row) => candidateInsertStatement(db, row)),
-    ...candidateMaterializationStatements(db, overlapping),
+    ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
     ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_ring', 'landlet_candidate_ring', prefix, { count })] : []),
   ]);
   const storedCandidates = await db.prepare(`
     SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY created_at, landlet_id
   `).bind(prefix).all();
+  const materializedLandletIds = storedCandidates.results
+    .filter((row) => row.materialized_at)
+    .map((row) => row.landlet_id);
   return {
     candidates: storedCandidates.results.map(candidateFromRow),
-    materializedLandletIds: overlapping.map((row) => row.landlet_id),
-    readyForGenerationCompletion: overlapping.length === rows.length,
+    materializedLandletIds,
+    readyForGenerationCompletion: materializedLandletIds.length === rows.length,
     innerRadiusM,
     outerRadiusM: generated.outerRadiusM,
   };

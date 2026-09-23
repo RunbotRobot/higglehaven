@@ -2674,6 +2674,72 @@ describe('Worker API', () => {
     });
   });
 
+  // #849: the land-candidate call sites used to decide "does this candidate
+  // qualify for immediate materialization" from a JS-side `settings.radius_m`
+  // snapshot read before the db.batch() that inserts the candidate ever
+  // started -- a concurrent world/expand landing in the window between that
+  // read and the batch's own commit could leave a qualifying candidate
+  // stranded as materialized_at IS NULL with no guaranteed catch-up. The fix
+  // (candidateMaterializationSweepStatements) replaces that JS snapshot with
+  // a SQL subquery against world_settings evaluated live, inside the same
+  // db.batch() transaction as the insert -- so the outcome is invariant to
+  // ordering by construction, not because this test manages to force a
+  // specific interleaving (the Miniflare/D1 test harness doesn't expose a
+  // hook to guarantee one). This test fires the two requests genuinely
+  // concurrently and asserts the invariant the fix guarantees; isolate
+  // world_settings first so the race window (a candidate placed strictly
+  // between the current and post-expand radius) is deterministic,
+  // independent of whatever earlier tests in this file left the
+  // radius/increment/ratio at.
+  it('#849: a land candidate created concurrently with a world expansion is not stranded un-materialized', async () => {
+    await env.DB.prepare(`
+      UPDATE world_settings
+      SET radius_m = 90000, expansion_increment_m = 10, greenbelt_min_ratio = 1
+      WHERE world_id = 'default-world'
+    `).run();
+    // Guarantee the ratio gate can't trip: an extra 'generating' (non-water,
+    // non-greenbelt) landlet, far from anything else, pads the ratio's
+    // denominator without padding its numerator so greenbeltRatio < 1.
+    await env.DB.prepare(`
+      INSERT INTO landlets
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, landlet_class, polygon_json, metadata_json)
+      VALUES ('race-849-ratio-pad', 'Ratio pad', 4, 500000, 0, 'generating', 1, '[]', '{}')
+    `).run();
+
+    // A 2x2 square centered at (90005, 0) has min_world_radius_m ~= 90004:
+    // above the pre-expand radius (90000, so it must NOT materialize yet)
+    // but below the post-expand radius (90010, so it must materialize the
+    // instant the concurrent expand below lands), regardless of which of
+    // the two requests' transactions happens to commit first.
+    const [created, expanded] = await Promise.all([
+      api('/land-candidates', adminSession({
+        method: 'POST',
+        body: JSON.stringify({
+          landletId: 'race-849-candidate',
+          name: 'Race candidate',
+          areaM2: 4,
+          center: { x: 90005, y: 0 },
+          polygon: [
+            { x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 },
+          ],
+        }),
+      })),
+      api('/world/expand', adminSession({ method: 'POST' })),
+    ]);
+    expect(created.response.status).toBe(201);
+    expect(expanded.response.status).toBe(200);
+    expect(expanded.body.expansion.newRadiusM).toBe(90010);
+
+    const row = await env.DB.prepare(
+      'SELECT materialized_at FROM landlet_candidates WHERE landlet_id = ?',
+    ).bind('race-849-candidate').first();
+    expect(row.materialized_at).not.toBeNull();
+    const landlet = await env.DB.prepare(
+      'SELECT status FROM landlets WHERE landlet_id = ?',
+    ).bind('race-849-candidate').first();
+    expect(landlet.status).toBe('generating');
+  });
+
   // #523: nothing previously stopped an admin PUT/PATCH from setting
   // radiusM below its current value, with no re-validation of
   // already-materialized land that could then sit outside the new,
