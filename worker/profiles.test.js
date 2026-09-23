@@ -472,6 +472,35 @@ describe('Builders', () => {
     expect(deletedAfterPayout.response.status).toBe(200);
   });
 
+  // #852: handleBuilderRedeem inserts a higgles_redemptions claim row
+  // before either Stripe call, with stripe_payout_id only ever set once
+  // the payout call actually succeeds — same idiom as the auction-payout
+  // tests just above, manufactured directly here rather than relying on a
+  // genuine race against Stripe (never configured in this suite).
+  it('rejects deleting a builder while their higgles redemption is still being paid out', async () => {
+    const builder = await signupBuilder('redemption-pending-payout');
+    await env.DB.prepare(`
+      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+      VALUES ('redemption-pending-test', ?, 500, NULL, NULL)
+    `).bind(builder.builderId).run();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while a higgles redemption is still being paid out',
+    });
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(stillThere).not.toBeNull();
+
+    // Once the payout actually lands (stripe_payout_id set), deletion is
+    // allowed again.
+    await env.DB.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ?, stripe_payout_id = ? WHERE redemption_id = ?')
+      .bind('tr_test', 'po_test', 'redemption-pending-test').run();
+    const deletedAfterPayout = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deletedAfterPayout.response.status).toBe(200);
+  });
+
   // #279's guard has to catch a bid on *any* of a seller's active auctions,
   // not just a single one — this sets up two, with the bid on only the
   // second, to prove the check isn't limited to "their one auction."
