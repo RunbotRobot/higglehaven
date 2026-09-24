@@ -2279,10 +2279,25 @@ async function handleBuilders(request, env, db, route, url) {
     // keep the builder's own version history around in case they come
     // back, since that builder still exists. Deleting the builder removes
     // the only place that history could live.)
-    const owned = await db.prepare(`
+    //
+    // #879: a precomputed landlet-id list read here (as an earlier version
+    // of this handler did) goes stale the instant a concurrent POST
+    // .../claim — its own atomic UPDATE, entirely independent of this
+    // request — lands a NEW claim for this same builder between this read
+    // and the batch below. That landlet would then be invisible to the
+    // release statements, and get deleted-out-from-under permanently:
+    // status stays 'claimed' with owner_builder_id pointing at a builder
+    // row that no longer exists, unclaimable by anyone and unrecoverable
+    // by any future cleanup (nothing will ever again match that
+    // owner_builder_id). Closed by scoping each release statement below
+    // with its own live subquery instead of a fixed id list, so it
+    // re-derives "what does this builder currently own" against the
+    // database state at the moment this batch's statements actually run
+    // — sequentially within one transaction, so nothing else can land in
+    // between — rather than a stale read from before the batch started.
+    const ownedLandletsSql = `
       SELECT landlet_id FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
-    `).bind(route[1]).all();
-    const landletIds = owned.results.map((row) => row.landlet_id);
+    `;
 
     // #263/#279 guard the leading-bidder and with-bids-selling cases below,
     // but doing so as separate SELECTs checked *before* this batch (as an
@@ -2356,18 +2371,29 @@ async function handleBuilders(request, env, db, route, url) {
             SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
           )
       `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
-      ...landletIds.flatMap((landletId) => [
-        db.prepare(`DELETE FROM placed_instances WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
-        db.prepare(`DELETE FROM landlet_versions WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
-        db.prepare(`DELETE FROM landlet_levels WHERE landlet_id = ? AND ${builderGone}`).bind(landletId, route[1]),
-        db.prepare(`
-          UPDATE landlets
-          SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
-              claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          WHERE landlet_id = ? AND ${builderGone}
-        `).bind(landletId, route[1]),
-      ]),
+      // #879: each of these is scoped by ${ownedLandletsSql}/its own live
+      // WHERE, not a landlet-id list computed before this batch started —
+      // see the comment above ownedLandletsSql's definition for why that
+      // matters. The three DELETEs run before the UPDATE below clears
+      // owner_builder_id, so every one of them still sees the same,
+      // consistent "currently claimed by this builder" set.
+      db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
+      db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
+      db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
+      // RETURNING landlet_id: the response below used to report a
+      // precomputed id list — #879's fix means there's no such list to
+      // report anymore, since what actually gets released is only known
+      // once this statement runs. Reading it straight from this UPDATE's
+      // own result is simpler than a follow-up query, and can't itself go
+      // stale the way a separate SELECT after the batch would.
+      db.prepare(`
+        UPDATE landlets
+        SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+            claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE owner_builder_id = ? AND status = 'claimed' AND ${builderGone}
+        RETURNING landlet_id
+      `).bind(route[1], route[1]),
     ];
 
     // Deleting this builder cascades (migrations/0045_auctions.sql,
@@ -2376,7 +2402,9 @@ async function handleBuilders(request, env, db, route, url) {
     // auction still active at delete time has zero bids — there's no one
     // to notify, and nothing more to do beyond letting the cascade take it
     // (and its now-nonexistent auction_bids rows) away.
-    const [deleted] = await db.batch(statements);
+    const batchResults = await db.batch(statements);
+    const deleted = batchResults[0];
+    const released = batchResults[batchResults.length - 1];
     if (deleted.meta.changes === 0) {
       // One of the two guards blocked it, or (far narrower window) a
       // concurrent request already deleted this builder out from under
@@ -2422,7 +2450,7 @@ async function handleBuilders(request, env, db, route, url) {
       }
       throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
-    return json({ deleted: true, releasedLandletIds: landletIds });
+    return json({ deleted: true, releasedLandletIds: released.results.map((row) => row.landlet_id) });
   }
 
   // Admin-only test/ops fixture support — mirrors POST /api/landlets'
