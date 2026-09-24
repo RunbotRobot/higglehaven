@@ -2,7 +2,7 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker, { claimPurchasesForPayout } from './index.js';
+import worker, { claimPurchasesForPayout, sellerPayoutIdempotencyKey } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -3393,6 +3393,23 @@ describe('Simulated purchases', () => {
 
       const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
       expect(row.paid_out_at).toBeTruthy();
+    });
+
+    // #869: replaces a fresh crypto.randomUUID() per call (#866/#868 —
+    // could never match a retry's own key, so it never actually protected
+    // against a duplicate payout) with a hash of the claimed purchase-id
+    // set, which a genuine retry claiming the same purchases reproduces
+    // exactly.
+    it('sellerPayoutIdempotencyKey is stable for the same claimed set regardless of order, and differs for a different set', async () => {
+      const keyA = await sellerPayoutIdempotencyKey('seller-1', ['purchase-a', 'purchase-b']);
+      const keyAReordered = await sellerPayoutIdempotencyKey('seller-1', ['purchase-b', 'purchase-a']);
+      expect(keyAReordered).toBe(keyA);
+
+      const keyDifferentSet = await sellerPayoutIdempotencyKey('seller-1', ['purchase-a', 'purchase-c']);
+      expect(keyDifferentSet).not.toBe(keyA);
+
+      const keyDifferentSeller = await sellerPayoutIdempotencyKey('seller-2', ['purchase-a', 'purchase-b']);
+      expect(keyDifferentSeller).not.toBe(keyA);
     });
 
     // #599: once paid_out_at is set, this purchase's seller-share has

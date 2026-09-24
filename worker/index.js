@@ -5632,6 +5632,60 @@ async function handleBuilderStripeAccount(request, env, db) {
 // tracking (or some other bound) closes this; independent of any auction-
 // side flag, since that root cause was already fixed for auctions.
 const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
+
+// #869: finds this builder's own last still-incomplete redemption
+// (claimed, but not yet confirmed by a payout) and resumes it instead of
+// claiming a fresh one — the actual fix for the duplicate-payout race
+// #866/#868 tried and failed to close (their Idempotency-Key included a
+// fresh crypto.randomUUID() every call, so it could never match a retry's
+// own key). Exported so this — the part of the fix that doesn't require a
+// real Stripe call — can be unit-tested directly; POST /api/builders/me/
+// redeem itself always 503s before reaching this in the test suite
+// (REDEMPTION_PAUSED_PENDING_PROVENANCE, and Stripe is never configured
+// either), the same limitation claimPurchasesForPayout's own tests above
+// already accept for the seller side.
+export async function claimOrResumeBuilderRedemption(db, builderId, amountCents) {
+  const pending = await db.prepare(`
+    SELECT * FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
+    ORDER BY created_at DESC LIMIT 1
+  `).bind(builderId).first();
+  if (pending) {
+    return { redemption: pending, resumed: true };
+  }
+
+  // Atomically claims the balance before ever calling Stripe, guarded on
+  // the balance still covering this amount at commit time — the same
+  // "claim first, guard on the current value" idiom claimPurchasesForPayout
+  // above uses for sellers, closing the same double-redemption race two
+  // concurrent requests would otherwise hit.
+  const claim = await db.prepare(`
+    UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE builder_id = ? AND higgles_balance_cents >= ?
+  `).bind(amountCents, builderId, amountCents).run();
+  if (claim.meta.changes === 0) {
+    return { redemption: null, resumed: false };
+  }
+
+  // #852: inserted before either Stripe call, not after both succeed —
+  // this is what lets DELETE /api/builders/:id's own guard (see its
+  // comment) detect a redemption that's mid-flight (claimed, but not yet
+  // confirmed by a payout) the same way the seller-side
+  // claimPurchasesForPayout/paid_out_at claim already does. Without a
+  // persisted row this early, a builder deleted in the window between the
+  // balance claim above and the Stripe calls below used to let real money
+  // move with the INSERT then failing outright on the now-missing
+  // builder_id's FK, and the catch block's own refund below silently
+  // no-op (0 rows) against a builder that no longer exists.
+  const redemptionId = `redemption-${crypto.randomUUID()}`;
+  await db.prepare(`
+    INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+    VALUES (?, ?, ?, NULL, NULL)
+  `).bind(redemptionId, builderId, amountCents).run();
+  const redemption = await db.prepare('SELECT * FROM higgles_redemptions WHERE redemption_id = ?')
+    .bind(redemptionId).first();
+  return { redemption, resumed: false };
+}
+
 async function handleBuilderRedeem(request, env, db) {
   const user = await requireCurrentUser(request, db);
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
@@ -5682,34 +5736,23 @@ async function handleBuilderRedeem(request, env, db) {
       throw new HttpError('Complete Stripe onboarding before redeeming higgles for cash.', 400);
     }
 
-    // Atomically claims the balance before ever calling Stripe, guarded on
-    // the balance still covering this amount at commit time — the same
-    // "claim first, guard on the current value" idiom claimPurchasesForPayout
-    // above uses for sellers, closing the same double-redemption race two
-    // concurrent requests would otherwise hit.
-    const claim = await db.prepare(`
-      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ? AND higgles_balance_cents >= ?
-    `).bind(amountCents, sessionBuilder.builder_id, amountCents).run();
-    if (claim.meta.changes === 0) {
+    // #869: a genuine retry (the client resending this same redeem request
+    // after losing the response to a network drop between Stripe
+    // processing it and this Worker reading the result) used to mint a
+    // brand new redemption row and a fresh idempotency key every time, so
+    // Stripe could never recognize it as the same request — a real
+    // duplicate payout. claimOrResumeBuilderRedemption resumes whatever
+    // this builder's own last incomplete redemption left behind instead,
+    // so the same redemption_id (and the same Idempotency-Key header)
+    // reaches Stripe on both the original attempt and the retry.
+    const { redemption, resumed } = await claimOrResumeBuilderRedemption(db, sessionBuilder.builder_id, amountCents);
+    if (!redemption) {
       throw new HttpError('Your higgles balance changed — try again.', 409);
     }
-
-    // #852: inserted before either Stripe call, not after both succeed —
-    // this is what lets DELETE /api/builders/:id's own guard (see its
-    // comment) detect a redemption that's mid-flight (claimed, but not yet
-    // confirmed by a payout) the same way the seller-side
-    // claimPurchasesForPayout/paid_out_at claim already does. Without a
-    // persisted row this early, a builder deleted in the window between the
-    // balance claim above and the Stripe calls below used to let real money
-    // move with the INSERT then failing outright on the now-missing
-    // builder_id's FK, and the catch block's own refund below silently
-    // no-op (0 rows) against a builder that no longer exists.
-    const redemptionId = `redemption-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
-      VALUES (?, ?, ?, NULL, NULL)
-    `).bind(redemptionId, sessionBuilder.builder_id, amountCents).run();
+    if (resumed) {
+      return resumeBuilderRedemption(env, db, sessionBuilder, redemption);
+    }
+    const redemptionId = redemption.redemption_id;
 
     let payout;
     try {
@@ -5724,13 +5767,13 @@ async function handleBuilderRedeem(request, env, db) {
       const transfer = await stripeRequest(
         env, 'POST', 'transfers',
         { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
-        `builder-redeem-transfer:${sessionBuilder.builder_id}:${crypto.randomUUID()}`,
+        `builder-redeem-transfer:${redemptionId}`,
       );
       await db.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ? WHERE redemption_id = ?')
         .bind(transfer.id, redemptionId).run();
       payout = await stripeRequest(
         env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' },
-        `builder-redeem-payout:${sessionBuilder.builder_id}:${crypto.randomUUID()}`, sessionBuilder.stripe_account_id,
+        `builder-redeem-payout:${redemptionId}`, sessionBuilder.stripe_account_id,
       );
       await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
         .bind(payout.id, redemptionId).run();
@@ -5756,6 +5799,46 @@ async function handleBuilderRedeem(request, env, db) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #869: completes a redemption a prior request already claimed and
+// (partially or fully) attempted with Stripe, rather than starting a
+// second one — see handleBuilderRedeem's own call site comment. Reusing
+// `pending.redemption_id` as the Idempotency-Key's stable component on
+// both Stripe calls is what makes this actually idempotent: an
+// immediate second retry lands here again and sends the exact same key,
+// so Stripe recognizes it as the same request instead of processing a
+// second real payout.
+async function resumeBuilderRedemption(env, db, sessionBuilder, pending) {
+  let payout;
+  try {
+    let transferId = pending.stripe_transfer_id;
+    if (!transferId) {
+      const transfer = await stripeRequest(
+        env, 'POST', 'transfers',
+        { amount: pending.amount_cents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
+        `builder-redeem-transfer:${pending.redemption_id}`,
+      );
+      transferId = transfer.id;
+      await db.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ? WHERE redemption_id = ?')
+        .bind(transferId, pending.redemption_id).run();
+    }
+    payout = await stripeRequest(
+      env, 'POST', 'payouts', { amount: pending.amount_cents, currency: 'usd' },
+      `builder-redeem-payout:${pending.redemption_id}`, sessionBuilder.stripe_account_id,
+    );
+    await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
+      .bind(payout.id, pending.redemption_id).run();
+  } catch (err) {
+    // Deliberately does not refund the balance or delete the row the way
+    // a fresh attempt's own catch block does — we don't know whether
+    // *this* resume's Stripe call genuinely failed or just lost its
+    // response, so leaving the claim and row in place keeps the
+    // redemption resumable (and keeps blocking builder deletion) instead
+    // of risking yet another stranded duplicate on the next retry.
+    throw err;
+  }
+  return json({ redeemedCents: pending.amount_cents, stripePayoutId: payout.id });
 }
 
 // #454: real-money sale proceeds already sit in the seller's own Stripe
@@ -5854,6 +5937,18 @@ async function releasePurchaseClaim(db, purchases, nowIso) {
   await db.batch(purchases.map((purchase) =>
     db.prepare('UPDATE purchases SET paid_out_at = NULL WHERE purchase_id = ? AND paid_out_at = ?')
       .bind(purchase.purchase_id, nowIso)));
+}
+
+// #869: derives the seller-payout Idempotency-Key from the exact claimed
+// purchase-id set, replacing the fresh crypto.randomUUID() #866/#868 used
+// (which could never match a retry's own key, so it never actually
+// protected against a duplicate payout the way that fix intended). Sorted
+// first so the same claimed set always hashes to the same key regardless
+// of iteration order. Exported for direct testing, same reasoning as
+// claimPurchasesForPayout's own export just above.
+export async function sellerPayoutIdempotencyKey(sellerId, purchaseIds) {
+  const hash = await sha256Hex([...purchaseIds].sort().join(','));
+  return `seller-payout:${sellerId}:${hash}`;
 }
 
 // GET returns the seller's current held/available-for-cash-out balance
@@ -5969,9 +6064,9 @@ async function handleSellerPayouts(request, env, db) {
 
     let payout;
     try {
+      const idempotencyKey = await sellerPayoutIdempotencyKey(sessionSeller.seller_id, claimed.map((p) => p.purchase_id));
       payout = await stripeRequest(
-        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' },
-        `seller-payout:${sessionSeller.seller_id}:${crypto.randomUUID()}`, sessionSeller.stripe_account_id,
+        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' }, idempotencyKey, sessionSeller.stripe_account_id,
       );
     } catch (err) {
       // The claim above already stamped paid_out_at — undo it so a failed
