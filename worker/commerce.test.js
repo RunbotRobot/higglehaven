@@ -2,7 +2,7 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker, { claimPurchasesForPayout, sellerPayoutIdempotencyKey } from './index.js';
+import worker, { claimPurchasesForPayout, sellerPayoutIdempotencyKey, refundIdempotencyKey } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -2986,6 +2986,15 @@ describe('Simulated purchases', () => {
       // failed attempt.
       const retried = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
       expect(retried.response.status).toBe(503);
+    });
+
+    // #871: the refund's Stripe call previously passed no idempotency key at
+    // all, so a lost-response retry would have Stripe process a second real
+    // refund. Same fix shape as #869's builder/seller payout keys — verified
+    // directly since STRIPE_SECRET_KEY is never configured in this suite.
+    it('refundIdempotencyKey is stable for the same purchase and differs across purchases', () => {
+      expect(refundIdempotencyKey('purchase-abc')).toBe(refundIdempotencyKey('purchase-abc'));
+      expect(refundIdempotencyKey('purchase-abc')).not.toBe(refundIdempotencyKey('purchase-xyz'));
     });
   });
 

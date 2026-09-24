@@ -9771,6 +9771,15 @@ async function handlePurchaseConfirmDelivery(request, env) {
   return json({ confirmed: true });
 }
 
+// #871: stable across a genuine client/network retry of the same refund
+// (unlike a fresh crypto.randomUUID() per call), so a lost-response retry
+// reuses the same Idempotency-Key and Stripe recognizes it as a duplicate
+// instead of processing a second real refund. Exported for direct testing,
+// since STRIPE_SECRET_KEY is never configured in this test suite.
+export function refundIdempotencyKey(purchaseId) {
+  return `refund:${purchaseId}`;
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
 // — see its own comment for why only higgles_balance_cents is touched, not
 // higgles_earnings_events/land cap). Reachable from the Seller modal's own
@@ -9894,7 +9903,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
         amount: refundAmountCents,
         reverse_transfer: true,
         refund_application_fee: true,
-      });
+      }, refundIdempotencyKey(purchaseId));
     } catch (err) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
       throw err;
