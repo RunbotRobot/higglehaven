@@ -5098,6 +5098,13 @@ function deriveStripeOnboardingStatus(account) {
 // event is looked up against both sellers and builders (a Custom account
 // belongs to exactly one, never both) since the event alone doesn't say
 // which role created it.
+// #872: Stripe's own webhook-verification guidance requires rejecting a
+// signature whose timestamp is more than a few minutes old, in addition to
+// the HMAC check itself -- otherwise a captured, still-cryptographically-
+// valid payload (a proxy log, an exposed devtools session, a compromised
+// intermediary) could be replayed against this endpoint indefinitely.
+const STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
+
 async function handleStripeWebhook(request, env, db) {
   if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
   const rawBody = await request.text();
@@ -5112,6 +5119,9 @@ async function handleStripeWebhook(request, env, db) {
   const signedPayload = `${signatureParts.t}.${rawBody}`;
   const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
   if (!timingSafeEqual(signatureParts.v1, expectedSignature)) {
+    throw new HttpError('Invalid webhook signature', 401);
+  }
+  if (Math.abs(Date.now() / 1000 - Number(signatureParts.t)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     throw new HttpError('Invalid webhook signature', 401);
   }
   let event;

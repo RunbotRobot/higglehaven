@@ -79,6 +79,24 @@ describe('Stripe account.updated webhook (#766)', () => {
     expect(row.stripe_onboarding_status).toBe('complete');
   });
 
+  // #872: Stripe's own webhook-verification guidance is to reject a
+  // signature whose timestamp is too old, even when the HMAC itself is
+  // valid -- otherwise a captured payload could be replayed indefinitely.
+  it('rejects a webhook whose signature is correctly signed but too old', async () => {
+    const seller = await signupSeller('stripe-webhook-stale-timestamp');
+    await env.DB.prepare(
+      "UPDATE sellers SET stripe_account_id = 'acct_stale', stripe_onboarding_status = 'complete' WHERE seller_id = ?",
+    ).bind(seller.sellerId).run();
+
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 10 * 60;
+    const stale = await postStripeWebhook(accountUpdatedEvent('acct_stale'), { timestamp: staleTimestamp });
+    expect(stale.status).toBe(401);
+
+    const row = await env.DB.prepare('SELECT stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_onboarding_status).toBe('complete');
+  });
+
   it('re-derives and writes a disabled seller account back to action_needed', async () => {
     const seller = await signupSeller('stripe-webhook-seller-disabled');
     await env.DB.prepare(
