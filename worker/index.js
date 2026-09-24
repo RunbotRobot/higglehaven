@@ -9399,7 +9399,14 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
-  return writePurchaseRow(env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label), null, false, buyerBuilder.builder_id);
+  return writePurchaseRow(
+    env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label),
+    null, false, buyerBuilder.builder_id,
+    // #877: the client already mints and sends this (see purchaseInstance
+    // in src/api.js) for the real-money path's own idempotency needs —
+    // was silently never threaded through to this simulated path's write.
+    purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey),
+  );
 }
 
 // Shared by the simulated path (handleInstancePurchase's own direct write)
@@ -9712,10 +9719,23 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
-async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null) {
+async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, idempotencyKey = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
-  const purchaseId = `purchase-${crypto.randomUUID()}`;
+  // #877: a retry (network blip, double-tap) after this exact write already
+  // landed once finds it here instead of crediting the builder twice —
+  // mirrors handlePurchaseFinalize's own idempotency check, just keyed off
+  // purchase_id itself (reused as the dedup key, with its own PRIMARY KEY
+  // as the backstop against a genuinely concurrent double-submit) rather
+  // than a separate payment_intent_id UNIQUE index, since this simulated
+  // path has no Stripe-issued id to dedupe against. idempotencyKey is only
+  // ever undefined/null here for a malformed or missing client key
+  // (purchaseIdempotencyKey's own "degrades to no protection" behavior).
+  if (idempotencyKey) {
+    const existing = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(idempotencyKey).first();
+    if (existing) return json({ purchase: purchaseFromRow(existing) });
+  }
+  const purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
   // #680: same defensive existence check as writeOrphanedPurchaseRow's own
