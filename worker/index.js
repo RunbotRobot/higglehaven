@@ -2095,6 +2095,12 @@ async function getVersion(db, landletId, versionId) {
 // spam either endpoint with arbitrarily large rows at an unlimited rate.
 const BUILDER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
+// #864: the rename (PUT/PATCH) paths for both of these had no
+// checkRateLimit call at all -- the only two authenticated writes in this
+// file missing one, unlike every comparable authenticated mutation
+// (friend requests, bundles, calendar events, saved layouts, ...).
+const BUILDER_RENAME_RATE_LIMIT_MAX = 20;
+const SELLER_RENAME_RATE_LIMIT_MAX = 20;
 
 async function handleBuilders(request, env, db, route, url) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
@@ -2246,6 +2252,7 @@ async function handleBuilders(request, env, db, route, url) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
+    await checkRateLimit(db, `builder-rename:${sessionBuilder.builder_id}`, BUILDER_RENAME_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // #479: this rename path used plain stringValue (no upper bound),
     // unlike POST /api/builders' own create path just above (already
@@ -2809,6 +2816,7 @@ async function handleSellers(request, env, db, route, url) {
     await requireSeller(db, route[1]);
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
+    await checkRateLimit(db, `seller-rename:${sessionSeller.seller_id}`, SELLER_RENAME_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // #479: same gap as the builder-rename fix just above — this used
     // plain stringValue (no upper bound), unlike POST /api/sellers' own

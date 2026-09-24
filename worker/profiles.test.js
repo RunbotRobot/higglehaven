@@ -702,6 +702,23 @@ describe('Builders', () => {
     });
     expect(limited.response.status).toBe(429);
   });
+
+  // #864: unlike the create path just above, the rename path had no
+  // checkRateLimit call at all -- the only two authenticated writes in
+  // this file missing one.
+  it('rate-limits repeated builder renames from the same builder', async () => {
+    const renamer = await signupBuilder('builder-rename-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/builders/${renamer.builderId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: `Rename Attempt ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/builders/${renamer.builderId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'One too many' }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Sellers', () => {
@@ -747,6 +764,21 @@ describe('Sellers', () => {
     const limited = await api('/sellers', {
       method: 'POST', headers, body: JSON.stringify({ label: 'One too many' }),
     });
+    expect(limited.response.status).toBe(429);
+  });
+
+  // #864: same gap as the builder-rename fix above.
+  it('rate-limits repeated seller renames from the same seller', async () => {
+    const renamer = await signupSeller('seller-rename-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: `Rename Attempt ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+      method: 'PATCH', body: JSON.stringify({ label: 'One too many' }),
+    }));
     expect(limited.response.status).toBe(429);
   });
 });
