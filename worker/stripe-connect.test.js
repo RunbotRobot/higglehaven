@@ -1,5 +1,6 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { claimOrResumeBuilderRedemption } from './index.js';
 import { api, signupAdmin, signupBuilder, signupSeller } from './test-helpers.js';
 
 let adminSession;
@@ -304,5 +305,61 @@ describe('Higgles redemption (#625)', () => {
 
     const status = await api('/builders/me/redeem', builder.session());
     expect(status.body.availableCents).toBe(5000);
+  });
+
+  // #869: POST /builders/me/redeem itself always 503s in this suite
+  // (REDEMPTION_PAUSED_PENDING_PROVENANCE, on top of Stripe never being
+  // configured), so the actual fix -- resuming an in-flight redemption
+  // instead of always minting a fresh one with a fresh (and therefore
+  // useless) idempotency key -- is tested directly against the exported
+  // claim/resume primitive, the same "no real Stripe call needed" shape
+  // commerce.test.js's own claimPurchasesForPayout tests already use.
+  it('claimOrResumeBuilderRedemption claims a fresh redemption and debits the balance when nothing is pending', async () => {
+    const builder = await signupBuilder('redeem-claim-fresh');
+    await creditHiggles(builder, 5000);
+
+    const { redemption, resumed } = await claimOrResumeBuilderRedemption(env.DB, builder.builderId, 2000);
+    expect(resumed).toBe(false);
+    expect(redemption.builder_id).toBe(builder.builderId);
+    expect(redemption.amount_cents).toBe(2000);
+    expect(redemption.stripe_transfer_id).toBeNull();
+    expect(redemption.stripe_payout_id).toBeNull();
+
+    const row = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.higgles_balance_cents).toBe(3000);
+  });
+
+  it('claimOrResumeBuilderRedemption resumes an existing incomplete redemption instead of claiming a second one', async () => {
+    const builder = await signupBuilder('redeem-resume');
+    await creditHiggles(builder, 5000);
+
+    // Manufactures the exact state a lost-response retry leaves behind:
+    // the transfer leg already succeeded (stripe_transfer_id set), the
+    // payout leg's outcome is unknown (stripe_payout_id still NULL), and
+    // the balance was already debited for it (never refunded, since the
+    // original attempt never definitively failed).
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - 2000 WHERE builder_id = ?')
+      .bind(builder.builderId).run();
+    await env.DB.prepare(`
+      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+      VALUES ('redemption-resume-test', ?, 2000, 'tr_already_succeeded', NULL)
+    `).bind(builder.builderId).run();
+
+    const { redemption, resumed } = await claimOrResumeBuilderRedemption(env.DB, builder.builderId, 2000);
+    expect(resumed).toBe(true);
+    expect(redemption.redemption_id).toBe('redemption-resume-test');
+    expect(redemption.stripe_transfer_id).toBe('tr_already_succeeded');
+
+    // Not debited a second time -- claimOrResumeBuilderRedemption must not
+    // touch the balance at all when resuming.
+    const row = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.higgles_balance_cents).toBe(3000);
+
+    // No second row was created either.
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(count.n).toBe(1);
   });
 });
