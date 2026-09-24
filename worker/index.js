@@ -5729,7 +5729,8 @@ async function handleBuilderRedeem(request, env, db) {
       await db.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ? WHERE redemption_id = ?')
         .bind(transfer.id, redemptionId).run();
       payout = await stripeRequest(
-        env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' }, undefined, sessionBuilder.stripe_account_id,
+        env, 'POST', 'payouts', { amount: amountCents, currency: 'usd' },
+        `builder-redeem-payout:${sessionBuilder.builder_id}:${crypto.randomUUID()}`, sessionBuilder.stripe_account_id,
       );
       await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
         .bind(payout.id, redemptionId).run();
@@ -5969,7 +5970,8 @@ async function handleSellerPayouts(request, env, db) {
     let payout;
     try {
       payout = await stripeRequest(
-        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' }, undefined, sessionSeller.stripe_account_id,
+        env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' },
+        `seller-payout:${sessionSeller.seller_id}:${crypto.randomUUID()}`, sessionSeller.stripe_account_id,
       );
     } catch (err) {
       // The claim above already stamped paid_out_at — undo it so a failed
