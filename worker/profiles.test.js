@@ -227,6 +227,83 @@ describe('Builders', () => {
     expect(reclaimed.response.status).toBe(200);
   });
 
+  // #879: DELETE /api/builders/:id used to read the builder's claimed
+  // landlets once, before its own db.batch() ran, and release exactly that
+  // precomputed list — a landlet claimed by this same builder (e.g. a
+  // second tab) in the gap between that read and the batch was invisible
+  // to the release statements, leaving it permanently status='claimed'
+  // with owner_builder_id pointing at a now-deleted builder row. Fired
+  // concurrently (not awaited one at a time) so a real interleave is
+  // possible, the same idiom as this file's other concurrent-request
+  // tests (e.g. commerce.test.js's "concurrent draft save" race) — those
+  // assert an invariant that must hold regardless of which request wins,
+  // not that a specific interleaving reliably occurs, since the exact
+  // timing isn't something a test can pin down. Here: whichever request
+  // wins, the landlet must never end up dangling — claimed with an
+  // owner_builder_id no live builder row holds. (It's fine, and expected,
+  // for the claim to legitimately win via getOrCreateBuilderForUser
+  // transparently minting a fresh builder profile for the same logged-in
+  // account once the old one is gone — that's a real, valid new owner, not
+  // a dangling reference.)
+  it('never leaves a landlet dangling on a deleted builder when a claim races the deletion', async () => {
+    const builder = await signupBuilder('race-delete-claim-builder');
+    await createGreenbeltLandlet('race-delete-claim-existing-landlet');
+    await api('/landlets/race-delete-claim-existing-landlet/claim', builder.session({ method: 'POST' }));
+    await createGreenbeltLandlet('race-delete-claim-new-landlet');
+
+    await Promise.all([
+      api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' })),
+      api('/landlets/race-delete-claim-new-landlet/claim', builder.session({ method: 'POST' })),
+    ]);
+
+    const newLandletRow = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('race-delete-claim-new-landlet').first();
+    if (newLandletRow.owner_builder_id === null) {
+      expect(newLandletRow.status).toBe('greenbelt');
+    } else {
+      const ownerStillExists = await env.DB.prepare('SELECT 1 FROM builders WHERE builder_id = ?')
+        .bind(newLandletRow.owner_builder_id).first();
+      expect(ownerStillExists).not.toBeNull();
+    }
+  });
+
+  // #879's fix replaced a precomputed landlet-id list with a live subquery
+  // scoped by owner_builder_id/status, evaluated inside the delete's own
+  // batch — not exercised by the existing single-landlet release test
+  // above. Two owned landlets confirms it isn't accidentally hardcoded to
+  // "at most one." A builder can only ever directly claim one landlet
+  // (the claim endpoint's own atomic guard blocks a second); a second one
+  // is acquired via winning an auction instead, same as
+  // "resolves a winning auction" elsewhere in this codebase's test suite.
+  it('releases every landlet the builder currently owns, not just one', async () => {
+    const builder = await signupBuilder('multi-release-builder');
+    const seller = await signupBuilder('multi-release-seller');
+    await createGreenbeltLandlet('multi-release-landlet-a');
+    await api('/landlets/multi-release-landlet-a/claim', builder.session({ method: 'POST' }));
+    await createGreenbeltLandlet('multi-release-landlet-b');
+    await api('/landlets/multi-release-landlet-b/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/multi-release-landlet-b/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await env.DB.prepare(`UPDATE builders SET higgles_balance_cents = 10000, land_cap_m2 = 3000 WHERE builder_id = ?`).bind(builder.builderId).run();
+    const bid = await api(`/auctions/${auctionId}/bids`, builder.session({ method: 'POST', body: JSON.stringify({ amountCents: 1000 }) }));
+    expect(bid.response.status).toBe(201);
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.body.auction.winningBidId).not.toBeNull();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds.sort()).toEqual(['multi-release-landlet-a', 'multi-release-landlet-b']);
+
+    const landletA = await api('/landlets/multi-release-landlet-a');
+    expect(landletA.body.landlet.status).toBe('greenbelt');
+    const landletB = await api('/landlets/multi-release-landlet-b');
+    expect(landletB.body.landlet.status).toBe('greenbelt');
+  });
+
   it('deleting a builder who owns nothing just removes them', async () => {
     const builder = await signupBuilder('owns-nothing-builder');
     const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
