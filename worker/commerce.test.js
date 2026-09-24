@@ -2314,6 +2314,47 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(404);
   });
 
+  // #877: the frontend (purchaseInstance in src/api.js) always sends a
+  // stable idempotencyKey it keeps reusing until a purchase finalizes —
+  // exactly the "network blip, then a retry with the same key" scenario
+  // handlePurchaseFinalize's own idempotency check already handles for the
+  // real-money path. This confirms the simulated path (the default for a
+  // product whose seller hasn't connected Stripe) now handles it too.
+  it('does not double-credit the builder when the same idempotencyKey is retried', async () => {
+    const seller = await signupBuilder('purchase-idempotency-seller');
+    await createGreenbeltLandletWithArea('purchase-idempotency-landlet', 1000);
+    await claim('purchase-idempotency-landlet', seller);
+    await createTemplate('purchase-idempotency-template', { priceCents: 750 });
+    await placeInstance('purchase-idempotency-instance', 'purchase-idempotency-landlet', 'purchase-idempotency-template', seller);
+
+    const first = await api('/instances/purchase-idempotency-instance/purchase', seller.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/instances/purchase-idempotency-instance/purchase', seller.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.purchase.purchaseId).toBe(first.body.purchase.purchaseId);
+
+    const builderShareCents = first.body.purchase.builderShareCents;
+    const after = await builderRow(seller.builderId);
+    expect(after.higgles_balance_cents).toBe(builderShareCents);
+    const purchaseCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE instance_id = ?')
+      .bind('purchase-idempotency-instance').first();
+    expect(purchaseCount.n).toBe(1);
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // purchase, still credited normally — this isn't a dedup-everything
+    // guard, only same-key retries.
+    const separate = await api('/instances/purchase-idempotency-instance/purchase', seller.session({ method: 'POST' }));
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.purchase.purchaseId).not.toBe(first.body.purchase.purchaseId);
+    const afterSeparate = await builderRow(seller.builderId);
+    expect(afterSeparate.higgles_balance_cents).toBe(builderShareCents * 2);
+  });
+
   it('400s purchasing an unpriced product', async () => {
     const seller = await signupBuilder('purchase-unpriced-seller');
     await createGreenbeltLandletWithArea('purchase-unpriced-landlet', 1000);
