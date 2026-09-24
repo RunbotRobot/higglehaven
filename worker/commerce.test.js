@@ -2,7 +2,9 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker, { claimPurchasesForPayout, sellerPayoutIdempotencyKey, refundIdempotencyKey } from './index.js';
+import worker, {
+  claimPurchasesForPayout, sellerPayoutIdempotencyKey, refundIdempotencyKey, auctionSettlementEventId,
+} from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -277,6 +279,88 @@ describe('Auctions', () => {
       'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(owner.builderId).first();
     expect(earningsCount.n).toBe(1);
+  });
+
+  // #875: resolveAuction used to transfer ownership and debit the winner's
+  // balance as one standalone write, then defer crediting the seller,
+  // recording winningBidId, and clearing the old owner's build content into
+  // a later, unrelated db.batch call — a Worker interruption between the two
+  // left the land transferred with the seller never paid and the build never
+  // cleared, and no retry could ever notice (the resolve guard only re-fires
+  // while status is still 'active'). This reproduces exactly that stuck
+  // state by hand (can't actually kill the Worker mid-request from a test),
+  // then confirms the next /resolve call resumes and completes it instead of
+  // silently no-opping forever.
+  it('resumes a resolution stuck between the ownership transfer and settlement, instead of leaving it stranded', async () => {
+    const owner = await signupBuilder('resolve-resume-owner');
+    const bidder = await signupBuilder('resolve-resume-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('auction-resolve-resume-landlet');
+    await claim('auction-resolve-resume-landlet', owner);
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'auction-resolve-resume-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    }));
+    const started = await api('/landlets/auction-resolve-resume-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    const placedBid = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 3000 }),
+    }));
+    const bidId = placedBid.body.bid.bidId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    // Hand-reproduce exactly what the atomic transfer+winningBidId batch
+    // (worker/index.js's resolveAuction) leaves committed, without ever
+    // running the settlement batch that's supposed to follow it.
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
+      .bind(3000, bidder.builderId).run();
+    await env.DB.prepare(`UPDATE landlets SET owner_builder_id = ?, active_version_id = NULL WHERE landlet_id = ?`)
+      .bind(bidder.builderId, 'auction-resolve-resume-landlet').run();
+    await env.DB.prepare(`UPDATE auctions SET status = 'ended', winning_bid_id = ? WHERE auction_id = ?`)
+      .bind(bidId, auctionId).run();
+
+    // Confirm the stuck state actually looks stuck before resuming it.
+    const stuckSeller = await api('/builders/me', owner.session());
+    expect(stuckSeller.body.builder.higglesBalanceCents).toBe(0);
+    const stuckInstances = await api('/instances?landletId=auction-resolve-resume-landlet');
+    expect(stuckInstances.body.instances).not.toEqual([]);
+    const stuckEarnings = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE event_id = ?',
+    ).bind(auctionSettlementEventId(auctionId)).first();
+    expect(stuckEarnings.n).toBe(0);
+
+    const resumed = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resumed.response.status).toBe(200);
+    expect(resumed.body.auction.status).toBe('ended');
+    expect(resumed.body.auction.winningBidId).toBe(bidId);
+
+    const landlet = await api('/landlets/auction-resolve-resume-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=auction-resolve-resume-landlet');
+    expect(instances.body.instances).toEqual([]);
+    const sellerAfter = await api('/builders/me', owner.session());
+    expect(sellerAfter.body.builder.higglesBalanceCents).toBe(3000);
+    const sellerNotices = await api('/notifications', owner.session());
+    expect(sellerNotices.body.notifications.some((n) => n.message.includes('sold for $30.00'))).toBe(true);
+
+    // Resuming again (e.g. a second sweep before anyone notices) must not
+    // double-credit the seller — the earnings-event row is the resumability
+    // marker as well as the dedupe guard.
+    const resumedAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resumedAgain.response.status).toBe(200);
+    const sellerAfterSecondResume = await api('/builders/me', owner.session());
+    expect(sellerAfterSecondResume.body.builder.higglesBalanceCents).toBe(3000);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
+  });
+
+  it('auctionSettlementEventId is stable for the same auction and differs across auctions', () => {
+    expect(auctionSettlementEventId('auction-abc')).toBe(auctionSettlementEventId('auction-abc'));
+    expect(auctionSettlementEventId('auction-abc')).not.toBe(auctionSettlementEventId('auction-xyz'));
   });
 
   // #415: a draft save's ownership check (at the top of the handler) and

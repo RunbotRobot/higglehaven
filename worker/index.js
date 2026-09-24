@@ -4259,14 +4259,33 @@ async function recomputeLandCapsBatch(db, rows) {
 // resolves over a few calls instead of ever blocking one call indefinitely.
 const AUCTION_SWEEP_LIMIT = 25;
 
-// Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions and resolves
-// each in turn. Called both from scheduled() (#770 — so an auction resolves
-// even if nobody happens to view auctions after it expires) and at the top
-// of the list endpoint below (so a shopper browsing auctions always sees
-// current state without waiting for the next scheduled() run).
+// #875: a raw-SQL mirror of auctionSettlementEventId (defined below,
+// alongside the resume logic that actually relies on it) — matches its
+// 'earnings-auction-<id>' format exactly, so this NOT EXISTS reads as
+// "this auction transferred ownership but its settlement batch never
+// ran". Kept in sync by hand (same pattern as LANDLET_RELEASED_VIA_AUCTION_SQL
+// elsewhere in this file); needed here because the sweep query below has
+// to find these rows without loading each one into JS first.
+const AUCTION_UNSETTLED_TRANSFER_SQL = `(
+  status = 'ended' AND winning_bid_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM higgles_earnings_events
+    WHERE event_id = 'earnings-auction-' || auctions.auction_id
+  )
+)`;
+
+// Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions (plus any
+// stuck mid-settlement per #875 — see AUCTION_UNSETTLED_TRANSFER_SQL) and
+// resolves each in turn. Called both from scheduled() (#770 — so an
+// auction resolves even if nobody happens to view auctions after it
+// expires) and at the top of the list endpoint below (so a shopper
+// browsing auctions always sees current state without waiting for the
+// next scheduled() run).
 async function resolveDueAuctions(db) {
   const { results } = await db.prepare(`
-    SELECT * FROM auctions WHERE status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    SELECT * FROM auctions
+    WHERE (status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+       OR ${AUCTION_UNSETTLED_TRANSFER_SQL}
     ORDER BY ends_at LIMIT ?
   `).bind(AUCTION_SWEEP_LIMIT).all();
   for (const row of results) await resolveAuction(db, row);
@@ -4275,8 +4294,13 @@ async function resolveDueAuctions(db) {
 // Single-auction version of the same check, used wherever one specific
 // auction is already being read/acted on (GET one, place a bid, the
 // explicit resolve endpoint) — avoids the full-table sweep above when
-// only one row's state actually matters here.
+// only one row's state actually matters here. #875: also resumes a
+// stuck mid-settlement auction on sight — resolveAuction's own resume
+// branch no-ops cheaply (one SELECT) if it turns out already settled, so
+// this is safe to check unconditionally rather than needing its own
+// settlement-marker lookup here too.
 async function resolveAuctionIfDue(db, auction) {
+  if (auction.status === 'ended' && auction.winning_bid_id) return resolveAuction(db, auction);
   if (auction.status !== 'active' || auction.ends_at > new Date().toISOString()) return auction;
   return resolveAuction(db, auction);
 }
@@ -4292,7 +4316,81 @@ async function resolveAuctionIfDue(db, auction) {
 // landlet(s) is intentional (docs/SPEC.md §0/§5 — auctions are how a
 // builder acquires *additional* already-claimed land) — see migration
 // 0058 on why that no longer trips a UNIQUE constraint here.
+// #875: deterministic (not crypto.randomUUID()) so resolveAuction can
+// check for this row's existence to tell whether a given auction's
+// settlement batch already ran — the resumability marker, not just a
+// retry-key (contrast #869/#871's idempotency keys, which only need
+// stability, never existence-checking).
+export function auctionSettlementEventId(auctionId) {
+  return `earnings-auction-${auctionId}`;
+}
+
+// #875: the seller-credit/build-cleanup/notification side effects for a
+// confirmed winner — split out so both the normal resolution path and the
+// crash-resume path below can build the exact same batch from a winning
+// bid, whichever call actually determined it.
+function buildAuctionWinnerSettlementStatements(db, auction, winner) {
+  return [
+    // #809: this transfer is the true, final say on who owns this landlet
+    // now — but handleStartAuction's own atomic ownership re-check (added
+    // for #809) only ever sees a consistent snapshot, never the exact
+    // instant of *this* UPDATE. A new auction from the old seller can
+    // still legitimately commit its own INSERT in the genuinely-still-
+    // seller-owned window between this function's earlier status='ended'
+    // write and this transfer, then get orphaned the moment this transfer
+    // lands a beat later — the same "old owner's content surviving under
+    // the new owner" shape the placed_instances/landlet_versions/
+    // landlet_levels wipes just below already guard against, just for
+    // auctions instead of build content. Ending any other still-active
+    // auction on this same landlet here — the one place that already
+    // knows, atomically, that ownership has genuinely just moved — closes
+    // that residual gap regardless of exactly how the race landed.
+    db.prepare(`
+      UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ? AND status = 'active' AND auction_id != ?
+    `).bind(auction.landlet_id, auction.auction_id),
+    db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
+    db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
+    db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
+    db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
+    `).bind(winner.amount_cents, auction.seller_builder_id),
+    // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
+    // trailing-30-day earnings WINDOW, not the lifetime
+    // higgles_balance_cents total above — this per-event ledger is what
+    // makes that window computable later (see recomputeLandCap).
+    // INSERT OR IGNORE: this same statement can run again on a resumed
+    // settlement (#875) if a crash landed the transfer but not this
+    // batch, then a second resume attempt somehow raced it — the
+    // deterministic event_id makes a second insert a harmless no-op
+    // instead of a PRIMARY KEY failure that would abort the whole batch.
+    db.prepare(`
+      INSERT OR IGNORE INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
+    `).bind(auctionSettlementEventId(auction.auction_id), auction.seller_builder_id, winner.amount_cents),
+    notificationStatement(db, auction.seller_builder_id,
+      `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.`),
+    notificationStatement(db, winner.bidder_builder_id,
+      `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.`),
+  ];
+}
+
 async function resolveAuction(db, auction) {
+  // #875: a previous call already recorded a winner (status='ended',
+  // winning_bid_id set — both written atomically together below) but was
+  // interrupted before the settlement batch above ran. Resume by
+  // replaying just that batch for the already-determined winner, rather
+  // than re-entering the candidate loop below — which would be wrong now,
+  // since ownership and the balance debit have already happened.
+  if (auction.status === 'ended' && auction.winning_bid_id) {
+    const alreadySettled = await db.prepare('SELECT 1 FROM higgles_earnings_events WHERE event_id = ?')
+      .bind(auctionSettlementEventId(auction.auction_id)).first();
+    if (!alreadySettled) {
+      const winner = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(auction.winning_bid_id).first();
+      await db.batch(buildAuctionWinnerSettlementStatements(db, auction, winner));
+    }
+    return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+  }
+
   // Three separate call sites can all reach this for the same overdue
   // auction (resolveDueAuctions' sweep, resolveAuctionIfDue's per-request
   // check, and the explicit /resolve endpoint) — each on its own stale
@@ -4348,35 +4446,57 @@ async function resolveAuction(db, auction) {
     // clause makes the transfer itself the atomic gate: it only lands if
     // this candidate is still under cap the instant it's written, exactly
     // mirroring that INSERT's subquery shape. Run standalone (not
-    // deferred into the statements batch below) for the same reason the
+    // deferred into the settlement batch below) for the same reason the
     // balance debit above is standalone — D1's db.batch can't branch on
     // an earlier statement's row count within the same call, and the next
-    // candidate needs to know *now* whether to be tried.
-    const transferred = await db.prepare(`
-      UPDATE landlets
-      SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
-        AND (
-          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
-        ) + ? >= (
-          ?
-          + COALESCE((
-              SELECT SUM(area_m2) FROM landlets AS owned
-              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
-                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
-            ), 0)
-          + COALESCE((
-              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
-              JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
-              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
-                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
-            ), 0)
-        )
-    `).bind(
-      candidate.bidder_builder_id, auction.landlet_id,
-      candidate.bidder_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2,
-      auctionedLandlet.area_m2, candidate.bidder_builder_id, candidate.bidder_builder_id,
-    ).run();
+    // candidate needs to know *now* whether to be tried. Bundled with the
+    // winning_bid_id write in the same batch (#875) — db.batch is
+    // atomic across its statements, so the two can now never land
+    // separately; a crash between them used to leave the landlet
+    // transferred with no record of who won it, and no way for a retry
+    // to tell (the top-of-function guard above only fires while
+    // status='active', which it no longer is once this point is reached).
+    const [transferred] = await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET owner_builder_id = ?, active_version_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+          AND (
+            SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+          ) + ? >= (
+            ?
+            + COALESCE((
+                SELECT SUM(area_m2) FROM landlets AS owned
+                WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                  AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+              ), 0)
+            + COALESCE((
+                SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+                JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+                WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                  AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+              ), 0)
+          )
+      `).bind(
+        candidate.bidder_builder_id, auction.landlet_id,
+        candidate.bidder_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2,
+        auctionedLandlet.area_m2, candidate.bidder_builder_id, candidate.bidder_builder_id,
+      ),
+      // Guarded by re-checking the landlet's owner within this same
+      // transaction, rather than re-running the cap formula above
+      // unconditionally — after the transfer statement lands, this
+      // landlet itself would start counting toward the candidate's own
+      // "owned" sum, silently changing what that formula means if it
+      // were duplicated verbatim here. A batch statement's WHERE always
+      // sees the preceding statement's already-applied effect (D1 runs a
+      // batch's statements sequentially in one transaction), so this
+      // only matches when the transfer just above genuinely landed.
+      db.prepare(`
+        UPDATE auctions SET winning_bid_id = ?
+        WHERE auction_id = ?
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id = ?)
+      `).bind(candidate.bid_id, auction.auction_id, auction.landlet_id, candidate.bidder_builder_id),
+    ]);
     if (transferred.meta.changes === 0) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
@@ -4386,52 +4506,13 @@ async function resolveAuction(db, auction) {
     break;
   }
 
-  const statements = [
-    db.prepare('UPDATE auctions SET winning_bid_id = ? WHERE auction_id = ?').bind(winner ? winner.bid_id : null, auction.auction_id),
-  ];
+  const statements = [];
   if (winner) {
-    // Ownership itself was already transferred above, atomically gated on
-    // the winner's land cap — only the build-cleanup and money/notification
-    // side effects remain, safe to batch together now that the transfer is
-    // confirmed to have actually landed.
-    //
-    // #809: this transfer is the true, final say on who owns this landlet
-    // now — but handleStartAuction's own atomic ownership re-check (added
-    // for #809) only ever sees a consistent snapshot, never the exact
-    // instant of *this* UPDATE. A new auction from the old seller can
-    // still legitimately commit its own INSERT in the genuinely-still-
-    // seller-owned window between this function's earlier status='ended'
-    // write and this transfer, then get orphaned the moment this transfer
-    // lands a beat later — the same "old owner's content surviving under
-    // the new owner" shape the placed_instances/landlet_versions/
-    // landlet_levels wipes just below already guard against, just for
-    // auctions instead of build content. Ending any other still-active
-    // auction on this same landlet here — the one place that already
-    // knows, atomically, that ownership has genuinely just moved — closes
-    // that residual gap regardless of exactly how the race landed.
-    statements.push(
-      db.prepare(`
-        UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ? AND status = 'active' AND auction_id != ?
-      `).bind(auction.landlet_id, auction.auction_id),
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
-      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
-      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
-      db.prepare(`
-        UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-      `).bind(winner.amount_cents, auction.seller_builder_id),
-      // Land cap (docs/SPEC.md §3, migrations/0050) grows off a genuine
-      // trailing-30-day earnings WINDOW, not the lifetime
-      // higgles_balance_cents total above — this per-event ledger is what
-      // makes that window computable later (see recomputeLandCap).
-      db.prepare(`
-        INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
-      `).bind(`earnings-${crypto.randomUUID()}`, auction.seller_builder_id, winner.amount_cents),
-      notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.`),
-      notificationStatement(db, winner.bidder_builder_id,
-        `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.`),
-    );
+    // Ownership (and winning_bid_id) were already transferred above,
+    // atomically gated on the winner's land cap — only the build-cleanup
+    // and money/notification side effects remain, safe to batch together
+    // now that the transfer is confirmed to have actually landed.
+    statements.push(...buildAuctionWinnerSettlementStatements(db, auction, winner));
   } else if (candidates.length === 0 && auction.starting_bid_cents === 0) {
     statements.push(
       // #809: same reasoning as the winner branch above — this release
