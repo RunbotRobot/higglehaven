@@ -3278,6 +3278,16 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 // authenticated-action limits.
 const BUNDLE_CREATE_RATE_LIMIT_MAX = 20;
 
+// #892: #791 above only rate-limited creating a bundle — renaming/toggling
+// `shared` (PATCH/PUT) and deleting one never got the same treatment, so a
+// single already-created bundle could be mutated or deleted an unbounded
+// number of times per second by its own owner's session. Same shape as
+// #520/#564/#804's own PATCH-vs-DELETE-sibling gaps elsewhere in this file.
+// Bucketed by builder id, same reasoning as BUNDLE_CREATE_RATE_LIMIT_MAX;
+// PATCH and DELETE share one bucket since both are "mutate an existing
+// bundle" actions, not two independently-abusable surfaces.
+const BUNDLE_MUTATE_RATE_LIMIT_MAX = 20;
+
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const limit = queryLimit(url.searchParams.get('limit'), 100);
@@ -3355,6 +3365,7 @@ async function handleBundles(request, db, route, url) {
     if (!existing) return json({ error: 'Bundle not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
+    await checkRateLimit(db, `bundle-mutate:${sessionBuilder.builder_id}`, BUNDLE_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // Both fields optional and independent — a rename shouldn't have to
     // also resend the current shared flag, and vice versa. #468: this used
@@ -3389,6 +3400,7 @@ async function handleBundles(request, db, route, url) {
     if (!existing) return json({ error: 'Bundle not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
+    await checkRateLimit(db, `bundle-mutate:${sessionBuilder.builder_id}`, BUNDLE_MUTATE_RATE_LIMIT_MAX);
     await db.prepare('DELETE FROM bundles WHERE bundle_id = ?').bind(route[1]).run();
     return json({ deleted: true });
   }
