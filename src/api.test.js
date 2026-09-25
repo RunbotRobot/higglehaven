@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
+import { deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
@@ -90,6 +90,18 @@ describe('fetchAllAuctions', () => {
     mockPaginatedFetch([{ auctions: [{ auctionId: 'a' }], nextCursor: null }]);
     const all = await fetchAllAuctions();
     expect(all).toEqual([{ auctionId: 'a' }]);
+  });
+});
+
+describe('deleteLandletLevel', () => {
+  // #901: without surfacing this, nothing tells the caller which instances
+  // the server just swept out of active space, so their meshes go stale.
+  it('returns the server\'s sweptInstanceIds', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ deleted: true, sweptInstanceIds: ['a', 'b'] }),
+    })));
+    await expect(deleteLandletLevel('landlet-1', 2)).resolves.toEqual(['a', 'b']);
   });
 });
 

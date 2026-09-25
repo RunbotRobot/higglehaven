@@ -424,10 +424,14 @@ export async function addLandletLevel(landletId, direction) {
 
 // Only the outermost existing level (in whichever direction levelIndex is
 // on) can actually be removed — a 409 (surfaced via requestJson) otherwise.
+// Returns the ids of any instances the server swept out of active space as
+// a result (#901) — the caller still needs to prune its own local scene for
+// those, since the server has no way to reach into it.
 export async function deleteLandletLevel(landletId, levelIndex) {
-  await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
+  const { sweptInstanceIds } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
     method: 'DELETE',
   });
+  return sweptInstanceIds;
 }
 
 // builderId is never sent — the server derives "who's claiming" from the
