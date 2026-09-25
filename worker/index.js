@@ -9464,7 +9464,11 @@ async function handleInstancePurchase(request, env, instanceId) {
   }
   return writePurchaseRow(
     env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label),
-    null, false, buyerBuilder.builder_id,
+    // #888: unlike the real-money checkout->finalize path, there's no time
+    // gap here between reading template and writing the purchase — template
+    // is already fresh in this same request, so deriving isAvatarCategory
+    // from it directly (rather than a locked-in snapshot) is correct here.
+    null, false, buyerBuilder.builder_id, template.category === 'avatar',
     // #877: the client already mints and sends this (see purchaseInstance
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
@@ -9669,9 +9673,17 @@ async function handlePurchaseFinalize(request, env) {
   };
   const isDigitalGood = meta.isDigitalGood === 'true';
   const buyerBuilderId = meta.buyerBuilderId || null;
+  // #888: same checkout-time-snapshot reasoning as isDigitalGood above —
+  // whether this purchase grants an equippable avatar was already decided
+  // and locked into the PaymentIntent's own metadata at checkout (see
+  // createPurchaseCheckout's own comment), so it must be read from meta
+  // here rather than left for writePurchaseRow to re-derive from a live
+  // template.category that may have changed underneath this purchase by
+  // the time finalize runs.
+  const isAvatarCategory = meta.isAvatarCategory === 'true';
 
   if (instance && template && landlet?.owner_builder_id) {
-    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood, buyerBuilderId);
+    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -9782,7 +9794,16 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
 }
 
-async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, idempotencyKey = null) {
+// Exported so #888's regression test can call this directly with an
+// explicit isAvatarCategory, the same way other real-Stripe-path-only
+// logic in this file (claimOrResumeBuilderRedemption, sellerPayoutIdempotencyKey)
+// is exported for direct unit testing — the real createPurchaseCheckout ->
+// handlePurchaseFinalize flow this function's isAvatarCategory parameter
+// actually guards against is only reachable through a live Stripe call,
+// which this test suite deliberately never configures (see
+// worker/commerce.test.js's "Stripe is never configured in this test
+// suite" comment).
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -9805,7 +9826,9 @@ async function writePurchaseRow(env, instance, template, landlet, amounts, payme
   // (buyerBuilderId can arrive here from Stripe metadata set at checkout
   // time, same staleness risk as that path — the simulated caller's own
   // buyerBuilderId is always fresh, but this guards both the same way).
-  const buyerBuilderStillExists = template.category === 'avatar' && buyerBuilderId
+  // #888: isAvatarCategory is an explicit parameter, not re-derived from
+  // template.category here — see this function's own callers for why.
+  const buyerBuilderStillExists = isAvatarCategory && buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(buyerBuilderId).first()
     : null;
   await db.batch([

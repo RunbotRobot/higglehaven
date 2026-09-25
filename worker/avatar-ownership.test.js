@@ -8,6 +8,7 @@
 // scope, not this file's.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { writePurchaseRow } from './index.js';
 import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 let adminSession;
@@ -128,6 +129,81 @@ describe('Avatar ownership (#680)', () => {
     expect(buyerOwns.body.avatars.map((a) => a.templateId)).toContain('avatar-ownership-buyer-template');
     const sellerOwns = await api('/builders/me/avatars', seller.session());
     expect(sellerOwns.body.avatars.map((a) => a.templateId)).not.toContain('avatar-ownership-buyer-template');
+  });
+});
+
+// #888: the real Stripe checkout -> finalize path locks isAvatarCategory
+// into the PaymentIntent's own metadata at checkout time (same reasoning
+// as isDigitalGood), specifically so a template's live, mutable category
+// can't retroactively change whether a purchase grants/withholds an
+// owned_avatars row. writePurchaseRow is the function both that real path
+// and the simulated path share -- exercised directly here (rather than via
+// HTTP) because the real checkout->finalize flow only actually reaches this
+// with a live Stripe call, which this test suite deliberately never
+// configures (see worker/commerce.test.js's "Stripe is never configured in
+// this test suite" comment). Building amounts/instance/template/landlet by
+// hand instead of via computePurchaseAmounts (also unexported) -- only the
+// fields writePurchaseRow itself reads need to be present.
+describe('writePurchaseRow honors an explicit isAvatarCategory over template.category (#888)', () => {
+  async function seedForWrite(prefix) {
+    const seller = await signupBuilder(`${prefix}-seller`);
+    const buyer = await signupBuilder(`${prefix}-buyer`);
+    await createGreenbeltLandlet(`${prefix}-landlet`);
+    await claim(`${prefix}-landlet`, seller);
+    return { seller, buyer };
+  }
+
+  async function fetchRows(templateId, landletId, instanceId) {
+    const template = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const landlet = await env.DB.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+    const instance = await env.DB.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+    return { template, landlet, instance };
+  }
+
+  function amountsFor(template) {
+    return {
+      quantity: 1, buyerLabel: null, unitPriceCents: template.price_cents, totalCents: template.price_cents,
+      commissionCents: 0, builderShareCents: template.price_cents, platformShareCents: 0,
+    };
+  }
+
+  it('does not grant owned_avatars when isAvatarCategory is explicitly false, even though template.category is avatar', async () => {
+    const prefix = 'write-purchase-row-snapshot-false';
+    const { seller, buyer } = await seedForWrite(prefix);
+    await createAvatarTemplate(`${prefix}-template`);
+    await placeInstance(`${prefix}-instance`, `${prefix}-landlet`, `${prefix}-template`, seller);
+    const { template, landlet, instance } = await fetchRows(`${prefix}-template`, `${prefix}-landlet`, `${prefix}-instance`);
+    expect(template.category).toBe('avatar');
+
+    await writePurchaseRow(env, instance, template, landlet, amountsFor(template), 'pi_888_snapshot_false', false, buyer.builderId, false);
+
+    const owned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, `${prefix}-template`).all();
+    expect(owned.results).toHaveLength(0);
+  });
+
+  it('grants owned_avatars when isAvatarCategory is explicitly true, even though template.category is not avatar', async () => {
+    const prefix = 'write-purchase-row-snapshot-true';
+    const { seller, buyer } = await seedForWrite(prefix);
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: `${prefix}-template`, name: 'Plain product', color: '#222222',
+        dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 500,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    await placeInstance(`${prefix}-instance`, `${prefix}-landlet`, `${prefix}-template`, seller);
+    const { template, landlet, instance } = await fetchRows(`${prefix}-template`, `${prefix}-landlet`, `${prefix}-instance`);
+    expect(template.category).not.toBe('avatar');
+
+    await writePurchaseRow(env, instance, template, landlet, amountsFor(template), 'pi_888_snapshot_true', false, buyer.builderId, true);
+
+    const owned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, `${prefix}-template`).all();
+    expect(owned.results).toHaveLength(1);
   });
 });
 
