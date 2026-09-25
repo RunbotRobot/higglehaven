@@ -6589,9 +6589,9 @@ Creates a task. **Requires `from` (the caller's own name) and `title`
 blank.** These are the owner's own two named criteria from N31. An
 explicit `id` may be supplied (`409` if already taken); otherwise one is
 generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
-`session`, `tag`, `url`, `waitingOn`, `imageUrl`) is optional, defaulting
-to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively, matching the
-Artifact-era board's own defaults for a freeform note.
+`session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`) is optional,
+defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
+matching the Artifact-era board's own defaults for a freeform note.
 
 ### `GET /api/control-room/tasks/:id`
 
@@ -6601,9 +6601,9 @@ Artifact-era board's own defaults for a freeform note.
 
 Updates a task. **Requires `caller` (who is making this specific change)
 on every call — `400` if missing or blank.** Any of `status`, `session`,
-`note` (also stamps `noteUpdatedAt`), `tag`, `waitingOn`, `viewed`,
-`awaitingClaude` may be included; only fields actually present in the
-body are touched.
+`note` (also stamps `noteUpdatedAt`), `tag`, `prUrl`, `waitingOn`,
+`viewed`, `awaitingClaude` may be included; only fields actually present
+in the body are touched.
 
 **The actual fix N31 asked for**: setting `waitingOn` to `'owner'` (when
 it wasn't already) additionally requires a non-empty `reason` — `400`

@@ -86,6 +86,16 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.waitingOn).toBeNull();
   });
 
+  it('creates a task with a prUrl', async () => {
+    const task = await createTask({ prUrl: 'https://github.com/RunbotRobot/higglehaven/pull/902' });
+    expect(task.pr).toBe('https://github.com/RunbotRobot/higglehaven/pull/902');
+  });
+
+  it('defaults pr to null when prUrl is omitted', async () => {
+    const task = await createTask();
+    expect(task.pr).toBeNull();
+  });
+
   it('rejects creating a second task with a duplicate explicit id', async () => {
     const task = await createTask({ id: 'issue-9001' });
     expect(task.id).toBe('issue-9001');
@@ -182,6 +192,25 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.response.status).toBe(200);
     expect(got.body.task.status).toBe('in_progress');
     expect(got.body.task.session).toBe('higglehaven2');
+  });
+
+  it('updates prUrl on an existing task', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH',
+      body: JSON.stringify({ caller: 'higglehaven2', prUrl: 'https://github.com/RunbotRobot/higglehaven/pull/910' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.pr).toBe('https://github.com/RunbotRobot/higglehaven/pull/910');
+  });
+
+  it('clears prUrl by setting it to null', async () => {
+    const task = await createTask({ prUrl: 'https://github.com/RunbotRobot/higglehaven/pull/910' });
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', prUrl: null }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.pr).toBeNull();
   });
 
   // The actual core of N31's fix: this exact transition is what kept
