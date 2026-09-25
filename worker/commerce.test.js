@@ -1346,6 +1346,26 @@ describe('Bundles', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #892: unlike POST above (#791), PATCH/PUT and DELETE never got a
+  // checkRateLimit call at all -- a single already-created bundle could be
+  // mutated or deleted an unbounded number of times per second by its own
+  // owner's session. Both actions share one bucket (BUNDLE_MUTATE_RATE_LIMIT_MAX),
+  // so this exercises PATCH calls against the same bundle up to the limit,
+  // then confirms DELETE against that same bucket is what finally 429s.
+  it('rate-limits repeated bundle mutations (PATCH/DELETE) from the same builder', async () => {
+    const builder = await signupBuilder('bundle-mutate-rate-limit');
+    const created = await api('/bundles', builder.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/bundles/${bundleId}`, builder.session({
+        method: 'PATCH', body: JSON.stringify({ name: `Renamed ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/bundles/${bundleId}`, builder.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
     const builder = await signupBuilder('bundle-validate');
     const empty = await api('/bundles', builder.session({
