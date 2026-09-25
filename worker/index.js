@@ -5350,6 +5350,22 @@ export async function decryptTaxIdPayload(env, stored) {
   return JSON.parse(new TextDecoder().decode(plaintext));
 }
 
+// #895: every field here used to go through the bare stringValue() (no
+// upper bound at all) — the same gap #337 already found and fixed for
+// authorLabel/buyerLabel elsewhere in this file via labelValue(). Reusing
+// labelValue()'s 100-char cap for the shorter fields; legalName/
+// addressLine1 get their own, longer cap (same idea as password's own
+// separate 200-char limit above) since a full legal name or street
+// address can legitimately run past 100 characters.
+const MAX_TAX_FORM_TEXT_LENGTH = 200;
+function taxFormTextValue(value, field) {
+  const text = stringValue(value, field);
+  if (text.length > MAX_TAX_FORM_TEXT_LENGTH) {
+    throw new HttpError(`${field} must be ${MAX_TAX_FORM_TEXT_LENGTH} characters or fewer`, 400);
+  }
+  return text;
+}
+
 // W-9 (US persons) needs a US taxpayer ID (SSN or EIN) and a US address;
 // W-8BEN (non-US persons) needs a country of citizenship, a foreign tax
 // ID, and a permanent residence address instead — genuinely different
@@ -5357,24 +5373,30 @@ export async function decryptTaxIdPayload(env, stored) {
 function validateTaxIdForm(input) {
   const formType = input.formType;
   if (formType !== 'w9' && formType !== 'w8ben') throw new HttpError('formType must be "w9" or "w8ben"', 400);
-  const legalName = stringValue(input.legalName, 'legalName');
-  const addressLine1 = stringValue(input.addressLine1, 'addressLine1');
-  const city = stringValue(input.city, 'city');
+  const legalName = taxFormTextValue(input.legalName, 'legalName');
+  const addressLine1 = taxFormTextValue(input.addressLine1, 'addressLine1');
+  const city = labelValue(input.city, 'city');
   if (formType === 'w9') {
     return {
       formType, legalName, addressLine1, city,
-      state: stringValue(input.state, 'state'),
-      postalCode: stringValue(input.postalCode, 'postalCode'),
-      taxIdNumber: stringValue(input.taxIdNumber, 'taxIdNumber'),
+      state: labelValue(input.state, 'state'),
+      postalCode: labelValue(input.postalCode, 'postalCode'),
+      taxIdNumber: labelValue(input.taxIdNumber, 'taxIdNumber'),
     };
   }
   return {
     formType, legalName, addressLine1, city,
-    country: stringValue(input.country, 'country'),
-    countryOfCitizenship: stringValue(input.countryOfCitizenship, 'countryOfCitizenship'),
-    foreignTaxId: stringValue(input.foreignTaxId, 'foreignTaxId'),
+    country: labelValue(input.country, 'country'),
+    countryOfCitizenship: labelValue(input.countryOfCitizenship, 'countryOfCitizenship'),
+    foreignTaxId: labelValue(input.foreignTaxId, 'foreignTaxId'),
   };
 }
+
+// Same authenticated-per-user shape as FRIEND_REQUEST_RATE_LIMIT_MAX/
+// BUNDLE_MUTATE_RATE_LIMIT_MAX above (#895) — this endpoint had no
+// checkRateLimit call at all before, unlike every comparable authenticated
+// mutation in this file.
+const TAX_ID_FORM_RATE_LIMIT_MAX = 20;
 
 // A builder/seller can resubmit (e.g. a corrected SSN, or upgrading from
 // an already-filed W-8BEN to a W-9 after becoming a US person) — this
@@ -5386,6 +5408,7 @@ async function handleTaxIdForm(request, env, db, user) {
   if (!taxIdEncryptionConfigured(env)) {
     throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
   }
+  await checkRateLimit(db, `tax-id-form:${user.user_id}`, TAX_ID_FORM_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const form = validateTaxIdForm(input);
   const encrypted = await encryptTaxIdPayload(env, form);

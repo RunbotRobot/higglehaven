@@ -153,6 +153,49 @@ describe('Tax-ID form (#614)', () => {
     expect(me.body.user.taxFormType).toBe('w9');
   });
 
+  // #895: every field used to go through the bare stringValue() (no upper
+  // bound at all) — the same gap #337 already fixed for authorLabel/
+  // buyerLabel elsewhere in this file. A payload this large would
+  // previously have been accepted, encrypted, and stored without limit.
+  it('rejects an oversized legalName instead of accepting it unbounded', async () => {
+    const builder = await signupBuilder('tax-id-form-oversized-name');
+    const got = await api('/tax/id-form', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        formType: 'w9', legalName: 'A'.repeat(500), addressLine1: '1 Way', city: 'London', state: 'LDN', postalCode: '00000', taxIdNumber: '123-45-6789',
+      }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/legalName/);
+  });
+
+  it('rejects an oversized short field (city) instead of accepting it unbounded', async () => {
+    const builder = await signupBuilder('tax-id-form-oversized-city');
+    const got = await api('/tax/id-form', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        formType: 'w9', legalName: 'Ada Lovelace', addressLine1: '1 Way', city: 'A'.repeat(200), state: 'LDN', postalCode: '00000', taxIdNumber: '123-45-6789',
+      }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/city/);
+  });
+
+  // #895: handleTaxIdForm had no checkRateLimit call at all, unlike every
+  // other comparable authenticated per-user mutation in this file.
+  it('rate-limits repeated submissions from the same account', async () => {
+    const builder = await signupBuilder('tax-id-form-rate-limit');
+    const body = JSON.stringify({
+      formType: 'w9', legalName: 'Ada Lovelace', addressLine1: '1 Way', city: 'London', state: 'LDN', postalCode: '00000', taxIdNumber: '123-45-6789',
+    });
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/tax/id-form', builder.session({ method: 'POST', body }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/tax/id-form', builder.session({ method: 'POST', body }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it("exposes taxFormType/taxFormCompletedAt on the account view once submitted", async () => {
     const builder = await signupBuilder('tax-id-form-account-view');
     const before = await api('/auth/me', builder.session());
