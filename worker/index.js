@@ -1086,7 +1086,14 @@ async function handleModelCleanup(request, env) {
 // (migrations/0087's own ON DELETE SET NULL reasoning).
 export async function scheduledModelCleanup(env) {
   if (!env.MODELS) return;
-  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false });
+  // #890: an unattended sweep — unlike the admin-triggered POST endpoint
+  // below, which stays immediate/no-grace-period on purpose — must not
+  // delete an upload that's still legitimately mid-registration (the
+  // upload-then-register wizard has no deadline of its own). Reuses
+  // MODEL_UPLOAD_RESERVATION_TIMEOUT_MS: the same "comfortably above how
+  // long even a slow connection needs" reasoning already applied to the
+  // storage-budget-reservation side of this identical upload flow.
+  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
   if (result.targetCount > 0) {
     await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
       maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
@@ -1095,10 +1102,15 @@ export async function scheduledModelCleanup(env) {
   }
 }
 
-async function cleanupUnreferencedModels(env, { maxDeletes, dryRun }) {
+// Exported so #890's regression test can exercise minAgeMs directly with a
+// tiny threshold — proving an object that genuinely clears the age bar
+// still gets cleaned isn't practically testable through the real cron
+// path, which hardcodes the full 5-minute MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
+export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAgeMs = 0 }) {
   const targets = [];
   let cursor;
   let completeScan = false;
+  const now = Date.now();
   do {
     const listing = await env.MODELS.list({ cursor, limit: 100 });
     const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
@@ -1118,7 +1130,12 @@ async function cleanupUnreferencedModels(env, { maxDeletes, dryRun }) {
     let examinedWholePage = true;
     for (let i = 0; i < listing.objects.length; i++) {
       const object = listing.objects[i];
-      if (!referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
+      // #890: an object younger than minAgeMs is skipped, not just
+      // "examined and found referenced" — it may still be mid-registration
+      // (see this function's own callers for why the cron path passes a
+      // nonzero minAgeMs and the admin-triggered one doesn't).
+      const oldEnough = !object.uploaded || now - object.uploaded.getTime() >= minAgeMs;
+      if (oldEnough && !referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
       if (targets.length === maxDeletes && i < listing.objects.length - 1) {
         examinedWholePage = false;
         break;

@@ -2,7 +2,7 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker from './index.js';
+import worker, { cleanupUnreferencedModels } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -308,29 +308,59 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
-  // #848: scheduled() now automatically reclaims unreferenced R2 uploads
+  // #848: scheduled() automatically reclaims unreferenced R2 uploads
   // (previously only reachable via the admin-only POST above) — otherwise
   // concept-image's own guaranteed-unreferenced generated PNGs eventually
   // fill the shared MAX_TOTAL_STORAGE_BYTES cap with no automatic recovery.
-  it('scheduled() automatically cleans up an unreferenced upload', async () => {
-    const orphanForm = new FormData();
-    orphanForm.set('file', glbFile({ json: '{"scheduledCleanupOrphan":true}' }));
-    const orphanUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: orphanForm });
-    const orphan = await orphanUpload.json();
-    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(200);
+  // #890: but the upload-then-register wizard is two independent steps
+  // with no deadline of its own, so the unattended sweep must not delete
+  // an upload that's still legitimately mid-registration — unlike the
+  // admin-triggered POST above, which stays immediate on purpose. A model
+  // uploaded moments ago (as every upload in this test file necessarily
+  // is) is always younger than MODEL_UPLOAD_RESERVATION_TIMEOUT_MS, so it
+  // must survive scheduled(), not get swept the instant the cron fires.
+  it('scheduled() does not clean up an upload still within its registration grace period', async () => {
+    const freshForm = new FormData();
+    freshForm.set('file', glbFile({ json: '{"scheduledCleanupFresh":true}' }));
+    const freshUpload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: freshForm });
+    const fresh = await freshUpload.json();
+    expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(200);
 
     const controller = createScheduledController();
     const ctx = createExecutionContext();
     await worker.scheduled(controller, env, ctx);
     await waitOnExecutionContext(ctx);
 
-    expect((await SELF.fetch(`https://higglehaven.test${orphan.modelUrl}`)).status).toBe(404);
-    const logRow = await env.DB.prepare(
-      `SELECT * FROM admin_action_log WHERE action_type = 'model_cleanup' AND admin_user_id IS NULL
-       AND detail_json LIKE '%"trigger":"scheduled"%' ORDER BY created_at DESC LIMIT 1`,
-    ).first();
-    expect(logRow).toBeTruthy();
-    expect(JSON.parse(logRow.detail_json).targetCount).toBeGreaterThanOrEqual(1);
+    expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(200);
+
+    // The admin-triggered path is unaffected by the grace period — same
+    // upload, deleted immediately once explicitly requested.
+    const manualCleanup = await api('/models/cleanup', adminSession({
+      method: 'POST', body: JSON.stringify({ maxDeletes: 100 }),
+    }));
+    expect(manualCleanup.response.status).toBe(200);
+    expect(manualCleanup.body.targetModelUrls).toContain(fresh.modelUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(404);
+  });
+
+  // Companion to the grace-period test above: proves minAgeMs's own
+  // comparison actually discriminates on age (rather than, say, always
+  // excluding everything) -- an object that genuinely clears a tiny
+  // threshold still gets targeted. Exercises cleanupUnreferencedModels
+  // directly since the real cron path hardcodes the full 5-minute
+  // MODEL_UPLOAD_RESERVATION_TIMEOUT_MS, far too long to wait out here.
+  it('cleanupUnreferencedModels targets an object once it clears minAgeMs', async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"minAgeMsOldEnough":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const { modelUrl } = await upload.json();
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 1 });
+    expect(result.targetModelUrls).toContain(modelUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(404);
   });
 
   // #774: image_url (a product thumbnail, written by POST .../thumbnail)
