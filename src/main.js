@@ -4696,6 +4696,19 @@ const trimUnitLabelEls = [...document.querySelectorAll('.trim-unit-label')];
 
 let activeSettingsTab = 'general';
 
+// #905: renderLandCapField/renderRedeemHigglesField/renderAuctionSection
+// each await ensureBuilderIdentity() (a real network round-trip whenever
+// Settings was opened from Shop mode before Build mode ever established
+// builderId) before appending their own content to settingsSectionEl —
+// but switching tabs (or reopening the modal) is synchronous and
+// unconditional, so a tab switch mid-await let a since-superseded call's
+// financially-relevant controls (Redeem Higgles, Start Auction) land on
+// whatever tab is now showing. Bumped once per renderSettingsSection()
+// call (covers both a tab click and a modal reopen, since both call it);
+// same generation-counter idiom notificationsLoadToken/landletRenderToken
+// already use elsewhere in this file for the identical shape of race.
+let settingsRenderToken = 0;
+
 // Called whenever the Units preference changes, so every on-screen length
 // reflects it immediately rather than only after the next selection change
 // or modal reopen.
@@ -4706,6 +4719,7 @@ function refreshUnitDisplays() {
 }
 
 function renderSettingsSection() {
+  settingsRenderToken += 1;
   settingsSectionEl.innerHTML = '';
   for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
     btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
@@ -5025,6 +5039,7 @@ async function renderTaxPaperworkField() {
 // chosen at all this session — builderId can still be null if Settings is
 // opened from Shop mode before ever entering Build).
 async function renderLandCapField() {
+  const myToken = settingsRenderToken;
   // builderId can be null here purely because Settings was opened from Shop
   // mode before Build mode ever ran ensureBuilderIdentity() this session —
   // not because the visitor is actually logged out. If they already have a
@@ -5032,6 +5047,12 @@ async function renderLandCapField() {
   // `if (currentAuthUser) return currentAuthUser` means this never pops a
   // login prompt) instead of just leaving this whole field missing.
   if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  // #905: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — appending
+  // below would land this field there instead of silently vanishing with
+  // it, same as a stale renderNotifications/renderForLandlet call already
+  // gets caught by their own load tokens.
+  if (myToken !== settingsRenderToken) return;
   if (!builderId) return;
   const field = document.createElement('div');
   field.id = 'land-cap-field';
@@ -5185,7 +5206,12 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
 // fields, different account row) rather than sharing code with it, to
 // avoid touching that already-working, real-money-adjacent flow.
 async function renderRedeemHigglesField() {
+  const myToken = settingsRenderToken;
   if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  // #905: see renderLandCapField's own comment — a tab switch/modal reopen
+  // during that await already tore down settingsSectionEl for a different
+  // tab, so this real-money redemption form must not land there.
+  if (myToken !== settingsRenderToken) return;
   if (!builderId) return;
 
   const statusField = document.createElement('div');
@@ -5903,6 +5929,7 @@ function formatAuctionSummary(auction) {
 // latter isn't tied to currentLandletId, so it still renders here even
 // outside an active Build session, same as Land Cap above it.
 async function renderAuctionSection() {
+  const myToken = settingsRenderToken;
   // Same Shop-mode-opened-Settings gap as renderLandCapField above — an
   // already-logged-in visitor can still have a null builderId simply
   // because nothing's called ensureBuilderIdentity() yet this session.
@@ -5910,6 +5937,11 @@ async function renderAuctionSection() {
   // circuits on an existing currentAuthUser) rather than showing a
   // "choose an identity" dead end to someone who already has one.
   if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  // #905: see renderLandCapField's own comment — a tab switch/modal reopen
+  // during that await already tore down settingsSectionEl for a different
+  // tab, so this section (with a live "Start Auction" button) must not
+  // land there.
+  if (myToken !== settingsRenderToken) return;
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
