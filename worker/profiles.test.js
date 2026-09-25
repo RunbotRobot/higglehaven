@@ -1201,6 +1201,32 @@ describe('Friendships', () => {
   // test below (this whole file, 300+ tests, one process) applies here too
   // — matching its timeout rather than re-discovering the same flake.
 
+  // #899: unlike POST above (#369), PATCH (accept) and DELETE (decline/
+  // cancel/unfriend) never got a checkRateLimit call at all — a single
+  // friendship could be re-accepted (a no-op per #353, but still a live
+  // request) or deleted an unbounded number of times per second by either
+  // side's own session. Both actions share one bucket
+  // (FRIENDSHIP_MUTATE_RATE_LIMIT_MAX), so this exercises PATCH calls
+  // against the same already-accepted friendship up to the limit, then
+  // confirms DELETE against that same bucket is what finally 429s — same
+  // shape as the bundle-mutate rate-limit test in commerce.test.js (#892).
+  it('rate-limits repeated friendship mutations (PATCH/DELETE) from the same builder', async () => {
+    const alice = await signupBuilder('friendship-mutate-rate-limit-alice');
+    const bob = await signupBuilder('friendship-mutate-rate-limit-bob');
+    const sent = await api('/friendships', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId }),
+    }));
+    const friendshipId = sent.body.friendship.friendshipId;
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/friendships/${friendshipId}`, bob.session({
+        method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/friendships/${friendshipId}`, bob.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #353: the accept UPDATE previously matched regardless of the row's
   // current status, so re-PATCHing an already-accepted friendship kept
   // re-sending the requester a duplicate notification with no limit.

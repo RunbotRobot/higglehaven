@@ -3039,6 +3039,12 @@ function notificationFromRow(row) {
 // builder id, not an IP, since this gates a real account's own request
 // volume rather than an anonymous caller's.
 const FRIEND_REQUEST_RATE_LIMIT_MAX = 20;
+// #899: the accept (PATCH) and decline/cancel/unfriend (DELETE) branches
+// below had no checkRateLimit call at all, unlike POST just above — each
+// fires a real notification to the other party (same shape #369 already
+// throttled for creation), same fix pattern as BUNDLE_MUTATE_RATE_LIMIT_MAX
+// (#892).
+const FRIENDSHIP_MUTATE_RATE_LIMIT_MAX = 20;
 
 async function handleFriendships(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
@@ -3136,6 +3142,7 @@ async function handleFriendships(request, db, route, url) {
     // their own request would skip the other side's consent entirely.
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
+    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
     // #353: gated on the row's *current* status (mirroring resolveAuction's
@@ -3177,6 +3184,7 @@ async function handleFriendships(request, db, route, url) {
       && sessionBuilder.builder_id !== existing.recipient_builder_id) {
       throw new HttpError('Not your friendship', 403);
     }
+    await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     const deleteStatement = db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]);
     // #857: same "no passive way to find out" gap #319 already fixed for
     // request/accept — a decline left the original requester with nothing
