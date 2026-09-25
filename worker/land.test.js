@@ -2032,9 +2032,29 @@ describe('Landlet levels', () => {
 
     const removed = await api('/landlets/levels-remove-instances-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(removed.response.status).toBe(200);
+    // #901: the frontend has no other way to find out which instances just
+    // got swept out of its local scene -- without this, their meshes go
+    // stale and can later block an unrelated batch sync.
+    expect(removed.body.sweptInstanceIds).toEqual(['levels-remove-instances-upper']);
 
     const instances = await api('/instances?landletId=levels-remove-instances-landlet');
     expect(instances.body.instances.map((i) => i.instanceId)).toEqual(['levels-remove-instances-ground']);
+  });
+
+  // #901: a removal with nothing to sweep should report an empty array, not
+  // omit the field or return null -- the frontend loops over it unconditionally.
+  it('reports an empty sweptInstanceIds array when nothing needed sweeping', async () => {
+    const owner = await signupBuilder('levels-remove-nothing-owner');
+    await createGreenbeltLandletWithArea('levels-remove-nothing-landlet', 1000);
+    await claim('levels-remove-nothing-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-remove-nothing-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const removed = await api('/landlets/levels-remove-nothing-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+    expect(removed.body.sweptInstanceIds).toEqual([]);
   });
 
   // #633 (sub-issue of #631, owner-confirmed on #522/#631): the instances

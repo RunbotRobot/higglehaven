@@ -6443,7 +6443,15 @@ levelRemoveBtn.addEventListener('click', async () => {
   levelActionBusy = true;
   setLevelButtonsDisabled(true);
   try {
-    await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    const sweptInstanceIds = await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    // #901: the server already deleted these instances (archiving them into
+    // a saved layout first) — without pruning them here too, their meshes
+    // stay selectable/draggable in the scene and can later get swept into
+    // an undo snapshot or group move, failing an otherwise-unrelated sync.
+    for (const instanceId of sweptInstanceIds || []) {
+      const mesh = productMeshes.find((m) => m.userData.instanceId === instanceId);
+      if (mesh) deleteInstance(mesh, { sync: false });
+    }
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
     currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
     setLevelStatus('');

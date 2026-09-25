@@ -3810,7 +3810,11 @@ async function handleLandletLevels(request, db, route) {
     );
     await db.batch(statements);
     await recomputeLandCap(db, landlet.owner_builder_id);
-    return json({ deleted: true });
+    // #901: the caller's own local scene still has meshes for whatever just
+    // got swept above -- without reporting which instance ids those were,
+    // nothing tells the frontend to prune them, leaving stale/unselectable
+    // "ghost" meshes that can later block an unrelated batch sync.
+    return json({ deleted: true, sweptInstanceIds: outOfRange.results.map((instance) => instance.instance_id) });
   }
 
   return json({ error: 'Not found' }, 404);
