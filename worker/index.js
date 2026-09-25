@@ -787,9 +787,9 @@ async function handleControlRoomTaskCreate(request, env, db) {
   const statements = [
     db.prepare(`
       INSERT INTO control_room_tasks
-        (task_id, kind, number, note_number, title, status, session, posted_by, tag, url,
+        (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
          waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       taskId,
       body.kind ? labelValue(body.kind, 'kind') : 'feedback',
@@ -801,6 +801,7 @@ async function handleControlRoomTaskCreate(request, env, db) {
       postedBy,
       body.tag ? labelValue(body.tag, 'tag') : null,
       body.url ? labelValue(body.url, 'url') : null,
+      body.prUrl ? labelValue(body.prUrl, 'prUrl') : null,
       waitingOn,
       body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
       body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
@@ -856,6 +857,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
     setIfPresent('note_updated_at', new Date().toISOString());
   }
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
+  if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? labelValue(body.prUrl, 'prUrl') : null);
   if (body.waitingOn !== undefined) setIfPresent('waiting_on', body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null);
   if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
   if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
