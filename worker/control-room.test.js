@@ -86,6 +86,35 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.waitingOn).toBeNull();
   });
 
+  // #909: the update handler's "core of N31's fix" (below) only ever
+  // covered the update path -- a brand-new task could still be created
+  // already sitting at waitingOn:'owner' with no explanation anywhere,
+  // reproducing the exact bug N31 exists to prevent.
+  it('rejects creating a task with waitingOn owner and no reason', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Needs owner already', waitingOn: 'owner' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/reason/i);
+  });
+
+  it('accepts creating a task with waitingOn owner and a reason, posting it as a real linked reply', async () => {
+    const task = await createTask({
+      from: 'higglehaven3', title: 'Needs a design call', waitingOn: 'owner', reason: 'Needs the owner\'s judgment on X.',
+    });
+    expect(task.waitingOn).toBe('owner');
+
+    const replies = await api(`/control-room/tasks/${task.id}/replies`, keySession());
+    expect(replies.body.replies).toHaveLength(1);
+    expect(replies.body.replies[0]).toMatchObject({ from: 'higglehaven3', text: 'Needs the owner\'s judgment on X.' });
+  });
+
+  it('creates a task with waitingOn set to something other than owner, no reason required', async () => {
+    const task = await createTask({ from: 'higglehaven2', title: 'Blocked on another task', waitingOn: 'issue-123' });
+    expect(task.waitingOn).toBe('issue-123');
+  });
+
   it('rejects creating a second task with a duplicate explicit id', async () => {
     const task = await createTask({ id: 'issue-9001' });
     expect(task.id).toBe('issue-9001');
