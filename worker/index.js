@@ -6668,18 +6668,20 @@ async function handleTax(request, env, db, route, url) {
       throw new HttpError("Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet", 409);
     }
     const approvedAt = new Date().toISOString();
-    // #815: approving a real tax record is a sensitive, real-money-adjacent
-    // action -- log who did it, batched with the mutation itself so the two
-    // can never diverge (same convention as #814's grant-admin wiring).
-    const results = await db.batch([
-      db.prepare(`
-        UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ? WHERE form_id = ? AND status = 'draft'
-      `).bind(approvedAt, approvedAt, formId),
-      adminActionLogStatement(db, user.user_id, 'approve_1099_form', 'tax_1099_form', formId, {
-        formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id,
-      }),
-    ]);
-    if (results[0].meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
+    // #897: this UPDATE's own status='draft' guard means it can legitimately
+    // affect 0 rows (a concurrent approval already won), unlike grant-admin's
+    // unconditional write -- batching the log INSERT with it would commit a
+    // log row for an approval that never happened, since db.batch() commits
+    // every statement as long as none errors (0 rows changed isn't an
+    // error). Same "logged only after confirmed" idiom delete_land_candidate
+    // already uses for the identical reason.
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ? WHERE form_id = ? AND status = 'draft'
+    `).bind(approvedAt, approvedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
+    await adminActionLogStatement(db, user.user_id, 'approve_1099_form', 'tax_1099_form', formId, {
+      formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id,
+    }).run();
     return json({ formId, status: 'approved', approvedAt });
   }
   // #646: the actual e-filing transmission #645's review flow was built to
@@ -6714,23 +6716,20 @@ async function handleTax(request, env, db, route, url) {
     const payeeTaxId = await decryptTaxIdPayload(env, payee.tax_id_encrypted);
     const filingReference = await transmitTax1099Form(env, { form, payeeEmail: payee.email, payeeTaxId });
     const filedAt = new Date().toISOString();
-    // #815: transmitting a real filing to the IRS is the most consequential
-    // step in this flow -- log who did it, batched with the mutation itself
-    // so the two can never diverge (same convention as #814's grant-admin
-    // wiring). The actual transmission above can't be part of this atomic
-    // batch (it's a network call, not a D1 statement), but by this point
-    // it's already succeeded, so logging failure would only lose the audit
-    // trail, never cause a double-transmit.
-    const results = await db.batch([
-      db.prepare(`
-        UPDATE tax_1099_forms SET status = 'filed', filed_at = ?, filing_reference = ?, updated_at = ?
-        WHERE form_id = ? AND status = 'approved'
-      `).bind(filedAt, filingReference, filedAt, formId),
-      adminActionLogStatement(db, user.user_id, 'file_1099_form', 'tax_1099_form', formId, {
-        formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id, filingReference,
-      }),
-    ]);
-    if (results[0].meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
+    // #897: same reasoning as approve_1099_form above -- this UPDATE's own
+    // status='approved' guard can legitimately affect 0 rows, so the log
+    // INSERT must not be batched with it (a batch commits a 0-rows-changed
+    // statement same as any other). The transmission above already
+    // succeeded by this point regardless, so this only ever affects the
+    // audit trail, never a double-transmit.
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'filed', filed_at = ?, filing_reference = ?, updated_at = ?
+      WHERE form_id = ? AND status = 'approved'
+    `).bind(filedAt, filingReference, filedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
+    await adminActionLogStatement(db, user.user_id, 'file_1099_form', 'tax_1099_form', formId, {
+      formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id, filingReference,
+    }).run();
     return json({ formId, status: 'filed', filedAt, filingReference });
   }
   // #763: the schema (migrations/0081) has anticipated a 'voided' terminal
@@ -6750,20 +6749,17 @@ async function handleTax(request, env, db, route, url) {
       throw new HttpError(`Cannot void a form in status "${form.status}"`, 409);
     }
     const updatedAt = new Date().toISOString();
-    // #815: voiding a real tax record (potentially an already-approved one)
-    // is a correction with real accountability weight -- log who did it,
-    // batched with the mutation itself so the two can never diverge (same
-    // convention as #814's grant-admin wiring).
-    const results = await db.batch([
-      db.prepare(`
-        UPDATE tax_1099_forms SET status = 'voided', updated_at = ?
-        WHERE form_id = ? AND status IN ('draft', 'approved')
-      `).bind(updatedAt, formId),
-      adminActionLogStatement(db, user.user_id, 'void_1099_form', 'tax_1099_form', formId, {
-        formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id, previousStatus: form.status,
-      }),
-    ]);
-    if (results[0].meta.changes === 0) throw new HttpError('Tax form was no longer draft or approved', 409);
+    // #897: same reasoning as approve_1099_form above -- this UPDATE's own
+    // status IN ('draft','approved') guard can legitimately affect 0 rows,
+    // so the log INSERT must not be batched with it.
+    const result = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'voided', updated_at = ?
+      WHERE form_id = ? AND status IN ('draft', 'approved')
+    `).bind(updatedAt, formId).run();
+    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer draft or approved', 409);
+    await adminActionLogStatement(db, user.user_id, 'void_1099_form', 'tax_1099_form', formId, {
+      formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id, previousStatus: form.status,
+    }).run();
     return json({ formId, status: 'voided', updatedAt });
   }
   return json({ error: 'Not found' }, 404);

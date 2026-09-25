@@ -3937,6 +3937,36 @@ describe('Simulated purchases', () => {
         expect(rejected.response.status).toBe(403);
       });
 
+      // #897: the UPDATE's own status='draft' guard means the losing side of
+      // a concurrent approve legitimately affects 0 rows and must 409 -- but
+      // before the fix, its admin_action_log INSERT was batched with that
+      // UPDATE and committed regardless, misattributing an approval that
+      // never happened to whichever admin lost the race.
+      it('does not log admin_action_log for the losing side of a concurrent approve', async () => {
+        const builder = await signupBuilder('tax-1099-approve-race');
+        const builderMe = await api('/builders/me', builder.session());
+        await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+          .bind('w9', '2026-01-01T00:00:00.000Z', builder.email).run();
+        await grantHiggles(builderMe.body.builder.builderId, 70000);
+        const year = new Date().getUTCFullYear();
+        const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const form = listed.body.forms.find((f) => f.email === builder.email);
+
+        // Fired together, not awaited one at a time — see reviews-auth.test.js's
+        // own verify-email/reset-password races for the same "genuinely
+        // concurrent, not sequential" pattern this needs to reproduce the bug.
+        const [first, second] = await Promise.all([
+          api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' })),
+          api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' })),
+        ]);
+        expect([first.response.status, second.response.status].sort()).toEqual([200, 409]);
+
+        const logRows = await env.DB.prepare(
+          'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+        ).bind('approve_1099_form', form.formId).first();
+        expect(logRows.count).toBe(1);
+      });
+
       // #763: the schema (migrations/0081) always had a 'voided' status in
       // its CHECK constraint, but nothing ever set it until now -- an admin
       // who approved a form in error (or a draft generated against a bad
@@ -4009,6 +4039,28 @@ describe('Simulated purchases', () => {
           const second = await api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' }));
           expect(second.response.status).toBe(409);
           expect(second.body.error).toMatch(/status "voided"/);
+        });
+
+        // #897: same reasoning as the concurrent-approve test above -- the
+        // losing side of a concurrent void must not still write a log row.
+        it('does not log admin_action_log for the losing side of a concurrent void', async () => {
+          const builder = await signupBuilder('tax-1099-void-race');
+          const builderMe = await api('/builders/me', builder.session());
+          await grantHiggles(builderMe.body.builder.builderId, 70000);
+          const year = new Date().getUTCFullYear();
+          const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+          const form = listed.body.forms.find((f) => f.email === builder.email);
+
+          const [first, second] = await Promise.all([
+            api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' })),
+            api(`/tax/admin-forms/${form.formId}/void`, adminSession({ method: 'POST' })),
+          ]);
+          expect([first.response.status, second.response.status].sort()).toEqual([200, 409]);
+
+          const logRows = await env.DB.prepare(
+            'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+          ).bind('void_1099_form', form.formId).first();
+          expect(logRows.count).toBe(1);
         });
 
         // Filing genuinely can't be reached through the real API in this
