@@ -8409,6 +8409,8 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   };
 }
 
+const WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT = 5;
+
 async function handleWorld(request, db, route) {
   if (request.method === 'GET' && route.length === 1) {
     const settings = await getWorldSettings(db);
@@ -8430,29 +8432,47 @@ async function handleWorld(request, db, route) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
     const admin = await requireAdmin(request, db);
-    const existing = await getWorldSettings(db);
     const input = await readJson(request);
-    const world = validateWorld({ ...worldFromRow(existing), ...input });
-    // #523: nothing here re-validates already-materialized/greenbelt land
-    // against a smaller radius, and expandWorldOnce (the only other writer
-    // of radius_m) only ever grows it — so a shrink here was the one path
-    // that could leave existing landlets sitting outside the world's own
-    // stated bounds. Owner direction (reply yyjnvw3ueii8zn0k5cs3): block
-    // shrinking outright; if the radius is ever wrong by accident, that's
-    // a one-time manual/engineered fix, not something this endpoint should
-    // allow as routine input.
-    if (world.radiusM < existing.radius_m) {
-      throw new HttpError('World radius cannot be decreased', 400);
-    }
-    await db.batch([
-      db.prepare(`
+    // #881: same TOCTOU shape #837 fixed in expandWorldOnce — the UPDATE
+    // below used to have no WHERE guard tying it back to the `existing` row
+    // this handler actually read, so two concurrent PUT/PATCH calls (or one
+    // racing an expandWorldOnce radius bump) could each overwrite whatever
+    // the other just wrote, silently discarding an update while
+    // admin_action_log recorded both as if each succeeded cleanly. Claim the
+    // write via a conditional UPDATE first, same idiom expandWorldOnce uses.
+    let existing;
+    let world;
+    for (let attempt = 0; ; attempt++) {
+      existing = await getWorldSettings(db);
+      world = validateWorld({ ...worldFromRow(existing), ...input });
+      // #523: nothing here re-validates already-materialized/greenbelt land
+      // against a smaller radius, and expandWorldOnce (the only other writer
+      // of radius_m) only ever grows it — so a shrink here was the one path
+      // that could leave existing landlets sitting outside the world's own
+      // stated bounds. Owner direction (reply yyjnvw3ueii8zn0k5cs3): block
+      // shrinking outright; if the radius is ever wrong by accident, that's
+      // a one-time manual/engineered fix, not something this endpoint should
+      // allow as routine input.
+      if (world.radiusM < existing.radius_m) {
+        throw new HttpError('World radius cannot be decreased', 400);
+      }
+      const claimed = await db.prepare(`
         UPDATE world_settings
         SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
             day_cycle_hours = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE world_id = 'default-world'
-      `).bind(world.radiusM, world.expansionIncrementM, world.greenbeltMinRatio, world.coordinateRotationDeg, world.dayCycleHours, JSON.stringify(world.metadata)),
-      adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world'),
-    ]);
+        WHERE world_id = 'default-world' AND radius_m = ? AND expansion_increment_m = ?
+          AND greenbelt_min_ratio = ? AND coordinate_rotation_deg = ? AND day_cycle_hours = ?
+          AND metadata_json = ?
+      `).bind(
+        world.radiusM, world.expansionIncrementM, world.greenbeltMinRatio, world.coordinateRotationDeg, world.dayCycleHours, JSON.stringify(world.metadata),
+        existing.radius_m, existing.expansion_increment_m, existing.greenbelt_min_ratio, existing.coordinate_rotation_deg, existing.day_cycle_hours, existing.metadata_json,
+      ).run();
+      if (claimed.meta.changes > 0) break;
+      if (attempt >= WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT) {
+        throw new HttpError('World settings are being updated concurrently — please retry', 409);
+      }
+    }
+    await adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world').run();
     const updated = await getWorldSettings(db);
     return json({ world: worldFromRow(updated) });
   }
