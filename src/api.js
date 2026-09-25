@@ -484,12 +484,21 @@ function chunk(array, size) {
 export async function createInstancesRemote(instances) {
   const created = [];
   for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
-    const { instances: stored } = await requestJson('/instances/batch', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ instances: batch }),
-    });
-    created.push(...stored);
+    try {
+      const { instances: stored } = await requestJson('/instances/batch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instances: batch }),
+      });
+      created.push(...stored);
+    } catch (err) {
+      // #903: a later chunk failing doesn't mean nothing was saved — earlier
+      // chunks already committed server-side. Attaching how many succeeded
+      // lets a caller (syncBatchCreate) report the real remaining count
+      // instead of claiming the whole request failed.
+      err.succeededCount = created.length;
+      throw err;
+    }
   }
   return created;
 }

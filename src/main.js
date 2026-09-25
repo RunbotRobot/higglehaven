@@ -1908,7 +1908,12 @@ async function syncBatchCreate(meshes) {
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    alert(`Couldn't save ${meshes.length} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+    // #903: a chunked create can fail partway through with earlier chunks
+    // already saved — err.succeededCount (set by createInstancesRemote)
+    // says how many, so this doesn't claim the whole placement failed when
+    // most of it actually made it to the server.
+    const failedCount = meshes.length - (err.succeededCount ?? 0);
+    alert(`Couldn't save ${failedCount} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
 
@@ -1945,8 +1950,12 @@ let instanceCounter = 0;
 // sync: false lets a caller placing many instances at once (see
 // placeClipboardItems) skip the per-item network request here and batch
 // them all into one call itself instead — see syncBatchCreate's doc
-// comment for why that distinction matters.
-async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true } = {}) {
+// comment for why that distinction matters. clamp: false likewise lets a
+// caller placing a whole *group* at once (also placeClipboardItems) skip
+// this per-item clamp and apply one shared offset across the group after
+// every mesh exists instead — see that call site's own comment for why an
+// independent per-item clamp here would squish the group's shape.
+async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true, clamp = true } = {}) {
   instanceCounter += 1;
   const instance = {
     instanceId: `${template.templateId}-${Date.now()}-${instanceCounter}`,
@@ -1962,8 +1971,10 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true 
   };
   const mesh = await addInstanceToScene(instance);
   if (!mesh) return null;
-  const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
-  mesh.position.set(clamped.x, clamped.y, clamped.z);
+  if (clamp) {
+    const clamped = clampToLandlet(mesh, mesh.position.x, mesh.position.y, mesh.position.z);
+    mesh.position.set(clamped.x, clamped.y, clamped.z);
+  }
   mesh.userData.safePosition = mesh.position.clone();
   persistLayout();
   if (sync) syncCreate(mesh);
@@ -7734,8 +7745,45 @@ async function placeClipboardItems(items, x, y, supportZ) {
       rotationZ: item.rotationZ,
       crop: item.crop,
       scale: item.scale,
-    }, { sync: false });
+    }, { sync: false, clamp: false });
     if (mesh) placed.push(mesh);
+  }
+  // #903: clamp the whole placed group with one shared offset instead of
+  // each item independently — an independent per-item clamp (what used to
+  // happen here via spawnInstanceAt's own clamp) lets an item near a
+  // landlet boundary get pushed in while others just inside stay put,
+  // squishing the group's saved relative arrangement out of shape. Same
+  // technique (per-item bounds intersected into one [min, max] per axis,
+  // one shared offset applied to everyone) the group-move handler already
+  // uses for the identical problem — see its own "group-squish" comment,
+  // groupMovePivot's objectChange listener above.
+  if (placed.length > 0) {
+    const floorZ = levelFloorZ(currentLevelIndex);
+    const ceilingZ = floorZ + LANDLET_HEIGHT_M;
+    let minOffsetX = -Infinity, maxOffsetX = Infinity;
+    let minOffsetY = -Infinity, maxOffsetY = Infinity;
+    let minOffsetZ = -Infinity, maxOffsetZ = Infinity;
+    for (const mesh of placed) {
+      const { width, depth, height } = meshDimensions(mesh);
+      const halfSpanX = LANDLET_SIDE_M / 2 - width / 2;
+      const halfSpanY = LANDLET_SIDE_M / 2 - depth / 2;
+      minOffsetX = Math.max(minOffsetX, -halfSpanX - mesh.position.x);
+      maxOffsetX = Math.min(maxOffsetX, halfSpanX - mesh.position.x);
+      minOffsetY = Math.max(minOffsetY, -halfSpanY - mesh.position.y);
+      maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
+      minOffsetZ = Math.max(minOffsetZ, floorZ + height / 2 - mesh.position.z);
+      maxOffsetZ = Math.min(maxOffsetZ, ceilingZ - height / 2 - mesh.position.z);
+    }
+    const offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
+    const offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);
+    const offsetZ = THREE.MathUtils.clamp(0, minOffsetZ, maxOffsetZ);
+    for (const mesh of placed) {
+      mesh.position.x += offsetX;
+      mesh.position.y += offsetY;
+      mesh.position.z += offsetZ;
+      mesh.userData.safePosition = mesh.position.clone();
+    }
+    persistLayout();
   }
   clearSelection();
   for (const mesh of placed) {
