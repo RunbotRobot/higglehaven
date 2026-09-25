@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
+import { createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
@@ -90,6 +90,49 @@ describe('fetchAllAuctions', () => {
     mockPaginatedFetch([{ auctions: [{ auctionId: 'a' }], nextCursor: null }]);
     const all = await fetchAllAuctions();
     expect(all).toEqual([{ auctionId: 'a' }]);
+  });
+});
+
+describe('createInstancesRemote', () => {
+  // #903: a later chunk failing after an earlier one already succeeded must
+  // not look like "nothing was saved" to the caller (syncBatchCreate uses
+  // this to avoid telling the builder their whole placement failed when
+  // most of it actually made it to the server).
+  it('attaches how many instances succeeded before a chunk failure', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      call += 1;
+      if (call === 1) {
+        const sent = JSON.parse(options.body).instances;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ instances: sent.map((i) => ({ ...i, instanceId: `${i.templateId}-saved` })) }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: 'Internal server error' }),
+      });
+    }));
+
+    const instances = Array.from({ length: 150 }, (_, i) => ({ templateId: `item-${i}`, x: i, y: 0, z: 0 }));
+    const error = await createInstancesRemote(instances).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.succeededCount).toBe(100); // the first 100-item chunk
+  });
+
+  it('never sets succeededCount when every chunk succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      const sent = JSON.parse(options.body).instances;
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ instances: sent.map((i) => ({ ...i, instanceId: `${i.templateId}-saved` })) }),
+      });
+    }));
+    const instances = [{ templateId: 'a', x: 0, y: 0, z: 0 }];
+    const created = await createInstancesRemote(instances);
+    expect(created).toEqual([{ templateId: 'a', x: 0, y: 0, z: 0, instanceId: 'a-saved' }]);
   });
 });
 
