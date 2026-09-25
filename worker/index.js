@@ -3611,6 +3611,20 @@ async function landletLevels(db, landletId) {
 // the landlet's own owner, same authenticated-action reasoning as those
 // other limits.
 const SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX = 20;
+// #907: SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX above only guards the
+// snapshot-and-sweep sub-branch of level removal (when out-of-range
+// instances exist to archive) — the add-level POST branch, and a plain
+// level removal with nothing to sweep, had no rate limit at all despite
+// each doing the same real, repeated DB work (an atomic multi-subquery
+// INSERT/DELETE plus a recomputeLandCap call) this file rate-limits
+// everywhere else. Same free add/remove-level loop reasoning as above,
+// just covering the branches that loop actually spends most of its time
+// in when no instance happens to be sitting in the swept z-range. Kept as
+// its own bucket (rather than folded into SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX)
+// so a plain add/remove loop with nothing to sweep is governed by its own
+// budget instead of silently sharing — and quietly draining — the sweep
+// path's.
+const LANDLET_LEVEL_RATE_LIMIT_MAX = 40;
 
 async function handleLandletLevels(request, db, route) {
   const landletId = route[1];
@@ -3624,6 +3638,7 @@ async function handleLandletLevels(request, db, route) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    await checkRateLimit(db, `landlet-level-add:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.direction !== 'up' && input.direction !== 'down') {
       throw new HttpError('direction must be "up" or "down"', 400);
@@ -3804,6 +3819,13 @@ async function handleLandletLevels(request, db, route) {
           instance.crop_json, instance.scale, instance.is_community_sign, instance.is_community_calendar,
         ));
       }
+    } else {
+      // #907: the sweep branch above has its own limiter (SAVED_LAYOUT_CREATE_
+      // RATE_LIMIT_MAX, since #794) — an ordinary removal with nothing to
+      // sweep never hit any checkRateLimit at all before this, despite doing
+      // the same atomic DELETE + recomputeLandCap work as any other level
+      // removal.
+      await checkRateLimit(db, `landlet-level-remove:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
     }
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),

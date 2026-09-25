@@ -2168,6 +2168,62 @@ describe('Landlet levels', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #907: the sweep-specific rate limit just above (#794) only covers a
+  // level removal that has an out-of-range instance to archive -- the
+  // add-level branch itself had no rate limit at all, letting a builder
+  // loop POST .../levels indefinitely (each call doing a real atomic
+  // multi-subquery INSERT plus a recomputeLandCap call).
+  it('rate-limits repeated level additions from the same builder', async () => {
+    const owner = await signupBuilder('levels-add-rate-limit-owner');
+    await createGreenbeltLandletWithArea('levels-add-rate-limit-landlet', 1000);
+    await claim('levels-add-rate-limit-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+
+    for (let i = 0; i < 40; i++) {
+      const added = await api('/landlets/levels-add-rate-limit-landlet/levels', owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+      expect(added.response.status).not.toBe(429);
+      // Removed directly (bypassing the DELETE endpoint's own, separate
+      // #907 rate limit below) so each add lands on level index 1 again
+      // without this loop also draining that other bucket.
+      await env.DB.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?')
+        .bind('levels-add-rate-limit-landlet').run();
+    }
+    const limited = await api('/landlets/levels-add-rate-limit-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
+  // #907: a level removal with nothing to sweep (the common case for an
+  // empty level) fell through with no rate limit at all -- only the sweep
+  // sub-branch tested above (#794) had one.
+  it('rate-limits repeated level removals with nothing to sweep, from the same builder', async () => {
+    const owner = await signupBuilder('levels-remove-rate-limit-owner');
+    await createGreenbeltLandletWithArea('levels-remove-rate-limit-landlet', 1000);
+    await claim('levels-remove-rate-limit-landlet', owner);
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+
+    async function seedLevelDirectly() {
+      // Seeded directly (bypassing POST /levels and its own separate
+      // #907 add-rate-limit above) so this isolates just the DELETE-side
+      // limit being tested here.
+      await env.DB.prepare(`
+        INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+      `).bind(`levels-remove-rate-limit-seed-${crypto.randomUUID()}`, 'levels-remove-rate-limit-landlet', 1, levelCapM2).run();
+    }
+
+    for (let i = 0; i < 40; i++) {
+      await seedLevelDirectly();
+      const removed = await api('/landlets/levels-remove-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).not.toBe(429);
+    }
+    await seedLevelDirectly();
+    const limited = await api('/landlets/levels-remove-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
   // createGreenbeltLandletWithArea helpers to get a real removed-level
