@@ -2806,6 +2806,42 @@ describe('Worker API', () => {
     expect(grown.body.world.radiusM).toBe(currentRadiusM + 1);
   });
 
+  // #881: same TOCTOU shape #837 fixed in expandWorldOnce, but for the
+  // PUT/PATCH /world write path, which #837 never touched. The old
+  // unconditional `UPDATE world_settings ... WHERE world_id = 'default-world'`
+  // had no guard tying it back to the `existing` row the handler actually
+  // read, so two concurrent PATCH calls that each change a *different*
+  // field could each independently merge their own change onto the same
+  // stale snapshot and then clobber each other's write wholesale --
+  // whichever landed last would silently revert the other's field back to
+  // its old value, even though neither request ever touched that field.
+  // Fired as two genuinely concurrent full HTTP requests (matching #849's
+  // own test just above, which reliably interleaves in this harness,
+  // unlike a narrower single-statement race) so this reproduces the actual
+  // bug shape rather than a specific forced ordering.
+  it('#881: two concurrent PATCH /world calls touching different fields both take effect, not just whichever lands last', async () => {
+    const before = (await api('/world')).body.world;
+    const newDayCycleHours = before.dayCycleHours + 1;
+    const newCoordinateRotationDeg = before.coordinateRotationDeg + 1;
+
+    const [patchA, patchB] = await Promise.all([
+      api('/world', adminSession({
+        method: 'PATCH',
+        body: JSON.stringify({ dayCycleHours: newDayCycleHours }),
+      })),
+      api('/world', adminSession({
+        method: 'PATCH',
+        body: JSON.stringify({ coordinateRotationDeg: newCoordinateRotationDeg }),
+      })),
+    ]);
+    expect(patchA.response.status).toBe(200);
+    expect(patchB.response.status).toBe(200);
+
+    const after = (await api('/world')).body.world;
+    expect(after.dayCycleHours).toBe(newDayCycleHours);
+    expect(after.coordinateRotationDeg).toBe(newCoordinateRotationDeg);
+  });
+
   // The scheduled() export (see wrangler.jsonc's triggers.crons) is what
   // actually keeps the world growing now — the old player-triggered "Grow
   // the world" button is gone. Invoked directly against the worker module
