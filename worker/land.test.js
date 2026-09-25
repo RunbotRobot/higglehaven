@@ -1593,6 +1593,50 @@ describe('Land cap', () => {
     expect(wonByBidder).toHaveLength(1);
   });
 
+  // #883: a candidate skipped in resolveAuction's candidate loop (their
+  // balance or land cap no longer covers their own bid by resolution time)
+  // used to get zero notification of losing -- nobody outbid them (they
+  // were still the standing-highest bid), and the resolution branches only
+  // ever notified the seller. Seed two bids directly (bypassing
+  // handleAuctionBids' own bid-time balance check, same technique as the
+  // #785 test above) so the higher bid's bidder is under-funded by
+  // resolution time and gets skipped in favor of the lower, affordable bid.
+  it('#883: notifies a skipped candidate who was the standing-highest bid but could not be settled', async () => {
+    const seller = await signupBuilder('skip-notify-seller');
+    const highBidder = await signupBuilder('skip-notify-high-bidder');
+    const lowBidder = await signupBuilder('skip-notify-low-bidder');
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 50 WHERE builder_id = ?')
+      .bind(highBidder.builderId).run();
+    await fundHiggles(lowBidder);
+    await createGreenbeltLandletWithArea('skip-notify-landlet', 100);
+    await claim('skip-notify-landlet', seller);
+    const started = await startAuction('skip-notify-landlet', seller);
+    const auctionId = started.body.auction.auctionId;
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('skip-notify-bid-high', auctionId, highBidder.builderId, 200),
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('skip-notify-bid-low', auctionId, lowBidder.builderId, 100),
+      env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`)
+        .bind(auctionId),
+    ]);
+
+    const resolved = await api(`/auctions/${auctionId}`);
+    expect(resolved.response.status).toBe(200);
+
+    const landlet = await env.DB.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?')
+      .bind('skip-notify-landlet').first();
+    expect(landlet.owner_builder_id).toBe(lowBidder.builderId);
+
+    const { results: highBidderNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(highBidder.builderId).all();
+    expect(highBidderNotifications.some((n) => /could no longer be honored/.test(n.message))).toBe(true);
+  });
+
   it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
     // The claim endpoint's own NOT EXISTS guard already limits a builder to
     // exactly one claimed lándlet at a time regardless of land cap, so a

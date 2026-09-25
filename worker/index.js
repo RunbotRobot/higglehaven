@@ -4455,13 +4455,26 @@ async function resolveAuction(db, auction) {
   `).bind(auction.auction_id).all();
   const auctionedLandlet = await db.prepare('SELECT area_m2 FROM landlets WHERE landlet_id = ?').bind(auction.landlet_id).first();
 
+  // #883: notifyOfNewBid only ever tells the *previous* highest bidder
+  // they've been outbid, at bid-placement time — so every candidate below
+  // the eventual winner already learned they lost, except the one who was
+  // still the standing-highest bid right up until resolution and got
+  // skipped here (balance/cap changed since bidding). Nobody outbid them,
+  // so they never got an outbid notification, and none of the resolution
+  // branches below notify anyone but the seller — collect skipped
+  // candidates as we go so each one gets told they lost, same discipline
+  // this file already applies to every other state-changing event.
+  const skippedCandidateBuilderIds = [];
   let winner = null;
   for (const candidate of candidates) {
     const debited = await db.prepare(`
       UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?
       WHERE builder_id = ? AND higgles_balance_cents >= ?
     `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents).run();
-    if (debited.meta.changes === 0) continue;
+    if (debited.meta.changes === 0) {
+      skippedCandidateBuilderIds.push(candidate.bidder_builder_id);
+      continue;
+    }
 
     // #785: a plain recomputeLandCap() read-then-compare here (like the
     // balance check above uses a conditional UPDATE, not a read-then-
@@ -4528,13 +4541,15 @@ async function resolveAuction(db, auction) {
     if (transferred.meta.changes === 0) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
+      skippedCandidateBuilderIds.push(candidate.bidder_builder_id);
       continue;
     }
     winner = candidate;
     break;
   }
 
-  const statements = [];
+  const statements = skippedCandidateBuilderIds.map((builderId) => notificationStatement(db, builderId,
+    `Your bid on ${auction.landlet_id} could no longer be honored and was skipped — you did not win this auction.`));
   if (winner) {
     // Ownership (and winning_bid_id) were already transferred above,
     // atomically gated on the winner's land cap — only the build-cleanup
