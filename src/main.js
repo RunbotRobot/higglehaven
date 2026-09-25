@@ -13246,10 +13246,16 @@ async function loadLandletMap(resolve) {
     // Landlets still generating (not yet enclosed by the world's expansion
     // radius) are queued backend state, not something to show a builder —
     // only fetch the two statuses that are meaningful to see/select here.
+    // #885: fetchLandlets only ever returns one page — GET /api/landlets
+    // orders oldest-first, so a plain limit:100 here would permanently cap
+    // this map at the oldest 100 greenbelt/claimed landlets ever generated,
+    // silently hiding every plot from the ongoing world-expansion pipeline
+    // (same bug class #186/#190 already fixed for other /landlets callers).
+    // fetchAllLandlets follows nextCursor to get the real full set.
     const [fetchedWorld, greenbeltLandlets, claimedLandlets] = await Promise.all([
       fetchWorld(),
-      fetchLandlets({ status: 'greenbelt', limit: 100 }),
-      fetchLandlets({ status: 'claimed', limit: 100 }),
+      fetchAllLandlets({ status: 'greenbelt' }),
+      fetchAllLandlets({ status: 'claimed' }),
     ]);
     world = fetchedWorld;
     landlets = [...greenbeltLandlets, ...claimedLandlets];
