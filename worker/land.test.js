@@ -517,6 +517,53 @@ describe('Community signs', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #960: same #415/#929 "auction transfer in the await gap" race already
+  // closed for placed_instances' own DELETE -- a stale sign-post-moderation
+  // DELETE from a builder who just lost the landlet in auction must not
+  // still succeed. Same injection point (checkRateLimit's own INSERT) as
+  // the #958/#959 landlet-level tests, since that's the earliest awaited
+  // step after requireOwnedLandlet in this handler too.
+  it('does not delete a sign post on a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('sign-delete-ownership-race-owner');
+    const newOwner = await signupBuilder('sign-delete-ownership-race-new-owner');
+    await createGreenbeltLandlet('sign-delete-ownership-race-landlet');
+    await api('/landlets/sign-delete-ownership-race-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-delete-ownership-race-instance',
+        landletId: 'sign-delete-ownership-race-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-delete-ownership-race-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Hello!' }),
+    });
+    const postId = posted.body.post.postId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'sign-delete-ownership-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let deleted;
+    try {
+      deleted = await api(`/instances/sign-delete-ownership-race-instance/posts/${postId}`, owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(deleted.response.status).toBe(409);
+
+    const stillThere = await env.DB.prepare('SELECT 1 FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    expect(stillThere).not.toBeNull();
+  });
+
   // #944: unlike its own POST sibling above, the DELETE branch had no rate
   // limit at all -- an authenticated landlet owner could delete posts in an
   // unthrottled loop. Seeds 21 posts directly via the DB (rather than via
@@ -1000,6 +1047,49 @@ describe('Community calendar', () => {
       method: 'POST', body: JSON.stringify({ text: 'One too many' }),
     }));
     expect(limited.response.status).toBe(429);
+  });
+
+  // #960: same race as the sign-post DELETE test in the "Community signs"
+  // describe block above -- see its own comment.
+  it('does not delete a calendar event on a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('calendar-delete-ownership-race-owner');
+    const newOwner = await signupBuilder('calendar-delete-ownership-race-new-owner');
+    await createGreenbeltLandlet('calendar-delete-ownership-race-landlet');
+    await api('/landlets/calendar-delete-ownership-race-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-delete-ownership-race-instance',
+        landletId: 'calendar-delete-ownership-race-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, isCommunityCalendar: true,
+      }),
+    }));
+    const posted = await api('/instances/calendar-delete-ownership-race-instance/events', owner.session({
+      method: 'POST', body: JSON.stringify({ text: 'Bonfire night!' }),
+    }));
+    const eventId = posted.body.event.eventId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'calendar-delete-ownership-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let deleted;
+    try {
+      deleted = await api(`/instances/calendar-delete-ownership-race-instance/events/${eventId}`, owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(deleted.response.status).toBe(409);
+
+    const stillThere = await env.DB.prepare('SELECT 1 FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    expect(stillThere).not.toBeNull();
   });
 
   // #944: unlike its own POST sibling above, the DELETE branch had no rate
@@ -2977,7 +3067,11 @@ describe('Landlet levels', () => {
     await env.DB.prepare(`
       INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('levels-cap-earning', owner.builderId, 4000).run();
-    const afterAdd = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId).landCapM2;
+    // #717's bounded ids= lookup, not the plain unfiltered (#715-paginated,
+    // 100/page) list — this test's own builder isn't guaranteed to land on
+    // page 1 once enough other builders exist earlier in this cumulative
+    // test file's run.
+    const afterAdd = (await api(`/builders?ids=${owner.builderId}`)).body.builders.find((b) => b.builderId === owner.builderId).landCapM2;
     const expectedIncrease = Math.floor((40 / ((1000 + levelCapM2) / 1000)) * 100);
     expect(afterAdd).toBe(1000 + expectedIncrease);
     expect(afterAdd).toBeLessThan(5000); // strictly less than the no-levels 1000m2-owned case
@@ -2995,7 +3089,9 @@ describe('Landlet levels', () => {
     `).bind('levels-owned-area-seed', 'levels-owned-area-landlet', 1, levelCapM2).run();
     const expectedOwnedAreaM2 = 1000 + levelCapM2;
 
-    const listed = (await api('/builders')).body.builders.find((b) => b.builderId === owner.builderId);
+    // #717's bounded ids= lookup, not the plain unfiltered (#715-paginated,
+    // 100/page) list — same reasoning as the cap-growth-formula test above.
+    const listed = (await api(`/builders?ids=${owner.builderId}`)).body.builders.find((b) => b.builderId === owner.builderId);
     expect(listed.ownedAreaM2).toBe(expectedOwnedAreaM2);
 
     const me = await api('/builders/me', owner.session());
