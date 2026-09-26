@@ -919,6 +919,60 @@ describe('Worker API', () => {
     expect(notices.body.notifications[0].message).toContain('you have 3 placed');
   });
 
+  // #932: unlike every other single-item update handler on a comparably-
+  // shaped resource (builder/seller rename, bundles PATCH, friendships
+  // PATCH), this handler never checked whether its own UPDATE actually
+  // matched a row -- a concurrent DELETE of the template landing in the gap
+  // before the UPDATE ran left the handler returning a fabricated 200 built
+  // from the locally-merged template object, for a row that no longer
+  // existed. Hooks env.DB.prepare (the same binding object the worker's own
+  // fetch handler sees, per vitest-pool-workers) to delete the template out
+  // from under the PATCH at the exact moment its own UPDATE runs.
+  it('returns 404, not a fabricated 200, when the template is deleted concurrently with a PATCH', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-patch-concurrent-delete-template', name: 'Concurrent delete template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE catalog_templates')) {
+        armed = false;
+        // The delete must actually commit before the UPDATE runs, not just
+        // be fired -- wrapping bind().run() to await it first (rather than
+        // firing it unawaited alongside prepare()) is what makes this
+        // deterministic instead of a coin flip on which write lands first.
+        const deleted = originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+          .bind('catalog-patch-concurrent-delete-template').run();
+        const stmt = originalPrepare(sql);
+        return {
+          bind: (...bindArgs) => {
+            const bound = stmt.bind(...bindArgs);
+            return { run: async () => { await deleted; return bound.run(); } };
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+    let patched;
+    try {
+      patched = await api('/catalog/catalog-patch-concurrent-delete-template', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed after concurrent delete' }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(patched.response.status).toBe(404);
+    expect(patched.body).toEqual({ error: 'Catalog template not found' });
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
