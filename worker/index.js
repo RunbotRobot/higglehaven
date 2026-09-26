@@ -10097,9 +10097,19 @@ async function handlePurchases(request, env, route, url) {
       const id = stringValue(templateId, 'templateId');
       const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(id).first();
       if (!template) throw new HttpError('Catalog template not found', 404);
+      // #940: catalog_templates.seller_id has no FK constraint, so it can be
+      // a genuinely dangling value once the owning seller self-deletes their
+      // account (no live session can ever resolve to a deleted seller_id,
+      // per getOrCreateSellerForUser) -- a plain truthiness check here would
+      // 403 this endpoint forever, for everyone, the same way #932/#934/#936/
+      // #937 already found on this resource's other sibling handlers.
       if (template.seller_id) {
-        const sessionSeller = await requireSessionSeller(request, db);
-        assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your product');
+        if (await sellerExists(db, template.seller_id)) {
+          const sessionSeller = await requireSessionSeller(request, db);
+          assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your product');
+        } else {
+          await requireAdmin(request, db);
+        }
       }
       const { results } = await db.prepare(`
         SELECT * FROM purchases WHERE template_id = ? ORDER BY created_at DESC LIMIT 100
