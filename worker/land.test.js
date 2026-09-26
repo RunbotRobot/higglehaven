@@ -2114,6 +2114,65 @@ describe('Landlet levels', () => {
     expect(savedInstances[0].rotation_z_rad).toBe(1.25);
   });
 
+  // #928: the outOfRange snapshot used to be taken once, before
+  // checkRateLimit and the level DELETE (two awaited round-trips) — a
+  // concurrent write landing in the doomed z-range during that gap would be
+  // silently destroyed by the final sweep DELETE (scoped by z-range, not by
+  // the snapshotted instance ids) without ever getting a
+  // saved_layout_instances row. Simulating a genuine concurrent request via
+  // real timing (Promise.all of two fetches) turned out not to reliably
+  // land inside this specific window in this test runtime — both requests
+  // complete too predictably relative to each other. Instead, this hooks
+  // env.DB.prepare (the exact same binding object the worker's own fetch
+  // handler sees, per vitest-pool-workers) to insert a new instance directly
+  // into placed_instances at the moment checkRateLimit's own INSERT runs —
+  // i.e. exactly in the gap between the original outOfRange snapshot and
+  // everything that follows it, the same gap a real concurrent request would
+  // land in.
+  it('never silently destroys an instance placed concurrently with a level removal, without saving it', async () => {
+    const owner = await signupBuilder('levels-remove-sweep-race-owner');
+    await createGreenbeltLandletWithArea('levels-remove-sweep-race-landlet', 1000);
+    await claim('levels-remove-sweep-race-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-remove-sweep-race-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const racingInstanceId = 'levels-remove-sweep-race-instance';
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        // Fire-and-continue: this mirrors a concurrent request's write
+        // landing in the gap between the original snapshot and the level
+        // DELETE, without needing this hook itself to be async.
+        originalPrepare(`
+          INSERT INTO placed_instances (
+            instance_id, landlet_id, template_id, x_m, y_m, z_m,
+            rotation_x_rad, rotation_y_rad, rotation_z_rad, scale
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 1)
+        `).bind(racingInstanceId, 'levels-remove-sweep-race-landlet', 'placeholder-tree', 1, 1, LEVEL_HEIGHT_M * 1.5).run();
+      }
+      return originalPrepare(sql);
+    };
+    try {
+      const removed = await api('/landlets/levels-remove-sweep-race-landlet/levels/1', owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    const stillPlaced = await env.DB.prepare(
+      'SELECT 1 FROM placed_instances WHERE instance_id = ?',
+    ).bind(racingInstanceId).first();
+    if (stillPlaced) return; // survived (shouldn't happen given the injection point, but not a bug either way)
+    const saved = await env.DB.prepare(
+      'SELECT 1 FROM saved_layout_instances WHERE source_instance_id = ?',
+    ).bind(racingInstanceId).first();
+    expect(saved, `${racingInstanceId} was destroyed by the level-removal sweep without ever being saved`).not.toBeNull();
+  });
+
   // Removing a level with nothing in its z-range shouldn't create an empty
   // saved-layout record — there's nothing worth preserving.
   it('creates no saved-layout record when a removed level has no instances to sweep', async () => {
