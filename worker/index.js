@@ -7028,9 +7028,15 @@ async function handleConfirmCard(request, env, db) {
   // #948: same placement as #839's own precedent — see handleCardSetupIntent's
   // own comment above.
   await checkRateLimit(db, `confirm-card:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
+  // #954: trust_tier is a one-way ratchet elsewhere in this file (see
+  // handleDiditVerificationSession's own "already ID-verified" guard, and
+  // computeNextLandCap's land_cap_m2 ratchet) -- id_verified must never be
+  // written back down to credit_card just because this endpoint fired
+  // again (a stale tab, a retried flow, a direct API call).
   if (!stripeConfigured(env)) {
     await db.prepare(`
-      UPDATE users SET card_funding = 'credit', trust_tier = 'credit_card',
+      UPDATE users SET card_funding = 'credit',
+        trust_tier = CASE WHEN trust_tier = 'id_verified' THEN trust_tier ELSE 'credit_card' END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE user_id = ?
     `).bind(user.user_id).run();
@@ -7043,7 +7049,8 @@ async function handleConfirmCard(request, env, db) {
   const funding = paymentMethod.card?.funding || null;
   const accepted = funding === 'credit';
   await db.prepare(`
-    UPDATE users SET card_funding = ?, trust_tier = CASE WHEN ? THEN 'credit_card' ELSE trust_tier END,
+    UPDATE users SET card_funding = ?,
+      trust_tier = CASE WHEN trust_tier = 'id_verified' THEN trust_tier WHEN ? THEN 'credit_card' ELSE trust_tier END,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE user_id = ?
   `).bind(funding, accepted ? 1 : 0, user.user_id).run();
