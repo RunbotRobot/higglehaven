@@ -2937,6 +2937,45 @@ describe('Simulated purchases', () => {
     );
   });
 
+  // #940: same dangling-seller_id class as the refund fix above -- this
+  // endpoint's plain `if (template.seller_id)` truthiness check treated a
+  // dangling id as still-owned, so no session (not even admin) could ever
+  // match it once the seller self-deleted, permanently locking out this
+  // product's sales-history view.
+  it('falls back to admin listing a product\'s sales once its seller has since deleted their account', async () => {
+    const seller = await signupSeller('purchase-list-deleted-seller');
+    const builder = await signupBuilder('purchase-list-deleted-seller-builder');
+    await createGreenbeltLandletWithArea('purchase-list-deleted-seller-landlet', 1000);
+    await claim('purchase-list-deleted-seller-landlet', builder);
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'purchase-list-deleted-seller-template',
+        name: 'Product whose seller later deletes their account',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 1500,
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    await placeInstance('purchase-list-deleted-seller-instance', 'purchase-list-deleted-seller-landlet', 'purchase-list-deleted-seller-template', builder);
+    const purchased = await api('/instances/purchase-list-deleted-seller-instance/purchase', builder.session({ method: 'POST' }));
+
+    const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+    expect(sellerDeleted.response.status).toBe(200);
+
+    const nonAdmin = await signupBuilder('purchase-list-deleted-seller-nonadmin');
+    const wrongSession = await api('/purchases?templateId=purchase-list-deleted-seller-template', nonAdmin.session());
+    expect(wrongSession.response.status).toBe(403);
+
+    const asAdmin = await api('/purchases?templateId=purchase-list-deleted-seller-template', adminSession());
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body.purchases).toContainEqual(
+      expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId }),
+    );
+  });
+
   // Owner (Control Room, 2026-09-10, on #651): a refund must never be
   // blocked just because a builder already redeemed their commission —
   // "a shopper should not be punished for the chance occurrence of a
