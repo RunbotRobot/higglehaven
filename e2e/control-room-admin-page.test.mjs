@@ -173,12 +173,15 @@ console.log('Quick Look says nothing is waiting before any owner-blocked task ex
 
 // Two owner-blocked tasks, posted a beat apart — Quick Look should pick
 // the older (longer-waiting) one first, not whichever was posted last.
+// #909: creating a task already waitingOn:'owner' now requires a `reason`,
+// same as the update endpoint already did — these two seeds predate that
+// fix and need one added to keep getting past creation at all.
 const quickLookOlderTitle = `E2E quick-look older ${Date.now()}`;
 await page.evaluate(async (title) => {
   await fetch('/api/control-room/tasks', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner' }),
+    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner', reason: 'E2E seed.' }),
   });
 }, quickLookOlderTitle);
 await page.waitForTimeout(200); // comfortably past this board's own millisecond-precision updatedAt
@@ -187,7 +190,7 @@ await page.evaluate(async (title) => {
   await fetch('/api/control-room/tasks', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner' }),
+    body: JSON.stringify({ from: 'higglehaven-e2e', kind: 'feedback', title, waitingOn: 'owner', reason: 'E2E seed.' }),
   });
 }, quickLookNewerTitle);
 

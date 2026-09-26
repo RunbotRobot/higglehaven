@@ -6593,6 +6593,15 @@ generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
 defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
 matching the Artifact-era board's own defaults for a freeform note.
 
+**Same N31 `reason` requirement as PATCH below, applied here too (#909)**:
+creating a task with `waitingOn` set to `'owner'` additionally requires a
+non-empty `reason` — `400` otherwise, and nothing is written. When
+present, `reason` is inserted as a real `control_room_replies` row
+(`from` = the same `from`) in the same atomic `db.batch` as the INSERT —
+a brand-new task can no longer land on the board already "Waiting on:
+Owner" with no reply anywhere explaining why. `waitingOn` set to anything
+other than `'owner'` needs no `reason`.
+
 ### `GET /api/control-room/tasks/:id`
 
 `404` if the task doesn't exist.

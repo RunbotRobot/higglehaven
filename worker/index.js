@@ -771,30 +771,50 @@ async function handleControlRoomTaskCreate(request, env, db) {
   const existing = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   if (existing) throw new HttpError('A task with this id already exists', 409);
 
+  // #909: the update handler's own comment above calls its reason
+  // requirement "the core of N31's own fix" -- this create path is the
+  // other way a task can land at waitingOn:'owner', and until now it had
+  // no equivalent guard at all, letting a brand-new task reach the board
+  // already "Waiting on: Owner" with zero reply anywhere explaining why.
+  // Same requirement, same atomic reply-in-the-same-write shape as update.
+  const waitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
+  let reason = null;
+  if (waitingOn === 'owner') {
+    reason = controlRoomTextValue(body.reason, 'reason (message text explaining the owner block)');
+  }
+
   const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO control_room_tasks
-      (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
-       waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    taskId,
-    body.kind ? labelValue(body.kind, 'kind') : 'feedback',
-    body.number == null ? null : positiveInteger(body.number, 'number'),
-    body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber'),
-    title,
-    body.status ? labelValue(body.status, 'status') : 'queued',
-    body.session ? labelValue(body.session, 'session') : '',
-    postedBy,
-    body.tag ? labelValue(body.tag, 'tag') : null,
-    body.url ? labelValue(body.url, 'url') : null,
-    body.prUrl ? labelValue(body.prUrl, 'prUrl') : null,
-    body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null,
-    body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
-    body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
-    body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')),
-    now, now,
-  ).run();
+  const statements = [
+    db.prepare(`
+      INSERT INTO control_room_tasks
+        (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
+         waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      taskId,
+      body.kind ? labelValue(body.kind, 'kind') : 'feedback',
+      body.number == null ? null : positiveInteger(body.number, 'number'),
+      body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber'),
+      title,
+      body.status ? labelValue(body.status, 'status') : 'queued',
+      body.session ? labelValue(body.session, 'session') : '',
+      postedBy,
+      body.tag ? labelValue(body.tag, 'tag') : null,
+      body.url ? labelValue(body.url, 'url') : null,
+      body.prUrl ? labelValue(body.prUrl, 'prUrl') : null,
+      waitingOn,
+      body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
+      body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
+      body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')),
+      now, now,
+    ),
+  ];
+  if (waitingOn === 'owner') {
+    statements.push(db.prepare(`
+      INSERT INTO control_room_replies (reply_id, task_id, from_caller, text, created_at) VALUES (?, ?, ?, ?, ?)
+    `).bind(`reply-${crypto.randomUUID()}`, taskId, postedBy, reason, now));
+  }
+  await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   return json({ task: controlRoomTaskFromRow(row) }, 201);
