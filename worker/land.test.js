@@ -279,6 +279,24 @@ describe('Landlet updates', () => {
     }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #952: the real POST .../claim endpoint just above was cited (by #799's
+  // own title and the LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX comment
+  // above) as already having a rate limit -- it never actually did. Same
+  // "already owns a claimed landlet is a normal 409, not a hard stop" shape
+  // as the self-claim-creation test above, just against real greenbelt
+  // landlets instead of caller-fabricated ones.
+  it('rate-limits repeated claim attempts from the same builder', async () => {
+    const builder = await signupBuilder('claim-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      await createGreenbeltLandlet(`claim-rate-limit-landlet-${i}`);
+      const attempt = await api(`/landlets/claim-rate-limit-landlet-${i}/claim`, builder.session({ method: 'POST' }));
+      expect(attempt.response.status).toBe(i === 0 ? 200 : 409);
+    }
+    await createGreenbeltLandlet('claim-rate-limit-landlet-final');
+    const limited = await api('/landlets/claim-rate-limit-landlet-final/claim', builder.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Community signs', () => {

@@ -7518,6 +7518,11 @@ const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
 // reasoning as every other repeatable-write limit in this file.
 const LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX = 20;
 
+// #952: the real /claim endpoint the comment above cites as already having
+// this guard never actually did -- this closes that gap for real, same
+// bucketing convention as every other repeatable-write limit in this file.
+const LANDLET_CLAIM_RATE_LIMIT_MAX = 20;
+
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
     return handleLandletVersions(request, db, route, url);
@@ -7616,6 +7621,12 @@ async function handleLandlets(request, db, route, url) {
     // on that builder's behalf without them ever logging in).
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderId = sessionBuilder.builder_id;
+    // #952: this endpoint was the reference implementation
+    // LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX's own comment (and #799's
+    // title) cited as already rate-limited -- it never actually was.
+    // Mirrors that sibling's constant/bucket shape now that the gap is
+    // closed for real.
+    await checkRateLimit(db, `landlet-claim:${builderId}`, LANDLET_CLAIM_RATE_LIMIT_MAX);
     const result = await db.prepare(`
       UPDATE landlets
       SET status = 'claimed', owner_builder_id = ?,
