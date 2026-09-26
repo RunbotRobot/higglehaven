@@ -106,6 +106,15 @@ await card.locator('.card-head .pill-unviewed').waitFor({ timeout: 10000 });
 const markedUnviewedButtonText = await card.locator('button[data-action="toggleViewed"]').textContent();
 console.log('button reads "Mark viewed" once unviewed again (actual):', markedUnviewedButtonText.trim());
 
+// #913: an in-progress task with no explicit waitingOn used to still fall
+// through waitingBadge()'s default and show a "Ready for Claude" pill --
+// a false green light contradicting AGENTS.md's own documented "an
+// ordinary in-progress card stays quiet" design.
+await card.locator('button[data-action="status"][data-value="in_progress"]').click();
+await card.locator('.pill-in_progress').waitFor({ timeout: 10000 });
+const readyForClaudePillShowsOnInProgress = await card.locator('.card-head .pill-waiting-claude').isVisible();
+console.log('in-progress task with no explicit waitingOn shows no "Ready for Claude" pill (should be false):', readyForClaudePillShowsOnInProgress);
+
 await card.locator('button[data-action="status"][data-value="done"]').click();
 await card.locator('.pill-done').waitFor({ timeout: 10000 });
 console.log('status flipped to done: true');
@@ -289,6 +298,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   newlyPostedIsUnviewed &&
   markedViewedButtonText.trim() === 'Mark unviewed' &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
+  !readyForClaudePillShowsOnInProgress &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
   stillFocusedAfterPoll &&

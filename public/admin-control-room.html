@@ -244,6 +244,13 @@
     if (task.waitingOn && task.waitingOn !== 'claude') {
       return '<span class="pill pill-blocked-on" data-jump-to="' + escapeHtml(task.waitingOn) + '">Blocked on #' + escapeHtml(task.waitingOn) + '</span>';
     }
+    // #913: the "Ready for Claude" default below is only meaningful for a
+    // queued card -- an in_progress card with no explicit waitingOn just
+    // means someone's already on it, not that it's newly actionable. Render
+    // nothing rather than a false-positive green light in that case (same
+    // "quiet unless an actual explicit wait" rule this badge already
+    // follows for status === 'done' above).
+    if (task.status === 'in_progress') return '';
     return '<span class="pill pill-waiting-claude">Ready for Claude</span>';
   }
 
