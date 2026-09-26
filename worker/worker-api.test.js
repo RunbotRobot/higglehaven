@@ -876,6 +876,49 @@ describe('Worker API', () => {
     expect(notices.body.notifications[0].templateId).toBe('catalog-batch-resize-referenced');
   });
 
+  // #920: notifyBuildersOfDimensionChange sends one notification per
+  // builder (not per instance) -- correct -- but used to hardcode the
+  // message text to "you have one placed" regardless of how many copies
+  // of the resized template that builder actually has placed.
+  it('reports the real instance count when a builder has several placed copies of the resized template', async () => {
+    const referenced = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'dimension-notify-count-template', name: 'Dimension notify count template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(referenced.response.status).toBe(201);
+    const hostingBuilder = await signupBuilder('dimension-notify-count-builder');
+    await api('/landlets', hostingBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'dimension-notify-count-landlet', name: 'Dimension notify count landlet', areaM2: 100,
+        status: 'claimed', ownerBuilderId: hostingBuilder.builderId, center: { x: 6200, y: 0 },
+      }),
+    }));
+    for (const [instanceId, x] of [['dimension-notify-count-instance-1', 0], ['dimension-notify-count-instance-2', 1], ['dimension-notify-count-instance-3', 2]]) {
+      const placed = await api('/instances', hostingBuilder.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId, landletId: 'dimension-notify-count-landlet',
+          templateId: 'dimension-notify-count-template', x, y: 0,
+        }),
+      }));
+      expect(placed.response.status).toBe(201);
+    }
+
+    const resized = await api('/catalog/dimension-notify-count-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ dimensions: { width: 2, depth: 2, height: 2 } }),
+    });
+    expect(resized.response.status).toBe(200);
+
+    const notices = await api('/notifications', hostingBuilder.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('you have 3 placed');
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
