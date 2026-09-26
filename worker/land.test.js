@@ -2006,6 +2006,52 @@ describe('Land cap', () => {
     expect(highBidderNotifications.some((n) => /could no longer be honored/.test(n.message))).toBe(true);
   });
 
+  // #966: nothing stops the same builder placing two (increasing) bids on
+  // one auction -- handleAuctionBids only requires a new bid to beat the
+  // current highest, never checks for an existing bid from the same
+  // bidder. If their higher bid gets skipped at resolution (balance no
+  // longer covers it) but their own earlier, lower bid does, the candidate
+  // loop used to leave that builder's id in skippedCandidateBuilderIds
+  // *and* set them as winner -- sending the same builder both "you did not
+  // win this auction" and "you won the auction" for the same resolution.
+  // Seed two bids from the same builder directly (same technique as the
+  // #883 test above), sized so only the lower one is affordable by
+  // resolution time.
+  it('#966: does not send a contradictory loss notification to a builder who wins via their own lower bid', async () => {
+    const seller = await signupBuilder('self-bid-contradiction-seller');
+    const bidder = await signupBuilder('self-bid-contradiction-bidder');
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 100 WHERE builder_id = ?')
+      .bind(bidder.builderId).run();
+    await createGreenbeltLandletWithArea('self-bid-contradiction-landlet', 100);
+    await claim('self-bid-contradiction-landlet', seller);
+    const started = await startAuction('self-bid-contradiction-landlet', seller);
+    const auctionId = started.body.auction.auctionId;
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('self-bid-contradiction-bid-high', auctionId, bidder.builderId, 150),
+      env.DB.prepare(
+        `INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)`,
+      ).bind('self-bid-contradiction-bid-low', auctionId, bidder.builderId, 100),
+      env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`)
+        .bind(auctionId),
+    ]);
+
+    const resolved = await api(`/auctions/${auctionId}`);
+    expect(resolved.response.status).toBe(200);
+
+    const landlet = await env.DB.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?')
+      .bind('self-bid-contradiction-landlet').first();
+    expect(landlet.owner_builder_id).toBe(bidder.builderId);
+
+    const { results: notifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(bidder.builderId).all();
+    expect(notifications.some((n) => /you won the auction/i.test(n.message))).toBe(true);
+    expect(notifications.some((n) => /could no longer be honored/.test(n.message))).toBe(false);
+  });
+
   it('lets a builder claim their one free starter lándlet regardless of the land cap', async () => {
     // The claim endpoint's own NOT EXISTS guard already limits a builder to
     // exactly one claimed lándlet at a time regardless of land cap, so a
