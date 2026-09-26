@@ -9877,7 +9877,7 @@ async function handleInstancePurchase(request, env, instanceId) {
     // #877: the client already mints and sends this (see purchaseInstance
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
-    purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey),
+    purchaseIdempotencyKey(instance.instance_id, buyerBuilder.builder_id, input.idempotencyKey),
   );
 }
 
@@ -9954,9 +9954,20 @@ function computePurchaseAmounts(template, input, fallbackBuyerLabel) {
 // malformed key degrades to no idempotency protection for this one
 // request rather than failing the purchase outright — defense in depth,
 // not a hard requirement for a real purchase to go through.
-function purchaseIdempotencyKey(instanceId, rawKey) {
+// #974: also namespaced with the calling buyerBuilderId, not just the
+// instance id -- placed_instances are re-sellable listings (arbitrary
+// quantity, nothing marks one "sold"), so many different buyers legitimately
+// purchase the same instanceId over time. The client's own rawKey lives in
+// localStorage keyed only by instanceId (never the logged-in account) and
+// survives a cancelled/abandoned checkout for up to 30 minutes, so a second,
+// unrelated buyer on the same browser within that window used to submit the
+// exact same key -- writePurchaseRow's dedup lookup would then hand the
+// first buyer's later retry the second buyer's own purchase details.
+// Folding buyerBuilderId in here makes that collision structurally
+// impossible regardless of what the client does with its own key.
+function purchaseIdempotencyKey(instanceId, buyerBuilderId, rawKey) {
   if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
-  return `purchase:${instanceId}:${rawKey}`;
+  return `purchase:${instanceId}:${buyerBuilderId}:${rawKey}`;
 }
 
 async function createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilderId, buyerBuilderLabel) {
@@ -10001,7 +10012,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       buyerBuilderId: buyerBuilderId || '',
       isAvatarCategory: String(isAvatarCategory),
     },
-  }, purchaseIdempotencyKey(instance.instance_id, input.idempotencyKey));
+  }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey));
 
   // publishableKey is safe to hand to the browser by design (it's how
   // Stripe.js identifies which Stripe account to talk to) — the frontend
