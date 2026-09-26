@@ -821,6 +821,20 @@ describe('Authentication', () => {
     expect(confirmed.body.user).toMatchObject({ trustTier: 'credit_card', cardFunding: 'credit' });
   });
 
+  // #954: trust_tier is a one-way ratchet elsewhere in this file (see the
+  // "already ID-verified" didit-verification-session test above) --
+  // confirm-card firing again for an already-id_verified account (a stale
+  // tab, a retried flow, a direct API call) must not regress it back down
+  // to credit_card.
+  it('does not downgrade an already ID-verified account back to credit_card on confirm-card', async () => {
+    const builder = await signupBuilder('confirm-card-no-downgrade');
+    await env.DB.prepare('UPDATE users SET trust_tier = \'id_verified\' WHERE email = ?').bind(builder.email).run();
+
+    const confirmed = await api('/auth/confirm-card', builder.session({ method: 'POST' }));
+    expect(confirmed.response.status).toBe(200);
+    expect(confirmed.body.user).toMatchObject({ trustTier: 'id_verified', cardFunding: 'credit' });
+  });
+
   // #948: both endpoints make a real outbound Stripe API call whenever
   // Stripe is configured, unlike every other authenticated mutation in
   // this file, which is always rate-limited. checkRateLimit is placed
