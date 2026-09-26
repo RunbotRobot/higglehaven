@@ -78,6 +78,16 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.response.status).toBe(400);
   });
 
+  // #971: `from` used to skip the labelValue cap every other short field in
+  // this handler (session, tag, url, prUrl, kind, waitingOn) already has.
+  it('rejects an over-length caller name', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST', body: JSON.stringify({ from: 'x'.repeat(101), title: 'Has a title' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/from.*must be 100 characters or fewer/i);
+  });
+
   it('creates a task with a caller name and message text, defaulting status to queued', async () => {
     const task = await createTask({ from: 'higglehaven2', title: 'Ship the migration' });
     expect(task.status).toBe('queued');
@@ -241,6 +251,16 @@ describe('Control Room tasks (#N31)', () => {
     }));
     expect(got.response.status).toBe(400);
     expect(got.body.error).toMatch(/caller/i);
+  });
+
+  // #971: `caller` used to skip the same labelValue cap.
+  it('rejects an over-length caller name on update', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'x'.repeat(101), status: 'done' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/caller.*must be 100 characters or fewer/i);
   });
 
   it('404s updating a task that does not exist', async () => {
@@ -443,6 +463,16 @@ describe('Control Room replies (#N31)', () => {
     }));
     expect(got.response.status).toBe(400);
     expect(got.body.error).toMatch(/text/i);
+  });
+
+  // #971: reply `from` used to skip the same labelValue cap.
+  it('rejects an over-length caller name on a reply', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'x'.repeat(101), text: 'Hi' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/from.*must be 100 characters or fewer/i);
   });
 
   it('404s replying to a task that does not exist', async () => {
