@@ -25,6 +25,8 @@ async function placeTreeAt(x, y) {
   await page.mouse.click(x, y);
 }
 
+const isPostInstances = (req) => req.url().includes('/api/instances') && req.method() === 'POST';
+
 const indicatorHiddenInitially = await page.locator('#connectivity-indicator').isHidden();
 console.log('indicator hidden before any sync (should be true):', indicatorHiddenInitially);
 
@@ -46,17 +48,42 @@ await page.route('**/api/instances', async (route) => {
   await route.continue();
 });
 
-// Two placements issued back-to-back, well within the first request's own
-// 1500ms delay -- the second one's request reaches the server and succeeds
-// before the first one's failure ever lands.
+// #980: this used to gate both the second placement's issuance and the final
+// assertion on flat page.waitForTimeout() margins (150ms / 2200ms) sized to
+// comfortably clear the artificial 1500ms delay above -- under real CI
+// runner-load contention those margins aren't actually guaranteed, making
+// this test intermittently flaky for reasons that have nothing to do with
+// the connectivity-indicator logic it's meant to verify. Waiting on the
+// actual network events instead (the first request having been dispatched,
+// then its failure and the second request's success having both actually
+// landed) makes the test's timing follow real cause-and-effect rather than a
+// guessed wall-clock margin, however loaded the runner is.
+const firstRequestIssued = page.waitForRequest(isPostInstances, { timeout: 10000 });
+
 await placeTreeAt(160, 400);
-await page.waitForTimeout(150);
+// Only the FIRST request needs to have reached the network layer before the
+// second one is issued -- the second still lands and resolves well within
+// the first's own 1500ms artificial delay either way.
+await firstRequestIssued;
+
+const firstRequestFailed = page.waitForEvent('requestfailed', { predicate: isPostInstances, timeout: 15000 });
+const secondRequestSucceeded = page.waitForResponse(
+  (response) => isPostInstances(response.request()),
+  { timeout: 15000 },
+);
+
 await placeTreeAt(260, 400);
 
-// Long enough for the second (fast, successful) request to land AND for the
-// first (slow, failing) request's 1500ms delay to fully elapse afterward --
-// exercising the exact out-of-order-resolution window this test targets.
-await page.waitForTimeout(2200);
+// Waits until both the slow request's failure and the fast request's success
+// have actually reached the page -- not just "long enough that they probably
+// have" -- exercising the exact out-of-order-resolution window this test
+// targets regardless of how long either one actually took.
+await Promise.all([firstRequestFailed, secondRequestSucceeded]);
+// Small, fixed buffer for the page's own promise-rejection/resolution
+// handlers (reportSyncResult, a plain synchronous microtask) to run after
+// the network event above lands -- not a guess at how long the network
+// operation itself takes, unlike the timeouts this replaces.
+await page.waitForTimeout(200);
 
 const indicatorHiddenAfterStaleFailureArrives = await page.locator('#connectivity-indicator').isHidden();
 console.log(
