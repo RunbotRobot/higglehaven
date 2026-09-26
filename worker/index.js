@@ -8856,12 +8856,17 @@ async function autoGrowWorldIfNeeded(db) {
     await expandWorldOnce(db);
   }
 
-  // Phase 2: still nothing greenbelt at all? Nothing pending is left to
-  // enclose — generate a fresh ring of land at the current boundary,
-  // mirroring the old generateRingAtBoundary.
+  // Phase 2: Phase 1's loop above already broke out once nothing enclosable
+  // was left, so if the ratio is still below threshold here, more land
+  // actually needs generating — mirroring the old generateRingAtBoundary.
+  // #942: this used to re-check for literally zero greenbelt landlets
+  // instead of trusting worldNeedsGrowth's own ratio-based verdict, so this
+  // phase silently never fired once at least one greenbelt landlet existed
+  // anywhere -- true almost all the time, since the threshold is a
+  // percentage, not "run out completely". That defeated the entire feature
+  // in its realistic steady state.
   if (await worldNeedsGrowth(db)) {
-    const anyGreenbelt = await db.prepare(`SELECT 1 FROM landlets WHERE status = 'greenbelt' LIMIT 1`).first();
-    if (!anyGreenbelt) await generateRingAtWorldBoundary(db);
+    await generateRingAtWorldBoundary(db);
   }
 
   return { grew: true };
