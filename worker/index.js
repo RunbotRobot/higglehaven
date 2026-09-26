@@ -10132,9 +10132,19 @@ async function handleMarkShipped(request, env, purchaseId) {
   const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) return json({ error: 'Purchase not found' }, 404);
-  if (!purchase.seller_id) throw new HttpError('This purchase has no seller to authorize the request', 400);
-  const sessionSeller = await requireSessionSeller(request, db);
-  assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  // #937: seller_id can be non-null yet dangling -- pointing at a seller row
+  // DELETE /api/sellers/:id already removed. Without this sellerExists
+  // check, assertOwner below would 403 forever once that happens (no live
+  // session can ever match an id no longer in `sellers`), permanently
+  // locking out this purchase's mark-shipped call. Mirrors
+  // handlePurchaseRefund's own fallback to requireAdmin for the same reason.
+  let admin;
+  if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
+    const sessionSeller = await requireSessionSeller(request, db);
+    assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+  } else {
+    admin = await requireAdmin(request, db);
+  }
   if (!purchase.payment_intent_id) {
     throw new HttpError('Only real-money purchases can be marked shipped', 400);
   }
@@ -10158,6 +10168,13 @@ async function handleMarkShipped(request, env, purchaseId) {
   ).bind(purchaseId).run();
   if (result.meta.changes === 0) {
     throw new HttpError('This purchase is already marked shipped', 400);
+  }
+  // Logged only once the update above actually succeeded, same reasoning as
+  // handlePurchaseRefund's own admin-override log: `admin` is only set on
+  // the dangling/ownerless-fallback branch above, so an ordinary
+  // seller-initiated mark-shipped logs nothing here.
+  if (admin) {
+    await adminActionLogStatement(db, admin.user_id, 'mark_shipped_override', 'purchase', purchaseId).run();
   }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
