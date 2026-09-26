@@ -2376,6 +2376,51 @@ describe('Simulated purchases', () => {
     expect(afterSeparate.higgles_balance_cents).toBe(builderShareCents * 2);
   });
 
+  // #974: purchaseIdempotencyKey used to be a pure function of instanceId +
+  // the client-supplied rawKey, with no buyer component at all -- a stale
+  // localStorage-cached key surviving a cancelled checkout, then reused by a
+  // second account on the same browser (localStorage is keyed only by
+  // instanceId, never the logged-in account), collided on one shared
+  // purchase row instead of two separate ones.
+  it('does not let two different buyers collide on the same client-supplied idempotencyKey', async () => {
+    const seller = await signupBuilder('purchase-idempotency-cross-buyer-seller');
+    await createGreenbeltLandletWithArea('purchase-idempotency-cross-buyer-landlet', 1000);
+    await claim('purchase-idempotency-cross-buyer-landlet', seller);
+    await createTemplate('purchase-idempotency-cross-buyer-template', { priceCents: 750 });
+    await placeInstance(
+      'purchase-idempotency-cross-buyer-instance', 'purchase-idempotency-cross-buyer-landlet',
+      'purchase-idempotency-cross-buyer-template', seller,
+    );
+
+    const buyerA = await signupBuilder('purchase-idempotency-cross-buyer-a');
+    const buyerB = await signupBuilder('purchase-idempotency-cross-buyer-b');
+    const sharedKey = 'shared-stale-key';
+
+    const purchasedByA = await api('/instances/purchase-idempotency-cross-buyer-instance/purchase', buyerA.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: sharedKey }),
+    }));
+    expect(purchasedByA.response.status).toBe(201);
+
+    const purchasedByB = await api('/instances/purchase-idempotency-cross-buyer-instance/purchase', buyerB.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: sharedKey }),
+    }));
+    expect(purchasedByB.response.status).toBe(201);
+    expect(purchasedByB.body.purchase.purchaseId).not.toBe(purchasedByA.body.purchase.purchaseId);
+    expect(purchasedByB.body.purchase.buyerLabel).not.toBe(purchasedByA.body.purchase.buyerLabel);
+
+    const purchaseCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE instance_id = ?')
+      .bind('purchase-idempotency-cross-buyer-instance').first();
+    expect(purchaseCount.n).toBe(2);
+
+    // A's own retry of the same shared key must still find only A's own
+    // purchase, never B's.
+    const retriedByA = await api('/instances/purchase-idempotency-cross-buyer-instance/purchase', buyerA.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: sharedKey }),
+    }));
+    expect(retriedByA.response.status).toBe(200);
+    expect(retriedByA.body.purchase.purchaseId).toBe(purchasedByA.body.purchase.purchaseId);
+  });
+
   it('400s purchasing an unpriced product', async () => {
     const seller = await signupBuilder('purchase-unpriced-seller');
     await createGreenbeltLandletWithArea('purchase-unpriced-landlet', 1000);
