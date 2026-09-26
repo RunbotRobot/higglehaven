@@ -624,6 +624,27 @@ function controlRoomTextValue(value, field) {
   return text;
 }
 
+// #915: labelValue alone (non-empty, ≤100 chars) let a typo or casing slip
+// ("Done", "in-progress") reach the control_room_tasks table, where the
+// schema's own CHECK constraint (migrations/0082_control_room.sql) rejects
+// it anyway -- but only with an opaque "Request violates a database
+// constraint" error, not the field-scoped 400 message this file gives for
+// every other rejected field. This mirrors that CHECK in application code
+// purely for a caller-facing error message, same enum-check idiom already
+// used elsewhere in this file (e.g. handleAuctions' own status check).
+// `kind` deliberately has NO equivalent: migration 0082's own comment
+// explains kind/tag are free-text on purpose ("new values have appeared
+// organically over months of multi-session use; a CHECK constraint would
+// just become a recurring migration tax") -- do not add one.
+const CONTROL_ROOM_STATUSES = ['queued', 'in_progress', 'done'];
+function controlRoomStatusValue(value) {
+  const status = labelValue(value, 'status');
+  if (!CONTROL_ROOM_STATUSES.includes(status)) {
+    throw new HttpError(`status must be one of ${CONTROL_ROOM_STATUSES.join(', ')}`, 400);
+  }
+  return status;
+}
+
 function controlRoomTaskFromRow(row) {
   return {
     id: row.task_id,
@@ -796,7 +817,7 @@ async function handleControlRoomTaskCreate(request, env, db) {
       body.number == null ? null : positiveInteger(body.number, 'number'),
       body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber'),
       title,
-      body.status ? labelValue(body.status, 'status') : 'queued',
+      body.status ? controlRoomStatusValue(body.status) : 'queued',
       body.session ? labelValue(body.session, 'session') : '',
       postedBy,
       body.tag ? labelValue(body.tag, 'tag') : null,
@@ -850,7 +871,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   const values = [];
   const setIfPresent = (column, value) => { fields.push(`${column} = ?`); values.push(value); };
 
-  if (body.status !== undefined) setIfPresent('status', labelValue(body.status, 'status'));
+  if (body.status !== undefined) setIfPresent('status', controlRoomStatusValue(body.status));
   if (body.session !== undefined) setIfPresent('session', body.session ? labelValue(body.session, 'session') : '');
   if (body.note !== undefined) {
     setIfPresent('note', body.note ? controlRoomTextValue(body.note, 'note') : null);
