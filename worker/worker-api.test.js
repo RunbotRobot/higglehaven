@@ -3055,6 +3055,21 @@ describe('Worker API', () => {
     expect(grown.body.world.radiusM).toBe(currentRadiusM + 1);
   });
 
+  // #976: worldFromRow leaves landletCounts undefined when called with no
+  // counts argument -- PUT/PATCH used to do exactly that, unlike GET, which
+  // always passes getLandletCounts's own result through.
+  it('includes landletCounts on PUT/PATCH /world, matching GET', async () => {
+    const fromGet = (await api('/world')).body.world.landletCounts;
+    expect(fromGet).toBeTruthy();
+
+    const patched = await api('/world', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({}),
+    }));
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.world.landletCounts).toEqual(fromGet);
+  });
+
   // #881: same TOCTOU shape #837 fixed in expandWorldOnce, but for the
   // PUT/PATCH /world write path, which #837 never touched. The old
   // unconditional `UPDATE world_settings ... WHERE world_id = 'default-world'`

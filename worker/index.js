@@ -1732,7 +1732,13 @@ async function handleCatalog(request, db, route, url, models, env) {
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
-    return json({ template }, 201);
+    // #976: re-select and map through templateFromRow rather than handing
+    // back the locally-constructed `template` object -- validateTemplate's
+    // own return literal never carries imageUrl/imageEmbedding/createdAt/
+    // updatedAt, unlike every sibling create/update handler in this file
+    // (and this resource's own POST/PUT batch sibling just below).
+    const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
+    return json({ template: templateFromRow(stored) }, 201);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
@@ -1784,7 +1790,12 @@ async function handleCatalog(request, db, route, url, models, env) {
       depth: existing.depth_m,
       height: existing.height_m,
     });
-    return json({ template });
+    // #976: same reasoning as the POST handler above -- re-select and map
+    // through templateFromRow instead of the locally-constructed `template`
+    // object, so imageUrl/imageEmbedding/createdAt/updatedAt come back
+    // populated like every sibling endpoint on this resource.
+    const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    return json({ template: templateFromRow(stored) });
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
@@ -8829,7 +8840,11 @@ async function handleWorld(request, db, route) {
     }
     await adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world').run();
     const updated = await getWorldSettings(db);
-    return json({ world: worldFromRow(updated) });
+    // #976: pass counts through like GET does above -- worldFromRow leaves
+    // landletCounts undefined when called with one argument, unlike GET's
+    // always-populated response for the identical resource.
+    const updatedCounts = await getLandletCounts(db);
+    return json({ world: worldFromRow(updated, updatedCounts) });
   }
 
   return json({ error: 'Not found' }, 404);
