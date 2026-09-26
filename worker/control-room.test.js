@@ -86,6 +86,43 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.waitingOn).toBeNull();
   });
 
+  // #915: labelValue alone never gave an invalid status a field-scoped
+  // error -- the schema's own CHECK constraint already rejected it, but
+  // only with an opaque "Request violates a database constraint" message,
+  // unlike every other rejected field in this API. `kind` deliberately has
+  // no such check (migration 0082_control_room.sql's own comment: kind/tag
+  // are intentionally free-text, "a CHECK constraint would just become a
+  // recurring migration tax") -- do not add one; only status is covered.
+  it('rejects creating a task with an invalid status, with a field-scoped error', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Bad status', status: 'Done' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/status/i);
+  });
+
+  it('accepts creating a task with each documented status value', async () => {
+    for (const status of ['queued', 'in_progress', 'done']) {
+      const task = await createTask({ from: 'higglehaven2', title: `Status ${status}`, status });
+      expect(task.status).toBe(status);
+    }
+  });
+
+  it('still accepts an arbitrary, non-enumerated kind (intentionally free-text)', async () => {
+    const task = await createTask({ from: 'higglehaven2', title: 'Freeform kind', kind: 'a-brand-new-kind' });
+    expect(task.kind).toBe('a-brand-new-kind');
+  });
+
+  it('rejects updating a task to an invalid status, with a field-scoped error', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', status: 'in-progress' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/status/i);
+  });
+
   // #909: the update handler's "core of N31's fix" (below) only ever
   // covered the update path -- a brand-new task could still be created
   // already sitting at waitingOn:'owner' with no explanation anywhere,
