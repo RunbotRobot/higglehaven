@@ -3800,6 +3800,37 @@ async function handleLandletLevels(request, db, route) {
     if (levelIndex === 0) {
       throw new HttpError('Only the outermost existing level can be removed', 409);
     }
+    // #924: everything below (the z-range/sweep-set computation and the
+    // rate-limit check it feeds) used to run AFTER the DELETE just below,
+    // which meant a caller who'd hit their rate limit still got the real,
+    // irreversible level removal committed before the 429 was thrown — with
+    // the sweep/save-layout/recomputeLandCap steps that are supposed to
+    // follow it never happening. Computing the hypothetical post-delete
+    // state from the CURRENT (pre-delete) level list first, and checking
+    // the rate limit against it before any write, means a request that
+    // gets rate-limited never mutates anything at all — same ordering the
+    // sibling POST (add-level) branch above already uses (checkRateLimit,
+    // then its own atomic guarded INSERT). A rate-limit slot can still be
+    // spent on a request that later loses the #395 race below and gets a
+    // 409 instead of actually deleting anything — same accepted tradeoff
+    // the POST branch already has for its own atomic INSERT.
+    const current = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(landletId).all();
+    const remainingIndices = current.results.map((row) => row.level_index).filter((index) => index !== levelIndex);
+    const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    const outOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
+      .bind(landletId, minZ, maxZ).all();
+    if (outOfRange.results.length > 0) {
+      await checkRateLimit(db, `saved-layout-create:${landlet.owner_builder_id}`, SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX);
+    } else {
+      // #907: the sweep branch above has its own limiter (SAVED_LAYOUT_CREATE_
+      // RATE_LIMIT_MAX, since #794) — an ordinary removal with nothing to
+      // sweep never hit any checkRateLimit at all before this, despite doing
+      // the same atomic DELETE + recomputeLandCap work as any other level
+      // removal.
+      await checkRateLimit(db, `landlet-level-remove:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
+    }
+
     // Found via backlog audit (#395): the outermost check below used to run
     // against a plain SELECT snapshot, then the actual DELETE was a
     // separate, unguarded statement — a concurrent add extending past this
@@ -3826,13 +3857,8 @@ async function handleLandletLevels(request, db, route) {
     // ever re-checks an existing instance's z once placed
     // (assertInstanceZWithinLevels only runs on that instance's own
     // create/move). Same allowed-range formula (and half-level-height
-    // slack) as assertInstanceZWithinLevels, computed against the levels
-    // that remain after this delete, so an instance already within
-    // tolerance of the new boundary isn't needlessly swept up.
-    const remaining = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(landletId).all();
-    const remainingIndices = remaining.results.map((row) => row.level_index);
-    const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
-    const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    // slack) as assertInstanceZWithinLevels, computed (above) against the
+    // levels that remain once this delete succeeds.
     // #633 (sub-issue of #631, owner-confirmed on #522): before the sweep
     // below deletes these instances from active space, snapshot them into
     // a reusable saved_level_layouts/saved_layout_instances record — "we
@@ -3840,14 +3866,12 @@ async function handleLandletLevels(request, db, route) {
     // a silent loss of their work, just a move out of active shoppable
     // space. Read-then-batch-insert is safe here (unlike a TOCTOU-prone
     // read-then-act elsewhere in this file) since nothing else can write to
-    // this exact landlet_id's placed_instances between this SELECT and the
-    // DELETE below — assertOwner above already serializes this handler to
-    // one caller at a time per landlet's own owner.
-    const outOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
-      .bind(landletId, minZ, maxZ).all();
+    // this exact landlet_id's placed_instances between the outOfRange
+    // SELECT above and the DELETE below — assertOwner above already
+    // serializes this handler to one caller at a time per landlet's own
+    // owner.
     const statements = [];
     if (outOfRange.results.length > 0) {
-      await checkRateLimit(db, `saved-layout-create:${landlet.owner_builder_id}`, SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX);
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
       statements.push(db.prepare(`
         INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
@@ -3869,13 +3893,6 @@ async function handleLandletLevels(request, db, route) {
           instance.crop_json, instance.scale, instance.is_community_sign, instance.is_community_calendar,
         ));
       }
-    } else {
-      // #907: the sweep branch above has its own limiter (SAVED_LAYOUT_CREATE_
-      // RATE_LIMIT_MAX, since #794) — an ordinary removal with nothing to
-      // sweep never hit any checkRateLimit at all before this, despite doing
-      // the same atomic DELETE + recomputeLandCap work as any other level
-      // removal.
-      await checkRateLimit(db, `landlet-level-remove:${landlet.owner_builder_id}`, LANDLET_LEVEL_RATE_LIMIT_MAX);
     }
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),
