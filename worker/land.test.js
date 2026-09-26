@@ -2224,6 +2224,38 @@ describe('Landlet levels', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #924: the rate-limit check used to run AFTER the level row was already
+  // deleted -- a rate-limited caller still got the real, irreversible
+  // removal committed, just with a 429 response and none of the
+  // sweep/save-layout/recomputeLandCap follow-through that's supposed to
+  // come with it. A rate-limited request must leave the level row (and
+  // everything else) completely untouched.
+  it('leaves the level row untouched when the removal is rate-limited, not deleted with a 429 response', async () => {
+    const owner = await signupBuilder('levels-remove-rate-limit-untouched-owner');
+    await createGreenbeltLandletWithArea('levels-remove-rate-limit-untouched-landlet', 1000);
+    await claim('levels-remove-rate-limit-untouched-landlet', owner);
+    const levelCapM2 = expectedCapConsumedM2(1000, 1);
+
+    async function seedLevelDirectly(levelId) {
+      await env.DB.prepare(`
+        INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+      `).bind(levelId, 'levels-remove-rate-limit-untouched-landlet', 1, levelCapM2).run();
+    }
+
+    for (let i = 0; i < 40; i++) {
+      await seedLevelDirectly(`levels-remove-rate-limit-untouched-seed-${i}`);
+      await api('/landlets/levels-remove-rate-limit-untouched-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    }
+    await seedLevelDirectly('levels-remove-rate-limit-untouched-final');
+    const limited = await api('/landlets/levels-remove-rate-limit-untouched-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM landlet_levels WHERE level_id = ?',
+    ).bind('levels-remove-rate-limit-untouched-final').all();
+    expect(results).toHaveLength(1);
+  });
+
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
   // createGreenbeltLandletWithArea helpers to get a real removed-level
