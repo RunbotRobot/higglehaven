@@ -2752,7 +2752,11 @@ describe('Landlet levels', () => {
     }
     const limited = await sweepOneLevel('levels-rate-limit-instance-final');
     expect(limited.response.status).toBe(429);
-  });
+  }, 45000); // #978: 20 iterations x 3 real HTTP requests each (add level,
+  // place instance, sweep-delete) reliably finishes in ~2s in isolation, but
+  // this file's 121 tests share one D1 instance, and late-file cumulative
+  // state occasionally pushes this specific test past the 20s default under
+  // CI load -- already blocked two separate unrelated PRs' CI runs.
 
   // #907: the sweep-specific rate limit just above (#794) only covers a
   // level removal that has an out-of-range instance to archive -- the
@@ -2840,7 +2844,10 @@ describe('Landlet levels', () => {
       'SELECT * FROM landlet_levels WHERE level_id = ?',
     ).bind('levels-remove-rate-limit-untouched-final').all();
     expect(results).toHaveLength(1);
-  });
+  }, 30000); // #978: 40 iterations of a direct DB seed plus a DELETE call
+  // each, late in this file's 121-test run against one shared D1 instance --
+  // reliably finishes in ~2s in isolation but has hit the 20s default once
+  // under CI load already.
 
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
