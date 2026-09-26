@@ -3044,6 +3044,52 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #976: POST/PATCH /api/catalog used to return the locally-constructed
+  // `template` object built by validateTemplate, which never carries
+  // imageUrl/imageEmbedding/createdAt/updatedAt -- unlike every sibling
+  // create/update handler in this file (and this same resource's own
+  // POST/PUT batch endpoint), which all re-select and map through
+  // templateFromRow after the write.
+  describe('Catalog template response completeness (#976)', () => {
+    it('includes imageUrl/imageEmbedding/createdAt/updatedAt on POST /api/catalog', async () => {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'template-976-create',
+          name: 'Response completeness template',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+      expect(created.body.template).toMatchObject({ imageUrl: null, imageEmbedding: null });
+      expect(created.body.template.createdAt).toBeTruthy();
+      expect(created.body.template.updatedAt).toBeTruthy();
+    });
+
+    it('includes imageUrl/imageEmbedding/createdAt/updatedAt on PATCH /api/catalog/:templateId', async () => {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'template-976-patch',
+          name: 'Response completeness template',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+
+      const patched = await api('/catalog/template-976-patch', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed response completeness template' }),
+      });
+      expect(patched.response.status).toBe(200);
+      expect(patched.body.template).toMatchObject({ name: 'Renamed response completeness template', imageUrl: null, imageEmbedding: null });
+      expect(patched.body.template.createdAt).toBeTruthy();
+      expect(patched.body.template.updatedAt).toBeTruthy();
+    });
+  });
+
   // #729: saved_layout_instances and version_instances both hold a
   // template_id under ON DELETE RESTRICT (see migrations/0080 and 0007's
   // own comments), so a template referenced only by one of these snapshot
