@@ -257,7 +257,7 @@
   function threadEntries(task, replies) {
     const entries = [];
     if (task.note) {
-      entries.push({ from: task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.createdAt });
+      entries.push({ from: task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.updatedAt });
     }
     (replies || []).forEach((r) => entries.push({ from: r.from, text: r.text, at: r.createdAt }));
     return entries.sort((a, b) => new Date(a.at) - new Date(b.at));
