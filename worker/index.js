@@ -3864,14 +3864,25 @@ async function handleLandletLevels(request, db, route) {
     // a reusable saved_level_layouts/saved_layout_instances record — "we
     // should save it for the builder's future use" — so this removal isn't
     // a silent loss of their work, just a move out of active shoppable
-    // space. Read-then-batch-insert is safe here (unlike a TOCTOU-prone
-    // read-then-act elsewhere in this file) since nothing else can write to
-    // this exact landlet_id's placed_instances between the outOfRange
-    // SELECT above and the DELETE below — assertOwner above already
-    // serializes this handler to one caller at a time per landlet's own
-    // owner.
+    // space.
+    // #928: the `outOfRange` snapshot taken above (before checkRateLimit and
+    // the level DELETE, both awaited round-trips) is stale by the time we
+    // get here — a concurrent request from the same owner (two open tabs, or
+    // a synced drag-place that validated fine against the still-existing
+    // level a moment ago) can land a new instance in this same z-range
+    // during that gap. That instance wouldn't be in the stale snapshot, so
+    // it would never get a saved_layout_instances row, but the final sweep
+    // DELETE below is scoped by z-range, not by snapshotted instance ids, so
+    // it would still be destroyed — a silent, unrecorded data loss. Nothing
+    // here actually serializes concurrent requests from the same builder
+    // (assertOwner is just an equality check, not a lock), so re-querying
+    // immediately before building the batch — rather than reusing the
+    // earlier snapshot — closes that window down to this batch's own commit
+    // latency.
+    const freshOutOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
+      .bind(landletId, minZ, maxZ).all();
     const statements = [];
-    if (outOfRange.results.length > 0) {
+    if (freshOutOfRange.results.length > 0) {
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
       statements.push(db.prepare(`
         INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_landlet_id, source_level_index, name)
@@ -3880,7 +3891,7 @@ async function handleLandletLevels(request, db, route) {
         savedLayoutId, landlet.owner_builder_id, landletId, levelIndex,
         `Level ${levelIndex} from ${landlet.name}, removed ${new Date().toISOString().slice(0, 10)}`,
       ));
-      for (const instance of outOfRange.results) {
+      for (const instance of freshOutOfRange.results) {
         statements.push(db.prepare(`
           INSERT INTO saved_layout_instances (
             saved_layout_id, source_instance_id, template_id, x_m, y_m, z_m,
@@ -3903,7 +3914,7 @@ async function handleLandletLevels(request, db, route) {
     // got swept above -- without reporting which instance ids those were,
     // nothing tells the frontend to prune them, leaving stale/unselectable
     // "ghost" meshes that can later block an unrelated batch sync.
-    return json({ deleted: true, sweptInstanceIds: outOfRange.results.map((instance) => instance.instance_id) });
+    return json({ deleted: true, sweptInstanceIds: freshOutOfRange.results.map((instance) => instance.instance_id) });
   }
 
   return json({ error: 'Not found' }, 404);
