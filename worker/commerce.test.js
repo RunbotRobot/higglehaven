@@ -3382,6 +3382,24 @@ describe('Simulated purchases', () => {
       expect(reShipped.response.status).toBe(400);
     });
 
+    // #925: the sequential re-ship test above only proves a repeat call
+    // after the first one is already committed gets a 400 — it doesn't
+    // exercise the actual race, two requests genuinely concurrent
+    // (Promise.all, not awaited one at a time), which a plain check-then-
+    // act UPDATE with no WHERE shipped_at IS NULL guard could let both
+    // pass the read-check and both write. Exactly one should win.
+    it('does not let two concurrent mark-shipped requests both succeed', async () => {
+      const builder = await signupBuilder('payout-shipped-race-builder');
+      const seller = await createConnectedSeller('payout-shipped-race-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+
+      const [first, second] = await Promise.all([
+        api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' })),
+        api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' })),
+      ]);
+      expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
+    });
+
     // #749: handlePurchaseRefund treats refunded_at as authoritative (it
     // rejects a second refund), but mark-shipped and confirm-delivery never
     // checked it at all — a refunded physical order could still be marked
