@@ -2667,13 +2667,16 @@ async function requireBuilder(db, builderId) {
 // only ever hit the "already exists" path in practice. 401 with no
 // session (requireCurrentUser); never a 404 either way.
 async function getOrCreateBuilderForUser(db, user) {
-  let row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
-  if (!row) {
-    const builderId = `builder-${crypto.randomUUID()}`;
-    await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-      .bind(builderId, user.username, user.user_id).run();
-    row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
-  }
+  // #946: INSERT OR IGNORE + unconditional re-read (mirroring
+  // ownedAvatarStatement below) rather than SELECT-then-conditionally-
+  // INSERT — the latter raced two concurrent requests for the same
+  // account's builder profile against the partial UNIQUE INDEX on
+  // builders.user_id (migrations/0054), surfacing to the loser as a
+  // confusing 409 instead of a clean idempotent get-or-create.
+  const builderId = `builder-${crypto.randomUUID()}`;
+  await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+    .bind(builderId, user.username, user.user_id).run();
+  const row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
   // #336/#325: keeps a real "was this builder recently active" signal
   // fresh — see migrations/0067's own comment for why neither of this
   // table's existing timestamps works for that. Bumped here (every
@@ -4899,14 +4902,15 @@ async function requireSeller(db, sellerId) {
 // migrations/0054's own comment), not auto-created at signup the way a
 // builder profile is.
 async function getOrCreateSellerForUser(db, user) {
-  let row = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
-  if (!row) {
-    const sellerId = `seller-${crypto.randomUUID()}`;
-    await db.prepare('INSERT INTO sellers (seller_id, label, user_id) VALUES (?, ?, ?)')
-      .bind(sellerId, user.username, user.user_id).run();
-    row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
-  }
-  return row;
+  // #946: same INSERT OR IGNORE + unconditional re-read fix as
+  // getOrCreateBuilderForUser above — this side is more exposed since
+  // this get-or-create IS the primary way a seller profile is created
+  // (see this function's own comment above), not just a defensive
+  // fallback.
+  const sellerId = `seller-${crypto.randomUUID()}`;
+  await db.prepare('INSERT OR IGNORE INTO sellers (seller_id, label, user_id) VALUES (?, ?, ?)')
+    .bind(sellerId, user.username, user.user_id).run();
+  return db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
 }
 
 async function handleMySeller(request, db) {

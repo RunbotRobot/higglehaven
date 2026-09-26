@@ -796,6 +796,63 @@ describe('Builders', () => {
     }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #946: getOrCreateBuilderForUser used to SELECT-then-conditionally-
+  // INSERT, racing two concurrent requests against the partial UNIQUE INDEX
+  // on builders.user_id (migrations/0054) -- the loser got a raw 409
+  // instead of its own re-provisioned profile. Reachable only after a
+  // builder self-deletes (DELETE /api/builders/:id, stood in for here the
+  // same way the pioneer-rank test above does) while their account
+  // persists, since an ordinary signup already creates a builder
+  // synchronously and this function's own fallback path is otherwise never
+  // hit. Deterministically injects the "concurrent" insert via
+  // env.DB.prepare (vitest-pool-workers shares this exact env.DB instance
+  // with the worker's own fetch handler) instead of relying on real
+  // concurrency, which can't reliably land two requests inside the same
+  // race window.
+  it('does not 409 when a concurrent request re-provisions a self-deleted builder profile first', async () => {
+    const racer = await signupBuilder('builder-race-user');
+    await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(racer.builderId).run();
+    const { user_id: userId } = await env.DB.prepare('SELECT user_id FROM users WHERE email = ?')
+      .bind(racer.email).first();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    const racerBuilderId = `builder-${crypto.randomUUID()}`;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INTO builders')) {
+        armed = false;
+        const stmt = originalPrepare(sql);
+        return {
+          bind: (...args) => {
+            const bound = stmt.bind(...args);
+            return {
+              run: async () => {
+                await originalPrepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+                  .bind(racerBuilderId, 'Racer', userId).run();
+                return bound.run();
+              },
+            };
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+
+    let result;
+    try {
+      result = await api('/builders/me', racer.session());
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(result.response.status).toBe(200);
+    expect(result.body.builder.builderId).toBe(racerBuilderId);
+
+    const { results } = await env.DB.prepare('SELECT builder_id FROM builders WHERE user_id = ?')
+      .bind(userId).all();
+    expect(results).toHaveLength(1);
+  });
 });
 
 describe('Sellers', () => {
@@ -857,6 +914,62 @@ describe('Sellers', () => {
       method: 'PATCH', body: JSON.stringify({ label: 'One too many' }),
     }));
     expect(limited.response.status).toBe(429);
+  });
+
+  // #946: getOrCreateSellerForUser used to SELECT-then-conditionally-INSERT,
+  // racing two concurrent requests for the same account's seller profile
+  // against the partial UNIQUE INDEX on sellers.user_id (migrations/0054)
+  // -- the loser got a raw 409 instead of its own seller profile. This side
+  // is more exposed than the builder one (see that function's own comment):
+  // selling has no synchronous creation-at-signup step, so this
+  // get-or-create IS the primary way a seller profile is created at all.
+  // Deterministically injects the "concurrent" insert via env.DB.prepare
+  // (vitest-pool-workers shares this exact env.DB instance with the
+  // worker's own fetch handler) instead of relying on real concurrency,
+  // which can't reliably land two requests inside the same race window.
+  it('does not 409 when a concurrent request creates the seller profile first', async () => {
+    const email = `seller-race-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password here', { username: `seller-race-${crypto.randomUUID().slice(0, 8)}` });
+    const sessionToken = extractSessionCookie(signedUp.response);
+    const { user_id: userId } = await env.DB.prepare('SELECT user_id FROM users WHERE email = ?')
+      .bind(email).first();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    const racerSellerId = `seller-${crypto.randomUUID()}`;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INTO sellers')) {
+        armed = false;
+        const stmt = originalPrepare(sql);
+        return {
+          bind: (...args) => {
+            const bound = stmt.bind(...args);
+            return {
+              run: async () => {
+                await originalPrepare('INSERT INTO sellers (seller_id, label, user_id) VALUES (?, ?, ?)')
+                  .bind(racerSellerId, 'Racer', userId).run();
+                return bound.run();
+              },
+            };
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+
+    let result;
+    try {
+      result = await api('/sellers/me', withSession(sessionToken));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(result.response.status).toBe(200);
+    expect(result.body.seller.sellerId).toBe(racerSellerId);
+
+    const { results } = await env.DB.prepare('SELECT seller_id FROM sellers WHERE user_id = ?')
+      .bind(userId).all();
+    expect(results).toHaveLength(1);
   });
 });
 
