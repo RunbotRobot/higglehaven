@@ -1405,12 +1405,23 @@ async function handleCatalog(request, db, route, url, models, env) {
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
+    // #934: unlike the single-item PUT/PATCH sibling above (which forces
+    // sellerId back to the existing row's own value on every update,
+    // specifically because "reassigning a template's seller isn't a
+    // feature this endpoint supports"), this upsert let the caller-supplied
+    // sellerId win via `seller_id = excluded.seller_id` -- including for a
+    // pre-existing row whose seller_id was null or dangling, letting any
+    // seller silently claim ownership of an unowned/orphaned template by
+    // just resubmitting it with their own sellerId.
+    const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
-    `).bind(...templateParams(template))));
+    `).bind(...templateParams(existingSellerIdById.has(template.templateId)
+      ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
+      : template))));
     // The single-item PATCH/PUT sibling above always calls
     // notifyBuildersOfDimensionChange on a dimension change — this batch
     // upsert performs the identical column update per template but was

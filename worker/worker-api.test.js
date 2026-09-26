@@ -1019,6 +1019,45 @@ describe('Worker API', () => {
     expect((await api('/catalog/catalog-batch-deleted-seller-template')).response.status).toBe(404);
   });
 
+  // #934: unlike the single-item PUT/PATCH sibling (which forces sellerId
+  // back to the existing row's own value on every update, since
+  // "reassigning a template's seller isn't a feature this endpoint
+  // supports"), this batch upsert let the caller-supplied sellerId win via
+  // `seller_id = excluded.seller_id` -- letting any seller silently claim
+  // ownership of a template that was never owned by resubmitting it with
+  // their own sellerId in a batch PUT.
+  it('does not let a batch PUT upsert claim ownership of a previously unowned template', async () => {
+    const unowned = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-batch-claim-unowned-template',
+        name: 'Unowned template',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(unowned.response.status).toBe(201);
+
+    const claimer = await signupSeller('catalog-batch-claim-unowned-seller');
+    const claimed = await api('/catalog/batch', claimer.session({
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        {
+          templateId: 'catalog-batch-claim-unowned-template', name: 'Renamed by claimer',
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 }, sellerId: claimer.sellerId,
+        },
+      ] }),
+    }));
+    expect(claimed.response.status).toBe(200);
+    expect(claimed.body.templates[0].name).toBe('Renamed by claimer');
+    expect(claimed.body.templates[0].sellerId).toBeNull();
+
+    const stored = await env.DB.prepare(
+      'SELECT seller_id FROM catalog_templates WHERE template_id = ?',
+    ).bind('catalog-batch-claim-unowned-template').first();
+    expect(stored.seller_id).toBeNull();
+  });
+
   it('cursor-paginates placed instances within one landlet', async () => {
     // Owned directly at creation (POST /landlets allows creating a landlet
     // already claimed by yourself — see that route's own comment) rather
