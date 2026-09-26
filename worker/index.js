@@ -3808,10 +3808,18 @@ async function handleLandletLevels(request, db, route) {
                 AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
             ), 0)
         )
+        -- #958: re-pins ownership into this same atomic write, same #415
+        -- idiom as handleLandletVersions' POST -- without this, an auction
+        -- resolving (transferring ownership) in the await gap between the
+        -- assertOwner check above and this INSERT would still let this
+        -- request plant a level on the landlet's new owner, billed against
+        -- the old owner's own land cap above.
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(
       levelId, landletId, levelIndex, capConsumedM2,
       landletId, extentBefore, landletId, levelIndex,
       landlet.owner_builder_id, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, capConsumedM2, landlet.owner_builder_id, landlet.owner_builder_id,
+      landletId, landlet.owner_builder_id,
     ).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('This landlet\'s levels changed — please retry', 409);
@@ -3869,6 +3877,12 @@ async function handleLandletLevels(request, db, route) {
     // promises never happens. Re-checking "is this still the current
     // outermost in its own direction" as part of the DELETE's own WHERE
     // clause closes that window.
+    // #958: same #415 owner-pin idiom as the POST add-level branch above --
+    // without this, an auction resolving in the await gap between the
+    // assertOwner check above and this DELETE would still let this stale
+    // request remove a level the new owner may have since added their own
+    // content to, sweeping it into a saved_level_layouts row attributed to
+    // the old owner (landlet.owner_builder_id, bound below).
     const deleted = await db.prepare(`
       DELETE FROM landlet_levels
       WHERE landlet_id = ? AND level_index = ?
@@ -3876,9 +3890,10 @@ async function handleLandletLevels(request, db, route) {
           SELECT CASE WHEN ? > 0 THEN MAX(level_index) ELSE MIN(level_index) END
           FROM landlet_levels WHERE landlet_id = ?
         )
-    `).bind(landletId, levelIndex, levelIndex, landletId).run();
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(landletId, levelIndex, levelIndex, landletId, landletId, landlet.owner_builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Only the outermost existing level can be removed', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
     // z-range this level was providing is removed from active shoppable

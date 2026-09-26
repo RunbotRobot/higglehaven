@@ -2385,6 +2385,82 @@ describe('Landlet levels', () => {
     expect(saved, `${racingInstanceId} was destroyed by the level-removal sweep without ever being saved`).not.toBeNull();
   });
 
+  // #958: same #415 "auction transfer in the await gap" race already closed
+  // for landlet versions/draft/instances -- an owning builder's add-level
+  // request must not still succeed once a concurrent auction resolution has
+  // transferred the landlet away, even though assertOwner passed a moment
+  // earlier. Same injection point (checkRateLimit's own INSERT) as the
+  // sweep-race test above, since that's the earliest awaited step after
+  // assertOwner in this handler too.
+  it('does not add a level onto a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('levels-add-ownership-race-owner');
+    const newOwner = await signupBuilder('levels-add-ownership-race-new-owner');
+    await createGreenbeltLandletWithArea('levels-add-ownership-race-landlet', 1000);
+    await claim('levels-add-ownership-race-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'levels-add-ownership-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let added;
+    try {
+      added = await api('/landlets/levels-add-ownership-race-landlet/levels', owner.session({
+        method: 'POST', body: JSON.stringify({ direction: 'up' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(added.response.status).toBe(409);
+
+    const { results: levels } = await env.DB.prepare(
+      'SELECT * FROM landlet_levels WHERE landlet_id = ?',
+    ).bind('levels-add-ownership-race-landlet').all();
+    expect(levels).toHaveLength(0);
+  });
+
+  // #958: same race, remove-level side. A stale DELETE from the old owner
+  // must not still remove a level once ownership has transferred mid-request.
+  it('does not remove a level from a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('levels-remove-ownership-race-owner');
+    const newOwner = await signupBuilder('levels-remove-ownership-race-new-owner');
+    await createGreenbeltLandletWithArea('levels-remove-ownership-race-landlet', 1000);
+    await claim('levels-remove-ownership-race-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-remove-ownership-race-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'levels-remove-ownership-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let removed;
+    try {
+      removed = await api('/landlets/levels-remove-ownership-race-landlet/levels/1', owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(removed.response.status).toBe(409);
+
+    const stillThere = await env.DB.prepare(
+      'SELECT 1 FROM landlet_levels WHERE landlet_id = ? AND level_index = 1',
+    ).bind('levels-remove-ownership-race-landlet').first();
+    expect(stillThere).not.toBeNull();
+  });
+
   // Removing a level with nothing in its z-range shouldn't create an empty
   // saved-layout record — there's nothing worth preserving.
   it('creates no saved-layout record when a removed level has no instances to sweep', async () => {
