@@ -186,6 +186,73 @@ describe('Landlet updates', () => {
     expect(generating.body.landlet).toMatchObject({ status: 'generating', ownerBuilderId: null });
   });
 
+  // #964: unlike every other free-text field in this file (see #337), the
+  // unowned-creation branch's `name` used plain stringValue with no length
+  // cap -- reachable by a fully unauthenticated caller.
+  it('rejects an over-length name on unauthenticated landlet creation', async () => {
+    const rejected = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-overlong-name-landlet', name: 'x'.repeat(101), areaM2: 4, status: 'greenbelt',
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/name must be 100 characters or fewer/);
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-overlong-name-landlet').first();
+    expect(stored).toBeNull();
+  });
+
+  // #964: unlike every other array-shaped input in this file (e.g.
+  // candidates.length > 100), validatePolygon capped nothing -- an
+  // unauthenticated caller could POST an unboundedly large polygon into a
+  // row that's echoed back verbatim on every subsequent GET.
+  it('rejects an over-length polygon on unauthenticated landlet creation', async () => {
+    const rejected = await api('/landlets', {
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'unowned-overlong-polygon-landlet', name: 'Too many points', areaM2: 4, status: 'greenbelt',
+        polygon: Array.from({ length: 101 }, (_, i) => ({ x: i, y: 0 })),
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/polygon must contain at most 100 points/);
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('unowned-overlong-polygon-landlet').first();
+    expect(stored).toBeNull();
+  });
+
+  // #964: unlike the self-claim branch just below (already rate-limited),
+  // this fully-unauthenticated unowned/greenbelt creation path had no
+  // throttle at all -- an unbounded, anonymous way to flood the landlets
+  // table. Synthetic cf-connecting-ip per the sign-post/purchase rate-limit
+  // tests' own approach.
+  it('rate-limits repeated unauthenticated unowned landlet creations from the same client', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/landlets', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          landletId: `unowned-create-rate-limit-${i}`, name: `Attempt ${i}`, areaM2: 4, status: 'greenbelt',
+        }),
+      });
+      expect(attempt.response.status).toBe(201);
+    }
+    const limited = await api('/landlets', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        landletId: 'unowned-create-rate-limit-final', name: 'One too many', areaM2: 4, status: 'greenbelt',
+      }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   // #799: the self-owned branch of POST /api/landlets grants the exact same
   // fully-buildable outcome as POST .../claim (requireOwnedLandlet only
   // ever checks owner_builder_id, never status) — but until this fix it
