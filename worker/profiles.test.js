@@ -232,30 +232,53 @@ describe('Builders', () => {
   // precomputed list — a landlet claimed by this same builder (e.g. a
   // second tab) in the gap between that read and the batch was invisible
   // to the release statements, leaving it permanently status='claimed'
-  // with owner_builder_id pointing at a now-deleted builder row. Fired
-  // concurrently (not awaited one at a time) so a real interleave is
-  // possible, the same idiom as this file's other concurrent-request
-  // tests (e.g. commerce.test.js's "concurrent draft save" race) — those
-  // assert an invariant that must hold regardless of which request wins,
-  // not that a specific interleaving reliably occurs, since the exact
-  // timing isn't something a test can pin down. Here: whichever request
-  // wins, the landlet must never end up dangling — claimed with an
-  // owner_builder_id no live builder row holds. (It's fine, and expected,
-  // for the claim to legitimately win via getOrCreateBuilderForUser
-  // transparently minting a fresh builder profile for the same logged-in
-  // account once the old one is gone — that's a real, valid new owner, not
-  // a dangling reference.)
+  // with owner_builder_id pointing at a now-deleted builder row.
+  //
+  // #962: this used to fire the DELETE and the competing claim concurrently
+  // via a real Promise.all, relying on non-deterministic interleaving to
+  // actually land in the race window — confirmed flaky (failed 2 of 3
+  // isolated runs on an unmodified main). The DELETE handler's own gap is
+  // between requireSessionBuilder resolving (its own getOrCreateBuilderForUser
+  // call's last_active_at UPDATE is the last statement it awaits) and the
+  // handler's db.batch actually running -- no further awaits happen in
+  // between. Injecting the competing claim's own atomic UPDATE right there,
+  // the same env.DB.prepare hook technique this session's own #928/#958/
+  // #959/#960/#961 tests use, deterministically lands it in that exact
+  // window every run instead of hoping a real race does.
   it('never leaves a landlet dangling on a deleted builder when a claim races the deletion', async () => {
     const builder = await signupBuilder('race-delete-claim-builder');
     await createGreenbeltLandlet('race-delete-claim-existing-landlet');
     await api('/landlets/race-delete-claim-existing-landlet/claim', builder.session({ method: 'POST' }));
     await createGreenbeltLandlet('race-delete-claim-new-landlet');
 
-    await Promise.all([
-      api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' })),
-      api('/landlets/race-delete-claim-new-landlet/claim', builder.session({ method: 'POST' })),
-    ]);
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE builders SET last_active_at')) {
+        armed = false;
+        originalPrepare(`
+          UPDATE landlets SET status = 'claimed', owner_builder_id = ?,
+            claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE landlet_id = ? AND status = 'greenbelt' AND owner_builder_id IS NULL
+        `).bind(builder.builderId, 'race-delete-claim-new-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let deleted;
+    try {
+      deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(deleted.response.status).toBe(200);
 
+    // Whichever request effectively "won" the race, the landlet must never
+    // end up dangling — claimed with an owner_builder_id no live builder
+    // row holds. (It's fine, and expected, for the claim to legitimately
+    // win via getOrCreateBuilderForUser transparently minting a fresh
+    // builder profile for the same logged-in account once the old one is
+    // gone — that's a real, valid new owner, not a dangling reference.)
     const newLandletRow = await env.DB.prepare(
       'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
     ).bind('race-delete-claim-new-landlet').first();
