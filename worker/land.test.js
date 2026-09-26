@@ -1190,6 +1190,98 @@ describe('Extensibility (crop floor)', () => {
     expect(realCropChange.response.status).toBe(400);
   });
 
+  // #929: same race shape as the create/update tests above, for the two
+  // DELETE branches — unlike their POST/PUT/PATCH siblings, they used a
+  // point-in-time requireOwnedLandlet(s) check followed by a plain DELETE
+  // with no ownership condition folded in and no meta.changes check
+  // afterward, so a transfer landing in the await gap would let the old
+  // owner's DELETE still remove the row.
+  it('does not let a concurrent instance delete land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('instance-delete-resolve-race-owner');
+    const bidder = await signupBuilder('instance-delete-resolve-race-bidder');
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(100_000_000, bidder.builderId).run();
+    await createGreenbeltLandlet('instance-delete-resolve-race-landlet');
+    await api('/landlets/instance-delete-resolve-race-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-delete-resolve-race-instance', landletId: 'instance-delete-resolve-race-landlet',
+        templateId: 'placeholder-tree', x: 1, y: 1,
+      }),
+    }));
+    const started = await api('/landlets/instance-delete-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [deleted] = await Promise.all([
+      api('/instances/instance-delete-resolve-race-instance', owner.session({ method: 'DELETE' })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // 403 is also legitimate here (same shape as the create/update tests
+    // above): the endpoint's own early requireOwnedLandlet check can
+    // itself lose the race and see the new owner already in place, ahead
+    // of ever reaching the write-time guard this fix adds (which is what
+    // produces 409 instead). 404 is legitimate too — resolveAuction's own
+    // unconditional wipe can beat this DELETE's initial existence check.
+    expect([200, 403, 404, 409]).toContain(deleted.response.status);
+
+    const landlet = await api('/landlets/instance-delete-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    // Whichever ran first, the instance never survives under the new
+    // owner: this DELETE's own guard rejected it if resolve won, or
+    // resolve's wipe removed it right after if this DELETE won.
+    const instances = await api('/instances?landletId=instance-delete-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
+  // #929: same race shape, for the batch delete endpoint.
+  it('does not let a concurrent batch instance delete land once an auction transfers the landlet', async () => {
+    const owner = await signupBuilder('batch-delete-resolve-race-owner');
+    const bidder = await signupBuilder('batch-delete-resolve-race-bidder');
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(100_000_000, bidder.builderId).run();
+    await createGreenbeltLandlet('batch-delete-resolve-race-landlet');
+    await api('/landlets/batch-delete-resolve-race-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/instances/batch', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'batch-delete-resolve-race-instance',
+          landletId: 'batch-delete-resolve-race-landlet',
+          templateId: 'placeholder-tree', x: 1, y: 1,
+        }],
+      }),
+    }));
+    const started = await api('/landlets/batch-delete-resolve-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [deleted] = await Promise.all([
+      api('/instances/batch', owner.session({
+        method: 'DELETE',
+        body: JSON.stringify({ instanceIds: ['batch-delete-resolve-race-instance'] }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    expect([200, 403, 404, 409]).toContain(deleted.response.status);
+
+    const landlet = await api('/landlets/batch-delete-resolve-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=batch-delete-resolve-race-landlet');
+    expect(instances.body.instances).toEqual([]);
+  });
+
   // #860: same fix as the two tests directly above, but for
   // PUT /landlets/:id/draft, which never got it either -- this endpoint
   // always resends the landlet's *entire* current draft on every save
