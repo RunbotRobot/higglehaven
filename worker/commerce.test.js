@@ -3400,6 +3400,41 @@ describe('Simulated purchases', () => {
       expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
     });
 
+    // #937: seller_id can be non-null yet dangling once DELETE /api/sellers/:id
+    // removes the seller row it points at. Before this fix, the plain
+    // `if (purchase.seller_id)` truthiness check treated that dangling id as
+    // still-owned, so no session (not even admin) could ever match it — the
+    // purchase became permanently un-shippable, unlike its refund sibling
+    // which already falls back to admin for this exact case.
+    it("falls back to admin marking a purchase shipped once the product's seller has since deleted their account", async () => {
+      const builder = await signupBuilder('payout-shipped-deleted-seller-builder');
+      const seller = await createConnectedSeller('payout-shipped-deleted-seller-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      // DELETE /api/sellers/:id blocks while a purchase's proceeds are
+      // unpaid -- stamp paid_out_at/stripe_payout_id first, same as the
+      // real flow the issue describes (a seller can only self-delete once
+      // shipped_at doesn't matter to that guard, but payout does).
+      await env.DB.prepare(`
+        UPDATE purchases SET paid_out_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), stripe_payout_id = 'po_test' WHERE purchase_id = ?
+      `).bind(purchaseId).run();
+
+      const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(sellerDeleted.response.status).toBe(200);
+
+      const nonAdmin = await signupBuilder('payout-shipped-deleted-seller-nonadmin');
+      const wrongSession = await api(`/purchases/${purchaseId}/mark-shipped`, nonAdmin.session({ method: 'POST' }));
+      expect(wrongSession.response.status).toBe(403);
+
+      const asAdmin = await api(`/purchases/${purchaseId}/mark-shipped`, adminSession({ method: 'POST' }));
+      expect(asAdmin.response.status).toBe(200);
+      expect(asAdmin.body.purchase.shippedAt).toBeTruthy();
+
+      const logRow = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('mark_shipped_override', purchaseId).first();
+      expect(logRow).not.toBeNull();
+    });
+
     // #749: handlePurchaseRefund treats refunded_at as authoritative (it
     // rejects a second refund), but mark-shipped and confirm-delivery never
     // checked it at all — a refunded physical order could still be marked
