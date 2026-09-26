@@ -4740,7 +4740,19 @@ async function resolveAuction(db, auction) {
     break;
   }
 
-  const statements = skippedCandidateBuilderIds.map((builderId) => notificationStatement(db, builderId,
+  // #966: nothing stops the same builder from placing more than one
+  // (increasing) bid on this auction (handleAuctionBids only requires a new
+  // bid to beat the current highest, never checks for an existing bid from
+  // the same builder), so skippedCandidateBuilderIds can end up containing
+  // the eventual winner's own id -- an earlier, higher bid from them got
+  // skipped here before a later, lower bid of theirs went on to win below.
+  // Deduping (a builder can genuinely have two losing bids too, which would
+  // otherwise queue two near-identical notifications) and excluding the
+  // winner is what keeps this from sending them both "you did not win this
+  // auction" and "you won the auction" for the same resolution.
+  const skipNotifyBuilderIds = [...new Set(skippedCandidateBuilderIds)]
+    .filter((builderId) => builderId !== winner?.bidder_builder_id);
+  const statements = skipNotifyBuilderIds.map((builderId) => notificationStatement(db, builderId,
     `Your bid on ${auction.landlet_id} could no longer be honored and was skipped — you did not win this auction.`));
   if (winner) {
     // Ownership (and winning_bid_id) were already transferred above,
