@@ -10076,8 +10076,18 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has been refunded', 400);
   }
-  await db.prepare('UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
-    .bind(purchaseId).run();
+  // #925: the shipped_at check above and this UPDATE were a check-then-act
+  // race -- two concurrent requests could both pass the check and both
+  // write, silently overwriting shipped_at with whichever landed second.
+  // Folding the guard into the UPDATE's own WHERE clause closes it, same
+  // pattern as the other claim-before-act writes in this file (landlet-
+  // level guards, friendship-accept, refund guards).
+  const result = await db.prepare(
+    'UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND shipped_at IS NULL',
+  ).bind(purchaseId).run();
+  if (result.meta.changes === 0) {
+    throw new HttpError('This purchase is already marked shipped', 400);
+  }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
 }
