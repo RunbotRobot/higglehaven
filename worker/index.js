@@ -6327,6 +6327,53 @@ export async function sellerPayoutIdempotencyKey(sellerId, purchaseIds) {
   return `seller-payout:${sellerId}:${hash}`;
 }
 
+// #969: mirrors claimOrResumeBuilderRedemption's own "resume before
+// claiming fresh" shape (#869) — a genuine retry after this seller's own
+// Stripe payout call succeeded but the trailing DB write recording
+// stripe_payout_id never landed (a D1 blip, a Worker eviction) used to
+// leave these purchases claimed (paid_out_at set) forever: unpaidSellerPurchases
+// only ever looks at paid_out_at IS NULL, so no future payout attempt could
+// ever pick them back up, and the seller-delete guard (paid_out_at IS NULL
+// OR stripe_payout_id IS NULL) then permanently blocks the account from
+// being deleted. Unlike redemption, no new claim table is needed here —
+// sellerPayoutIdempotencyKey above is a pure function of sellerId + the
+// claimed purchase-id set, so re-deriving it from these exact stuck rows
+// reaches the SAME Stripe payout Stripe already recorded, rather than
+// creating a duplicate. Exported for direct testing, same reasoning as
+// claimPurchasesForPayout/sellerPayoutIdempotencyKey above.
+export async function claimOrResumeSellerPayout(db, sellerId) {
+  const { results: claimed } = await db.prepare(`
+    SELECT * FROM purchases
+    WHERE seller_id = ? AND payment_intent_id IS NOT NULL
+      AND paid_out_at IS NOT NULL AND stripe_payout_id IS NULL AND refunded_at IS NULL
+    ORDER BY purchase_id
+  `).bind(sellerId).all();
+  return { claimed, resumed: claimed.length > 0 };
+}
+
+// Companion to claimOrResumeSellerPayout — completes a previously-claimed-
+// but-unconfirmed seller payout by re-deriving the same idempotency key and
+// re-calling Stripe (which returns the already-issued payout instead of
+// creating a new one), then finishing the DB write that didn't land the
+// first time. No claim/release here: these purchases were already claimed
+// by an earlier request, not this one, so there's nothing to undo on
+// failure — the stuck rows simply stay stuck for the next retry, same as
+// today.
+async function resumeSellerPayout(env, db, sessionSeller, claimed) {
+  if (!stripeConfigured(env)) {
+    throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+  }
+  const claimedCents = claimed.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
+  const idempotencyKey = await sellerPayoutIdempotencyKey(sessionSeller.seller_id, claimed.map((p) => p.purchase_id));
+  const payout = await stripeRequest(
+    env, 'POST', 'payouts', { amount: claimedCents, currency: 'usd' }, idempotencyKey, sessionSeller.stripe_account_id,
+  );
+  await db.batch(claimed.map((purchase) =>
+    db.prepare('UPDATE purchases SET stripe_payout_id = ? WHERE purchase_id = ?')
+      .bind(payout.id, purchase.purchase_id)));
+  return json({ payoutCents: claimedCents, purchaseCount: claimed.length, stripePayoutId: payout.id });
+}
+
 // GET returns the seller's current held/available-for-cash-out balance
 // (folded into the same shape stripeAccountStatusJson already gives the
 // onboarding panel, so one call covers both); POST actually triggers a
@@ -6343,6 +6390,18 @@ async function handleSellerPayouts(request, env, db) {
   }
 
   if (request.method === 'POST') {
+    // #969: a stuck claimed-but-unconfirmed purchase (paid_out_at set,
+    // stripe_payout_id still NULL) is invisible to unpaidSellerPurchases
+    // just below (it filters paid_out_at IS NULL) -- this has to run before
+    // that call and the availableCents check, not just before the Stripe
+    // config/onboarding checks further down, or a seller whose entire
+    // unpaid balance is stuck would see a misleading "nothing available"
+    // error instead of ever being resumed.
+    const { claimed: stuckClaimed, resumed } = await claimOrResumeSellerPayout(db, sessionSeller.seller_id);
+    if (resumed) {
+      return resumeSellerPayout(env, db, sessionSeller, stuckClaimed);
+    }
+
     const purchases = await unpaidSellerPurchases(db, sessionSeller.seller_id);
     const eligible = purchases.filter(isPurchaseEligibleForPayout);
     const availableCents = eligible.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);

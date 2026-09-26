@@ -3,7 +3,8 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker, {
-  claimPurchasesForPayout, sellerPayoutIdempotencyKey, refundIdempotencyKey, auctionSettlementEventId,
+  claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
+  auctionSettlementEventId,
 } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
@@ -3656,6 +3657,82 @@ describe('Simulated purchases', () => {
 
       const keyDifferentSeller = await sellerPayoutIdempotencyKey('seller-2', ['purchase-a', 'purchase-b']);
       expect(keyDifferentSeller).not.toBe(keyA);
+    });
+
+    // #969: if the Stripe payout call succeeds but the trailing DB write
+    // recording stripe_payout_id never lands (a D1 blip, a Worker
+    // eviction), the purchase is left claimed (paid_out_at set) but
+    // unconfirmed (stripe_payout_id still NULL) -- exactly the in-flight
+    // state the #745 test above seeds directly, without ever calling the
+    // real payout endpoint. claimOrResumeSellerPayout is what a retried
+    // POST /sellers/me/payouts uses to find and resume that stuck set
+    // instead of computing a fresh one (which would never see it, since
+    // unpaidSellerPurchases filters paid_out_at IS NULL).
+    it('claimOrResumeSellerPayout finds a stuck claimed-but-unconfirmed purchase and nothing else', async () => {
+      // A separate builder per purchase -- a builder can only ever own one
+      // claimed landlet at a time (POST .../claim's own NOT EXISTS guard),
+      // so makeRealMoneyPurchase's own fresh-landlet-per-call claim would
+      // silently fail (and placeInstance would then 403) on any call past
+      // the first if these all reused one builder.
+      const seller = await createConnectedSeller('resume-payout-seller');
+
+      const nothingStuck = await claimOrResumeSellerPayout(env.DB, seller.sellerId);
+      expect(nothingStuck).toEqual({ claimed: [], resumed: false });
+
+      const stuckBuilder = await signupBuilder('resume-payout-stuck-builder');
+      const stuckPurchaseId = await makeRealMoneyPurchase(stuckBuilder, seller, { isDigitalGood: true });
+      await claimPurchasesForPayout(
+        env.DB,
+        [await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(stuckPurchaseId).first()],
+        '2026-01-01T00:00:00.000Z',
+      );
+
+      // A confirmed (stripe_payout_id set) claim is not "stuck" -- it
+      // already completed successfully and must never be resumed again.
+      const confirmedBuilder = await signupBuilder('resume-payout-confirmed-builder');
+      const confirmedPurchaseId = await makeRealMoneyPurchase(confirmedBuilder, seller, { isDigitalGood: true });
+      await env.DB.prepare('UPDATE purchases SET paid_out_at = ?, stripe_payout_id = ? WHERE purchase_id = ?')
+        .bind('2026-01-01T00:00:00.000Z', 'po_already_confirmed', confirmedPurchaseId).run();
+
+      // A refunded purchase is claimed-but-unconfirmed by the same raw
+      // columns, but refunded_at excludes it -- the same guard
+      // isPurchaseEligibleForPayout/unpaidSellerPurchases already apply to
+      // the fresh-claim path, kept consistent here.
+      const refundedBuilder = await signupBuilder('resume-payout-refunded-builder');
+      const refundedPurchaseId = await makeRealMoneyPurchase(refundedBuilder, seller, { isDigitalGood: true });
+      await env.DB.prepare('UPDATE purchases SET paid_out_at = ?, refunded_at = ? WHERE purchase_id = ?')
+        .bind('2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', refundedPurchaseId).run();
+
+      const stuck = await claimOrResumeSellerPayout(env.DB, seller.sellerId);
+      expect(stuck.resumed).toBe(true);
+      expect(stuck.claimed.map((p) => p.purchase_id)).toEqual([stuckPurchaseId]);
+    });
+
+    // #969: proves the resume branch actually gets taken through the real
+    // POST /sellers/me/payouts endpoint, not just the extracted primitive
+    // above. This suite never configures Stripe, so the real payout call
+    // itself still can't be exercised -- but the routing decision is
+    // observable anyway: before this fix, a seller whose entire unpaid
+    // balance was stuck (invisible to unpaidSellerPurchases) got the
+    // fresh-claim path's own "Nothing is available to cash out yet." 400,
+    // since the stuck purchase never even reached the Stripe checks.
+    // After the fix, the resume branch runs first and reaches its own
+    // stripeConfigured guard instead, so the response flips to a 503
+    // "not configured" -- proof the stuck purchase was found and routed to
+    // resumeSellerPayout rather than silently falling through.
+    it('routes a stuck claimed-but-unconfirmed purchase to the resume path instead of "nothing available"', async () => {
+      const builder = await signupBuilder('resume-payout-endpoint-builder');
+      const seller = await createConnectedSeller('resume-payout-endpoint-seller');
+      const stuckPurchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+      await claimPurchasesForPayout(
+        env.DB,
+        [await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(stuckPurchaseId).first()],
+        '2026-01-01T00:00:00.000Z',
+      );
+
+      const attempted = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+      expect(attempted.response.status).toBe(503);
+      expect(attempted.body.error).toMatch(/not configured/);
     });
 
     // #599: once paid_out_at is set, this purchase's seller-share has

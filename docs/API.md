@@ -1344,6 +1344,17 @@ avoid a payout Stripe would reject outright). Marks every purchase whose
 own share fit inside the actual payout amount as paid out; a purchase
 whose amount didn't fit stays available for the next request.
 
+If an earlier `POST` here already claimed a set of purchases and its
+Stripe payout call succeeded, but the follow-up write recording that
+payout's id never landed (#969), the next `POST` resumes that exact
+claimed set instead — re-deriving the same idempotency key and re-calling
+Stripe, which returns the already-issued payout rather than creating a new
+one. This check runs first, ahead of every other check on this endpoint
+(availability, tax-reporting gate, onboarding) — a resume only ever hits
+its own `503` if `STRIPE_SECRET_KEY` isn't configured, never the ordinary
+"nothing available" `400` a caller might otherwise expect, since a stuck
+purchase is invisible to the normal availability computation.
+
 **Tax-reporting gate (#615, sub-issue of #350):** once this account's
 combined gross income for the calendar year — higgles commissions plus
 real-money sales, the same combined total `GET /api/tax/summary` (#612)
