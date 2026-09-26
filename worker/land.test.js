@@ -48,6 +48,40 @@ describe('Landlet updates', () => {
     expect(stillClaimable.response.status).toBe(200);
   });
 
+  // #956: the pin above only ever applied to the unowned branch -- an
+  // owning builder could PATCH their own claimed landlet's status away
+  // from 'claimed' while keeping ownership, the "owner implies claimed"
+  // half of #799's own invariant, just reachable here instead of via POST.
+  // Left unfixed, this would drop the landlet out of POST .../claim's
+  // "already own a claimed landlet" NOT EXISTS check, letting the same
+  // builder claim unlimited additional landlets.
+  it('does not let an owning builder move their own claimed landlet away from status claimed via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('owned-status-flip-landlet');
+    const owner = await signupBuilder('owned-status-flip-claimer');
+    const claimed = await api('/landlets/owned-status-flip-landlet/claim', owner.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const hijacked = await api('/landlets/owned-status-flip-landlet', owner.session({
+      method: 'PATCH', body: JSON.stringify({ status: 'greenbelt' }),
+    }));
+    expect(hijacked.response.status).toBe(200);
+    expect(hijacked.body.landlet.status).toBe('claimed');
+    expect(hijacked.body.landlet.ownerBuilderId).toBe(owner.builderId);
+
+    const stored = await env.DB.prepare(
+      'SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?',
+    ).bind('owned-status-flip-landlet').first();
+    expect(stored.status).toBe('claimed');
+    expect(stored.owner_builder_id).toBe(owner.builderId);
+
+    // The one-claimed-landlet-per-builder cap must still hold -- this
+    // builder can't claim a second landlet just because the PATCH above
+    // silently no-op'd.
+    await createGreenbeltLandlet('owned-status-flip-second-landlet');
+    const secondClaim = await api('/landlets/owned-status-flip-second-landlet/claim', owner.session({ method: 'POST' }));
+    expect(secondClaim.response.status).toBe(409);
+  });
+
   it('does not let a concurrent claim be reverted by a racing PATCH', async () => {
     // Fired together, not awaited one at a time — PATCH's own read of the
     // still-unowned row and its later write straddle the claim's write in

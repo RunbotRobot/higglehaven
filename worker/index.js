@@ -7806,9 +7806,14 @@ async function handleLandlets(request, db, route, url) {
     // matches `explainClaimConflict`'s available-greenbelt check again).
     // Claimed-state transitions only ever happen through the dedicated
     // claim/auction endpoints, same as ownership transfer itself.
-    if (existing.owner_builder_id === null) {
-      input.status = existing.status;
-    }
+    // #956: this used to only pin status for the unowned branch above,
+    // leaving the reverse direction wide open -- an owning builder could
+    // PATCH their own claimed landlet's status to 'greenbelt' (owner stays
+    // non-null), which drops out of POST .../claim's "already owns a
+    // claimed landlet" NOT EXISTS check, letting them claim unlimited
+    // additional landlets. Pinned unconditionally now, matching
+    // ownerBuilderId's own unconditional pin just above.
+    input.status = existing.status;
     const landlet = validateLandlet(
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
