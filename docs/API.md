@@ -3122,7 +3122,8 @@ Required fields:
 - `y`
 
 `z` defaults to `0`. `rotationZ` defaults to `0`. Position and rotation fields
-must be finite numbers.
+must be finite numbers. `label` is optional and, when present, must be a
+string of 100 characters or fewer (#971).
 
 ### `PUT /api/instances/:instanceId`
 ### `PATCH /api/instances/:instanceId`
@@ -6602,7 +6603,10 @@ cap).
 
 Creates a task. **Requires `from` (the caller's own name) and `title`
 (the task's own text) — both rejected outright, `400`, if missing or
-blank.** These are the owner's own two named criteria from N31. An
+blank.** `from` is capped at 100 characters, the same short-label limit
+every other field of its shape in this API uses (#971); `title` uses the
+longer 20,000-character text cap instead (see PATCH below). These are the
+owner's own two named criteria from N31. An
 explicit `id` may be supplied (`409` if already taken); otherwise one is
 generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
 `session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`) is optional,
@@ -6625,7 +6629,8 @@ other than `'owner'` needs no `reason`.
 ### `PATCH /api/control-room/tasks/:id`
 
 Updates a task. **Requires `caller` (who is making this specific change)
-on every call — `400` if missing or blank.** Any of `status`, `session`,
+on every call — `400` if missing or blank, capped at 100 characters
+(#971).** Any of `status`, `session`,
 `note` (also stamps `noteUpdatedAt`), `tag`, `prUrl`, `waitingOn`,
 `viewed`, `awaitingClaude` may be included; only fields actually present
 in the body are touched.
@@ -6651,7 +6656,9 @@ Every reply for one task, oldest first.
 Creates a reply. **Requires `from` and `text` — `400` if either is
 missing or blank** (a reply is nothing but those two fields, so both are
 unconditionally required, unlike the task update's conditional `reason`
-above). `404` if the task doesn't exist. Bumps the parent task's own
+above). `from` is capped at 100 characters like every field of its shape
+in this API (#971); `text` uses the longer 20,000-character text cap.
+`404` if the task doesn't exist. Bumps the parent task's own
 `updatedAt`, the same "a reply counts as activity on its thread" behavior
 the Artifact-era board used for its own sort order.
 

@@ -444,6 +444,42 @@ describe('Community signs', () => {
     expect(fetched.body.instance.isCommunitySign).toBe(true);
   });
 
+  // #971: validateInstance's own `label` field used plain `input.label ||
+  // null` -- no length cap and no type check at all, unlike every other
+  // optional label-shaped field in this file (optionalLabelValue).
+  it('rejects an over-length instance label', async () => {
+    const rejected = await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'label-cap-instance', landletId: signsLandlet, templateId: 'placeholder-tree',
+        x: 2, y: 2, label: 'x'.repeat(101),
+      }),
+    }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
+  });
+
+  // Same gap, the other failure mode: a non-string label used to sail
+  // through unchanged and reach a D1 .bind() call with a type D1 rejects,
+  // producing an uncaught 500 instead of the clean 400 every other
+  // malformed field on this endpoint gets.
+  it('rejects a non-string instance label on PATCH', async () => {
+    const created = await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'label-type-instance', landletId: signsLandlet, templateId: 'placeholder-tree', x: 3, y: 3,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    const patched = await api('/instances/label-type-instance', signsBuilder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ label: { not: 'a string' } }),
+    }));
+    expect(patched.response.status).toBe(400);
+    expect(patched.body.error).toMatch(/label is required/);
+  });
+
   it('rejects a post on an instance not marked as a community sign', async () => {
     await api('/instances', signsBuilder.session({
       method: 'POST',

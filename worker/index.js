@@ -786,7 +786,7 @@ async function handleControlRoomTaskGet(request, env, db, taskId) {
 async function handleControlRoomTaskCreate(request, env, db) {
   await requireControlRoomAccess(request, env, db);
   const body = await readJson(request);
-  const postedBy = stringValue(body.from, 'from (caller name)');
+  const postedBy = labelValue(body.from, 'from (caller name)');
   const title = controlRoomTextValue(body.title, 'title (message text)');
   const taskId = body.id ? labelValue(body.id, 'id') : `note-${crypto.randomUUID()}`;
   const existing = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
@@ -859,7 +859,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   if (!existing) return json({ error: 'Task not found' }, 404);
 
   const body = await readJson(request);
-  const caller = stringValue(body.caller, 'caller (caller name)');
+  const caller = labelValue(body.caller, 'caller (caller name)');
 
   const settingWaitingOnOwner = body.waitingOn === 'owner' && existing.waiting_on !== 'owner';
   let reason = null;
@@ -924,7 +924,7 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
   if (!task) return json({ error: 'Task not found' }, 404);
 
   const body = await readJson(request);
-  const fromCaller = stringValue(body.from, 'from (caller name)');
+  const fromCaller = labelValue(body.from, 'from (caller name)');
   const text = controlRoomTextValue(body.text, 'text (message text)');
   const replyId = `reply-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
@@ -11168,7 +11168,7 @@ function validateInstance(input, fallbackId) {
     rotationX: finiteNumber(input.rotationX ?? 0, 'rotationX'),
     rotationY: finiteNumber(input.rotationY ?? 0, 'rotationY'),
     rotationZ: finiteNumber(input.rotationZ ?? 0, 'rotationZ'),
-    label: input.label || null,
+    label: optionalLabelValue(input.label, 'label'),
     crop: validateCropShape(input.crop),
     scale: validateScale(input.scale),
     // docs/API.md's "Community signs" — per-*instance* opt-in (unlike
