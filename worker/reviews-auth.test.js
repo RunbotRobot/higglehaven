@@ -821,6 +821,34 @@ describe('Authentication', () => {
     expect(confirmed.body.user).toMatchObject({ trustTier: 'credit_card', cardFunding: 'credit' });
   });
 
+  // #948: both endpoints make a real outbound Stripe API call whenever
+  // Stripe is configured, unlike every other authenticated mutation in
+  // this file, which is always rate-limited. checkRateLimit is placed
+  // ahead of the stripeConfigured check (same as #839's own precedent for
+  // handlePurchaseFinalize), so it fires even along the simulated-success
+  // path this suite always takes — every one of these 20 calls still
+  // succeeds (simulated), the point is that the limiter is what eventually
+  // returns 429, not Stripe config.
+  it('rate-limits repeated card-setup-intent calls from the same session', async () => {
+    const builder = await signupBuilder('card-setup-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  });
+
+  it('rate-limits repeated confirm-card calls from the same session', async () => {
+    const builder = await signupBuilder('confirm-card-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/confirm-card', builder.session({ method: 'POST' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api('/auth/confirm-card', builder.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #556, owner decision (Control Room, 2026-09-09): "force everyone
   // through the new gates, no grandfathering in" — assertVerified in
   // worker/index.js's requireSessionBuilder/requireSessionSeller applies
