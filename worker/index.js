@@ -9478,7 +9478,22 @@ async function handleSignPosts(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `sign-post-delete:${sessionBuilder.builder_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
-    await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
+    // #960: requireOwnedLandlet above is a point-in-time check, and
+    // checkRateLimit is a real awaited write in between -- without this,
+    // an auction resolving (transferring ownership) in that gap would let
+    // this DELETE still moderate content on a landlet the caller no longer
+    // owns, with no trace. Same #929 idiom as handleInstances' own single
+    // DELETE.
+    const deleted = await db.prepare(`
+      DELETE FROM sign_posts WHERE post_id = ?
+        AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+    `).bind(postId, instanceId, sessionBuilder.builder_id).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ deleted: true });
   }
 
@@ -9575,7 +9590,18 @@ async function handleCalendarEvents(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-    await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+    // #960: same #929 idiom as the sign-posts DELETE above -- see its own
+    // comment.
+    const deleted = await db.prepare(`
+      DELETE FROM calendar_events WHERE event_id = ?
+        AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+    `).bind(eventId, instanceId, sessionBuilder.builder_id).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ deleted: true });
   }
 
