@@ -1945,19 +1945,26 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
     Math.abs(height - oldDimensions.height) > 1e-4;
   if (!changed) return;
 
+  // #920: grouping (rather than SELECT DISTINCT) gets a real per-builder
+  // count, so a builder with several placed copies of the resized template
+  // (e.g. bought/placed the same decorative item more than once) sees an
+  // accurate count instead of a hardcoded, always-singular "one placed".
   const { results } = await db.prepare(`
-    SELECT DISTINCT l.owner_builder_id AS builderId
+    SELECT l.owner_builder_id AS builderId, COUNT(*) AS instanceCount
     FROM placed_instances pi
     JOIN landlets l ON l.landlet_id = pi.landlet_id
     WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
+    GROUP BY l.owner_builder_id
   `).bind(template.templateId).all();
   if (results.length === 0) return;
 
   const fmt = (m) => `${m.toFixed(2)}m`;
-  const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have one placed. Check that it still fits where you put it.`;
-  await db.batch(results.map((row) => db.prepare(
-    'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
-  ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId)));
+  await db.batch(results.map((row) => {
+    const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
+    return db.prepare(
+      'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
+    ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId);
+  }));
 }
 
 async function assertUploadedModelExists(bucket, modelUrl) {
