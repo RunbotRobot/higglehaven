@@ -9015,9 +9015,20 @@ async function handleInstances(request, env, route, url) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
-    await db.batch(instanceIds.map((instanceId) => db.prepare(
-      'DELETE FROM placed_instances WHERE instance_id = ?',
-    ).bind(instanceId)));
+    const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
+    // #929: same fold-the-ownership-re-check-into-the-write idiom as the
+    // single DELETE above and the POST/PUT batch below — requireOwnedLandlets
+    // is a point-in-time check, so without this a landlet transfer landing
+    // in the await gap since `results` was fetched would let this DELETE
+    // still remove rows the caller no longer owns.
+    const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
+      DELETE FROM placed_instances
+      WHERE instance_id = ?
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(instanceId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
+    if (batchResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ deletedInstanceIds: instanceIds });
   }
 
@@ -9257,7 +9268,20 @@ async function handleInstances(request, env, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
-    await db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(route[1]).run();
+    // #929: requireOwnedLandlet above is a point-in-time check, unlike the
+    // POST/PUT/PATCH siblings above, which fold their own ownership
+    // re-check into the write itself. Without this, a landlet transfer
+    // landing in the await gap since existing was fetched would let this
+    // DELETE still remove a row the caller no longer owns, and unlike
+    // POST/PATCH, nothing here checked meta.changes to catch that.
+    const deleted = await db.prepare(`
+      DELETE FROM placed_instances
+      WHERE instance_id = ?
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(route[1], existing.landlet_id, sessionBuilder.builder_id).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     return json({ deleted: true });
   }
 
