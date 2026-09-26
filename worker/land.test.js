@@ -465,6 +465,42 @@ describe('Community signs', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #944: unlike its own POST sibling above, the DELETE branch had no rate
+  // limit at all -- an authenticated landlet owner could delete posts in an
+  // unthrottled loop. Seeds 21 posts directly via the DB (rather than via
+  // POST, which is itself rate-limited to 20) so this test can actually
+  // exercise 21 deletes without also hitting the create-side limit. A
+  // dedicated builder+landlet, not signsBuilder/signsLandlet, so this
+  // test's own bucket doesn't collide with the other sign-post DELETE calls
+  // already made by signsBuilder above.
+  it('rate-limits repeated post deletions from the same builder', async () => {
+    const rateLimitBuilder = await signupBuilder('sign-delete-rate-limit-builder');
+    await createGreenbeltLandlet('sign-delete-rate-limit-landlet');
+    await api('/landlets/sign-delete-rate-limit-landlet/claim', rateLimitBuilder.session({ method: 'POST' }));
+    await api('/instances', rateLimitBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-delete-rate-limit-instance',
+        landletId: 'sign-delete-rate-limit-landlet',
+        templateId: 'placeholder-tree',
+        x: 6,
+        y: 6,
+        isCommunitySign: true,
+      }),
+    }));
+    const postIds = Array.from({ length: 21 }, (_, i) => `sign-delete-rate-limit-post-${i}`);
+    await env.DB.batch(postIds.map((postId) => env.DB.prepare(
+      `INSERT INTO sign_posts (post_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)`,
+    ).bind(postId, 'sign-delete-rate-limit-instance', 'A Shopper', 'Nice place')));
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[i]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[20]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #827: unlike almost every other authenticated write in this file,
   // placed_instances creates/updates/deletes (single and batch alike) had no
   // checkRateLimit call at all. INSTANCE_WRITE_RATE_LIMIT_MAX is deliberately
@@ -911,6 +947,38 @@ describe('Community calendar', () => {
     const limited = await api('/instances/calendar-rate-limit-instance/events', rateLimitBuilder.session({
       method: 'POST', body: JSON.stringify({ text: 'One too many' }),
     }));
+    expect(limited.response.status).toBe(429);
+  });
+
+  // #944: unlike its own POST sibling above, the DELETE branch had no rate
+  // limit at all. Seeds 21 events directly via the DB (rather than via
+  // POST, which is itself rate-limited to 20) so this test can actually
+  // exercise 21 deletes without also hitting the create-side limit.
+  it('rate-limits repeated event deletions from the same builder', async () => {
+    const rateLimitBuilder = await signupBuilder('calendar-delete-rate-limit-builder');
+    await createGreenbeltLandlet('calendar-delete-rate-limit-landlet');
+    await api('/landlets/calendar-delete-rate-limit-landlet/claim', rateLimitBuilder.session({ method: 'POST' }));
+    await api('/instances', rateLimitBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-delete-rate-limit-instance',
+        landletId: 'calendar-delete-rate-limit-landlet',
+        templateId: 'placeholder-tree',
+        x: 1,
+        y: 1,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const eventIds = Array.from({ length: 21 }, (_, i) => `calendar-delete-rate-limit-event-${i}`);
+    await env.DB.batch(eventIds.map((eventId) => env.DB.prepare(
+      `INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)`,
+    ).bind(eventId, 'calendar-delete-rate-limit-instance', rateLimitBuilder.builder.label, 'An event')));
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[i]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[20]}`, rateLimitBuilder.session({ method: 'DELETE' }));
     expect(limited.response.status).toBe(429);
   });
 });
@@ -2586,6 +2654,26 @@ describe('Landlet levels', () => {
 
       const afterList = await api('/builders/me/saved-layouts', owner.session());
       expect(afterList.body.savedLayouts).toHaveLength(0);
+    });
+
+    // #944: unlike this file's other owner-gated CRUD DELETEs (friendship-
+    // mutate, bundle-mutate), this endpoint had no rate limit at all. Seeds
+    // 21 saved layouts directly via the DB (bypassing the full level-
+    // create/remove flow saveALayout uses, which would be far slower to
+    // repeat 21 times) so this test can exercise 21 deletes cheaply.
+    it('rate-limits repeated saved-layout deletions from the same builder', async () => {
+      const owner = await signupBuilder('saved-layouts-delete-rate-limit-owner');
+      const savedLayoutIds = Array.from({ length: 21 }, (_, i) => `saved-layouts-delete-rate-limit-${i}`);
+      await env.DB.batch(savedLayoutIds.map((savedLayoutId) => env.DB.prepare(
+        `INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_level_index, name) VALUES (?, ?, ?, ?)`,
+      ).bind(savedLayoutId, owner.builderId, 1, 'A saved layout')));
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/saved-layouts/${savedLayoutIds[i]}`, owner.session({ method: 'DELETE' }));
+        expect(attempt.response.status).toBe(200);
+      }
+      const limited = await api(`/saved-layouts/${savedLayoutIds[20]}`, owner.session({ method: 'DELETE' }));
+      expect(limited.response.status).toBe(429);
     });
   });
 

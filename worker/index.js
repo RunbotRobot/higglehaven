@@ -4023,6 +4023,12 @@ function savedLayoutInstanceFromRow(row) {
   };
 }
 
+// #944: the DELETE branch below is an authenticated, owner-gated,
+// repeatable mutation with no rate limit at all -- unlike this file's other
+// owner-gated CRUD DELETEs (friendship-mutate, bundle-mutate) and unlike
+// saved-layout *creation* itself (SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX).
+const SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX = 20;
+
 // #634: GET/DELETE /api/saved-layouts/:id — owner-gated the same way every
 // other builder-owned resource in this file is (assertOwner against the
 // session's own resolved builder id), a separate top-level collection
@@ -4050,6 +4056,7 @@ async function handleSavedLayouts(request, db, route) {
     if (!row) throw new HttpError('Saved layout not found', 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    await checkRateLimit(db, `saved-layout-delete:${sessionBuilder.builder_id}`, SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX);
     // saved_layout_instances cascades via its own FOREIGN KEY ... ON
     // DELETE CASCADE (migration 0080) — nothing else to clean up here.
     await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
@@ -9343,6 +9350,11 @@ async function handleInstances(request, env, route, url) {
 // checkRateLimit call at all — an anonymous caller could post an
 // unlimited number of times per second, unboundedly growing sign_posts.
 const SIGN_POST_RATE_LIMIT_MAX = 20;
+// #944: the DELETE branch below is an authenticated, owner-gated,
+// repeatable mutation with no rate limit at all -- unlike its own POST
+// sibling above (SIGN_POST_RATE_LIMIT_MAX) and this file's other owner-
+// gated CRUD DELETEs (friendship-mutate, bundle-mutate).
+const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
@@ -9399,6 +9411,7 @@ async function handleSignPosts(request, db, route) {
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
+    await checkRateLimit(db, `sign-post-delete:${sessionBuilder.builder_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
     await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
     return json({ deleted: true });
   }
@@ -9437,6 +9450,9 @@ function signPostFromRow(row) {
 // authenticated action gating a real account's own request volume (same
 // reasoning FRIEND_REQUEST_RATE_LIMIT_MAX's own comment gives).
 const CALENDAR_EVENT_RATE_LIMIT_MAX = 20;
+// #944: same missing-rate-limit gap as SIGN_POST_DELETE_RATE_LIMIT_MAX,
+// found in this handler's own DELETE branch.
+const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
@@ -9492,6 +9508,7 @@ async function handleCalendarEvents(request, db, route) {
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
+    await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
     await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
     return json({ deleted: true });
   }
