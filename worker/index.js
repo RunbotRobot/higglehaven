@@ -5800,6 +5800,13 @@ function stripeAccountStatusJson(env, row) {
   };
 }
 
+// #948: every one of these four handlers makes a real outbound Stripe API
+// call using the platform's own secret key on every POST, the same "real
+// cost/quota risk to the shared key" #839 already established for
+// handlePurchaseFinalize — but unlike that endpoint (unauthenticated, so
+// keyed by IP), these are all authenticated, so keyed by session instead.
+const STRIPE_RATE_LIMIT_MAX = 20;
+
 // GET returns the seller's current onboarding state; POST creates the
 // Stripe Custom account on first submission or updates it (e.g. after
 // Stripe comes back asking for more via requirements.currently_due) on
@@ -5817,6 +5824,10 @@ async function handleSellerStripeAccount(request, env, db) {
   if (request.method === 'POST') {
     const input = await readJson(request);
     const params = buildStripeIndividualParams(input, user.email, request);
+    // #948: same placement as #839's own precedent (checkRateLimit ahead of
+    // the stripeConfigured check) — this is what makes the limiter itself
+    // exercisable in a test suite that never configures Stripe at all.
+    await checkRateLimit(db, `stripe-account:${sessionSeller.seller_id}`, STRIPE_RATE_LIMIT_MAX);
     if (!stripeConfigured(env)) {
       throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
     }
@@ -5894,6 +5905,9 @@ async function handleBuilderStripeAccount(request, env, db) {
   if (request.method === 'POST') {
     const input = await readJson(request);
     const params = buildStripeIndividualParams(input, user.email, request, 'higglehaven marketplace builder');
+    // #948: same placement as #839's own precedent — see the seller-account
+    // handler's own comment above.
+    await checkRateLimit(db, `stripe-account:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (!stripeConfigured(env)) {
       throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
     }
@@ -6980,6 +6994,12 @@ async function handleAuth(request, env, db, route, url, ctx) {
 // collecting a card at all and go straight to confirm-card.
 async function handleCardSetupIntent(request, env, db) {
   const user = await requireCurrentUser(request, db);
+  // #948: same placement as #839's own precedent (checkRateLimit ahead of
+  // the stripeConfigured check) — this is what makes the limiter itself
+  // exercisable in a test suite that never configures Stripe at all, and it
+  // matches every other authenticated mutation in this file, which all cap
+  // near the top regardless of what happens further down.
+  await checkRateLimit(db, `card-setup:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
   if (!stripeConfigured(env)) {
     return json({ clientSecret: null, publishableKey: null, simulated: true });
   }
@@ -7005,6 +7025,9 @@ async function handleCardSetupIntent(request, env, db) {
 // deployment would ever actually see.
 async function handleConfirmCard(request, env, db) {
   const user = await requireCurrentUser(request, db);
+  // #948: same placement as #839's own precedent — see handleCardSetupIntent's
+  // own comment above.
+  await checkRateLimit(db, `confirm-card:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
   if (!stripeConfigured(env)) {
     await db.prepare(`
       UPDATE users SET card_funding = 'credit', trust_tier = 'credit_card',

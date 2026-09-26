@@ -112,6 +112,27 @@ describe('Seller Stripe Connect account', () => {
     expect(serialized).not.toContain('1234'); // ssnLast4
     expect(serialized).not.toContain('110000000'); // routing number
   });
+
+  // #948: this endpoint makes a real outbound Stripe API call on every
+  // valid submission, unlike every other authenticated mutation in this
+  // file, which is always rate-limited. checkRateLimit is placed ahead of
+  // the stripeConfigured check (same as #839's own precedent), which is
+  // what makes the limiter itself exercisable here — every one of these 20
+  // calls still 503s (Stripe never configured in this suite), the point is
+  // that the limiter, not Stripe config, is what eventually returns 429.
+  it('rate-limits repeated Stripe-account submissions from the same seller', async () => {
+    const seller = await signupSeller('stripe-rate-limit-seller');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+      expect(attempt.response.status).toBe(503);
+    }
+    const limited = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST', body: JSON.stringify(validPayload()),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 // #624 (sub-issue of #349/#324): the same Custom-account onboarding flow
@@ -194,6 +215,21 @@ describe('Builder Stripe Connect account (#624)', () => {
     }));
     const sellerStatus = await api('/sellers/me/stripe-account', seller.session());
     expect(sellerStatus.body.connected).toBe(false);
+  });
+
+  // #948: same gap and fix as the seller-account rate-limit test above.
+  it('rate-limits repeated Stripe-account submissions from the same builder', async () => {
+    const builder = await signupBuilder('stripe-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/stripe-account', builder.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+      expect(attempt.response.status).toBe(503);
+    }
+    const limited = await api('/builders/me/stripe-account', builder.session({
+      method: 'POST', body: JSON.stringify(validPayload()),
+    }));
+    expect(limited.response.status).toBe(429);
   });
 });
 
