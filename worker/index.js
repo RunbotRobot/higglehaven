@@ -1706,9 +1706,15 @@ async function handleCatalog(request, db, route, url, models, env) {
       }
     }
     const imageUrl = `/uploads/${key}`;
-    await db.prepare(`
+    const result = await db.prepare(`
       UPDATE catalog_templates SET image_url = ?, image_embedding = ? WHERE template_id = ?
     `).bind(imageUrl, embedding ? JSON.stringify(embedding) : null, route[1]).run();
+    // #936: same gap #932 fixed on this resource's PATCH/PUT sibling -- a
+    // concurrent DELETE of this template landing after the ownership check
+    // above (and the R2 upload, which takes real wall-clock time) left this
+    // UPDATE matching 0 rows while the handler still returned a fabricated
+    // 200, with the freshly-uploaded R2 object now orphaned.
+    if (result.meta.changes === 0) return json({ error: 'Catalog template not found' }, 404);
     return json({ imageUrl });
   }
 

@@ -408,6 +408,58 @@ describe('Worker API', () => {
     expect((await SELF.fetch(`https://higglehaven.test${imageUrl}`)).status).toBe(200);
   });
 
+  // #936: same gap #932 fixed on this resource's PATCH/PUT sibling -- this
+  // handler never checked whether its own UPDATE actually matched a row, so
+  // a concurrent DELETE of the template landing after the R2 upload left it
+  // returning a fabricated 200 for a row that no longer existed. Hooks
+  // env.DB.prepare (the same binding object the worker's own fetch handler
+  // sees) to delete the template out from under the thumbnail upload at the
+  // exact moment its own UPDATE runs, same technique #932's own test uses.
+  it('returns 404, not a fabricated 200, when the template is deleted concurrently with a thumbnail upload', async () => {
+    const owner = await signupSeller('thumbnail-concurrent-delete-owner');
+    const created = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'thumbnail-concurrent-delete-template',
+        name: 'Thumbnail concurrent delete test product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: owner.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE catalog_templates')) {
+        armed = false;
+        const deleted = originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+          .bind('thumbnail-concurrent-delete-template').run();
+        const stmt = originalPrepare(sql);
+        return {
+          bind: (...bindArgs) => {
+            const bound = stmt.bind(...bindArgs);
+            return { run: async () => { await deleted; return bound.run(); } };
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+    let thumbnail;
+    try {
+      thumbnail = await api('/catalog/thumbnail-concurrent-delete-template/thumbnail', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('\x89PNG\r\n\x1a\nthumbnail-concurrent-delete-test-bytes')}` }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(thumbnail.response.status).toBe(404);
+    expect(thumbnail.body).toEqual({ error: 'Catalog template not found' });
+  });
+
   // #540: the seller's own "faux lándlet" 3D array paginates by a
   // cumulative model-file-size cap — this is the field that makes that
   // possible, previously computed by POST /api/models but discarded by
