@@ -2635,6 +2635,7 @@ Required fields:
 
 Validation notes:
 
+- `name` must be 100 characters or fewer (#964).
 - `areaM2` must be greater than zero.
 - `center.x` and `center.y` default to `0` and must be finite numbers.
 - `status` defaults to `greenbelt` and must be `greenbelt`, `claimed`, or
@@ -2648,8 +2649,12 @@ Validation notes:
   (`POST .../claim` rejects it with `409`, see below). Nothing in world
   generation produces a `'water'` landlet yet — this field exists so the
   claim system and data model are ready for whenever it does.
-- `polygon` defaults to an empty array. When present, each point must contain
-  finite `x` and `y` values in meters.
+- `polygon` defaults to an empty array and holds at most 100 points (#964).
+  When present, each point must contain finite `x` and `y` values in meters.
+
+Rate limits: the unowned/greenbelt creation path (unauthenticated) is
+throttled per client IP; the self-claim path (`ownerBuilderId` set to
+yourself) is throttled per builder (#964, #799).
 
 ### `POST /api/landlets/:landletId/claim`
 

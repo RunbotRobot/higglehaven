@@ -7539,6 +7539,11 @@ const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
 // a builder from flooding it). Bucketed by the session builder id, same
 // reasoning as every other repeatable-write limit in this file.
 const LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX = 20;
+// #964: the unowned/greenbelt creation branch below is deliberately
+// unauthenticated (world-generation/admin housekeeping), so there's no
+// builder id to bucket by — same clientIp(request) fallback every other
+// unauthenticated create endpoint already uses (builder-create, seller-create).
+const LANDLET_CREATE_RATE_LIMIT_MAX = 20;
 
 // #952: the real /claim endpoint the comment above cites as already having
 // this guard never actually did -- this closes that gap for real, same
@@ -7763,6 +7768,12 @@ async function handleLandlets(request, db, route, url) {
       // way back. Unlike PUT/PATCH there's no existing row to silently pin
       // this back to, so this rejects outright instead.
       throw new HttpError('A claimed landlet must have an ownerBuilderId', 400);
+    } else {
+      // #964: the self-claim branch above already rate-limits itself
+      // (checkRateLimit a few lines up); this is the genuinely-unowned,
+      // fully-unauthenticated path, which had no throttle at all — an
+      // unbounded, anonymous way to flood the landlets table.
+      await checkRateLimit(db, `landlet-create:${clientIp(request)}`, LANDLET_CREATE_RATE_LIMIT_MAX);
     }
     // #799: folded into the INSERT's own WHERE clause (same atomic idiom as
     // POST .../claim's UPDATE a few dozen lines up, and the landlet-level
@@ -11040,7 +11051,7 @@ function validateLandlet(input, fallbackId) {
   const center = input.center || {};
   const landlet = {
     landletId: stringValue(input.landletId || fallbackId, 'landletId'),
-    name: stringValue(input.name, 'name'),
+    name: labelValue(input.name, 'name'),
     areaM2: positiveNumber(input.areaM2, 'areaM2'),
     center: {
       x: finiteNumber(center.x ?? input.centerX ?? 0, 'center.x'),
@@ -11351,6 +11362,11 @@ function landletLandType(value) {
 
 function validatePolygon(value) {
   if (!Array.isArray(value)) throw new HttpError('polygon must be an array', 400);
+  // #964: mirrors every other array-shaped input's own cap in this file
+  // (e.g. candidates.length > 100) — otherwise an unauthenticated caller
+  // could POST an unboundedly large polygon into a table with no CHECK
+  // constraint on it, one that's echoed back verbatim on every GET.
+  if (value.length > 100) throw new HttpError('polygon must contain at most 100 points', 400);
   return value.map((point, index) => {
     if (!point || typeof point !== 'object') throw new HttpError(`polygon[${index}] must be an object`, 400);
     return {
