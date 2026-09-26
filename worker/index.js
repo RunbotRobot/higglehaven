@@ -1748,12 +1748,20 @@ async function handleCatalog(request, db, route, url, models, env) {
     // null seller_id" promise for that case.
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
     await assertUploadedModelExists(models, template.modelUrl);
-    await db.prepare(`
+    const result = await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
           price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
     `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
+    // #932: unlike every other single-item update handler on a comparably-
+    // shaped resource (builder/seller rename, bundles PATCH, friendships
+    // PATCH), this one never checked whether its own UPDATE actually
+    // matched a row -- a concurrent DELETE of this template landing in the
+    // gap before this UPDATE ran would leave the row already gone, but the
+    // handler would still return a fabricated 200 built from the locally-
+    // merged `template` object instead of a 404.
+    if (result.meta.changes === 0) return json({ error: 'Catalog template not found' }, 404);
     await notifyBuildersOfDimensionChange(db, template, {
       width: existing.width_m,
       depth: existing.depth_m,
