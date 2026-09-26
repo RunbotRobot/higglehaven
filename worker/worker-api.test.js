@@ -1897,6 +1897,37 @@ describe('Worker API', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #949: the activate branch (route[4] === 'activate') never called
+  // checkRateLimit at all, unlike its two closest siblings (version-create
+  // just above, and the draft-save PUT) which both throttle the same
+  // landlet-version:<builderId> bucket.
+  it('rate-limits repeated landlet version activations from the same builder', async () => {
+    const builder = await signupBuilder('landlet-activate-rate-limit');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'activate-rate-limit-landlet', name: 'Activate rate limit landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5300, y: 1400 },
+      }),
+    }));
+    const saved = await api('/landlets/activate-rate-limit-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'Only version' }),
+    }));
+    const versionId = saved.body.version.versionId;
+    // The version-create call above already spent 1 of the shared bucket's
+    // 20 slots, so only 19 more activate calls fit before the 429.
+    for (let i = 0; i < 19; i++) {
+      const attempt = await api(`/landlets/activate-rate-limit-landlet/versions/${versionId}/activate`, builder.session({
+        method: 'POST',
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/landlets/activate-rate-limit-landlet/versions/${versionId}/activate`, builder.session({
+      method: 'POST',
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #480: `name`/`versionName` on a landlet version used plain stringValue
   // (no upper bound), unlike every other free-text label field in this
   // codebase (authorLabel/buyerLabel #337, bundle name #358) — the same

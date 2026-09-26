@@ -2112,6 +2112,7 @@ async function handleLandletVersions(request, db, route, url) {
     const landlet = await requireLandlet(db, landletId);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+    await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const version = await getVersion(db, landletId, route[3]);
     if (!version) return json({ error: 'Landlet version not found' }, 404);
     // #415: re-pins owner_builder_id, the same way the hardened /landlets/:id
