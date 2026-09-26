@@ -3066,9 +3066,18 @@ describe('Worker API', () => {
   // rather than through SELF (which only exposes fetch()), matching
   // Cloudflare's own documented pattern for testing scheduled handlers.
   it('scheduled() is a no-op once the greenbelt reserve already meets its minimum ratio', async () => {
-    // The previous test leaves greenbelt_min_ratio set to exactly the
-    // world's current ratio (see its own last PATCH) — already "healthy"
-    // by definition, so nothing here should change.
+    // #942: this used to rely on ambient state from earlier tests happening
+    // to leave the ratio already "healthy" -- but the ratio is a real
+    // fraction that shifts as other tests in this file claim/create
+    // landlets, so that assumption wasn't actually guaranteed, and this
+    // test was only ever passing because Phase 2's own bug silently
+    // suppressed growth regardless of the ratio. Setting the threshold to
+    // 0 here guarantees "already met" (a ratio can never be negative),
+    // the same explicit-setup discipline the "needs growth" test below
+    // already uses for its own opposite guarantee.
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 0 WHERE world_id = 'default-world'`,
+    ).run();
     const before = await api('/world');
     const controller = createScheduledController();
     const ctx = createExecutionContext();
@@ -3076,6 +3085,9 @@ describe('Worker API', () => {
     await waitOnExecutionContext(ctx);
     const after = await api('/world');
     expect(after.body.world.radiusM).toBe(before.body.world.radiusM);
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
+    ).run();
   });
 
   it('scheduled() automatically expands the world to enclose due land when the greenbelt reserve is low', async () => {
@@ -3144,6 +3156,38 @@ describe('Worker API', () => {
 
     // Restore a sane ratio so no later test in this file sees a world
     // that thinks it always needs to grow.
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
+    ).run();
+  }, 15000);
+
+  // #942: autoGrowWorldIfNeeded's Phase 2 (ring generation) used to re-check
+  // for literally zero greenbelt landlets anywhere, instead of trusting
+  // worldNeedsGrowth's own ratio-based verdict -- so once Phase 1 had
+  // nothing left to enclose but at least one greenbelt landlet already
+  // existed (true almost all the time), Phase 2 silently never generated
+  // anything, even though the ratio was still below threshold. A ratio of 1
+  // can never be satisfied, guaranteeing worldNeedsGrowth stays true straight
+  // through both phases regardless of whatever greenbelt already exists.
+  it('scheduled() generates a fresh ring of land when nothing is left to enclose but the ratio is still unmet', async () => {
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 1 WHERE world_id = 'default-world'`,
+    ).run();
+
+    const ringsBefore = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM landlet_candidate_rings WHERE ring_id LIKE 'auto-ring-%'`,
+    ).first()).count;
+
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    const ringsAfter = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM landlet_candidate_rings WHERE ring_id LIKE 'auto-ring-%'`,
+    ).first()).count;
+    expect(ringsAfter).toBeGreaterThan(ringsBefore);
+
     await env.DB.prepare(
       `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
     ).run();
