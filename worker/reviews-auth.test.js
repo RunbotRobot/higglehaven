@@ -447,6 +447,47 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #990: unlike the anonymous/orphaned-template path just above (#564),
+  // the authenticated seller-owner branch (see "gates review moderation"
+  // above) never had a rate limit at all -- a seller could delete every
+  // review on their own product in an unthrottled loop.
+  it('rate-limits repeated authenticated review DELETEs by the template\'s own seller', async () => {
+    const seller = await signupSeller('review-delete-owner-rate-limit-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-delete-owner-rate-limit',
+        name: 'Seller-owned rate-limit product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    const templateId = created.body.template.templateId;
+    for (let i = 0; i < 20; i++) {
+      await createPurchase(templateId, `Owner Rate Limit Shopper ${i}`);
+      const posted = await api(`/catalog/${templateId}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify({ authorLabel: `Owner Rate Limit Shopper ${i}`, rating: 5 }),
+      });
+      const attempt = await api(
+        `/catalog/${templateId}/reviews/${posted.body.review.reviewId}`,
+        seller.session({ method: 'DELETE' }),
+      );
+      expect(attempt.response.status).not.toBe(429);
+    }
+    await createPurchase(templateId, 'Owner Rate Limit Final Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'Owner Rate Limit Final Shopper', rating: 5 }),
+    });
+    const limited = await api(
+      `/catalog/${templateId}/reviews/${posted.body.review.reviewId}`,
+      seller.session({ method: 'DELETE' }),
+    );
+    expect(limited.response.status).toBe(429);
+  });
+
   // #804: review *creation* itself had no rate limit at all, unlike its own
   // sibling DELETE branch (tested just above) and every comparable write in
   // this file — a caller could cheaply mint many distinct "verified
