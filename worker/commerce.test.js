@@ -1220,6 +1220,22 @@ describe('Auctions', () => {
       expect(landlet.body.landlet.status).toBe('claimed');
     });
   });
+
+  // #1004: auctions.seller_builder_id and auction_bids.bidder_builder_id
+  // were the only two builder_id-referencing columns in this codebase with
+  // no index of their own, despite both being filtered on directly in hot
+  // paths (every bid placement's held-balance check; every builder
+  // self-delete's money-strand guard). Schema-only change with no
+  // app-observable behavior difference, so the meaningful regression check
+  // here is that the indexes actually exist, not a request/response
+  // assertion.
+  it('indexes auctions.seller_builder_id and auction_bids.bidder_builder_id', async () => {
+    const auctionsIndexes = (await env.DB.prepare('PRAGMA index_list(auctions)').all()).results;
+    expect(auctionsIndexes.some((idx) => idx.name === 'idx_auctions_seller_builder_id')).toBe(true);
+
+    const bidsIndexes = (await env.DB.prepare('PRAGMA index_list(auction_bids)').all()).results;
+    expect(bidsIndexes.some((idx) => idx.name === 'idx_auction_bids_bidder_builder_id')).toBe(true);
+  });
 });
 
 describe('Inactivity-triggered auctions', () => {

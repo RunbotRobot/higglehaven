@@ -1,0 +1,26 @@
+-- #1004: neither auctions.seller_builder_id nor auction_bids.bidder_builder_id
+-- ever got an index (migrations/0045_auctions.sql only indexed landlet_id,
+-- status+created_at, and auction_id) -- the only two builder_id-referencing
+-- columns in this codebase without one, breaking the pattern every sibling
+-- table follows (notifications, bundles, friendships, earnings events, saved
+-- layouts, higgles_redemptions, and purchases itself via #77's own identical
+-- "hot query, no supporting index" fix).
+--
+-- Two real hot paths run unsupported full scans without these:
+-- - handleAuctionBids' own held-balance/land-cap check on every bid
+--   placement (`auction_bids ab ... WHERE ab.bidder_builder_id = ?`).
+-- - DELETE /api/builders/:id's money-strand guard on every builder
+--   self-delete attempt, which filters both columns directly (and, per
+--   #1004's own investigation, does so twice per request -- once in the
+--   DELETE's own WHERE, once in the 404-vs-409 disambiguation SELECT that
+--   follows it).
+--
+-- seller_builder_id gets a composite (seller_builder_id, status) since
+-- every real call site filters both together (status IN ('active','ended')
+-- alongside it, never seller_builder_id alone) -- same reasoning as
+-- idx_auctions_status_listing's own composite shape. bidder_builder_id
+-- stays single-column: its own call sites join through auction_bids to
+-- auctions for the status filter rather than storing status redundantly
+-- on the bids table, so a composite here wouldn't be usable the same way.
+CREATE INDEX IF NOT EXISTS idx_auctions_seller_builder_id ON auctions(seller_builder_id, status);
+CREATE INDEX IF NOT EXISTS idx_auction_bids_bidder_builder_id ON auction_bids(bidder_builder_id);
