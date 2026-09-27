@@ -512,6 +512,27 @@ describe('Control Room replies (#N31)', () => {
     expect(replies.body.replies).toHaveLength(1);
     expect(replies.body.replies[0]).toMatchObject({ from: 'owner', text: 'Sounds good.' });
   });
+
+  // #997: a reply used to only bump updatedAt, leaving a task the owner
+  // already reviewed (viewed: true) showing no "New" indicator even though
+  // it just got fresh activity -- the same "sits hidden" failure mode
+  // AGENTS.md's own Control Room section calls out.
+  it('clears the parent task viewed flag when a reply is posted', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'owner', viewed: true }),
+    }));
+    const before = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(before.body.task.viewed).toBe(true);
+
+    const posted = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'higglehaven9', text: 'Reply after being viewed.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const after = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(after.body.task.viewed).toBe(false);
+  });
 });
 
 // N31 option 3 (owner: "I would like to do option 3. Isn't there a way to
