@@ -1181,6 +1181,29 @@ describe('Notifications', () => {
     expect(ownerAfterNewBid.body.notifications).toHaveLength(1);
   });
 
+  // #984: neither the mark-read (PATCH) nor mark-all-read (POST) branch had
+  // a checkRateLimit call at all, unlike this file's other authenticated
+  // mutation resources (bundle-mutate #892, friendship-mutate #899) — same
+  // shape as the friendship-mutate rate-limit test above (PATCH calls up to
+  // the limit, then a different mutation on the same shared bucket is what
+  // finally 429s).
+  it('rate-limits repeated notification mutations (PATCH/mark-all-read) from the same builder', async () => {
+    const owner = await signupBuilder('notif-mutate-rate-limit-owner');
+    const statements = Array.from({ length: 21 }, (_, i) =>
+      env.DB.prepare('INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)')
+        .bind(`notif-mutate-rate-limit-${i}`, owner.builderId, `Test notification ${i}`));
+    await env.DB.batch(statements);
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/notifications/notif-mutate-rate-limit-${i}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ read: true }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/notifications/mark-all-read', owner.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // Found via backlog audit: GET /notifications has no pagination, just a
   // flat LIMIT 100 — fine for the history list, but the unread badge used
   // to read straight off that capped list's own length
