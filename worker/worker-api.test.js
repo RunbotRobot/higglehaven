@@ -3316,4 +3316,46 @@ describe('Worker API', () => {
     ).first();
     expect(resolved.status).not.toBe('active');
   });
+
+  // #996: admin_action_log (#814) was write-only until this endpoint --
+  // every requireAdmin-gated mutation logged who did what, but nothing
+  // ever read it back.
+  it('rejects a non-admin/unauthenticated caller for GET /api/admin-action-log', async () => {
+    const unauthenticated = await api('/admin-action-log');
+    expect(unauthenticated.response.status).toBe(401);
+
+    const nonAdmin = await api('/admin-action-log', (await signupBuilder('action-log-non-admin')).session());
+    expect(nonAdmin.response.status).toBe(403);
+  });
+
+  it('lists admin action log entries newest-first, with a total count and exact-match filters', async () => {
+    const target = await signupBuilder('action-log-target');
+    const granted = await api(`/builders/${target.builderId}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    expect(granted.response.status).toBe(201);
+
+    const unfiltered = await api('/admin-action-log', adminSession());
+    expect(unfiltered.response.status).toBe(200);
+    expect(unfiltered.body.total).toBeGreaterThanOrEqual(1);
+    const entry = unfiltered.body.entries.find((e) => e.targetId === target.builderId);
+    expect(entry).toMatchObject({
+      adminUserId, actionType: 'land_cap_grant', targetType: 'builder', targetId: target.builderId,
+      detail: { amountCents: 500 },
+    });
+    expect(entry.createdAt).toBeTruthy();
+
+    const filtered = await api(
+      `/admin-action-log?actionType=land_cap_grant&targetType=builder&adminUserId=${adminUserId}`,
+      adminSession(),
+    );
+    expect(filtered.response.status).toBe(200);
+    expect(filtered.body.entries.every((e) => e.actionType === 'land_cap_grant' && e.targetType === 'builder')).toBe(true);
+    expect(filtered.body.entries.some((e) => e.targetId === target.builderId)).toBe(true);
+
+    const noMatch = await api('/admin-action-log?actionType=does-not-exist', adminSession());
+    expect(noMatch.response.status).toBe(200);
+    expect(noMatch.body.entries).toEqual([]);
+    expect(noMatch.body.total).toBe(0);
+  });
 });

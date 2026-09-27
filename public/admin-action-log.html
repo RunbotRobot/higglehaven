@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>higglehaven Admin Action Log</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #f4f7ef; color: #16240a;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #5a6b52; margin: 0 0 20px; font-size: 13px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  input, button {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
+    background: #fff; color: #16240a;
+  }
+  input { flex: 0 0 180px; }
+  button { cursor: pointer; background: #6ca42e; color: #16240a; border-color: #5a8e24; font-weight: 600; }
+  button:hover { background: #5a8e24; }
+  button.secondary { background: #fff; color: #16240a; font-weight: 500; }
+  button.secondary:hover { background: #eef3e6; }
+  .err { color: #8a2a12; font-size: 13px; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1e8; font-size: 13px; vertical-align: top; }
+  th { background: #eef3e6; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; }
+  tr:last-child td { border-bottom: none; }
+  .detail { font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; color: #4a5941; max-width: 360px; }
+  .empty { color: #6a7a60; padding: 30px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>higglehaven Admin Action Log</h1>
+<p class="sub" id="statusLine">Loading…</p>
+<p class="err" id="errLine" hidden></p>
+
+<div class="toolbar">
+  <input name="actionType" placeholder="Action type (exact)" />
+  <input name="targetType" placeholder="Target type (exact)" />
+  <input name="adminUserId" placeholder="Admin user id (exact)" />
+  <button id="filterBtn">Filter</button>
+  <button class="secondary" id="clearBtn">Clear</button>
+  <button class="secondary" id="refreshBtn">Refresh</button>
+</div>
+
+<div id="tableWrap"></div>
+
+<script>
+(function () {
+  const statusLine = document.getElementById('statusLine');
+  const errLine = document.getElementById('errLine');
+  const tableWrap = document.getElementById('tableWrap');
+  const actionTypeInput = document.querySelector('input[name="actionType"]');
+  const targetTypeInput = document.querySelector('input[name="targetType"]');
+  const adminUserIdInput = document.querySelector('input[name="adminUserId"]');
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function clearError() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  async function load() {
+    clearError();
+    statusLine.textContent = 'Loading…';
+    const params = new URLSearchParams();
+    if (actionTypeInput.value.trim()) params.set('actionType', actionTypeInput.value.trim());
+    if (targetTypeInput.value.trim()) params.set('targetType', targetTypeInput.value.trim());
+    if (adminUserIdInput.value.trim()) params.set('adminUserId', adminUserIdInput.value.trim());
+    const query = params.toString();
+    let body;
+    try {
+      const response = await fetch('/api/admin-action-log' + (query ? '?' + query : ''), {
+        headers: { 'content-type': 'application/json' },
+      });
+      try { body = await response.json(); } catch (_) { body = null; }
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    } catch (error) {
+      errLine.hidden = false;
+      errLine.textContent = error.message;
+      statusLine.textContent = 'Failed to load.';
+      return;
+    }
+    render(body);
+  }
+
+  function render(body) {
+    const entries = body.entries || [];
+    // Up to 500 most-recent entries, same capped-list shape as the
+    // Control Room task list -- entries.length can legitimately be less
+    // than total (an older entry outside the cap), same distinction that
+    // page's own header line makes.
+    statusLine.textContent = entries.length + ' shown · ' + body.total + ' total';
+    if (!entries.length) {
+      tableWrap.innerHTML = '<p class="empty">No matching admin actions.</p>';
+      return;
+    }
+    const rows = entries.map((entry) => `
+      <tr>
+        <td>${escapeHtml(entry.createdAt)}</td>
+        <td>${escapeHtml(entry.adminUserId || '—')}</td>
+        <td>${escapeHtml(entry.actionType)}</td>
+        <td>${escapeHtml(entry.targetType || '—')}</td>
+        <td>${escapeHtml(entry.targetId || '—')}</td>
+        <td class="detail">${entry.detail ? escapeHtml(JSON.stringify(entry.detail)) : ''}</td>
+      </tr>
+    `).join('');
+    tableWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>When</th><th>Admin</th><th>Action</th><th>Target type</th><th>Target id</th><th>Detail</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('filterBtn').addEventListener('click', load);
+  document.getElementById('refreshBtn').addEventListener('click', load);
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    actionTypeInput.value = '';
+    targetTypeInput.value = '';
+    adminUserIdInput.value = '';
+    load();
+  });
+  [actionTypeInput, targetTypeInput, adminUserIdInput].forEach((input) => {
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
