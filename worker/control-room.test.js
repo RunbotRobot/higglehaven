@@ -208,6 +208,21 @@ describe('Control Room tasks (#N31)', () => {
     expect(doneList.body.tasks.some((t) => t.id === done.id)).toBe(true);
   });
 
+  // #986: unlike the create/update handlers' own status field (validated by
+  // controlRoomStatusValue since #915), this list endpoint's status query
+  // filter went straight into the WHERE clause with no check -- a typo'd
+  // value (wrong case, wrong separator) silently matched zero rows instead
+  // of 400ing, same failure shape #915's own tests check for create/update.
+  it('rejects an invalid status filter on the task list, with a field-scoped error', async () => {
+    const wrongCase = await api('/control-room/tasks?status=Done', keySession());
+    expect(wrongCase.response.status).toBe(400);
+    expect(wrongCase.body.error).toMatch(/status/i);
+
+    const wrongSeparator = await api('/control-room/tasks?status=in-progress', keySession());
+    expect(wrongSeparator.response.status).toBe(400);
+    expect(wrongSeparator.body.error).toMatch(/status/i);
+  });
+
   // Owner, Control Room: the admin page's header kept reading "500 tasks
   // total" forever once the board actually passed 500 rows, because it was
   // displaying tasks.length off the same LIMIT-500 result set the page
