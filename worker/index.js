@@ -1951,6 +1951,12 @@ async function handleProductReviews(request, db, route) {
     if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+      // #990: unlike the anonymous/orphaned-template branch below (#564),
+      // this authenticated-owner branch never had a rate limit at all --
+      // same gap class already closed for other authenticated mutation
+      // actions in this file (FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899,
+      // CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX #944).
+      await checkRateLimit(db, `product-review-delete:${sessionSeller.seller_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     } else {
       await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
