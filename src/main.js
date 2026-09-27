@@ -10684,7 +10684,7 @@ function createShopAvatar() {
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite };
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, modelUrl: null };
 }
 
 // #681 (sub-issue of #679/#680): the account's own equipped custom avatar
@@ -10699,6 +10699,16 @@ function createShopAvatar() {
 // rigid whole (root position/rotation on `group`), but per-bone limb
 // animation on its own skeleton is #682's job, not this one's.
 async function createCustomShopAvatar(modelUrl) {
+  // #982: lets an e2e test simulate a slow model load (a real network fetch
+  // + GLTF parse can take a while) deterministically, without depending on
+  // how long an actual fetch takes or on Playwright's own route-
+  // interception timing (which was found to hold up unrelated same-origin
+  // requests for as long as a route handler delays a response, making a
+  // network-level delay here an unreliable way to construct this race in a
+  // test). Always undefined outside of that one test.
+  if (window.__testAvatarLoadDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testAvatarLoadDelayMs));
+  }
   const container = await loadModelInstance(modelUrl);
   // loadModelInstance recenters the model on its own bounding-box center,
   // so (unlike the procedural avatar, whose local z=0 is already its feet)
@@ -10747,10 +10757,10 @@ async function createCustomShopAvatar(modelUrl) {
     if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
   }
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null };
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState } — see createShopAvatar/createCustomShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState, modelUrl } — see createShopAvatar/createCustomShopAvatar
 
 // #713 (sub-issue of #710): swaps the live Shop-mode avatar the instant the
 // "My Avatars" settings picker equips a different one, so a builder standing
@@ -10763,8 +10773,17 @@ let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, h
 // updateShopMovement drives group.position/rotation from shopAvatarPosition/
 // shopAvatarFacing/shopAvatarPitch every frame regardless of which avatar
 // instance is in the scene, so the swap itself needs no position handoff.
+// #982: same out-of-order-resolution hazard as sellerShowcaseLoadToken/
+// syncCreate/etc elsewhere in this file — a custom model's load (the
+// `modelUrl` branch below) is a real network fetch + GLTF parse that can
+// take a while, so an earlier Equip click can still be mid-flight when a
+// later Equip click (e.g. the synchronous default-avatar branch) has
+// already resolved and swapped shopAvatar. Without this guard, the earlier
+// call would resume and silently overwrite the newer, correct equip.
+let shopAvatarEquipToken = 0;
 async function refreshEquippedShopAvatar(modelUrl) {
   if (currentMode !== 'shop' || !shopAvatar) return;
+  const myToken = ++shopAvatarEquipToken;
   let nextAvatar;
   if (modelUrl) {
     try {
@@ -10776,9 +10795,14 @@ async function refreshEquippedShopAvatar(modelUrl) {
   } else {
     nextAvatar = createShopAvatar();
   }
+  if (myToken !== shopAvatarEquipToken) return; // a newer equip superseded this one while the model was loading
   scene.remove(shopAvatar.group);
   shopAvatar = nextAvatar;
   scene.add(shopAvatar.group);
+  // Nothing in the DOM reflects which avatar is actually live-rendered
+  // (the Settings picker only ever shows server truth) -- exposed here so
+  // this exact race (#982) is observable from an e2e test.
+  window.__shopAvatarModelUrl = shopAvatar.modelUrl;
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -12428,6 +12452,7 @@ async function enterShopMode() {
   }
   if (!shopAvatar) shopAvatar = createShopAvatar();
   scene.add(shopAvatar.group);
+  window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
