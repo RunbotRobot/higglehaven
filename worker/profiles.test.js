@@ -1491,6 +1491,42 @@ describe('Friendships', () => {
     expect(patchMissing.response.status).toBe(404);
   });
 
+  // #1006: the DELETE (decline) branch used to decide whether to notify
+  // purely from a pre-fetch `existing.status === 'pending'` read, never
+  // re-verified against whether this call's own DELETE actually removed a
+  // row — unlike the sibling PATCH/accept branch, which #353 already
+  // gated on its own UPDATE's row-count for exactly this reason. Two
+  // concurrent DELETEs (fired together, not awaited one at a time, same
+  // race shape as the "accepts only one of two concurrent requests" test
+  // above) used to both read the pending status and both fire the
+  // notification, even though only one of them could actually delete the
+  // row.
+  it('sends only one decline notification when two DELETEs race the same pending friendship', async () => {
+    const a = await signupBuilder('friendship-decline-race-a');
+    const b = await signupBuilder('friendship-decline-race-b');
+    const sent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    // Genuinely concurrent, so either request's own top-level existence
+    // check can legitimately run after the other's DELETE already
+    // committed, correctly 404ing — that's a real outcome of the race, not
+    // a bug. The invariant this test actually cares about is the
+    // notification count below, not that both calls land a 200.
+    const [first, second] = await Promise.all([
+      api(`/friendships/${friendshipId}`, b.session({ method: 'DELETE' })),
+      api(`/friendships/${friendshipId}`, b.session({ method: 'DELETE' })),
+    ]);
+    expect([first.response.status, second.response.status].every((s) => s === 200 || s === 404)).toBe(true);
+
+    const aNotices = await api('/notifications', a.session());
+    const declineNotices = aNotices.body.notifications.filter(
+      (n) => n.message === 'friendship-decline-race-b declined your friend request.',
+    );
+    expect(declineNotices).toHaveLength(1);
+  });
+
   it('rejects an invalid status transition', async () => {
     const a = await signupBuilder('friendship-invalid-status-a');
     const b = await signupBuilder('friendship-invalid-status-b');
