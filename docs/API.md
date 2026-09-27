@@ -6705,6 +6705,40 @@ UI (per-viewer highlight/minimize toggles, a few small display niceties)
 was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
 
+## Admin action log (#996, sub-issue-in-spirit of #813/#814)
+
+`admin_action_log` (migration `0087_admin_action_log.sql`) records every
+`requireAdmin`-gated mutation — who did it, what kind of action, and what
+it targeted — but was write-only from its own first landing (#813's own
+body called an admin-facing browse UI an intentional, separate follow-up,
+never filed until #996). This is that follow-up: a read endpoint and a
+small browse page, both `requireAdmin`-gated same as everything else
+admin-only in this API.
+
+### `GET /api/admin-action-log`
+
+Lists log entries, newest first, capped at 500 rows — same "capped list +
+separate uncapped total count" shape as `GET /api/control-room/tasks`, not
+real cursor pagination, since a few hundred most-recent entries is what an
+admin actually wants to browse here too. Optional exact-match query-string
+filters: `actionType`, `targetType`, `adminUserId` (any combination; all
+must match when more than one is given). `401`/`403` via `requireAdmin`
+like every other admin-only endpoint.
+
+Response: `{ entries: [...], total }`. Each entry: `logId`, `adminUserId`
+(nullable — `ON DELETE SET NULL` if the acting admin's account is later
+deleted), `actionType`, `targetType`, `targetId`, `detail` (whatever small
+JSON-serializable context `adminActionLogStatement`'s own caller passed,
+or `null`), `createdAt`.
+
+### Admin page: `GET /admin/action-log`
+
+Same shape as `GET /admin/control-room` just above: `requireAdmin`-gated
+(a plain `401`/`403` HTML page otherwise), served from
+`public/admin-action-log.html`, a small dependency-free same-origin page
+with the three filter fields above and a refresh button. No polling —
+this is a browse-on-demand audit trail, not a live-updating board.
+
 ## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
 
 Owner direction on Control Room (N53): "I do want to allow users to upload

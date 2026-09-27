@@ -283,6 +283,10 @@ export default {
       return handleControlRoomAdminPage(request, env);
     }
 
+    if (url.pathname === '/admin/action-log') {
+      return handleAdminActionLogPage(request, env);
+    }
+
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url, ctx).catch((error) => {
         const httpError = error instanceof HttpError ? error : databaseHttpError(error);
@@ -571,6 +575,10 @@ async function handleApi(request, env, url, ctx) {
     return handleControlRoom(request, env, route, url);
   }
 
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-action-log') {
+    return handleAdminActionLogList(request, env.DB, url);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -711,17 +719,31 @@ async function handleControlRoomAdminPage(request, env) {
   return env.ASSETS.fetch(new Request(new URL('/admin-control-room.html', request.url), request));
 }
 
-function controlRoomSignInPage(error) {
+function controlRoomSignInPage(error, title = 'higglehaven Control Room') {
   const message = error.status === 401
     ? 'Sign in to higglehaven as an admin in another tab, then reload this page.'
     : 'This page is admin-only.';
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8" /><title>higglehaven Control Room</title>
+<head><meta charset="utf-8" /><title>${title}</title>
 <style>body { font: 15px/1.5 -apple-system, sans-serif; max-width: 32em; margin: 20vh auto; padding: 0 16px; color: #16240a; }</style>
 </head>
 <body><p>${message}</p></body>
 </html>`;
+}
+
+// #996: same "gate, then hand off to a plain static file over the ASSETS
+// binding" shape as handleControlRoomAdminPage above -- the browse UI for
+// admin_action_log (#814/#813), never built alongside the write side.
+async function handleAdminActionLogPage(request, env) {
+  if (request.method !== 'GET') return json({ error: 'Not found' }, 404);
+  try {
+    await requireAdmin(request, env.DB);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Action Log'), error.status);
+  }
+  return env.ASSETS.fetch(new Request(new URL('/admin-action-log.html', request.url), request));
 }
 
 async function handleControlRoom(request, env, route, url) {
@@ -4874,6 +4896,52 @@ function adminActionLogStatement(db, adminUserId, actionType, targetType, target
     targetId ?? null,
     detail !== undefined ? JSON.stringify(detail) : null,
   );
+}
+
+// #996: admin_action_log (#814) was write-only from its own first
+// landing (#813's own body called an admin-facing browse UI an
+// intentional, separate follow-up) -- this is that follow-up. Same
+// "capped list + separate uncapped total count" shape as
+// handleControlRoomTasksList, not real cursor pagination, since a few
+// hundred most-recent entries is what an admin actually wants to browse
+// here too.
+async function handleAdminActionLogList(request, db, url) {
+  await requireAdmin(request, db);
+  const actionType = url.searchParams.get('actionType');
+  const targetType = url.searchParams.get('targetType');
+  const adminUserId = url.searchParams.get('adminUserId');
+  const conditions = [];
+  const bindings = [];
+  if (actionType !== null) {
+    conditions.push('action_type = ?');
+    bindings.push(labelValue(actionType, 'actionType'));
+  }
+  if (targetType !== null) {
+    conditions.push('target_type = ?');
+    bindings.push(labelValue(targetType, 'targetType'));
+  }
+  if (adminUserId !== null) {
+    conditions.push('admin_user_id = ?');
+    bindings.push(labelValue(adminUserId, 'adminUserId'));
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const [{ results }, countRow] = await Promise.all([
+    db.prepare(`SELECT * FROM admin_action_log ${where} ORDER BY created_at DESC LIMIT 500`).bind(...bindings).all(),
+    db.prepare(`SELECT COUNT(*) AS total FROM admin_action_log ${where}`).bind(...bindings).first(),
+  ]);
+  return json({ entries: results.map(adminActionLogEntryFromRow), total: countRow.total });
+}
+
+function adminActionLogEntryFromRow(row) {
+  return {
+    logId: row.log_id,
+    adminUserId: row.admin_user_id,
+    actionType: row.action_type,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    detail: row.detail_json ? JSON.parse(row.detail_json) : null,
+    createdAt: row.created_at,
+  };
 }
 
 function formatCents(cents) {
