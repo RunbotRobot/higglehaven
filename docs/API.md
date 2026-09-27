@@ -2872,8 +2872,9 @@ save regardless of what a prior `PATCH /api/instances/:id` had set.
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
-statement, keeping the complete draft-and-snapshot save to four D1 statements
-regardless of draft size for free-tier efficiency.
+statement, keeping the complete draft-and-snapshot save to five D1 statements
+(the fifth being #415's own leading ownership/concurrency guard) regardless
+of draft size for free-tier efficiency.
 
 Individual instance CRUD calls remain low-level editing operations; this draft
 replacement endpoint is the explicit save boundary that guarantees version
