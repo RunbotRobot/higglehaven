@@ -3019,6 +3019,14 @@ async function handleSellers(request, env, db, route, url) {
 // since one builder's outstanding count should stay small in practice,
 // and no DELETE since a read notification is still useful history for
 // "wait, when did that change?"
+// #984: the mark-read (PATCH) and mark-all-read (POST) branches below had
+// no checkRateLimit call at all, unlike this file's other authenticated
+// mutation resources (BUNDLE_MUTATE_RATE_LIMIT_MAX #892,
+// FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899) — each is a real, uncached D1
+// write with no cap on how often a builder can fire it against their own
+// account.
+const NOTIFICATION_MUTATE_RATE_LIMIT_MAX = 20;
+
 async function handleNotifications(request, db, route, url) {
   // Ahead of the generic list GET below (same "specific path before generic
   // CRUD" ordering handleBuilders' own GET /me uses) — the list itself is
@@ -3075,6 +3083,7 @@ async function handleNotifications(request, db, route, url) {
     if (!existing) return json({ error: 'Notification not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your notification');
+    await checkRateLimit(db, `notification-mutate:${sessionBuilder.builder_id}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.read === true) {
       await db.prepare(`
@@ -3090,6 +3099,7 @@ async function handleNotifications(request, db, route, url) {
     // marking someone else's notifications read isn't a feature.
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderId = sessionBuilder.builder_id;
+    await checkRateLimit(db, `notification-mutate:${builderId}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
     await db.prepare(`
       UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE builder_id = ? AND read_at IS NULL
