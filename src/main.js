@@ -10301,6 +10301,12 @@ const shopReviews = [];
 // calendar events) already enforces.
 let shopTappedProduct = null;
 let shopReviewHintsVisible = false;
+// #994: which product shopReviewHintsVisible/canBuy were last computed for
+// -- updateReviewFade's own change-detection used to key purely off
+// tappedInRange, so retapping a *different* product without ever leaving
+// SIGN_INTERACT_RADIUS_M (two nearby items on the same shelf, say) left
+// the Buy/Return-Policy hints showing the previous product's priced state.
+let shopReviewHintsProduct = null;
 
 // Sustained view-attention tracking (#215, sub-issue of #207 — docs/SPEC.md
 // §2's item-handling animations trigger "on sustained view-attention," not
@@ -11663,8 +11669,13 @@ function updateReviewFade() {
     if (review === shopTappedProduct) tappedDistance = distance;
   }
   const tappedInRange = !!shopTappedProduct && tappedDistance <= SIGN_INTERACT_RADIUS_M;
-  if (tappedInRange !== shopReviewHintsVisible) {
+  // #994: recompute on a tapped-product change too, not just a tappedInRange
+  // flip -- two nearby in-range products can be tapped one after another
+  // without tappedInRange ever toggling, which used to leave the hints
+  // showing the previous product's priced state for the new one.
+  if (tappedInRange !== shopReviewHintsVisible || shopTappedProduct !== shopReviewHintsProduct) {
     shopReviewHintsVisible = tappedInRange;
+    shopReviewHintsProduct = shopTappedProduct;
     shopReviewHintEl.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy hint at
@@ -12156,9 +12167,11 @@ function unloadShopLandletInstances(entry) {
     if (shopTappedProduct === review) {
       shopTappedProduct = null;
       shopReviewHintsVisible = false;
+      shopReviewHintsProduct = null;
       shopProductInfoEl.classList.remove('visible');
       shopReviewHintEl.classList.remove('visible');
       shopBuyHintEl.classList.remove('visible');
+      shopReturnPolicyLinkEl.classList.remove('visible');
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise
