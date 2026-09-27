@@ -6633,8 +6633,18 @@ Updates a task. **Requires `caller` (who is making this specific change)
 on every call — `400` if missing or blank, capped at 100 characters
 (#971).** Any of `status`, `session`,
 `note` (also stamps `noteUpdatedAt`), `tag`, `prUrl`, `waitingOn`,
-`viewed`, `awaitingClaude` may be included; only fields actually present
-in the body are touched.
+`viewed`, `awaitingClaude`, `subIssues`, `subIssueSummaries` may be
+included; only fields actually present in the body are touched.
+
+`subIssues`/`subIssueSummaries` (#998) are how a top-level tracking
+task's card shows its breakdown — the admin page renders them as a
+linked "Sub-issues: #218 #219 ..." line (see AGENTS.md's "Proposing big
+feature work"). `subIssues` must be an array of positive integers (the
+sub-issue numbers), capped at 50 entries. `subIssueSummaries` must be an
+object mapping a sub-issue number (as a string key) to a short summary
+string (same 100-character cap as every other label-shaped field in this
+API, #971) — a short description of what that sub-issue is, shown
+alongside its number. Either field can be set to `null` to clear it.
 
 **The actual fix N31 asked for**: setting `waitingOn` to `'owner'` (when
 it wasn't already) additionally requires a non-empty `reason` — `400`
