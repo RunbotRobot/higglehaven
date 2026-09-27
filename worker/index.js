@@ -752,7 +752,12 @@ async function handleControlRoom(request, env, route, url) {
 // end-user account data.
 async function handleControlRoomTasksList(request, env, db, url) {
   await requireControlRoomAccess(request, env, db);
-  const status = url.searchParams.get('status');
+  const rawStatus = url.searchParams.get('status');
+  // #986: unlike the create/update handlers' own status field (validated by
+  // controlRoomStatusValue since #915), this filter went straight into the
+  // WHERE clause with no check -- a typo'd status (wrong case, wrong
+  // separator) silently matched zero rows instead of 400ing.
+  const status = rawStatus === null ? null : controlRoomStatusValue(rawStatus);
   const query = status
     ? db.prepare('SELECT * FROM control_room_tasks WHERE status = ? ORDER BY updated_at DESC LIMIT 500').bind(status)
     : db.prepare('SELECT * FROM control_room_tasks ORDER BY updated_at DESC LIMIT 500');
