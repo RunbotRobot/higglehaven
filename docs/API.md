@@ -6661,7 +6661,11 @@ above). `from` is capped at 100 characters like every field of its shape
 in this API (#971); `text` uses the longer 20,000-character text cap.
 `404` if the task doesn't exist. Bumps the parent task's own
 `updatedAt`, the same "a reply counts as activity on its thread" behavior
-the Artifact-era board used for its own sort order.
+the Artifact-era board used for its own sort order. Also unconditionally
+clears the parent task's `viewed` flag back to `false` (#997) — a reply
+is always fresh activity worth flagging, so a task the owner already
+reviewed goes back to showing the board's "New" indicator rather than
+sitting with a new reply nobody's alerted to.
 
 ### Admin page: `GET /admin/control-room`
 

@@ -939,7 +939,11 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
       INSERT INTO control_room_replies (reply_id, task_id, from_caller, text, image_url, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).bind(replyId, taskId, fromCaller, text, body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null, now),
-    db.prepare('UPDATE control_room_tasks SET updated_at = ? WHERE task_id = ?').bind(now, taskId),
+    // A reply is always fresh activity worth flagging, so it also clears
+    // `viewed` -- otherwise a task the owner already reviewed sits with no
+    // "New" indicator even though it just got a new reply (AGENTS.md's own
+    // Control Room section calls this out as the intended behavior).
+    db.prepare('UPDATE control_room_tasks SET updated_at = ?, viewed = 0 WHERE task_id = ?').bind(now, taskId),
   ]);
 
   const row = await db.prepare('SELECT * FROM control_room_replies WHERE reply_id = ?').bind(replyId).first();
