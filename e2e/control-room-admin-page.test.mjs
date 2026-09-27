@@ -139,6 +139,44 @@ const cursorPreservedAfterPoll = await replyBox.evaluate((el) => el.selectionSta
 console.log('reply textarea keeps focus across a poll tick (should be true):', stillFocusedAfterPoll);
 console.log('cursor position preserved across a poll tick (should be true):', cursorPreservedAfterPoll);
 
+// #988: clicking a status tab used to only filter the already-fetched,
+// status-less 500-row page client-side, so "N tasks total" kept showing
+// the grand total across every status instead of one scoped to the tab's
+// own status (the API itself already scopes `total` to `?status=`, per
+// worker/control-room.test.js's own "scopes total to the same status
+// filter as the list itself" test) -- this exercises the frontend
+// actually calling it, not just the endpoint. A second, still-queued task
+// makes the grand total (2) diverge from the done-scoped total (1) --
+// with only the one done task from the compose-form flow above, the two
+// totals would coincidentally match and this check would pass either way.
+await page.evaluate(async () => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'e2e-owner', kind: 'feedback', title: 'E2E still-queued task' }),
+  });
+});
+// Reload so the page's own (unfiltered) loadTasks() picks up both tasks
+// into its cache before the tab click below -- without this, the
+// pre-fix bug (tab click never re-fetches, just re-filters the same
+// cache) would go unnoticed, since the cache wouldn't yet contain the
+// second task either way.
+await page.reload({ waitUntil: 'networkidle' });
+const doneTotalFromApi = await page.evaluate(async () => {
+  const res = await fetch('/api/control-room/tasks?status=done');
+  const body = await res.json();
+  return body.total;
+});
+await page.click('.tabs button[data-status="done"]');
+await page.waitForFunction(
+  (expected) => document.querySelector('#statusLine')?.textContent.startsWith(expected + ' tasks total'),
+  doneTotalFromApi,
+  { timeout: 10000 },
+);
+const doneTabStatusLine = (await page.textContent('#statusLine')).trim();
+console.log('Done tab scopes "tasks total" to the status filter itself (actual):', doneTabStatusLine);
+const doneTabTotalMatchesApi = doneTabStatusLine.startsWith(doneTotalFromApi + ' tasks total');
+
 // Blocked-on jump (Control Room feedback: "When I tap 'blocked on #n', it
 // should jump to that task in the Control Room.") — a task's own waitingOn
 // can hold another task's `number` (a tracking task blocked on a real
@@ -303,6 +341,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   blockingCardIsOpen &&
   stillFocusedAfterPoll &&
   cursorPreservedAfterPoll &&
+  doneTabTotalMatchesApi &&
   quickLookIsOpen &&
   advancedToOther === 1 &&
   replyRecorded &&

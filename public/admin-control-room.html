@@ -403,7 +403,14 @@
 
   async function loadTasks() {
     try {
-      const data = await apiCall('/tasks');
+      // #988: the server already validates and scopes both the row list and
+      // `total` to this filter (controlRoomStatusValue, #915/#986) -- QUICK_LOOK
+      // is excluded per its own comment above (a synthetic client-only value
+      // that must never reach the API).
+      const query = (filterStatus && filterStatus !== QUICK_LOOK)
+        ? '?status=' + encodeURIComponent(filterStatus)
+        : '';
+      const data = await apiCall('/tasks' + query);
       tasks = data.tasks;
       totalTasks = data.total;
       clearError();
@@ -523,7 +530,11 @@
     if (!btn) return;
     filterStatus = btn.dataset.status;
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b === btn));
-    render();
+    if (filterStatus === QUICK_LOOK) {
+      render();
+    } else {
+      loadTasks();
+    }
   });
 
   document.getElementById('search').addEventListener('input', (event) => {
