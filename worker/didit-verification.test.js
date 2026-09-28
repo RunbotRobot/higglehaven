@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { latestDiditSession } from './index.js';
-import { api, signupBuilder } from './test-helpers.js';
+import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
 // why the suite is split by file) specifically so setting
@@ -173,6 +173,55 @@ describe('Didit verification webhook (#589)', () => {
       expect(latest.session_id).toBe(newerSessionId);
       expect(latest.processed_at).toBeNull();
       expect(latest.url).toBe('https://verify.didit.me/session/newer');
+    });
+  });
+
+  // #1014/migrations/0090: didit_verification_sessions.user_id and
+  // sellers.user_id used to have no ON DELETE clause at all (SQLite/D1's
+  // default RESTRICT), unlike every other REFERENCES users(user_id) FK in
+  // this schema -- a direct `DELETE FROM users` would have been rejected
+  // outright rather than cascading/nulling cleanly. No account-deletion
+  // endpoint exists yet, so this is exercised at the raw-SQL level (the
+  // same "no endpoint to drive it through yet" shape this file's own
+  // insertPendingSession helper already works around for session creation).
+  describe('ON DELETE behavior on users(user_id) (#1014/migrations/0090)', () => {
+    // handleSignup links every new account to an auto-provisioned builder
+    // via builders.user_id (docs/SPEC.md §3's "every user is automatically
+    // a builder") -- and builders.user_id itself is deliberately NOT part
+    // of #1014/migrations/0090's fix (see that migration's own comment: a
+    // rebuild is unsafe there, unlike sellers/didit_verification_sessions,
+    // because builders is the parent side of several ON DELETE
+    // CASCADE/SET NULL foreign keys). So a real `DELETE FROM users` still
+    // hits builders' own still-RESTRICT FK today, unrelated to what this
+    // migration actually fixed -- unlinking the auto-provisioned builder
+    // first isolates the sellers/didit_verification_sessions behavior
+    // this migration is responsible for.
+    async function unlinkAutoBuilder(userId) {
+      await env.DB.prepare('UPDATE builders SET user_id = NULL WHERE user_id = ?').bind(userId).run();
+    }
+
+    it('cascades a deleted user into their own didit_verification_sessions rows', async () => {
+      const builder = await signupBuilder('didit-user-deleted');
+      const sessionId = await insertPendingSession(builder.email);
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+      await unlinkAutoBuilder(userId);
+
+      await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
+
+      const row = await env.DB.prepare('SELECT * FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+      expect(row).toBeNull();
+    });
+
+    it('nulls out sellers.user_id (keeping the seller row) after the linked user is deleted', async () => {
+      const seller = await signupSeller('didit-seller-user-deleted');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(seller.email).first()).user_id;
+      await unlinkAutoBuilder(userId);
+
+      await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
+
+      const row = await env.DB.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+      expect(row).not.toBeNull();
+      expect(row.user_id).toBeNull();
     });
   });
 });
