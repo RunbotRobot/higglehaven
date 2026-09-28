@@ -3165,9 +3165,12 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
-- A friend request or its acceptance (see "Friendship object" below): the
-  recipient is notified of a new request, and the requester is notified
-  once it's accepted.
+- A friend request, its acceptance, or its decline (see "Friendship object"
+  below): the recipient is notified of a new request, and the requester is
+  notified once it's accepted or, if it's still pending when the recipient
+  declines it, once it's declined. Canceling your own pending request and
+  unfriending an already-accepted friendship do not notify the other side
+  (see #858 for the open question of whether unfriending should).
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -3348,7 +3351,9 @@ Requires a session logged in as either the `requesterBuilderId` or the
 `recipientBuilderId` on this friendship (`403` otherwise). Removes a
 friendship outright — covers declining a still-pending request, canceling
 one you sent, and unfriending an accepted one, all the same way. `404` if
-it doesn't exist.
+it doesn't exist. If the friendship is still pending and the caller is the
+`recipientBuilderId` (i.e. an actual decline, not a cancel or an unfriend),
+notifies the `requesterBuilderId`.
 
 ### Frontend wiring
 
