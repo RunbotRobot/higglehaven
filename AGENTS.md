@@ -177,17 +177,31 @@ call now means a `POST`/`PATCH` to the API, or the equivalent `INSERT`/
   owner has marked `viewed: true` should also flip that back to
   `viewed: false` so your reply doesn't sit hidden.
 
-**Posting a periodic work summary (e.g. an hourly recap of merged PRs):
-file it as its own new `control_room_tasks` row, not a reply on a
-recurring one.** The owner's own instruction (2026-09-09): "provide the
-hourly summaries each as their new task that is 'WAITING ON OWNER'. I
-should be able to mark tasks as done myself, then you won't have to
-bother with the task again." A reply buried under an old task's thread
-is easy to miss and leaves the owner unable to dismiss it without
-replying back; a fresh `kind: "feedback"`, `tag: "summary"` (or similar)
-row with `status: "queued"`, `waitingOn: "owner"` puts it in the Queued
-column on its own, where the owner can mark it `"done"` directly — no
-reply needed from either side.
+**Routine periodic work summaries are retired — do not post one.** A
+2026-09-09 instruction ("provide the hourly summaries each as their new
+task that is 'WAITING ON OWNER'... then you won't have to bother with
+the task again") is what created this convention in the first place; it
+is superseded, not current guidance, kept below only for the history.
+On 2026-09-28 the owner reversed it directly in the control room
+(`posted_by: "owner"`): "Let's eliminate the hourly summary. It's become
+an enormous backlog when I have priorities pulling me away from
+higglehaven," plus "Please mark all summaries as 'Done' from our
+backlog of queued summaries" — the latter because the former convention
+had, by then, produced 818 queued `tag: "summary"` rows across the
+fleet with nobody dismissing them (higglehaven2 bulk-cleared that
+backlog and replied confirming the change the same day). Keep checking
+the Control Room and GitHub backlog on your own hourly cron (see
+"Continuing without a prompt" below) — just stop posting a new
+`control_room_tasks` row every cycle to report "no change" or "nothing
+to self-assign." Only post when there's something the owner actually
+needs to see: a genuine question, a reply that hands a decision back to
+them (see "Set `waitingOn` back to `"owner"`" above), or a one-line note
+on a completed/self-assigned piece of work. The original 2026-09-09
+instruction, for context only:
+
+> "provide the hourly summaries each as their new task that is 'WAITING
+> ON OWNER'. I should be able to mark tasks as done myself, then you
+> won't have to bother with the task again."
 
 ### Continuing without a prompt
 
