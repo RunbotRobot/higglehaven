@@ -819,6 +819,21 @@ async function handleControlRoomTaskCreate(request, env, db) {
   const existing = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   if (existing) throw new HttpError('A task with this id already exists', 409);
 
+  const kind = body.kind ? labelValue(body.kind, 'kind') : 'feedback';
+  const explicitNumber = body.number == null ? null : positiveInteger(body.number, 'number');
+  const explicitNoteNumber = body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber');
+  // Owner feedback (control room notes 9461ee39/96d6d08c, 2026-09-28): a
+  // message-shaped task (no GitHub issue/PR behind it) had no visible id at
+  // all -- taskNumberLabel (admin-control-room.html) already renders
+  // "N" + noteNumber for exactly this case, but nothing ever populated
+  // noteNumber unless the caller happened to pass one, which neither the
+  // admin page's compose form nor any session's create call ever did. Auto-
+  // assign the next one here instead, so every message-shaped card gets a
+  // stable, referenceable id (e.g. "N42") the moment it's created, the same
+  // way a GitHub-backed card already gets its issue/PR number for free.
+  const isMessageShaped = kind === 'feedback' || kind === 'question';
+  const autoAssignNoteNumber = isMessageShaped && explicitNumber == null && explicitNoteNumber == null;
+
   // #909: the update handler's own comment above calls its reason
   // requirement "the core of N31's own fix" -- this create path is the
   // other way a task can land at waitingOn:'owner', and until now it had
@@ -837,12 +852,14 @@ async function handleControlRoomTaskCreate(request, env, db) {
       INSERT INTO control_room_tasks
         (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
          waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ${autoAssignNoteNumber
+        ? '(SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks)'
+        : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       taskId,
-      body.kind ? labelValue(body.kind, 'kind') : 'feedback',
-      body.number == null ? null : positiveInteger(body.number, 'number'),
-      body.noteNumber == null ? null : positiveInteger(body.noteNumber, 'noteNumber'),
+      kind,
+      explicitNumber,
+      ...(autoAssignNoteNumber ? [] : [explicitNoteNumber]),
       title,
       body.status ? controlRoomStatusValue(body.status) : 'queued',
       body.session ? labelValue(body.session, 'session') : '',
