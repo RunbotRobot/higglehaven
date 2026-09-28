@@ -1,0 +1,16 @@
+-- #1016: owned_avatars.purchase_id (added by 0085_owned_avatars_purchase_id.sql)
+-- never got an index. builder_id is covered for free by the table's own
+-- composite PRIMARY KEY (builder_id, template_id) via leftmost-prefix, but
+-- purchase_id gets no such coverage.
+--
+-- worker/index.js's refund handler (the #754/#801 avatar-refund-revocation
+-- logic) runs a `SELECT builder_id FROM owned_avatars WHERE purchase_id = ?`
+-- followed by a `DELETE ... WHERE purchase_id = ?` on every single refund
+-- processed by this app, not just avatar refunds -- both filter on
+-- purchase_id with no supporting index, so every refund does a full table
+-- scan of owned_avatars.
+--
+-- Partial index, since purchase_id is nullable and only rows granted
+-- through the real Stripe checkout path have it set -- same reasoning as
+-- migrations/0040_bundle_sharing.sql's own partial index on bundles.shared.
+CREATE INDEX IF NOT EXISTS idx_owned_avatars_purchase_id ON owned_avatars(purchase_id) WHERE purchase_id IS NOT NULL;
