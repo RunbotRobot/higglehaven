@@ -3339,7 +3339,6 @@ async function handleFriendships(request, db, route, url) {
       throw new HttpError('Not your friendship', 403);
     }
     await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
-    const deleteStatement = db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]);
     // #857: same "no passive way to find out" gap #319 already fixed for
     // request/accept — a decline left the original requester with nothing
     // but re-polling GET /api/friendships to notice the row just vanished.
@@ -3347,14 +3346,21 @@ async function handleFriendships(request, db, route, url) {
     // deleting it) — the requester cancelling their own pending request,
     // and unfriending an already-accepted friendship, are deliberately out
     // of scope here (see #858 for the unfriend-notification question).
-    if (existing.status === 'pending' && sessionBuilder.builder_id === existing.recipient_builder_id) {
-      await db.batch([
-        deleteStatement,
-        notificationStatement(db, existing.requester_builder_id,
-          `${sessionBuilder.label} declined your friend request.`),
-      ]);
-    } else {
-      await deleteStatement.run();
+    const isDecline = existing.status === 'pending' && sessionBuilder.builder_id === existing.recipient_builder_id;
+    // #1006: gated on the DELETE's own `WHERE status = 'pending'`, the same
+    // shape #353 already established for the sibling PATCH/accept branch —
+    // this used to decide whether to notify purely from the pre-fetch
+    // `existing.status` above, never re-verified against whether this call
+    // actually removed a row. Two concurrent DELETEs on the same pending
+    // friendship both read `existing.status === 'pending'` and both fired
+    // the notification, even though only one of them could actually delete
+    // the row.
+    const result = isDecline
+      ? await db.prepare(`DELETE FROM friendships WHERE friendship_id = ? AND status = 'pending'`).bind(route[1]).run()
+      : await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
+    if (isDecline && result.meta.changes === 1) {
+      await notificationStatement(db, existing.requester_builder_id,
+        `${sessionBuilder.label} declined your friend request.`).run();
     }
     return json({ deleted: true });
   }
