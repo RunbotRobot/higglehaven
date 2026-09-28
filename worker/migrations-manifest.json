@@ -86,5 +86,6 @@
   "0086_higgles_redemptions_builder_id_set_null.sql",
   "0087_admin_action_log.sql",
   "0088_higgles_redemptions_nullable_stripe_ids.sql",
-  "0089_auction_builder_id_indexes.sql"
+  "0089_auction_builder_id_indexes.sql",
+  "0090_catalog_name_nocase_sort.sql"
 ]

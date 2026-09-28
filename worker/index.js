@@ -1675,7 +1675,12 @@ async function handleCatalog(request, db, route, url, models, env) {
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
     if (cursor && sort === 'name') {
-      conditions.push('(name > ? OR (name = ? AND template_id > ?))');
+      // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
+      // below and migrations/0090's own idx_catalog_templates_name_nocase
+      // index -- an inconsistent collation here would silently reorder or
+      // skip rows relative to what the client's previous page actually
+      // ended on.
+      conditions.push('(name > ? COLLATE NOCASE OR (name = ? COLLATE NOCASE AND template_id > ?))');
       bindings.push(cursor.name, cursor.name, cursor.templateId);
     } else if (cursor) {
       const comparison = sort === 'price-asc' ? '>' : '<';
@@ -1683,8 +1688,12 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(cursor.priceCents, cursor.priceCents, cursor.templateId);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    // #1015: catalog_templates.name is free-text/seller-supplied, so
+    // sorting case-insensitively keeps the default browse order actually
+    // alphabetical -- matching the case-insensitive `q` search on this
+    // same column, and the client-side Sell-mode list's own localeCompare.
     const order = sort === 'name'
-      ? 'name, template_id'
+      ? 'name COLLATE NOCASE, template_id'
       : `price_cents ${sort === 'price-asc' ? 'ASC' : 'DESC'}, template_id`;
     const { results } = await db.prepare(`
       SELECT * FROM catalog_templates ${where}
