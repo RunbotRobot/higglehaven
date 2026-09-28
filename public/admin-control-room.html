@@ -192,6 +192,25 @@
     return tasks.find((t) => t.number === number);
   }
 
+  // Owner feedback (control room note 96d6d08c, 2026-09-28): "Inline
+  // mentions of tasks (such as #668) need to be links to see the card in
+  // the control room." A `#123`-style reference typed into a title/note/
+  // reply was plain text with nowhere to go; this turns it into the same
+  // clickable `data-jump-to` chip the "Blocked on #n" pill and sub-issue
+  // chips already use (see their own comments above), so tapping it jumps
+  // to that card the same way. Runs on already-escaped HTML — `#`/digits
+  // never appear in escapeHtml's own replacement set, so this can't
+  // reintroduce anything it escaped. Only linkifies a mention that
+  // actually resolves to a loaded task; an unresolved `#N` (a typo, or a
+  // task outside this board's up-to-500-row window) stays plain text.
+  function linkifyMentions(escapedText) {
+    return escapedText.replace(/#(\d+)/g, (match, numStr) => {
+      const target = taskById(Number(numStr));
+      if (!target) return match;
+      return '<span class="chip-jump" data-jump-to="' + numStr + '">' + match + '</span>';
+    });
+  }
+
   // Owner feedback (#ce3d9c55): "make the subtasks listed below a tracking
   // task header clickable, linking to that task" — reuses the same
   // data-jump-to click handling PR #699 added for the "Blocked on #n" pill
@@ -216,9 +235,11 @@
   // its title -- but the owner already refers to tasks by number in their
   // own replies ("#646", "N43") and this Control Room's own reply/tracking
   // conventions do the same. A GitHub-issue-backed task carries `number`;
-  // an owner feedback/question note carries `noteNumber` instead (this
-  // board's own sequential "N" numbering, distinct from GitHub's); a plain
-  // session summary/note has neither, so this renders nothing for those.
+  // a message-shaped feedback/question note carries `noteNumber` instead
+  // (this board's own sequential "N" numbering, distinct from GitHub's) —
+  // the create API now auto-assigns one for exactly that shape of task
+  // (see docs/API.md's POST /api/control-room/tasks), so this only ever
+  // renders nothing for a kind this board doesn't number at all.
   function taskNumberLabel(task) {
     if (task.number != null) return '#' + task.number;
     if (task.noteNumber != null) return 'N' + task.noteNumber;
@@ -283,7 +304,7 @@
       const threadHtml = entries.length
         ? entries.map((e) => (
             '<div class="msg"><div class="msg-head">' + escapeHtml(e.from || '(unknown)') +
-            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + escapeHtml(e.text) + '</div></div>'
+            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + linkifyMentions(escapeHtml(e.text)) + '</div></div>'
           )).join('')
         : '<div class="meta">No messages yet.</div>';
 

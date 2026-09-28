@@ -172,6 +172,34 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.pr).toBeNull();
   });
 
+  // Owner feedback (control room notes 9461ee39/96d6d08c, 2026-09-28): a
+  // message-shaped task (kind feedback/question, no GitHub issue/PR behind
+  // it) had no visible id at all, since taskNumberLabel (admin-control-
+  // room.html) only ever renders one from `number` or `noteNumber`, and
+  // nothing populated `noteNumber` unless the caller happened to supply it.
+  it('auto-assigns a sequential noteNumber to a message-shaped task with neither number nor noteNumber given', async () => {
+    const first = await createTask({ title: 'First auto-numbered note' });
+    const second = await createTask({ title: 'Second auto-numbered note' });
+    expect(typeof first.noteNumber).toBe('number');
+    expect(second.noteNumber).toBe(first.noteNumber + 1);
+  });
+
+  it('auto-assigns a noteNumber for kind question the same as feedback', async () => {
+    const task = await createTask({ kind: 'question', title: 'A question needing an id' });
+    expect(typeof task.noteNumber).toBe('number');
+  });
+
+  it('does not auto-assign a noteNumber when one is explicitly given', async () => {
+    const task = await createTask({ title: 'Explicit note number', noteNumber: 9001 });
+    expect(task.noteNumber).toBe(9001);
+  });
+
+  it('does not auto-assign a noteNumber for a GitHub-issue-backed task', async () => {
+    const task = await createTask({ kind: 'issue', number: 8001, title: 'A real GitHub issue' });
+    expect(task.number).toBe(8001);
+    expect(task.noteNumber).toBeNull();
+  });
+
   it('rejects creating a second task with a duplicate explicit id', async () => {
     const task = await createTask({ id: 'issue-9001' });
     expect(task.id).toBe('issue-9001');

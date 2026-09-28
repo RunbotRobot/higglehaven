@@ -6619,6 +6619,20 @@ generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
 defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
 matching the Artifact-era board's own defaults for a freeform note.
 
+**`noteNumber` is auto-assigned when omitted, for a message-shaped task
+only** (owner feedback, control room notes 9461ee39/96d6d08c,
+2026-09-28: a card with no GitHub issue/PR behind it had no visible id at
+all). When `kind` is `'feedback'` or `'question'` and neither `number`
+nor `noteNumber` is supplied, the next sequential `noteNumber`
+(`MAX(noteNumber) + 1` across the whole board, starting at 1) is assigned
+automatically, so every message-shaped card gets a stable, referenceable
+id (rendered as `N<n>` by the admin page) the moment it's created — the
+same way a GitHub-backed card already gets its issue/PR number for free.
+Passing either `number` or an explicit `noteNumber` skips auto-assignment
+entirely, and a `kind` other than `'feedback'`/`'question'` is never
+auto-assigned (a GitHub-backed `'issue'`/`'pr'` task is expected to carry
+its own `number` instead).
+
 **Same N31 `reason` requirement as PATCH below, applied here too (#909)**:
 creating a task with `waitingOn` set to `'owner'` additionally requires a
 non-empty `reason` — `400` otherwise, and nothing is written. When
