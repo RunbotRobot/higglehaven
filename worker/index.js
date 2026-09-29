@@ -665,6 +665,7 @@ function controlRoomTaskFromRow(row) {
     from: row.posted_by,
     note: row.note,
     noteUpdatedAt: row.note_updated_at,
+    noteAuthor: row.note_author,
     tag: row.tag,
     url: row.url,
     pr: row.pr_url,
@@ -920,6 +921,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   if (body.note !== undefined) {
     setIfPresent('note', body.note ? controlRoomTextValue(body.note, 'note') : null);
     setIfPresent('note_updated_at', new Date().toISOString());
+    setIfPresent('note_author', body.note ? caller : null);
   }
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
   if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? labelValue(body.prUrl, 'prUrl') : null);
