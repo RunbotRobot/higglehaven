@@ -3868,6 +3868,17 @@ template's own seller once it has one — `403` for anyone else — the same
 PATCH/DELETE handler uses; a template with no seller stays unrestricted,
 since there's no owner to check against.
 
+`POST` also notifies the template's own seller (#1043) — best-effort,
+fired after the insert succeeds, same "informational, never worth failing
+the write over" convention every other notification source in this file
+follows (see "Notifications" above). Since `notifications.builder_id`
+references `builders`, not `sellers` (a genuinely separate table), the
+seller is resolved to their own builder profile via the shared `user_id`
+both tables carry — every real seller is a real logged-in user, and every
+user is automatically a builder too. A seller-less or dangling
+`seller_id` (same fallback the `DELETE` ownership check above uses) has
+nobody to notify and is silently skipped.
+
 ```json
 POST /api/catalog/:templateId/reviews
 { "authorLabel": "...", "rating": 5, "text": "Lovely product!" }
