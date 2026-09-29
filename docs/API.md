@@ -3177,10 +3177,12 @@ can be added without their own table or endpoints — current sources are:
   above) — the original and only source with a `templateId` set (below).
 - Land acquisition auctions (see "Land acquisition auctions" below): a new
   bid (seller notified), being outbid (previous highest bidder notified),
-  an auction selling (seller and winning bidder both notified), an auction
-  ending with no bids (seller notified either way — kept the land, or
-  released to greenbelt if it had a $0 starting bid), and an auction voided
-  because the seller's account was deleted (every bidder notified).
+  an auction selling (seller and winning bidder both notified), and an
+  auction ending with no bids (seller notified either way — kept the land,
+  or released to greenbelt if it had a $0 starting bid). If the seller
+  deletes their account mid-auction, the auction row (and its bids) are
+  removed outright by a DB-level cascade instead — see "Land acquisition
+  auctions" below for why there's no one left to notify in that case.
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
