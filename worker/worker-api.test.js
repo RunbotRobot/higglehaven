@@ -1632,6 +1632,41 @@ describe('Worker API', () => {
     expect(patchedExternal.response.status).toBe(400);
   });
 
+  // #1064: assertUploadedModelExists used to accept any existing object in
+  // the shared MODELS bucket, not just one under the models/ prefix
+  // handleModelUpload actually writes to — a template's modelUrl could be
+  // set to a real, existing thumbnail or concept-image URL (same bucket,
+  // same /uploads/<key> scheme) and it would validate fine despite never
+  // having gone through handleModelUpload's own validateGlb check.
+  it('rejects a modelUrl pointing at a real but non-model uploaded object (a thumbnail)', async () => {
+    const owner = await signupSeller('model-url-thumbnail-owner');
+    const created = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-url-thumbnail-source', name: 'Thumbnail source', color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 }, sellerId: owner.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const thumbnail = await api('/catalog/model-url-thumbnail-source/thumbnail', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ imageDataUrl: `data:image/png;base64,${btoa('\x89PNG\r\n\x1a\nmodel-url-thumbnail-test')}` }),
+    }));
+    expect(thumbnail.response.status).toBe(200);
+    const { imageUrl } = thumbnail.body;
+    expect(imageUrl).toMatch(/^\/uploads\/thumbnails\//);
+
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'model-url-thumbnail-reuse-test', name: 'Thumbnail reuse test', color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 }, modelUrl: imageUrl,
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body).toEqual({ error: 'modelUrl does not reference an existing uploaded model' });
+  });
+
   it('atomically replaces a landlet draft', async () => {
     const draftBuilder = await signupBuilder('draft-landlet-builder');
     await api('/landlets', draftBuilder.session({
