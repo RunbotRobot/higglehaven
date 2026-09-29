@@ -1366,21 +1366,23 @@ reports and `noticeLevel` (#613) warns about — reaches the
 /api/tax/id-form`, #614), this endpoint blocks access to the *excess*
 above that line rather than the whole balance: a payout is capped to
 whatever headroom is still under the threshold (higgles earnings consume
-that headroom first, since nothing in this codebase lets a builder
-spend/withdraw a higgles balance at all yet — see the next paragraph),
-and returns `403` once no headroom is left, checked before the
-`STRIPE_SECRET_KEY`/onboarding checks above so a caller already over the
-line gets this specific error rather than an unrelated `503`/`400`
-masking it. Filing paperwork removes the cap entirely, including
-retroactively over past-threshold earnings already sitting unpaid.
+that headroom first, since this gate itself never blocks a higgles
+spend/withdrawal — see the next paragraph), and returns `403` once no
+headroom is left, checked before the `STRIPE_SECRET_KEY`/onboarding
+checks above so a caller already over the line gets this specific error
+rather than an unrelated `503`/`400` masking it. Filing paperwork
+removes the cap entirely, including retroactively over past-threshold
+earnings already sitting unpaid.
 
-This is a real-money-only gate for now — higgles are never gated here,
-because no endpoint in this codebase currently lets a builder spend or
-withdraw a higgles balance at all (an auction win never debits the
-winning bidder's own balance, and #349's higgle-to-cash redemption isn't
-built yet), so there's no higgles "access" action to block. `#615`'s own
-scoping left this as an explicit open question to resolve once one of
-those exists.
+This is a real-money-only gate for now — higgles spend/withdrawal isn't
+gated here, even though both actions exist elsewhere in this codebase:
+an auction win *does* atomically debit the winning bidder's own balance
+(`#629`, see "Land acquisition auctions" → "Resolution" above), and
+`#349`'s higgle-to-cash redemption *is* built (`#625`,
+`GET/POST /api/builders/me/redeem` below) — currently paused via
+`REDEMPTION_PAUSED_PENDING_PROVENANCE` (`#653`/`#836`) rather than
+unbuilt. `#615`'s own scoping left extending this tax gate to cover
+either of those as an explicit open question, not yet resolved.
 
 ```json
 {
