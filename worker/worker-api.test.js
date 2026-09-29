@@ -3053,6 +3053,73 @@ describe('Worker API', () => {
     expect(landlet.status).toBe('generating');
   });
 
+  // #1055: the single-landlet generation-complete endpoint used to decide
+  // "is this landlet now enclosed" from a JS-side settings.radius_m
+  // snapshot read before the db.batch() that updates it ever started -- the
+  // same TOCTOU shape #849 (just above) already fixed for candidate
+  // materialization. The fix replaces the JS snapshot with a live SQL
+  // subquery against world_settings, evaluated inside the UPDATE itself, so
+  // the decision is always made against whatever radius is actually
+  // committed at the moment this UPDATE runs, not a value read earlier that
+  // a concurrent world/expand could have already moved past. Isolate
+  // world_settings first (with its own radius/ratio-pad, disjoint from
+  // #849's, so the two races don't interfere with each other) so the race
+  // window (a landlet whose max_world_radius_m sits strictly between the
+  // pre- and post-expand radius) is deterministic. Placed here, after
+  // every earlier test that assumes a small baseline world radius, for the
+  // same reason #849's own race test above is: nothing later in this file
+  // relies on world_settings being back at its original value.
+  it('#1055: a landlet completing generation concurrently with a world expansion is not stranded un-enclosed', async () => {
+    await env.DB.prepare(`
+      UPDATE world_settings
+      SET radius_m = 190000, expansion_increment_m = 10, greenbelt_min_ratio = 1
+      WHERE world_id = 'default-world'
+    `).run();
+    await env.DB.prepare(`
+      INSERT INTO landlets
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, landlet_class, polygon_json, metadata_json)
+      VALUES ('race-1055-ratio-pad', 'Ratio pad', 4, 800000, 0, 'generating', 1, '[]', '{}')
+    `).run();
+
+    // Center at (190004, 0), areaM2:4, no explicit polygon -> the circular
+    // fallback gives max_world_radius_m = 190004 + sameAreaRadius(4) ~=
+    // 190005.13: above the pre-expand radius (190000, so it must not
+    // already read as enclosed) but below the post-expand radius (190010,
+    // so it must end up enclosed once the concurrent expand below lands),
+    // regardless of which of the two requests' own writes actually commits
+    // first.
+    const created = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'race-1055-landlet', name: 'Race landlet', areaM2: 4,
+        center: { x: 190004, y: 0 }, status: 'generating',
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    const [completed, expanded] = await Promise.all([
+      api('/landlets/race-1055-landlet/generation-complete', adminSession({ method: 'POST' })),
+      api('/world/expand', adminSession({ method: 'POST' })),
+    ]);
+    expect(completed.response.status).toBe(200);
+    expect(expanded.response.status).toBe(200);
+    expect(expanded.body.expansion.newRadiusM).toBe(190010);
+
+    const row = await env.DB.prepare(
+      'SELECT status, claimable_at FROM landlets WHERE landlet_id = ?',
+    ).bind('race-1055-landlet').first();
+    // Whichever of the two writes actually committed last saw the other's
+    // already-committed effect: either generation-complete's own live
+    // subquery already found the expanded radius, or -- if it committed
+    // first and (correctly, given the radius at that instant) stayed
+    // 'generating' -- expandWorldOnce's own post-expansion sweep (the
+    // `generated_at IS NOT NULL` sweep just below expandWorldOnce's radius
+    // bump) catches it, since generation-complete unconditionally sets
+    // generated_at regardless of enclosure. Either path ends here.
+    expect(row.status).toBe('greenbelt');
+    expect(row.claimable_at).not.toBeNull();
+  });
+
   // #523: nothing previously stopped an admin PUT/PATCH from setting
   // radiusM below its current value, with no re-validation of
   // already-materialized land that could then sit outside the new,
