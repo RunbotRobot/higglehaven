@@ -2096,7 +2096,14 @@ async function assertUploadedModelExists(bucket, modelUrl) {
   } catch {
     throw new HttpError('modelUrl contains invalid upload path encoding', 400);
   }
-  if (!key || !(await bucket.head(key))) {
+  // #1064: bucket.head() alone only proves *some* object exists at this key
+  // in the shared MODELS bucket -- thumbnails/<hash>.png and
+  // concept-images/<hash>.png live in the same bucket under the same
+  // /uploads/<key> URL scheme, so without this prefix check a template's
+  // modelUrl could be set to an existing thumbnail/concept-image instead of
+  // an actual uploaded model, bypassing handleModelUpload's own validateGlb
+  // check entirely (that check only ever runs at upload time, never here).
+  if (!key || !key.startsWith('models/') || !(await bucket.head(key))) {
     throw new HttpError('modelUrl does not reference an existing uploaded model', 400);
   }
 }
