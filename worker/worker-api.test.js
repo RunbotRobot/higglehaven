@@ -764,6 +764,45 @@ describe('Worker API', () => {
     expect((await api(`/catalog?q=${'a'.repeat(101)}`)).response.status).toBe(400);
   });
 
+  // #1015: the default sort=name used SQLite's BINARY collation, so a
+  // mixed-case set of product names sorted by raw byte value (every
+  // uppercase-initial name before every lowercase-initial one) instead of
+  // true case-insensitive alphabetical order -- inconsistent with the `q`
+  // search filter on this same column, which was already case-insensitive.
+  it('sorts and cursor-paginates the default name sort case-insensitively', async () => {
+    const seller = await signupSeller('catalog-nocase-seller');
+    for (const [templateId, name] of [
+      ['catalog-nocase-b', 'banana crate'],
+      ['catalog-nocase-z', 'Zen Fountain'],
+      ['catalog-nocase-a', 'Apple Basket'],
+    ]) {
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId, name, category: 'nocase-sort-test', sellerId: seller.sellerId, priceCents: 100,
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+    }
+
+    // True alphabetical order ("Apple Basket" < "banana crate" <
+    // "Zen Fountain") -- BINARY collation would instead put both
+    // capitalized names ("Apple Basket", "Zen Fountain") before the
+    // lowercase one.
+    const templateIds = [];
+    let cursor = null;
+    do {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await api(`/catalog?category=nocase-sort-test&limit=1${suffix}`);
+      expect(page.response.status).toBe(200);
+      expect(page.body.templates).toHaveLength(1);
+      templateIds.push(page.body.templates[0].templateId);
+      cursor = page.body.nextCursor;
+    } while (cursor);
+    expect(templateIds).toEqual(['catalog-nocase-a', 'catalog-nocase-b', 'catalog-nocase-z']);
+  });
+
   it('atomically creates catalog template batches', async () => {
     const created = await api('/catalog/batch', {
       method: 'POST',

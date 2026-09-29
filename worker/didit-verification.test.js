@@ -176,8 +176,8 @@ describe('Didit verification webhook (#589)', () => {
     });
   });
 
-  // #1014/migrations/0090+0092: didit_verification_sessions.user_id,
-  // sellers.user_id, and (as of 0092) builders.user_id used to have no ON
+  // #1014/migrations/0090+0093: didit_verification_sessions.user_id,
+  // sellers.user_id, and (as of 0093) builders.user_id used to have no ON
   // DELETE clause at all (SQLite/D1's default RESTRICT), unlike every other
   // REFERENCES users(user_id) FK in this schema -- a direct `DELETE FROM
   // users` would have been rejected outright rather than cascading/nulling
@@ -185,7 +185,7 @@ describe('Didit verification webhook (#589)', () => {
   // at the raw-SQL level (the same "no endpoint to drive it through yet"
   // shape this file's own insertPendingSession helper already works around
   // for session creation).
-  describe('ON DELETE behavior on users(user_id) (#1014/migrations/0090+0092)', () => {
+  describe('ON DELETE behavior on users(user_id) (#1014/migrations/0090+0093)', () => {
     it('cascades a deleted user into their own didit_verification_sessions rows', async () => {
       const builder = await signupBuilder('didit-user-deleted');
       const sessionId = await insertPendingSession(builder.email);
@@ -210,7 +210,7 @@ describe('Didit verification webhook (#589)', () => {
 
     // handleSignup links every new account to an auto-provisioned builder
     // via builders.user_id (docs/SPEC.md §3's "every user is automatically
-    // a builder") -- migrations/0092 closed this same gap for
+    // a builder") -- migrations/0093 closed this same gap for
     // builders.user_id, the one column #1014/migrations/0090 deliberately
     // left out (builders is the parent side of several other ON DELETE
     // CASCADE/SET NULL foreign keys, so rebuilding it safely needed its own
@@ -227,7 +227,7 @@ describe('Didit verification webhook (#589)', () => {
     });
   });
 
-  // migrations/0092 rebuilt `builders` (to add ON DELETE SET NULL on its own
+  // migrations/0093 rebuilt `builders` (to add ON DELETE SET NULL on its own
   // user_id column) alongside every table that itself references builders
   // -- notifications, bundles, auctions, auction_bids, friendships,
   // higgles_earnings_events, purchases, saved_level_layouts, owned_avatars,
@@ -237,9 +237,9 @@ describe('Didit verification webhook (#589)', () => {
   // unrelated ON DELETE behavior against builders (the thing every one of
   // them actually depends on in production, unlike builders.user_id itself,
   // which nothing depended on before this migration).
-  describe('builders remains a correct CASCADE/SET NULL parent after migrations/0092', () => {
+  describe('builders remains a correct CASCADE/SET NULL parent after migrations/0093', () => {
     it('still cascades a deleted builder into its own notifications', async () => {
-      const builder = await signupBuilder('post-0092-notifications-cascade');
+      const builder = await signupBuilder('post-0093-notifications-cascade');
       await env.DB.prepare(
         "INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, 'test')",
       ).bind(`notif-${crypto.randomUUID()}`, builder.builderId).run();
@@ -251,7 +251,7 @@ describe('Didit verification webhook (#589)', () => {
     });
 
     it('still nulls out purchases.builder_id (keeping the purchase row) after the linked builder is deleted', async () => {
-      const builder = await signupBuilder('post-0092-purchases-set-null');
+      const builder = await signupBuilder('post-0093-purchases-set-null');
       const purchaseId = `purchase-${crypto.randomUUID()}`;
       await env.DB.prepare(`
         INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, unit_price_cents, total_cents, commission_cents, builder_share_cents, platform_share_cents)

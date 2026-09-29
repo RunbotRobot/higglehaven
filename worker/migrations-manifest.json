@@ -89,5 +89,6 @@
   "0089_auction_builder_id_indexes.sql",
   "0090_owned_avatars_purchase_id_index.sql",
   "0091_sellers_didit_user_id_on_delete.sql",
-  "0092_builders_user_id_on_delete.sql"
+  "0092_catalog_name_nocase_sort.sql",
+  "0093_builders_user_id_on_delete.sql"
 ]
