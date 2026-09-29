@@ -5767,6 +5767,16 @@ async function diditRequest(env, method, path, body) {
 // session-gated action, not a public/anonymous endpoint an IP-based
 // bucket would need to cover.
 const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
+// #1037: handleDiditVerificationStatus below forwards straight through to a
+// live outbound Didit API call whenever the caller's latest session is
+// still pending, with no local throttle before this fix -- the same
+// "unrate-limited third-party call" gap #839 fixed for purchase finalize.
+// Sized around the legitimate client cadence (pollDiditVerificationStatus,
+// src/main.js: every 3s for up to 5 minutes, ~100 calls per verification
+// attempt), with headroom for a retry or two inside the same 15-minute
+// RATE_LIMIT_WINDOW_MS rather than the tighter ~20 this file's ordinary
+// one-shot mutations use.
+const DIDIT_STATUS_RATE_LIMIT_MAX = 120;
 
 // Shared by handleDiditVerificationSession (dedup an already-pending
 // session rather than starting a real-cost new one) and
@@ -5848,7 +5858,18 @@ async function handleDiditVerificationStatus(request, env, db) {
   if (user.trust_tier === 'id_verified') return json({ status: 'approved' });
   const latest = await latestDiditSession(db, user.user_id);
   if (!latest) return json({ status: 'none' });
-  if (latest.processed_at !== null || !diditConfigured(env)) {
+  if (latest.processed_at !== null) {
+    return json({ status: latest.status });
+  }
+  // #1037: rate-limited before the diditConfigured check below (not after),
+  // same ordering #839 already established for handlePurchaseFinalize's own
+  // "unrate-limited third-party call" fix — this way the guard still
+  // applies to every still-pending poll regardless of whether Didit happens
+  // to be configured, rather than only in production. Nothing to rate-limit
+  // yet if processed_at is already set above: no outbound call would ever
+  // happen for a session that's no longer pending.
+  await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
+  if (!diditConfigured(env)) {
     return json({ status: latest.status });
   }
   const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);

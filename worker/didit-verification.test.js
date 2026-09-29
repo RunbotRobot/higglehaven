@@ -137,6 +137,29 @@ describe('Didit verification webhook (#589)', () => {
     expect(session.status).toBe('declined');
   });
 
+  // #1037: GET /api/auth/didit-verification-status forwards straight
+  // through to a live outbound Didit API call whenever the caller's latest
+  // session is still locally pending -- previously with no local throttle
+  // at all. Same testing shape #839 already established for
+  // handlePurchaseFinalize's own identical gap: the rate-limit check now
+  // runs before the diditConfigured guard, so it's exercisable even though
+  // this suite deliberately never sets DIDIT_API_KEY (this file's own top
+  // comment) -- every call here 200s with the session's still-pending
+  // local status right up until the limiter itself trips 429, proving the
+  // limiter is what fires, not a side effect of Didit being unconfigured.
+  it('rate-limits repeated polls of a still-pending session', async () => {
+    const builder = await signupBuilder('didit-status-rate-limit');
+    await insertPendingSession(builder.email);
+
+    for (let i = 0; i < 120; i++) {
+      const response = await api('/auth/didit-verification-status', builder.session());
+      expect(response.response.status).toBe(200);
+      expect(response.body.status).toBe('pending');
+    }
+    const limited = await api('/auth/didit-verification-status', builder.session());
+    expect(limited.response.status).toBe(429);
+  });
+
   // #607: idx_didit_verification_sessions_user_id's own migration comment
   // says this table is looked up by user_id "to reuse/report an already-
   // pending one" when starting a new session -- handleDiditVerificationSession

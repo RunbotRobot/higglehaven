@@ -348,6 +348,11 @@ requesting builder's most recent verification session. While still
 Didit's own session-decision endpoint (rather than only trusting the
 webhook below to have already landed), so a builder who already finished
 verification isn't stuck reading "pending" if the webhook is slow.
+Rate-limited per-user (#1037) while a session is still pending — this is
+the frontend's own poll target (every 3s for up to 5 minutes per
+verification attempt) and each call reaches all the way through to a live
+outbound Didit API call, so the limit is sized generously around that
+cadence rather than this file's usual one-shot-mutation ~20.
 
 `POST /api/auth/didit-webhook` is Didit's own server-to-server delivery
 of a verification result — unauthenticated (no session cookie to check),
