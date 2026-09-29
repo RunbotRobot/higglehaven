@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { latestDiditSession } from './index.js';
+import { latestDiditSession, reconcileDiditSession } from './index.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -196,6 +196,33 @@ describe('Didit verification webhook (#589)', () => {
       expect(latest.session_id).toBe(newerSessionId);
       expect(latest.processed_at).toBeNull();
       expect(latest.url).toBe('https://verify.didit.me/session/newer');
+    });
+  });
+
+  // #1038: handleDiditVerificationSession now reconciles a reused pending
+  // session against Didit via this extracted helper before trusting it,
+  // rather than blindly handing back a session that may have already
+  // expired/resolved on Didit's side. Same "test the helper directly"
+  // constraint as latestDiditSession above -- DIDIT_API_KEY is never
+  // configured in this file, so handleDiditVerificationSession itself
+  // always 503s before ever reaching this call, and reconcileDiditSession's
+  // only branch reachable without a real outbound Didit call is its own
+  // "not configured" short-circuit.
+  describe('reconcileDiditSession (#1038)', () => {
+    it('returns the session\'s own local status unchanged, and makes no DB write, when Didit is not configured', async () => {
+      const builder = await signupBuilder('didit-reconcile-unconfigured');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+      const sessionId = await insertPendingSession(builder.email);
+      const latest = await latestDiditSession(env.DB, userId);
+
+      const status = await reconcileDiditSession(env, env.DB, latest, userId);
+      expect(status).toBe('pending');
+
+      const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+      expect(session.status).toBe('pending');
+      expect(session.processed_at).toBeNull();
+      const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE user_id = ?').bind(userId).first();
+      expect(user.trust_tier).toBe('credit_card');
     });
   });
 
