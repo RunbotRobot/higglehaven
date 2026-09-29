@@ -679,6 +679,26 @@ describe('Authentication', () => {
     expect(again.body.user.isAdmin).toBe(true);
   });
 
+  // #1074: admin-bootstrap is the OTHER of the two routes that grant admin
+  // privilege (see grant-admin's own #814 test below) -- #814's audit-trail
+  // effort never actually covered this one, leaving it the one privilege-
+  // escalation path with no record anywhere of when it happened or which
+  // account did it.
+  it('admin-bootstrap leaves a record of which account bootstrapped itself into admin', async () => {
+    const account = await signupBuilder('bootstrap-log-tester');
+    const bootstrapped = await api('/auth/admin-bootstrap', account.session({
+      method: 'POST',
+      body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    expect(bootstrapped.response.status).toBe(200);
+
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('admin_bootstrap', bootstrapped.body.user.userId).first();
+    expect(logRow.admin_user_id).toBe(bootstrapped.body.user.userId);
+    expect(logRow.target_type).toBe('user');
+  });
+
   // Found via backlog audit (#360): unlike every other secret-bearing auth
   // endpoint in this file (login lockout, signup/password-reset's
   // checkRateLimit), admin-bootstrap — the one endpoint that grants admin

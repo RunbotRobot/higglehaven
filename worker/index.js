@@ -7538,8 +7538,18 @@ async function handleAdminBootstrap(request, env, db) {
   if (!timingSafeEqual(secret, env.ADMIN_BOOTSTRAP_SECRET)) {
     throw new HttpError('Incorrect admin bootstrap secret', 403);
   }
-  await db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
-    .bind(user.user_id).run();
+  // #1074: this is the OTHER of the two routes that grant admin privilege
+  // (see handleGrantAdmin's own #814 fix just below) -- #814's audit-trail
+  // effort and its own sweep of admin-gated mutations (#815/#816/#817/#829)
+  // never actually covered this one, leaving it the one privilege-
+  // escalation path with no record anywhere of when it happened or which
+  // account did it. Same atomic batch-with-the-grant shape as
+  // handleGrantAdmin, so the two can never diverge.
+  await db.batch([
+    db.prepare('UPDATE users SET is_admin = 1, updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE user_id = ?')
+      .bind(user.user_id),
+    adminActionLogStatement(db, user.user_id, 'admin_bootstrap', 'user', user.user_id),
+  ]);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
   return json({ user: userFromRow(updated) });
 }
