@@ -6201,7 +6201,21 @@ export async function claimOrResumeBuilderRedemption(db, builderId, amountCents)
 async function handleBuilderRedeem(request, env, db) {
   const user = await requireCurrentUser(request, db);
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
-  const availableCents = Math.max(sessionBuilder.higgles_balance_cents, 0);
+  // #1029: net out higgles held by the caller's own active auction bids —
+  // same heldElsewhere shape handleAuctionBids already computes for the
+  // identical concept (#629: a bid holds what it needs until outbid or the
+  // auction closes). Without this, availableCents (and the frontend's
+  // "Available to redeem" display built on it) included higgles already
+  // committed to a leading bid, which resolveAuction's own atomic debit
+  // would then silently fail to honor if redeemed away.
+  const heldByActiveBids = await db.prepare(`
+    SELECT COALESCE(SUM(ab.amount_cents), 0) AS higglesCents
+    FROM auction_bids ab
+    JOIN auctions a ON a.auction_id = ab.auction_id
+    WHERE ab.bidder_builder_id = ? AND a.status = 'active'
+      AND ab.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = ab.auction_id)
+  `).bind(sessionBuilder.builder_id).first();
+  const availableCents = Math.max(sessionBuilder.higgles_balance_cents - heldByActiveBids.higglesCents, 0);
 
   if (request.method === 'GET') {
     return json({ ...stripeAccountStatusJson(env, sessionBuilder), availableCents });
