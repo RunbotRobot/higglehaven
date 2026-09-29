@@ -1483,6 +1483,8 @@ Optional query parameters:
   100 characters. SQL wildcard characters in the query are treated literally.
 - `sort`: `name` (default), `price-asc`, or `price-desc`. Price sorting excludes
   templates without a price and uses template ID as the stable tie-breaker.
+  The `name` sort is case-insensitive (#1015), matching the `q` search
+  filter's own case-insensitive matching on this same column.
 - `limit`: page size from 1 to 100; defaults to 100.
 - `cursor`: opaque `nextCursor` value from the preceding page.
 
