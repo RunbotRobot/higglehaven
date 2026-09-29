@@ -1939,7 +1939,7 @@ async function handleProductReviews(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const template = await db.prepare('SELECT template_id, name, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     await checkRateLimit(db, `product-review-create:${clientIp(request)}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
@@ -1990,6 +1990,25 @@ async function handleProductReviews(request, db, route) {
     `).bind(reviewId, templateId, authorLabel, rating, text, templateId, authorLabel).run();
     if (result.meta.changes === 0) {
       throw new HttpError('This purchaser has already reviewed this product', 409);
+    }
+    // #1043: every other real "something happened that the other party
+    // should passively learn about" event in this file fires a
+    // notification (a new bid, an auction selling, a sale, a friend
+    // request — see notifyOfNewBid/the friendship POST branch above) — a
+    // new review had no notification path at all. Best-effort, fired
+    // after the write it's about, same convention as those. A seller-less
+    // or dangling seller_id (same guard the DELETE branch below uses)
+    // simply has nobody to notify.
+    if (template.seller_id && await sellerExists(db, template.seller_id)) {
+      const owner = await db.prepare(`
+        SELECT b.builder_id AS builder_id FROM sellers s
+        JOIN builders b ON b.user_id = s.user_id
+        WHERE s.seller_id = ?
+      `).bind(template.seller_id).first();
+      if (owner) {
+        await notificationStatement(db, owner.builder_id,
+          `"${authorLabel}" left a ${rating}-star review on "${template.name}".`).run();
+      }
     }
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
     return json({ review: reviewFromRow(row) }, 201);

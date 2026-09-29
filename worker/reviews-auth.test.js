@@ -317,6 +317,56 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // #1043: every other real "something happened that the other party
+  // should passively learn about" event in this file/codebase fires a
+  // notification (new auction bid, an auction selling, a sale, a friend
+  // request) — a new review posted against a seller's own catalog template
+  // was the one comparable event with no notification path at all. The
+  // seller's own builder profile (always auto-provisioned, same account,
+  // same user_id) is what receives it.
+  it('notifies the template\'s own seller (via their builder profile) when a new review is posted', async () => {
+    const seller = await signupSeller('review-notify-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-notify-template',
+        name: 'Notify-worthy product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    const sellerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+
+    await createPurchase(templateId, 'A Notifying Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Notifying Shopper', rating: 4 }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    const { results } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ?',
+    ).bind(sellerBuilderId).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].message).toContain('A Notifying Shopper');
+    expect(results[0].message).toContain('Notify-worthy product');
+  });
+
+  // A review on a seller-less (orphaned or never-owned) template has nobody
+  // to notify — must not throw trying to resolve a notification target.
+  it('does not error posting a review on a seller-less template — nobody to notify', async () => {
+    const templateId = await createTemplate('review-notify-no-seller');
+    await createPurchase(templateId, 'A Shopper');
+    const posted = await api(`/catalog/${templateId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+    });
+    expect(posted.response.status).toBe(201);
+  });
+
   // DELETE /api/sellers/:sellerId deliberately leaves a template's
   // seller_id dangling rather than cleaning it up — docs/API.md says
   // that's "the same as" a template with a null seller_id, which review
