@@ -176,35 +176,20 @@ describe('Didit verification webhook (#589)', () => {
     });
   });
 
-  // #1014/migrations/0090: didit_verification_sessions.user_id and
-  // sellers.user_id used to have no ON DELETE clause at all (SQLite/D1's
-  // default RESTRICT), unlike every other REFERENCES users(user_id) FK in
-  // this schema -- a direct `DELETE FROM users` would have been rejected
-  // outright rather than cascading/nulling cleanly. No account-deletion
-  // endpoint exists yet, so this is exercised at the raw-SQL level (the
-  // same "no endpoint to drive it through yet" shape this file's own
-  // insertPendingSession helper already works around for session creation).
-  describe('ON DELETE behavior on users(user_id) (#1014/migrations/0090)', () => {
-    // handleSignup links every new account to an auto-provisioned builder
-    // via builders.user_id (docs/SPEC.md §3's "every user is automatically
-    // a builder") -- and builders.user_id itself is deliberately NOT part
-    // of #1014/migrations/0090's fix (see that migration's own comment: a
-    // rebuild is unsafe there, unlike sellers/didit_verification_sessions,
-    // because builders is the parent side of several ON DELETE
-    // CASCADE/SET NULL foreign keys). So a real `DELETE FROM users` still
-    // hits builders' own still-RESTRICT FK today, unrelated to what this
-    // migration actually fixed -- unlinking the auto-provisioned builder
-    // first isolates the sellers/didit_verification_sessions behavior
-    // this migration is responsible for.
-    async function unlinkAutoBuilder(userId) {
-      await env.DB.prepare('UPDATE builders SET user_id = NULL WHERE user_id = ?').bind(userId).run();
-    }
-
+  // #1014/migrations/0090+0093: didit_verification_sessions.user_id,
+  // sellers.user_id, and (as of 0093) builders.user_id used to have no ON
+  // DELETE clause at all (SQLite/D1's default RESTRICT), unlike every other
+  // REFERENCES users(user_id) FK in this schema -- a direct `DELETE FROM
+  // users` would have been rejected outright rather than cascading/nulling
+  // cleanly. No account-deletion endpoint exists yet, so this is exercised
+  // at the raw-SQL level (the same "no endpoint to drive it through yet"
+  // shape this file's own insertPendingSession helper already works around
+  // for session creation).
+  describe('ON DELETE behavior on users(user_id) (#1014/migrations/0090+0093)', () => {
     it('cascades a deleted user into their own didit_verification_sessions rows', async () => {
       const builder = await signupBuilder('didit-user-deleted');
       const sessionId = await insertPendingSession(builder.email);
       const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
-      await unlinkAutoBuilder(userId);
 
       await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
 
@@ -215,13 +200,69 @@ describe('Didit verification webhook (#589)', () => {
     it('nulls out sellers.user_id (keeping the seller row) after the linked user is deleted', async () => {
       const seller = await signupSeller('didit-seller-user-deleted');
       const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(seller.email).first()).user_id;
-      await unlinkAutoBuilder(userId);
 
       await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
 
       const row = await env.DB.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
       expect(row).not.toBeNull();
       expect(row.user_id).toBeNull();
+    });
+
+    // handleSignup links every new account to an auto-provisioned builder
+    // via builders.user_id (docs/SPEC.md §3's "every user is automatically
+    // a builder") -- migrations/0093 closed this same gap for
+    // builders.user_id, the one column #1014/migrations/0090 deliberately
+    // left out (builders is the parent side of several other ON DELETE
+    // CASCADE/SET NULL foreign keys, so rebuilding it safely needed its own
+    // migration -- see that migration's own comment for the technique).
+    it('nulls out builders.user_id (keeping the builder row) after the linked user is deleted', async () => {
+      const builder = await signupBuilder('didit-builder-user-deleted');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(userId).run();
+
+      const row = await env.DB.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builder.builderId).first();
+      expect(row).not.toBeNull();
+      expect(row.user_id).toBeNull();
+    });
+  });
+
+  // migrations/0093 rebuilt `builders` (to add ON DELETE SET NULL on its own
+  // user_id column) alongside every table that itself references builders
+  // -- notifications, bundles, auctions, auction_bids, friendships,
+  // higgles_earnings_events, purchases, saved_level_layouts, owned_avatars,
+  // higgles_redemptions -- to avoid the cascade-on-DROP-TABLE data-loss
+  // trap that migration's own comment documents. This guards against that
+  // rebuild having silently dropped or altered any of THOSE tables' own,
+  // unrelated ON DELETE behavior against builders (the thing every one of
+  // them actually depends on in production, unlike builders.user_id itself,
+  // which nothing depended on before this migration).
+  describe('builders remains a correct CASCADE/SET NULL parent after migrations/0093', () => {
+    it('still cascades a deleted builder into its own notifications', async () => {
+      const builder = await signupBuilder('post-0093-notifications-cascade');
+      await env.DB.prepare(
+        "INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, 'test')",
+      ).bind(`notif-${crypto.randomUUID()}`, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM notifications WHERE builder_id = ?').bind(builder.builderId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still nulls out purchases.builder_id (keeping the purchase row) after the linked builder is deleted', async () => {
+      const builder = await signupBuilder('post-0093-purchases-set-null');
+      const purchaseId = `purchase-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, unit_price_cents, total_cents, commission_cents, builder_share_cents, platform_share_cents)
+        VALUES (?, 'test-instance', 'test-template', ?, 100, 100, 0, 0, 100)
+      `).bind(purchaseId, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const row = await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row).not.toBeNull();
+      expect(row.builder_id).toBeNull();
     });
   });
 });
