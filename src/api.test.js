@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchCurrentUser } from './api.js';
+import {
+  createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchBundles, fetchCurrentUser,
+  fetchSharedBundles,
+} from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
 // global rather than spinning up a worker, since this only needs to prove
@@ -90,6 +93,46 @@ describe('fetchAllAuctions', () => {
     mockPaginatedFetch([{ auctions: [{ auctionId: 'a' }], nextCursor: null }]);
     const all = await fetchAllAuctions();
     expect(all).toEqual([{ auctionId: 'a' }]);
+  });
+});
+
+// #1035: same silent-truncation shape #186/#190 fixed for landlets/
+// auctions — fetchBundles()/fetchSharedBundles() used to do a single-page
+// fetch and drop nextCursor entirely, even though GET /api/bundles has
+// been cursor-paginated since #751.
+describe('fetchBundles', () => {
+  it('returns every bundle from a single page with no params', async () => {
+    mockPaginatedFetch([{ bundles: [{ bundleId: 'a' }, { bundleId: 'b' }], nextCursor: null }]);
+    const all = await fetchBundles();
+    expect(all).toEqual([{ bundleId: 'a' }, { bundleId: 'b' }]);
+  });
+
+  it('follows nextCursor across multiple pages, accumulating every result', async () => {
+    const urls = mockPaginatedFetch([
+      { bundles: [{ bundleId: 'a' }], nextCursor: 'cursor-1' },
+      { bundles: [{ bundleId: 'b' }], nextCursor: 'cursor-2' },
+      { bundles: [{ bundleId: 'c' }], nextCursor: null },
+    ]);
+    const all = await fetchBundles();
+    expect(all).toEqual([{ bundleId: 'a' }, { bundleId: 'b' }, { bundleId: 'c' }]);
+    expect(urls[0]).not.toContain('cursor=');
+    expect(urls[1]).toContain('cursor=cursor-1');
+    expect(urls[2]).toContain('cursor=cursor-2');
+  });
+});
+
+describe('fetchSharedBundles', () => {
+  it('follows nextCursor across multiple pages, always requesting shared=true', async () => {
+    const urls = mockPaginatedFetch([
+      { bundles: [{ bundleId: 'a' }], nextCursor: 'cursor-1' },
+      { bundles: [{ bundleId: 'b' }], nextCursor: null },
+    ]);
+    const all = await fetchSharedBundles();
+    expect(all).toEqual([{ bundleId: 'a' }, { bundleId: 'b' }]);
+    for (const url of urls) {
+      expect(url).toContain('shared=true');
+    }
+    expect(urls[1]).toContain('cursor=cursor-1');
   });
 });
 
