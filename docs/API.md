@@ -339,7 +339,14 @@ session for the requesting builder, returning
 `{ "sessionId": "...", "url": "https://verify.didit.me/..." }` — the
 frontend opens `url` for the builder to complete verification there.
 `400` if the account is already `"id_verified"`. `503` if Didit isn't
-configured on this deployment (`DIDIT_API_KEY` unset).
+configured on this deployment (`DIDIT_API_KEY` unset). Two concurrent
+requests from the same builder (a double-click, two open tabs) can never
+both reach Didit's own real, billed session-create call (#1039) — an
+atomic reservation (`idx_didit_verification_sessions_one_pending_per_user`,
+migrations/0095) ensures only the winner calls out; the loser is simply
+handed back the winner's session, the same response shape an ordinary
+non-racing repeat call already gets by reusing an already-pending session
+(#607).
 
 `GET /api/auth/didit-verification-status` is session-gated and returns
 `{ "status": "none" | "pending" | "approved" | "declined" }` for the

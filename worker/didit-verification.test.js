@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { latestDiditSession, reconcileDiditSession } from './index.js';
+import { latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -196,6 +196,65 @@ describe('Didit verification webhook (#589)', () => {
       expect(latest.session_id).toBe(newerSessionId);
       expect(latest.processed_at).toBeNull();
       expect(latest.url).toBe('https://verify.didit.me/session/newer');
+    });
+  });
+
+  // #1039: handleDiditVerificationSession used to read the user's latest
+  // session, then only create+insert a new one if none was found pending --
+  // with no locking or uniqueness guard between that read and the insert.
+  // Two concurrent requests (a double-click, two open tabs) could both
+  // observe no pending session and both reach Didit's real, billed
+  // session-create API. reserveDiditSession folds the check into one
+  // atomic statement so only the winner ever calls out. Testing the
+  // extracted helper directly, the same reasoning as latestDiditSession's
+  // own describe block above (DIDIT_API_KEY is never configured in this
+  // suite, so the real HTTP endpoint never reaches this far).
+  describe('reserveDiditSession (#1039)', () => {
+    it('reserves a pending row for the first caller', async () => {
+      const builder = await signupBuilder('didit-reserve-first');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const result = await reserveDiditSession(env.DB, userId);
+      expect(result.reservationId).not.toBeNull();
+      expect(result.existing).toBeNull();
+
+      const rows = await env.DB.prepare('SELECT * FROM didit_verification_sessions WHERE user_id = ?').bind(userId).all();
+      expect(rows.results).toHaveLength(1);
+      expect(rows.results[0].session_id).toBe(result.reservationId);
+      expect(rows.results[0].status).toBe('pending');
+    });
+
+    it('hands the existing reservation back to a concurrent second caller instead of creating a duplicate', async () => {
+      const builder = await signupBuilder('didit-reserve-race');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const [first, second] = await Promise.all([
+        reserveDiditSession(env.DB, userId),
+        reserveDiditSession(env.DB, userId),
+      ]);
+      const winner = first.reservationId ? first : second;
+      const loser = first.reservationId ? second : first;
+      expect(winner.reservationId).not.toBeNull();
+      expect(loser.reservationId).toBeNull();
+      expect(loser.existing.session_id).toBe(winner.reservationId);
+
+      // Exactly one row, not two -- the loser never got its own insert.
+      const rows = await env.DB.prepare('SELECT * FROM didit_verification_sessions WHERE user_id = ?').bind(userId).all();
+      expect(rows.results).toHaveLength(1);
+    });
+
+    it('allows a fresh reservation once the previous session is processed', async () => {
+      const builder = await signupBuilder('didit-reserve-reprocessed');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const first = await reserveDiditSession(env.DB, userId);
+      await env.DB.prepare(`
+        UPDATE didit_verification_sessions SET status = 'declined', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE session_id = ?
+      `).bind(first.reservationId).run();
+
+      const second = await reserveDiditSession(env.DB, userId);
+      expect(second.reservationId).not.toBeNull();
+      expect(second.reservationId).not.toBe(first.reservationId);
     });
   });
 
