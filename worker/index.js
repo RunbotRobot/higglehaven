@@ -5807,7 +5807,26 @@ async function handleDiditVerificationSession(request, env, db) {
   // handing back the one still in flight.
   const latest = await latestDiditSession(db, user.user_id);
   if (latest && latest.processed_at === null) {
-    return json({ sessionId: latest.session_id, url: latest.url });
+    // #1038: a merely locally-pending session can already be dead on
+    // Didit's side -- expired, abandoned, or (rarer) actually approved --
+    // if the webhook never landed and the builder never returned to
+    // trigger a status poll. Reconcile it the same way
+    // handleDiditVerificationStatus already does before trusting it,
+    // rather than handing back a session URL that's aged out, or starting
+    // a redundant new session below for an account that just turned out
+    // to already be verified. Same rate-limit bucket as that endpoint's
+    // own reconciliation call, since this hits the identical Didit
+    // decision endpoint -- not the real-cost session-create call below.
+    await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
+    const status = await reconcileDiditSession(env, db, latest, user.user_id);
+    if (status === 'pending') {
+      return json({ sessionId: latest.session_id, url: latest.url });
+    }
+    if (status === 'approved') {
+      throw new HttpError('This account is already ID-verified.', 400);
+    }
+    // status === 'declined' -- this session is dead, fall through and
+    // start a fresh one below.
   }
   await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
   // #1039: reserved atomically before ever calling Didit's real, billed
@@ -5892,6 +5911,25 @@ async function applyDiditDecision(db, sessionId, userId, approved) {
   }
 }
 
+// Shared by handleDiditVerificationStatus (poll the current session) and
+// handleDiditVerificationSession (#1038: reconcile a reused pending session
+// before trusting it) -- both need to check a still-locally-pending session
+// against Didit's own decision endpoint and apply any terminal outcome the
+// same way the webhook does. Returns the resulting status
+// ('approved'/'declined'/'pending'), or the session's own already-local
+// status unchanged if Didit isn't configured to check.
+export async function reconcileDiditSession(env, db, latest, userId) {
+  if (!diditConfigured(env)) return latest.status;
+  const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
+  const overallStatus = decision.status;
+  if (!Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
+    return 'pending';
+  }
+  const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
+  await applyDiditDecision(db, latest.session_id, userId, approved);
+  return approved ? 'approved' : 'declined';
+}
+
 // Polling fallback for the frontend after a builder returns from Didit's
 // hosted verification UI: reconciles directly against Didit's own session
 // endpoint whenever a builder's latest session is still locally pending,
@@ -5904,25 +5942,17 @@ async function handleDiditVerificationStatus(request, env, db) {
   if (latest.processed_at !== null) {
     return json({ status: latest.status });
   }
-  // #1037: rate-limited before the diditConfigured check below (not after),
-  // same ordering #839 already established for handlePurchaseFinalize's own
-  // "unrate-limited third-party call" fix — this way the guard still
-  // applies to every still-pending poll regardless of whether Didit happens
-  // to be configured, rather than only in production. Nothing to rate-limit
-  // yet if processed_at is already set above: no outbound call would ever
+  // #1037: rate-limited before the diditConfigured check inside
+  // reconcileDiditSession (not after), same ordering #839 already
+  // established for handlePurchaseFinalize's own "unrate-limited
+  // third-party call" fix — this way the guard still applies to every
+  // still-pending poll regardless of whether Didit happens to be
+  // configured, rather than only in production. Nothing to rate-limit yet
+  // if processed_at is already set above: no outbound call would ever
   // happen for a session that's no longer pending.
   await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
-  if (!diditConfigured(env)) {
-    return json({ status: latest.status });
-  }
-  const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
-  const overallStatus = decision.status;
-  if (Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
-    const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
-    await applyDiditDecision(db, latest.session_id, user.user_id, approved);
-    return json({ status: approved ? 'approved' : 'declined' });
-  }
-  return json({ status: 'pending' });
+  const status = await reconcileDiditSession(env, db, latest, user.user_id);
+  return json({ status });
 }
 
 // Didit signs its webhook deliveries with an HMAC-SHA256 of the raw body,
