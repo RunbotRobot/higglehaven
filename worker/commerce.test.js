@@ -3667,6 +3667,24 @@ describe('Simulated purchases', () => {
       expect(row.paid_out_at).toBeNull();
     });
 
+    // #1050: this POST branch makes real outbound Stripe balance/payouts
+    // calls on the shared platform key (once Stripe is actually
+    // configured), the same "real cost/quota risk" #839/#948 already fixed
+    // for the stripe-account handlers -- this endpoint never got the same
+    // guard. Same coverage shape as those handlers' own rate-limit tests.
+    it('rate-limits repeated payout attempts from the same seller', async () => {
+      const builder = await signupBuilder('payout-rate-limit-builder');
+      const seller = await createConnectedSeller('payout-rate-limit-seller');
+      await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+        expect(attempt.response.status).toBe(503);
+      }
+      const limited = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+      expect(limited.response.status).toBe(429);
+    });
+
     // Self-found audit fix, no issue: handleSellerPayouts used to read
     // unpaid purchases, call Stripe, and only afterward mark paid_out_at
     // with no guard at all — two concurrent POST /sellers/me/payouts calls

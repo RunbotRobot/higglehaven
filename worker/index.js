@@ -6335,6 +6335,12 @@ async function handleBuilderRedeem(request, env, db) {
   }
 
   if (request.method === 'POST') {
+    // #1050: same "real outbound Stripe API call on the shared key" gap
+    // #839/#948 already closed for the stripe-account handlers — this POST
+    // branch's Stripe transfers/payouts calls further down (currently
+    // unreachable while REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not
+    // forever) need the identical guard, same placement precedent as #948.
+    await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to redeem yet.', 400);
     }
@@ -6653,6 +6659,13 @@ async function handleSellerPayouts(request, env, db) {
   }
 
   if (request.method === 'POST') {
+    // #1050: same "real outbound Stripe API call on the shared key" gap
+    // #839/#948 already closed for the stripe-account handlers above —
+    // this POST branch (both the stuck-claim resume path below and the
+    // ordinary payout path further down) makes real Stripe balance/payouts
+    // calls, so it needs the identical guard. Ahead of everything else in
+    // this branch, same placement precedent as #948.
+    await checkRateLimit(db, `seller-payout:${sessionSeller.seller_id}`, STRIPE_RATE_LIMIT_MAX);
     // #969: a stuck claimed-but-unconfirmed purchase (paid_out_at set,
     // stripe_payout_id still NULL) is invisible to unpaidSellerPurchases
     // just below (it filters paid_out_at IS NULL) -- this has to run before
