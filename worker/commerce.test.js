@@ -3721,6 +3721,89 @@ describe('Simulated purchases', () => {
       expect(row.paid_out_at).toBeTruthy();
     });
 
+    // #1061: a refund and a payout claim used to be able to both land on
+    // the same purchase if they raced -- neither guard checked the other
+    // field (handlePurchaseRefund's atomic UPDATE only checked
+    // refunded_at, claimPurchasesForPayout's only checked paid_out_at).
+    // Fired genuinely concurrently, same shape as the claim-vs-claim race
+    // just above and #849's own candidate-materialization race -- asserts
+    // the all-or-nothing invariant the fix guarantees, not a forced
+    // ordering. Uses a simulated (no payment_intent_id) purchase so a
+    // winning refund completes fully via the higgles-only clawback path
+    // instead of hitting this suite's deliberately-unconfigured Stripe.
+    it('a refund racing a concurrent payout claim never lets both land on the same purchase', async () => {
+      const seller = await signupBuilder('refund-payout-race-seller');
+      await createGreenbeltLandletWithArea('refund-payout-race-landlet', 1000);
+      await claim('refund-payout-race-landlet', seller);
+      await createTemplate('refund-payout-race-template', { priceCents: 10000 });
+      await placeInstance('refund-payout-race-instance', 'refund-payout-race-landlet', 'refund-payout-race-template', seller);
+      const purchased = await api('/instances/refund-payout-race-instance/purchase', seller.session({ method: 'POST' }));
+      const { purchaseId } = purchased.body.purchase;
+      const purchaseRow = await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+
+      const [refunded, claimed] = await Promise.all([
+        api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' })),
+        claimPurchasesForPayout(env.DB, [purchaseRow], '2026-01-01T00:00:00.000Z'),
+      ]);
+
+      const refundWon = refunded.response.status === 200;
+      const claimWon = claimed.length === 1;
+      // Exactly one side wins -- never both (the bug this test exists to
+      // catch) and never neither (that would mean the guard is too
+      // aggressive and silently drops a legitimate request).
+      expect([refundWon, claimWon].filter(Boolean).length).toBe(1);
+
+      const row = await env.DB.prepare('SELECT refunded_at, paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      if (refundWon) {
+        expect(row.refunded_at).not.toBeNull();
+        expect(row.paid_out_at).toBeNull();
+        expect(claimed).toHaveLength(0);
+      } else {
+        expect(row.paid_out_at).not.toBeNull();
+        expect(row.refunded_at).toBeNull();
+        expect(refunded.response.status).toBe(409);
+        expect(refunded.body.error).toMatch(/already been paid out/i);
+      }
+    });
+
+    // #1061: deterministic version of the race just above, targeting
+    // claimPurchasesForPayout's own guard specifically rather than relying
+    // on however this test harness happens to schedule a genuinely
+    // concurrent Promise.all (which, for this particular pairing, reliably
+    // lets the claim resolve before the refund's own initial read gets a
+    // chance to see it — see that test's own comment). This instead
+    // reproduces the real caller-side gap directly: handleSellerPayouts
+    // reads unpaidSellerPurchases, then does real work (DB awaits, an
+    // outbound Stripe balance call) before ever calling
+    // claimPurchasesForPayout with that now-possibly-stale purchase row —
+    // exactly what a refund landing in that window would produce. Without
+    // the #1061 fix, claimPurchasesForPayout trusted the caller's stale
+    // row and claimed (and would have paid out) a purchase already
+    // refunded out from under it.
+    it('never claims a purchase using a caller-held row that went stale (refunded) after being read', async () => {
+      const seller = await signupBuilder('refund-payout-stale-seller');
+      await createGreenbeltLandletWithArea('refund-payout-stale-landlet', 1000);
+      await claim('refund-payout-stale-landlet', seller);
+      await createTemplate('refund-payout-stale-template', { priceCents: 10000 });
+      await placeInstance('refund-payout-stale-instance', 'refund-payout-stale-landlet', 'refund-payout-stale-template', seller);
+      const purchased = await api('/instances/refund-payout-stale-instance/purchase', seller.session({ method: 'POST' }));
+      const { purchaseId } = purchased.body.purchase;
+
+      // The stale row a caller like handleSellerPayouts would still be
+      // holding from before the refund below landed.
+      const staleRow = await env.DB.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(staleRow.refunded_at).toBeNull();
+
+      const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+      expect(refunded.response.status).toBe(200);
+
+      const claimed = await claimPurchasesForPayout(env.DB, [staleRow], '2026-01-01T00:00:00.000Z');
+      expect(claimed).toHaveLength(0);
+
+      const row = await env.DB.prepare('SELECT paid_out_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.paid_out_at).toBeNull();
+    });
+
     // #869: replaces a fresh crypto.randomUUID() per call (#866/#868 —
     // could never match a retry's own key, so it never actually protected
     // against a duplicate payout) with a hash of the claimed purchase-id

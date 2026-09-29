@@ -6572,10 +6572,18 @@ async function sellerPayoutSummaryJson(env, db, sessionSeller) {
 // inconsistency. Returns only the purchases this call actually won the
 // claim on, so the caller can size its Stripe payout request off the
 // post-claim set rather than the pre-claim one.
+//
+// #1061: also guards on refunded_at IS NULL — callers filter refunded_at
+// at read time (unpaidSellerPurchases), but handleSellerPayouts does real
+// work (DB awaits, an outbound Stripe balance call) between that read and
+// this claim, a long enough window for a concurrent handlePurchaseRefund
+// to refund one of the same purchases in between. Without this, the
+// purchase still gets claimed and paid out for real even though it's
+// simultaneously being refunded back to the buyer.
 export async function claimPurchasesForPayout(db, purchases, nowIso) {
   if (purchases.length === 0) return [];
   const results = await db.batch(purchases.map((purchase) =>
-    db.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ? AND paid_out_at IS NULL')
+    db.prepare('UPDATE purchases SET paid_out_at = ? WHERE purchase_id = ? AND paid_out_at IS NULL AND refunded_at IS NULL')
       .bind(nowIso, purchase.purchase_id)));
   return purchases.filter((_, i) => results[i].meta.changes === 1);
 }
@@ -10883,10 +10891,24 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // based on an earlier one's row count within the same call. Whichever
   // request's UPDATE loses the race affects 0 rows and gets rejected here
   // before it can touch the builder's balance at all.
+  //
+  // #1061: also re-checks paid_out_at IS NULL here, not just above — the
+  // eager paid_out_at check above is a fast-path only, same as the
+  // refunded_at read at the top of this function; a concurrent
+  // claimPurchasesForPayout (POST /sellers/me/payouts) landing in the
+  // window between that read and this write used to still let the refund
+  // through, reversing a Stripe transfer that's supposed to be backing
+  // other, still-unpaid sales.
   const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ? AND refunded_at IS NULL`,
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
   ).bind(purchaseId).run();
   if (guard.meta.changes === 0) {
+    const current = await db.prepare('SELECT refunded_at, paid_out_at FROM purchases WHERE purchase_id = ?')
+      .bind(purchaseId).first();
+    if (current?.paid_out_at) {
+      throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+    }
     throw new HttpError('This purchase has already been refunded', 400);
   }
 
