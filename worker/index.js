@@ -7926,17 +7926,27 @@ async function handleLandlets(request, db, route, url) {
       throw new HttpError('Landlet is not currently generating', 409);
     }
 
-    const settings = await getWorldSettings(db);
-    const enclosed = landletMaxWorldRadius(existing) <= settings.radius_m;
+    // #1055: "is this enclosed" used to be decided from a settings.radius_m
+    // JS read taken before this batch commits, unlike #849's own fix for
+    // the identical candidate-materialization race -- a concurrent
+    // expandWorldOnce bumping the radius in the gap between that read and
+    // this write could leave an already-enclosed landlet stuck at
+    // 'generating' until some future sweep happened to catch it. Now a
+    // live subquery against world_settings, evaluated inside this same
+    // UPDATE, the same fix shape candidateMaterializationSweepStatements
+    // already uses.
     await db.batch([
       db.prepare(`
         UPDATE landlets
         SET generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            status = CASE WHEN ? THEN 'greenbelt' ELSE status END,
-            claimable_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE claimable_at END,
+            status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
+            claimable_at = CASE
+              WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              ELSE claimable_at
+            END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ? AND status = 'generating' AND generated_at IS NULL
-      `).bind(enclosed ? 1 : 0, enclosed ? 1 : 0, route[1]),
+      `).bind(route[1]),
       adminActionLogStatement(db, admin.user_id, 'landlet_generation_complete', 'landlet', route[1]),
     ]);
     const updated = await requireLandlet(db, route[1]);
@@ -8546,7 +8556,6 @@ async function handleLandCandidates(request, db, route, url) {
     // structure for a band-based check like generate-ring's to work with.
     await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
 
-    const settings = await getWorldSettings(db);
     // Every other cell in the mosaic reaches greenbelt/claimable the normal
     // way: materialize as 'generating' (candidateMaterializationStatements,
     // above), then a later generation-complete/world-expand call promotes
@@ -8559,22 +8568,31 @@ async function handleLandCandidates(request, db, route, url) {
     // invisible to the builder-delete release logic, which matches by
     // owner_builder_id). Guarded on owner_builder_id IS NULL so a
     // genuinely-claimed center plot is never clobbered.
-    const centralEnclosed = landletMaxWorldRadius(centralRow) <= settings.radius_m;
+    //
+    // #1055: the enclosure decision itself is a live SQL subquery against
+    // world_settings (not a JS comparison against a pre-batch settings
+    // read, which could go stale against a concurrent expandWorldOnce) --
+    // same fix shape as the two generation-complete endpoints. The radius
+    // being compared still has to come from JS, though: centralRow's
+    // polygon/center are being freshly set in this very statement, so
+    // there's no already-stored max_world_radius_m column value that
+    // reflects it yet.
+    const centralMaxWorldRadius = landletMaxWorldRadius(centralRow);
     await db.batch([
       db.prepare(`
         UPDATE landlets
         SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
             generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            status = CASE WHEN owner_builder_id IS NULL AND ? THEN 'greenbelt' ELSE status END,
+            status = CASE WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
             claimable_at = CASE
-              WHEN owner_builder_id IS NULL AND ? THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+              WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
               ELSE claimable_at
             END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = 'starter-landlet'
       `).bind(
         central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json,
-        centralEnclosed ? 1 : 0, centralEnclosed ? 1 : 0,
+        centralMaxWorldRadius, centralMaxWorldRadius,
       ),
       ...rows.map((row) => candidateInsertStatement(db, row)),
       ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
@@ -8878,19 +8896,21 @@ async function completeRingGenerationInternal(db, ringId) {
     throw new HttpError('All ring candidates must be materialized before generation can complete', 409);
   }
 
-  const settings = await getWorldSettings(db);
+  // #1055: same live-subquery fix as the single-landlet generation-complete
+  // endpoint above -- a JS-read settings.radius_m here could go stale
+  // against a concurrent expandWorldOnce.
   await db.prepare(`
     UPDATE landlets
     SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        status = CASE WHEN max_world_radius_m <= ? THEN 'greenbelt' ELSE status END,
+        status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
         claimable_at = CASE
-          WHEN max_world_radius_m <= ? THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+          WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
           ELSE claimable_at
         END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
       AND status = 'generating'
-  `).bind(settings.radius_m, settings.radius_m, ringId).run();
+  `).bind(ringId).run();
   const completed = await db.prepare(`
     SELECT landlets.* FROM landlets
     JOIN landlet_candidates USING (landlet_id)
