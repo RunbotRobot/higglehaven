@@ -7452,9 +7452,29 @@ async function handleConfirmCard(request, env, db) {
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
     return json({ user: userFromRow(updated) });
   }
+  // #1072: this used to trust a client-supplied paymentMethodId directly,
+  // never checking it against anything -- a GET on any PaymentMethod that
+  // exists anywhere in this platform's own connected Stripe account
+  // succeeds, so a replayed id (this user's own from a prior session,
+  // another user's, or one obtained some other way) granted credit_card
+  // trust tier with no real verification at all. Trusting the SetupIntent
+  // id instead of the PaymentMethod id closes that: the SetupIntent was
+  // created server-side by handleCardSetupIntent above with this specific
+  // user's id stamped into its own metadata, and its payment_method is
+  // only ever set by Stripe once a real card has actually been confirmed
+  // against it -- so this endpoint now derives the PaymentMethod id itself
+  // from a resource it already knows belongs to this user, rather than
+  // trusting whatever id the caller happens to send.
   const input = await readJson(request);
-  const paymentMethodId = stringValue(input.paymentMethodId, 'paymentMethodId');
-  const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(paymentMethodId)}`);
+  const setupIntentId = stringValue(input.setupIntentId, 'setupIntentId');
+  const setupIntent = await stripeRequest(env, 'GET', `setup_intents/${encodeURIComponent(setupIntentId)}`);
+  if (setupIntent.metadata?.userId !== user.user_id) {
+    throw new HttpError('This card verification session does not belong to you.', 403);
+  }
+  if (setupIntent.status !== 'succeeded' || !setupIntent.payment_method) {
+    throw new HttpError('Card verification is not complete yet.', 400);
+  }
+  const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(setupIntent.payment_method)}`);
   const funding = paymentMethod.card?.funding || null;
   const accepted = funding === 'credit';
   await db.prepare(`

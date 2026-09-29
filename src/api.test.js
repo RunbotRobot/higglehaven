@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchBundles, fetchCurrentUser,
-  fetchSharedBundles,
+  confirmCard, createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchBundles,
+  fetchCurrentUser, fetchSharedBundles,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -222,5 +222,30 @@ describe('fetchCurrentUser', () => {
       json: () => Promise.resolve({ error: 'Internal server error' }),
     })));
     await expect(fetchCurrentUser()).rejects.toThrow('Internal server error');
+  });
+});
+
+// #1072: handleConfirmCard (worker/index.js) used to trust a client-supplied
+// paymentMethodId directly, letting a replayed id from anywhere grant
+// credit_card trust tier with no real verification. The fix moved to
+// deriving the PaymentMethod server-side off a SetupIntent this app itself
+// created for the current user -- this only proves the client-side half:
+// confirmCard sends the SetupIntent's own id, not a PaymentMethod id, since
+// that's the one piece worker/*.test.js can't see (this suite never
+// configures STRIPE_SECRET_KEY, so the real Stripe-calling branch itself
+// has no automated coverage at all, consistent with every other
+// real-Stripe-API branch in this file).
+describe('confirmCard', () => {
+  it('sends the SetupIntent id as setupIntentId, not a PaymentMethod id', async () => {
+    let sentBody;
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      sentBody = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ user: { userId: 'user-1', trustTier: 'credit_card' } }),
+      });
+    }));
+    await confirmCard('seti_abc123');
+    expect(sentBody).toEqual({ setupIntentId: 'seti_abc123' });
   });
 });
