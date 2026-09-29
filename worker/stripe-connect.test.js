@@ -382,6 +382,26 @@ describe('Higgles redemption (#625)', () => {
     expect(status.body.availableCents).toBe(5000);
   });
 
+  // #1050: same "real outbound Stripe API call on the shared key" gap
+  // #839/#948 already fixed for the stripe-account handlers -- this
+  // endpoint's own Stripe transfers/payouts calls (unreachable today while
+  // REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not forever) need the
+  // identical guard. Same coverage shape as those handlers' own tests.
+  it('rate-limits repeated redemption attempts from the same builder', async () => {
+    const builder = await signupBuilder('redeem-rate-limit');
+    await creditHiggles(builder, 5000);
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/redeem', builder.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      expect(attempt.response.status).toBe(503);
+    }
+    const limited = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #869: POST /builders/me/redeem itself always 503s in this suite
   // (REDEMPTION_PAUSED_PENDING_PROVENANCE, on top of Stripe never being
   // configured), so the actual fix -- resuming an in-flight redemption
