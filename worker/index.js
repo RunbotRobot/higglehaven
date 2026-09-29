@@ -8300,17 +8300,28 @@ async function handleLandletDraft(request, db, landletId) {
       return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
     });
     await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
-    const instancesNeedingXYCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
-        || instance.landletId !== existing.landletId;
-    });
-    assertInstanceXYWithinLandlet(instancesNeedingXYCheck);
+    // #1048: scale's own [0.001, 1000] domain bound is checked before the
+    // footprint-aware XY check below — cheap and DB-lookup-free, so an
+    // obviously-malformed scale gets its own specific error rather than
+    // being masked by the footprint check's "extends outside landlet"
+    // message once that check also starts factoring scale in.
     const instancesNeedingScaleCheck = instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
       return !existing || instance.scale !== existing.scale;
     });
     assertInstanceScaleWithinBounds(instancesNeedingScaleCheck);
+    // The XY check is now footprint-aware (crop and scale affect an
+    // instance's rendered edges, not just its center point), so it also
+    // needs to re-run whenever crop or scale changed, not just x/y/z/
+    // landletId — otherwise an untouched x/y whose *footprint* just grew
+    // (a scale bump resent alongside an unrelated move) could slip through.
+    const instancesNeedingXYCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
+        || instance.landletId !== existing.landletId || instance.scale !== existing.scale
+        || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
+    });
+    await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
 
     const versionId = crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
@@ -9522,23 +9533,29 @@ async function handleInstances(request, env, route, url) {
       return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
     });
     await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
-    // Same "only re-check what actually changed" reasoning as crop/z above
-    // — an untouched x/y resent unchanged on an unrelated group move
-    // shouldn't get re-validated against a bound that may have tightened
-    // since (footprintScaleAtHeight shrinks with z, so a level added above
-    // an instance after it was placed could otherwise brick it here).
-    const instancesNeedingXYCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
-        || instance.landletId !== existing.landletId;
-    });
-    assertInstanceXYWithinLandlet(instancesNeedingXYCheck);
-    // Same "only re-check what actually changed" reasoning as crop/z/xy above.
+    // Same "only re-check what actually changed" reasoning as crop/z above.
+    // #1048: scale's own domain bound is checked before the footprint-aware
+    // XY check below (see that call site's own comment for why).
     const instancesNeedingScaleCheck = instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
       return !existing || instance.scale !== existing.scale;
     });
     assertInstanceScaleWithinBounds(instancesNeedingScaleCheck);
+    // Same "only re-check what actually changed" reasoning as crop/z above
+    // — an untouched x/y resent unchanged on an unrelated group move
+    // shouldn't get re-validated against a bound that may have tightened
+    // since (footprintScaleAtHeight shrinks with z, so a level added above
+    // an instance after it was placed could otherwise brick it here).
+    // Also re-checks on a crop/templateId/scale change — the XY check is
+    // now footprint-aware, so those affect the bound too, not just x/y/z/
+    // landletId.
+    const instancesNeedingXYCheck = instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
+        || instance.landletId !== existing.landletId || instance.scale !== existing.scale
+        || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
+    });
+    await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
@@ -9617,8 +9634,9 @@ async function handleInstances(request, env, route, url) {
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
     await assertInstanceZWithinLevels(db, [instance]);
-    assertInstanceXYWithinLandlet([instance]);
+    // #1048: scale's own domain bound before the footprint-aware XY check.
     assertInstanceScaleWithinBounds([instance]);
+    await assertInstanceXYWithinLandlet(db, [instance]);
     // #456: requireOwnedLandlet above is a point-in-time check — an auction
     // resolving (transferring ownership, wiping placed_instances) in the
     // await gap between it and this write would otherwise let this request
@@ -9681,13 +9699,18 @@ async function handleInstances(request, env, route, url) {
       await assertInstanceZWithinLevels(db, [instance]);
     }
     // Same "only re-check what actually changed" reasoning as crop/z above.
-    if (instance.x !== existing.x_m || instance.y !== existing.y_m
-      || instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
-      assertInstanceXYWithinLandlet([instance]);
-    }
-    // Same "only re-check what actually changed" reasoning as crop/z/xy above.
+    // #1048: scale's own domain bound is checked before the footprint-aware
+    // XY check below (see that call site's own comment for why).
     if (instance.scale !== existing.scale) {
       assertInstanceScaleWithinBounds([instance]);
+    }
+    // Also re-checks on a crop/templateId/scale change — the XY check is
+    // now footprint-aware, so those affect the bound too, not just x/y/z/
+    // landletId.
+    if (instance.x !== existing.x_m || instance.y !== existing.y_m
+      || instance.z !== existing.z_m || instance.landletId !== existing.landlet_id
+      || instance.scale !== existing.scale || cropOrTemplateChanged) {
+      await assertInstanceXYWithinLandlet(db, [instance]);
     }
     // #456: fold the ownership re-check into the write itself — same
     // reasoning as the create endpoints above. Without this, a landlet
@@ -11145,22 +11168,56 @@ async function assertInstanceZWithinLevels(db, instances) {
 // per-landlet area_m2 column (#746) — but nothing on the server enforced
 // this, so a raw API write could set x/y to any finite value and render
 // arbitrarily far from the landlet it claims to belong to, including
-// inside another builder's landlet. Deliberately looser than
-// clampToLandlet's own bound, which also subtracts the placed template's
-// own half-width/depth so an instance's edges (not just its center) stay
-// inside: the server has no easy access to a template's real mesh
-// dimensions, and a center-point bound alone already closes the actual
-// abuse case (a wildly out-of-range offset) without ever rejecting
-// anything the frontend's own tighter clamp would have produced. No DB
-// lookup needed — unlike assertInstanceZWithinLevels, this bound doesn't
-// depend on which landlet it is, only on this fixed universal footprint.
-function assertInstanceXYWithinLandlet(instances) {
+// inside another builder's landlet.
+//
+// #1048: originally just a center-point bound (deliberately looser than
+// clampToLandlet's own, which also subtracts the placed template's own
+// half-width/depth) — the reasoning at the time was that the server had no
+// easy access to a template's real mesh dimensions, and a center-point
+// bound alone already closed "the actual abuse case (a wildly out-of-range
+// offset)." That stopped being true the moment #845 let a raw API call set
+// scale up to 1000: a center point that legitimately sits inside the
+// landlet, combined with a large scale, produces a mesh whose true
+// rendered edges extend arbitrarily far outside it — #845's own comment on
+// assertInstanceScaleWithinBounds diagnosed this exact defeat but never
+// fixed it here. Now mirrors clampToLandlet's own footprint-aware formula:
+// looks up each referenced template's dimensions (same DB-lookup shape as
+// assertCropWithinTemplateBounds) and subtracts half the instance's actual
+// rendered width/depth — crop and scale applied, matching meshDimensions'
+// own per-axis formula, including flooring's exemption from both (a
+// flooring instance's footprint is always its template's raw
+// width/depth — see meshDimensions' own flooring special-case) — from the
+// bound instead of just checking the bare center point. A template that
+// can't be found (deleted after being referenced) is treated the same as
+// before this fix — a center-point-only check — rather than blocking the
+// write on a lookup that predates this validation.
+async function assertInstanceXYWithinLandlet(db, instances) {
+  if (instances.length === 0) return;
+  const templateIds = [...new Set(instances.map((instance) => instance.templateId))];
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(
+    `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
+  ).bind(...templateIds).all();
+  const templatesById = new Map(results.map((row) => [row.template_id, templateFromRow(row)]));
   for (const instance of instances) {
     const halfSpan = (LANDLET_SIDE_M / 2) * footprintScaleAtHeight(instance.z);
-    if (Math.abs(instance.x) > halfSpan || Math.abs(instance.y) > halfSpan) {
+    const template = templatesById.get(instance.templateId);
+    let halfWidth = 0;
+    let halfDepth = 0;
+    if (template) {
+      if (template.metadata?.flooring === true) {
+        halfWidth = template.dimensions.width / 2;
+        halfDepth = template.dimensions.depth / 2;
+      } else {
+        halfWidth = ((instance.crop?.x ?? template.dimensions.width) * instance.scale) / 2;
+        halfDepth = ((instance.crop?.y ?? template.dimensions.depth) * instance.scale) / 2;
+      }
+    }
+    if (Math.abs(instance.x) + halfWidth > halfSpan || Math.abs(instance.y) + halfDepth > halfSpan) {
       throw new HttpError(
-        `x/y (${instance.x}, ${instance.y}) is outside landlet "${instance.landletId}"'s buildable footprint `
-        + `(allowed range: ±${halfSpan.toFixed(2)})`,
+        `Instance at (${instance.x}, ${instance.y}) with its rendered footprint extends outside landlet `
+        + `"${instance.landletId}"'s buildable footprint (center must stay within ±${(halfSpan - Math.max(halfWidth, halfDepth)).toFixed(2)} `
+        + `given its current size/scale)`,
         400,
       );
     }
@@ -11538,15 +11595,15 @@ function validateScale(value) {
 // gizmo itself used to enforce client-side (docs/API.md's "Legacy
 // per-instance Resize scale") — every legitimately-created value already
 // falls inside this range, so this only rejects what a raw API call could
-// otherwise smuggle in. An unbounded scale defeats
-// assertInstanceXYWithinLandlet's center-point check entirely, since scale
-// multiplies the rendered mesh's real-world size well past that check's
-// fixed footprint bound. Called conditionally (only when scale actually
-// changed vs. the stored row) at every write site, same "only re-check
-// what actually changed" idiom as assertInstanceXYWithinLandlet/
-// assertCropWithinTemplateBounds — an untouched scale resent unchanged on
-// an unrelated edit must not start bricking a pre-existing out-of-range
-// row.
+// otherwise smuggle in. This alone doesn't stop a large scale from still
+// producing a mesh whose rendered edges extend outside its landlet — that
+// half is #1048's job, having made assertInstanceXYWithinLandlet itself
+// scale/crop-aware rather than a bare center-point check. Called
+// conditionally (only when scale actually changed vs. the stored row) at
+// every write site, same "only re-check what actually changed" idiom as
+// assertInstanceXYWithinLandlet/assertCropWithinTemplateBounds — an
+// untouched scale resent unchanged on an unrelated edit must not start
+// bricking a pre-existing out-of-range row.
 const MIN_INSTANCE_SCALE = 0.001;
 const MAX_INSTANCE_SCALE = 1000;
 function assertInstanceScaleWithinBounds(instances) {

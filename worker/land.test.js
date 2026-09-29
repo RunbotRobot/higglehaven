@@ -3770,11 +3770,14 @@ describe('Landlet levels', () => {
   });
 
   describe('instance scale bounds (#845)', () => {
-    it('allows an instance with scale within the legacy Resize gizmo\'s [0.001, 1000] range', async () => {
+    it('allows an instance with scale within the legacy Resize gizmo\'s [0.001, 1000] range, placed so its scaled footprint still fits', async () => {
       const owner = await signupBuilder('instance-scale-within-owner');
       await createGreenbeltLandletWithArea('instance-scale-within-landlet', 1000);
       await claim('instance-scale-within-landlet', owner);
 
+      // placeholder-tree is 1.5m x 1.5m — scale: 5 gives a 7.5m x 7.5m
+      // footprint, comfortably inside the landlet's fixed ~15.8m half-span
+      // (LANDLET_AREA_M2 = 1000) even before #1048's footprint-aware check.
       const withinRange = await api('/instances', owner.session({
         method: 'POST',
         body: JSON.stringify({
@@ -3782,10 +3785,38 @@ describe('Landlet levels', () => {
           landletId: 'instance-scale-within-landlet',
           templateId: 'placeholder-tree',
           x: 0, y: 0, z: 0,
-          scale: 500,
+          scale: 5,
         }),
       }));
       expect(withinRange.response.status).toBe(201);
+    });
+
+    // #1048: this used to be the exact vulnerability -- scale: 500 is well
+    // within assertInstanceScaleWithinBounds' own [0.001, 1000] range (so
+    // that check alone accepted it), and x: 0/y: 0 is dead center of the
+    // landlet (so the old center-point-only assertInstanceXYWithinLandlet
+    // accepted it too) -- but a scale-500 placeholder-tree (1.5m x 1.5m)
+    // renders as 750m x 750m, vastly larger than the landlet's own ~31.6m
+    // buildable footprint. This test used to assert 201 here; now that
+    // assertInstanceXYWithinLandlet accounts for scale (and crop), it
+    // correctly rejects.
+    it('rejects a scale within [0.001, 1000] whose resulting footprint still doesn\'t fit the landlet', async () => {
+      const owner = await signupBuilder('instance-scale-footprint-owner');
+      await createGreenbeltLandletWithArea('instance-scale-footprint-landlet', 1000);
+      await claim('instance-scale-footprint-landlet', owner);
+
+      const tooBigForLandlet = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId: 'instance-scale-footprint',
+          landletId: 'instance-scale-footprint-landlet',
+          templateId: 'placeholder-tree',
+          x: 0, y: 0, z: 0,
+          scale: 500,
+        }),
+      }));
+      expect(tooBigForLandlet.response.status).toBe(400);
+      expect(tooBigForLandlet.body.error).toMatch(/extends outside landlet/);
     });
 
     it('rejects an instance scale far outside the legacy Resize gizmo\'s range', async () => {
@@ -3793,8 +3824,10 @@ describe('Landlet levels', () => {
       await createGreenbeltLandletWithArea('instance-scale-reject-landlet', 1000);
       await claim('instance-scale-reject-landlet', owner);
 
-      // Without this bound, x=0/y=0 sails through assertInstanceXYWithinLandlet's
-      // center-point check even though the rendered object would be enormous.
+      // This own [0.001, 1000] domain bound is checked before the
+      // footprint-aware XY check (see #1048), so a scale this far outside
+      // range still gets its own specific "scale must be between" error
+      // rather than the XY check's "extends outside landlet" one.
       const tooLarge = await api('/instances', owner.session({
         method: 'POST',
         body: JSON.stringify({
