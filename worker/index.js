@@ -9756,6 +9756,15 @@ const CALENDAR_EVENT_RATE_LIMIT_MAX = 20;
 // #944: same missing-rate-limit gap as SIGN_POST_DELETE_RATE_LIMIT_MAX,
 // found in this handler's own DELETE branch.
 const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
+// #1023: the /trigger branch below is intentionally unauthenticated (any
+// client racing to fire a due event, not just its landlet's owner) and
+// idempotent, but every call still does at least one SELECT, and a winning
+// call an UPDATE plus a re-SELECT -- real D1 load with no cap, the one
+// remaining public repeatable mutation in this file with no checkRateLimit
+// call at all. Bucketed by IP like SIGN_POST_RATE_LIMIT_MAX, since this
+// route is unauthenticated like sign posts, not owner-gated like the POST
+// above.
+const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
 
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
@@ -9840,13 +9849,14 @@ async function handleCalendarEvents(request, db, route) {
   // actually fired it, since only that caller should play the effect
   // locally.
   if (request.method === 'POST' && route.length === 5 && route[4] === 'trigger') {
-    return handleCalendarEventTrigger(db, instanceId, route[3]);
+    return handleCalendarEventTrigger(request, db, instanceId, route[3]);
   }
 
   return json({ error: 'Not found' }, 404);
 }
 
-async function handleCalendarEventTrigger(db, instanceId, eventId) {
+async function handleCalendarEventTrigger(request, db, instanceId, eventId) {
+  await checkRateLimit(db, `event-trigger:${clientIp(request)}`, EVENT_TRIGGER_RATE_LIMIT_MAX);
   const event = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
   if (!event) return json({ error: 'Event not found' }, 404);
   if (!event.scheduled_at || event.triggered_at || event.scheduled_at > new Date().toISOString()) {

@@ -1226,6 +1226,38 @@ describe('Community calendar', () => {
     const limited = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[20]}`, rateLimitBuilder.session({ method: 'DELETE' }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #1023: unlike every other public repeatable mutation in this file, the
+  // /trigger branch had no rate limit at all. It's intentionally
+  // unauthenticated (any client can race to fire a due event), so this is
+  // bucketed by IP like the sign-post rate-limit test above, not by
+  // builder. Seeds 21 already-due events directly via the DB so this test
+  // exercises 21 triggers without needing 21 real scheduledAt round-trips.
+  it('rate-limits repeated trigger calls from the same client', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-trigger-rate-limit-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 13,
+        y: 13,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const eventIds = Array.from({ length: 21 }, (_, i) => `calendar-trigger-rate-limit-event-${i}`);
+    await env.DB.batch(eventIds.map((eventId) => env.DB.prepare(
+      `INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at) VALUES (?, ?, ?, ?, ?)`,
+    ).bind(eventId, 'calendar-trigger-rate-limit-instance', calendarBuilder.builder.label, 'An event', '2000-01-01T00:00:00.000Z')));
+
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/instances/calendar-trigger-rate-limit-instance/events/${eventIds[i]}/trigger`, { method: 'POST', headers });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/instances/calendar-trigger-rate-limit-instance/events/${eventIds[20]}/trigger`, { method: 'POST', headers });
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Extensibility (crop floor)', () => {
