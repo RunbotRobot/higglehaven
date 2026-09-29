@@ -9583,6 +9583,25 @@ async function handleInstances(request, env, route, url) {
     if (updated.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #1022: unflagging (true -> false) used to only ever touch this row's
+    // own is_community_sign/is_community_calendar columns -- the sign's
+    // sign_posts/calendar's calendar_events rows were never cleared, so
+    // they sat around invisible-but-persistent and silently reappeared if
+    // the same instance was ever re-flagged later. Only the ON DELETE
+    // CASCADE (migrations/0041/0042) fires on actually deleting the
+    // instance; unflagging needs its own explicit cleanup here. Run as
+    // separate follow-up writes gated on the UPDATE above having actually
+    // landed (not batched with it), same idiom as #1006's notification
+    // fix -- db.batch() has no atomic rollback on a WHERE-guard mismatch,
+    // so batching an unconditional delete alongside a write that might
+    // still no-op on the ownership race above would delete real content
+    // even when the PATCH itself ends up rejected with a 409.
+    if (existing.is_community_sign && !instance.isCommunitySign) {
+      await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(route[1]).run();
+    }
+    if (existing.is_community_calendar && !instance.isCommunityCalendar) {
+      await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(route[1]).run();
+    }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
     return json({ instance: instanceFromRow(stored) });
   }

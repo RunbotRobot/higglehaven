@@ -5564,12 +5564,16 @@ The migrations currently create seventeen main backend tables:
 - `bundles`: a builder's saved, named multi-item groups (see "Bundles" above).
 - `sign_posts`: shopper-authored posts on a placed instance flagged
   `isCommunitySign` (see "Community signs" above), cascade-deleted with
-  their instance.
+  their instance, and also explicitly deleted (#1022) the moment that same
+  instance is un-flagged (`isCommunitySign` set back to `false`) — not just
+  on instance deletion — so a later reflag of the same instance never
+  resurrects old posts.
 - `calendar_events`: builder-authored events on a placed instance flagged
   `isCommunityCalendar` (see "Community calendar" above), cascade-deleted
-  with their instance. Optionally carries `scheduled_at`/`triggered_at` for
-  the one-shot creative-tool trigger (see "Scheduled calendar events +
-  creative-tool trigger" above).
+  with their instance, and likewise explicitly deleted (#1022) on unflag.
+  Optionally carries `scheduled_at`/`triggered_at` for the one-shot
+  creative-tool trigger (see "Scheduled calendar events + creative-tool
+  trigger" above).
 - `product_reviews`: shopper-authored star ratings (+ optional text) on a
   catalog template (see "Product reviews" above), no opt-in flag needed,
   cascade-deleted with their template.

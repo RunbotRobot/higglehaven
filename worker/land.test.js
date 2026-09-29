@@ -444,6 +444,46 @@ describe('Community signs', () => {
     expect(fetched.body.instance.isCommunitySign).toBe(true);
   });
 
+  // #1022: un-flagging used to only ever write placed_instances' own
+  // is_community_sign column -- the sign's sign_posts rows were never
+  // touched, so they sat around unreferenced by any live flag check and
+  // silently reappeared (both via GET and rendered client-side) the moment
+  // the same instance was re-flagged as a sign later.
+  it('clears old sign posts when unflagged, so a later reflag does not resurrect them', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-unflag-reflag-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 3,
+        y: 3,
+        isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-unflag-reflag-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'First post' }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    const unflagged = await api('/instances/sign-unflag-reflag-instance', signsBuilder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunitySign: false }),
+    }));
+    expect(unflagged.response.status).toBe(200);
+    expect(unflagged.body.instance.isCommunitySign).toBe(false);
+
+    const reflagged = await api('/instances/sign-unflag-reflag-instance', signsBuilder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunitySign: true }),
+    }));
+    expect(reflagged.response.status).toBe(200);
+    expect(reflagged.body.instance.isCommunitySign).toBe(true);
+
+    const list = await api('/instances/sign-unflag-reflag-instance/posts');
+    expect(list.body.posts).toHaveLength(0);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).
@@ -824,6 +864,44 @@ describe('Community calendar', () => {
 
     const fetched = await api('/instances/calendar-toggle-instance');
     expect(fetched.body.instance.isCommunityCalendar).toBe(true);
+  });
+
+  // #1022: same gap as community signs' own unflag/reflag test above --
+  // calendar_events rows were never cleared on unflag, so a later reflag of
+  // the same instance silently resurrected old events.
+  it('clears old calendar events when unflagged, so a later reflag does not resurrect them', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-unflag-reflag-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 7,
+        y: 7,
+        isCommunityCalendar: true,
+      }),
+    }));
+    const posted = await api('/instances/calendar-unflag-reflag-instance/events', calendarBuilder.session({
+      method: 'POST', body: JSON.stringify({ text: 'Market day Saturday!' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const unflagged = await api('/instances/calendar-unflag-reflag-instance', calendarBuilder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunityCalendar: false }),
+    }));
+    expect(unflagged.response.status).toBe(200);
+    expect(unflagged.body.instance.isCommunityCalendar).toBe(false);
+
+    const reflagged = await api('/instances/calendar-unflag-reflag-instance', calendarBuilder.session({
+      method: 'PATCH',
+      body: JSON.stringify({ isCommunityCalendar: true }),
+    }));
+    expect(reflagged.response.status).toBe(200);
+    expect(reflagged.body.instance.isCommunityCalendar).toBe(true);
+
+    const list = await api('/instances/calendar-unflag-reflag-instance/events');
+    expect(list.body.events).toHaveLength(0);
   });
 
   it('is independent of isCommunitySign on the same instance', async () => {
