@@ -99,16 +99,20 @@ export async function ageAttest() {
 // Returns `{ clientSecret, publishableKey, simulated }` — `simulated: true`
 // (Stripe not configured on this deployment) means there's no card to
 // collect at all; the caller should skip straight to confirmCard() with no
-// paymentMethodId (see handleCardSetupIntent's own comment in worker/index.js).
+// setupIntentId (see handleCardSetupIntent's own comment in worker/index.js).
 export async function cardSetupIntent() {
   return requestJson('/auth/card-setup-intent', { method: 'POST' });
 }
 
-export async function confirmCard(paymentMethodId) {
+// #1072: takes the SetupIntent's own id, not a PaymentMethod id -- the
+// server derives the PaymentMethod itself from this SetupIntent (which it
+// created for the current user), rather than trusting a client-supplied
+// PaymentMethod id directly.
+export async function confirmCard(setupIntentId) {
   const { user } = await requestJson('/auth/confirm-card', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ paymentMethodId }),
+    body: JSON.stringify({ setupIntentId }),
   });
   return user;
 }

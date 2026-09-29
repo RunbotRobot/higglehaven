@@ -8589,7 +8589,7 @@ verifyContinueBtn.addEventListener('click', async () => {
   verifyContinueBtn.disabled = true;
   setVerifyStatus('Verifying…');
   try {
-    let paymentMethodId = null;
+    let setupIntentId = null;
     if (!verifyStripeSetup?.simulated) {
       const Stripe = await loadStripeJs();
       const stripe = Stripe(verifyStripeSetup.publishableKey);
@@ -8597,9 +8597,9 @@ verifyContinueBtn.addEventListener('click', async () => {
         payment_method: { card: verifyCardElement },
       });
       if (result.error) throw new Error(result.error.message || 'Card verification failed.');
-      paymentMethodId = result.setupIntent.payment_method;
+      setupIntentId = result.setupIntent.id;
     }
-    const user = await confirmCard(paymentMethodId);
+    const user = await confirmCard(setupIntentId);
     currentAuthUser = user;
     notifyVerifyResult(user);
   } catch (err) {
