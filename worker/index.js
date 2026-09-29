@@ -5810,14 +5810,57 @@ async function handleDiditVerificationSession(request, env, db) {
     return json({ sessionId: latest.session_id, url: latest.url });
   }
   await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
-  const session = await diditRequest(env, 'POST', 'v3/session/', {
-    vendor_data: user.user_id,
-    callback: `${appBaseUrl(env)}/?diditReturn=1`,
-  });
-  await db.prepare(`
-    INSERT INTO didit_verification_sessions (session_id, user_id, status, url) VALUES (?, ?, 'pending', ?)
-  `).bind(session.session_id, user.user_id, session.url).run();
-  return json({ sessionId: session.session_id, url: session.url });
+  // #1039: reserved atomically before ever calling Didit's real, billed
+  // session-create API -- without this, two concurrent requests (a
+  // double-click, or two open tabs) that both observed no pending session
+  // just above would both reach the outbound call and both get billed.
+  // Same "claim first, only the winner calls out" idiom
+  // claimOrResumeBuilderRedemption (#852) already uses for Stripe.
+  const { reservationId, existing } = await reserveDiditSession(db, user.user_id);
+  if (!reservationId) {
+    // Lost the race -- a concurrent request already reserved this user's
+    // pending session; hand back that one instead of ever calling Didit.
+    return json({ sessionId: existing.session_id, url: existing.url });
+  }
+  try {
+    const session = await diditRequest(env, 'POST', 'v3/session/', {
+      vendor_data: user.user_id,
+      callback: `${appBaseUrl(env)}/?diditReturn=1`,
+    });
+    // The reservation's own session_id was only ever a local placeholder --
+    // nothing external has referenced it, so overwriting it with Didit's
+    // real one (along with the url a reused session needs, #607) is safe.
+    await db.prepare(`
+      UPDATE didit_verification_sessions SET session_id = ?, url = ? WHERE session_id = ?
+    `).bind(session.session_id, session.url, reservationId).run();
+    return json({ sessionId: session.session_id, url: session.url });
+  } catch (err) {
+    // The outbound call itself failed (or Didit isn't configured) --
+    // release the reservation so it doesn't permanently block this user
+    // from ever starting verification again.
+    await db.prepare('DELETE FROM didit_verification_sessions WHERE session_id = ?').bind(reservationId).run();
+    throw err;
+  }
+}
+
+// Exported for direct testing, the same reasoning latestDiditSession's own
+// callers already rely on -- DIDIT_API_KEY is never configured in any test
+// file (deliberately, per worker/didit-verification.test.js's own top
+// comment), so handleDiditVerificationSession itself always 503s before
+// ever reaching this far through a real HTTP request.
+export async function reserveDiditSession(db, userId) {
+  const reservationId = `pending-${crypto.randomUUID()}`;
+  const result = await db.prepare(`
+    INSERT INTO didit_verification_sessions (session_id, user_id, status)
+    SELECT ?, ?, 'pending'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM didit_verification_sessions WHERE user_id = ? AND processed_at IS NULL
+    )
+  `).bind(reservationId, userId, userId).run();
+  if (result.meta.changes === 0) {
+    return { reservationId: null, existing: await latestDiditSession(db, userId) };
+  }
+  return { reservationId, existing: null };
 }
 
 // Didit's own decision statuses (https://docs.didit.me/): 'Approved' is
