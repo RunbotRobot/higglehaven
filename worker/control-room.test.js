@@ -146,6 +146,27 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.body.error).toMatch(/reason/i);
   });
 
+  // #1070: waitingOn is deliberately free-text too (a "blocked on #123"
+  // task id must pass through untouched, see the test just below this
+  // block), so the 'owner' sentinel comparison couldn't be an enum check
+  // either -- but it used to be case-sensitive, letting a casing variant
+  // (e.g. 'Owner') bypass the reason requirement entirely.
+  it('rejects creating a task with a casing variant of waitingOn owner and no reason', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Needs owner already, cased oddly', waitingOn: 'Owner' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/reason/i);
+  });
+
+  it('normalizes a casing variant of waitingOn owner to the canonical lowercase value once a reason is given', async () => {
+    const task = await createTask({
+      from: 'higglehaven3', title: 'Needs a design call, cased oddly', waitingOn: 'OWNER', reason: 'Needs the owner\'s judgment on X.',
+    });
+    expect(task.waitingOn).toBe('owner');
+  });
+
   it('accepts creating a task with waitingOn owner and a reason, posting it as a real linked reply', async () => {
     const task = await createTask({
       from: 'higglehaven3', title: 'Needs a design call', waitingOn: 'owner', reason: 'Needs the owner\'s judgment on X.',
@@ -186,6 +207,16 @@ describe('Control Room tasks (#N31)', () => {
 
   it('auto-assigns a noteNumber for kind question the same as feedback', async () => {
     const task = await createTask({ kind: 'question', title: 'A question needing an id' });
+    expect(typeof task.noteNumber).toBe('number');
+  });
+
+  // #1070: kind is deliberately free-text (a GitHub-issue kind must pass
+  // through untouched, see the "issue-backed" test just below), so this
+  // couldn't be an enum check -- but the message-shaped comparison itself
+  // used to be case-sensitive, silently skipping auto-numbering for any
+  // casing variant of 'feedback'/'question'.
+  it('auto-assigns a noteNumber for a casing variant of kind feedback', async () => {
+    const task = await createTask({ kind: 'Feedback', title: 'Casing-variant kind' });
     expect(typeof task.noteNumber).toBe('number');
   });
 
@@ -397,6 +428,23 @@ describe('Control Room tasks (#N31)', () => {
 
     const stillUnchanged = await api(`/control-room/tasks/${task.id}`, keySession());
     expect(stillUnchanged.body.task.waitingOn).toBeNull();
+  });
+
+  // #1070: same gap as the create-path test above, on the update path's
+  // own separate comparison.
+  it('rejects setting waitingOn to a casing variant of owner with no reason, and normalizes it once a reason is given', async () => {
+    const task = await createTask();
+    const rejected = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'Owner' }),
+    }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/reason/i);
+
+    const accepted = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'OWNER', reason: 'Needs a design call.' }),
+    }));
+    expect(accepted.response.status).toBe(200);
+    expect(accepted.body.task.waitingOn).toBe('owner');
   });
 
   it('accepts setting waitingOn to owner with a reason, and posts it as a real linked reply', async () => {

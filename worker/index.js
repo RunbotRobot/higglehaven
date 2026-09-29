@@ -832,7 +832,15 @@ async function handleControlRoomTaskCreate(request, env, db) {
   // assign the next one here instead, so every message-shaped card gets a
   // stable, referenceable id (e.g. "N42") the moment it's created, the same
   // way a GitHub-backed card already gets its issue/PR number for free.
-  const isMessageShaped = kind === 'feedback' || kind === 'question';
+  // #1070: compared case-insensitively -- kind/waitingOn are both
+  // deliberately free-text (a GitHub-issue kind, or a "blocked on #123"
+  // waitingOn value, must pass through untouched), but the two sentinel
+  // values this file gates real behavior on ('feedback'/'question' here,
+  // 'owner' below) need to be recognized regardless of a caller's casing,
+  // or a caller who happens to write e.g. "Feedback"/"Owner" silently
+  // skips the gate entirely -- exactly the N31 failure mode #909 already
+  // fixed for the exact-casing case.
+  const isMessageShaped = kind.toLowerCase() === 'feedback' || kind.toLowerCase() === 'question';
   const autoAssignNoteNumber = isMessageShaped && explicitNumber == null && explicitNoteNumber == null;
 
   // #909: the update handler's own comment above calls its reason
@@ -841,7 +849,15 @@ async function handleControlRoomTaskCreate(request, env, db) {
   // no equivalent guard at all, letting a brand-new task reach the board
   // already "Waiting on: Owner" with zero reply anywhere explaining why.
   // Same requirement, same atomic reply-in-the-same-write shape as update.
-  const waitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
+  //
+  // #1070: normalized to the canonical lowercase sentinel (not just
+  // compared case-insensitively) once it matches -- admin-control-room.html's
+  // own badge/Quick-Look logic does a strict === 'owner' against the STORED
+  // value, so a casing variant that only passed the gate check here would
+  // still render wrong on the board. Any other value (a genuine "blocked on
+  // #123" task id) passes through untouched.
+  let waitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
+  if (waitingOn?.toLowerCase() === 'owner') waitingOn = 'owner';
   let reason = null;
   if (waitingOn === 'owner') {
     reason = controlRoomTextValue(body.reason, 'reason (message text explaining the owner block)');
@@ -906,7 +922,14 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   const body = await readJson(request);
   const caller = labelValue(body.caller, 'caller (caller name)');
 
-  const settingWaitingOnOwner = body.waitingOn === 'owner' && existing.waiting_on !== 'owner';
+  // #1070: normalized to the canonical lowercase sentinel once it matches
+  // case-insensitively, on both the incoming and already-stored side --
+  // see handleControlRoomTaskCreate's own comment on why a strict === alone
+  // (against a column that's also genuinely free-text) isn't enough.
+  let normalizedIncomingWaitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
+  if (normalizedIncomingWaitingOn?.toLowerCase() === 'owner') normalizedIncomingWaitingOn = 'owner';
+  const existingWaitingOnOwner = existing.waiting_on?.toLowerCase() === 'owner';
+  const settingWaitingOnOwner = normalizedIncomingWaitingOn === 'owner' && !existingWaitingOnOwner;
   let reason = null;
   if (settingWaitingOnOwner) {
     reason = controlRoomTextValue(body.reason, 'reason (message text explaining the owner block)');
@@ -925,7 +948,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   }
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
   if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? labelValue(body.prUrl, 'prUrl') : null);
-  if (body.waitingOn !== undefined) setIfPresent('waiting_on', body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null);
+  if (body.waitingOn !== undefined) setIfPresent('waiting_on', normalizedIncomingWaitingOn);
   if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
   if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
   if (body.subIssues !== undefined) {
