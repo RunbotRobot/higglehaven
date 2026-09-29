@@ -9231,6 +9231,20 @@ function refreshAccountAuthUI() {
     authAccountTrustTierEl.textContent = trustTierLabels[currentAuthUser.trustTier] || '';
     authAccountTrustTierEl.classList.toggle('verified', currentAuthUser.trustTier === 'id_verified');
     authVerifyIdBtn.hidden = currentAuthUser.trustTier === 'id_verified';
+    // #1067: pollDiditVerificationStatus's own 5-minute-timeout copy
+    // promises this "will pick up automatically next time you open your
+    // account" — nothing here actually did that until now. Reconciles a
+    // stalled-pending session (one the redirect/poll never resolved) the
+    // same way pollDiditVerificationStatus itself does, fire-and-forget
+    // with the same re-entrancy guard as the pioneer-badge fetch just
+    // below. Cheap when there's nothing pending — handleDiditVerificationStatus
+    // no-ops with no outbound Didit call in that case.
+    if (currentAuthUser.trustTier !== 'id_verified') {
+      fetchDiditVerificationStatus().then(({ status }) => {
+        if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading
+        if (status === 'approved') refreshCurrentUser();
+      }).catch(() => {});
+    }
     // Founding/pioneer recognition (docs/SPEC.md §3) — this app has no
     // separate profile page, so the account panel is the closest fit (the
     // old dev-mode identity roster used to show this — see
