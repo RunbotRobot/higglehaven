@@ -1676,7 +1676,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
-      // below and migrations/0091's own idx_catalog_templates_name_nocase
+      // below and migrations/0092's own idx_catalog_templates_name_nocase
       // index -- an inconsistent collation here would silently reorder or
       // skip rows relative to what the client's previous page actually
       // ended on.
