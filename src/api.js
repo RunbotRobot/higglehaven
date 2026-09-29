@@ -756,9 +756,23 @@ export async function replaceLandletDraft(landletId, { instances, versionName, v
 // with no translation. Private to the owning builder.
 // No builderId param — the server derives "whose bundles" from the session
 // cookie, never from a client-supplied field.
+// #1035: GET /api/bundles is cursor-paginated (#751) at 100 per page, but
+// every caller here wants the builder's whole saved-bundle set for the
+// picker — same "one page silently truncates past 100" shape #186/#190
+// already fixed for landlets/auctions, just applied in-place here (rather
+// than a separate fetchAll* export) since no caller ever wants only the
+// first page.
 export async function fetchBundles() {
-  const { bundles } = await requestJson('/bundles');
-  return bundles;
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { bundles, nextCursor } = await requestJson(`/bundles?${query.toString()}`);
+    all.push(...bundles);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 export async function createBundle({ name, items, shared }) {
@@ -784,10 +798,20 @@ export async function updateBundle(bundleId, patch) {
 
 // The community tab: every builder's shared bundles, not just one
 // builder's — a separate listing from fetchBundles(builderId), not a
-// filtered version of it (see the worker's own GET handler).
+// filtered version of it (see the worker's own GET handler). Paginated
+// the same way fetchBundles() is (#1035) — the platform-wide shared pool
+// is exactly as likely to cross 100 as any one builder's own bundles.
 export async function fetchSharedBundles() {
-  const { bundles } = await requestJson('/bundles?shared=true');
-  return bundles;
+  const all = [];
+  let cursor;
+  for (;;) {
+    const query = new URLSearchParams({ shared: 'true', limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    const { bundles, nextCursor } = await requestJson(`/bundles?${query.toString()}`);
+    all.push(...bundles);
+    if (!nextCursor) return all;
+    cursor = nextCursor;
+  }
 }
 
 export async function deleteBundle(bundleId) {
