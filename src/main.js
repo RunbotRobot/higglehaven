@@ -4000,6 +4000,8 @@ function renderSellerList() {
       try {
         const copy = await createCatalogTemplate({
           name: `${template.name} (copy)`,
+          category: template.category,
+          subcategory: template.subcategory,
           dimensions: template.dimensions,
           color: template.color,
           modelUrl: template.modelUrl,
