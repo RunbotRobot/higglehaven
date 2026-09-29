@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "pretest": "node scripts/check-migrations-manifest-fresh.mjs",
+    "pretest": "node scripts/check-migrations-manifest-fresh.mjs && node scripts/check-migration-number-collisions.mjs",
     "test": "vitest run",
     "test:e2e": "node e2e/run-all.mjs",
     "generate:migrations-manifest": "node scripts/generate-migrations-manifest.mjs",
