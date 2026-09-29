@@ -34,8 +34,17 @@ await clearVerifyModalIfShown(page);
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 
 await openAccountMenu(page);
+// #1067: refreshAccountAuthUI (re-run on every account-auth-btn click,
+// see that handler's own comment) now reconciles a stalled-pending Didit
+// session on open instead of only ever picking one up via the
+// ?diditReturn=1 redirect or a fresh poll — proven here by the status
+// endpoint actually being called, not by a real approval (no Didit
+// config in this deployment to drive one, per this file's own top
+// comment).
+const diditStatusRequest = page.waitForRequest('**/api/auth/didit-verification-status', { timeout: 5000 });
 await page.click('#account-auth-btn');
 await waitForText(page, '#account-auth-btn', 'Didit Suite');
+await diditStatusRequest;
 
 const trustTierBeforeVerify = await page.textContent('#auth-account-trust-tier');
 console.log('trust-tier text for an account that has only cleared the credit-card floor (should say credit-card verified, not yet ID-verified):', trustTierBeforeVerify);
