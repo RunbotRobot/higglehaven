@@ -347,6 +347,57 @@ describe('Refund revokes avatar ownership (#754)', () => {
     expect(reEquip.response.status).toBe(403);
   });
 
+  // #1033: a buyer can legitimately hold TWO separate, unrefunded purchases
+  // of the same avatar template (two separately-placed instances, both
+  // bought) — owned_avatars' own single purchase_id column only ever
+  // tracked the first one (INSERT OR IGNORE is a no-op for the second), so
+  // refunding that first purchase used to revoke ownership even while the
+  // second, still-valid purchase backed the exact same grant.
+  it('keeps ownership and equip state when a SECOND unrefunded purchase of the same template still exists', async () => {
+    const seller = await signupBuilder('avatar-refund-multi-seller');
+    const buyer = await signupBuilder('avatar-refund-multi-buyer');
+    await createGreenbeltLandlet('avatar-refund-multi-landlet');
+    await claim('avatar-refund-multi-landlet', seller);
+    await createAvatarTemplate('avatar-refund-multi-template');
+    await placeInstance('avatar-refund-multi-instance-1', 'avatar-refund-multi-landlet', 'avatar-refund-multi-template', seller);
+    await placeInstance('avatar-refund-multi-instance-2', 'avatar-refund-multi-landlet', 'avatar-refund-multi-template', seller);
+
+    const firstPurchase = await purchase('avatar-refund-multi-instance-1', buyer);
+    expect(firstPurchase.response.status).toBe(201);
+    const secondPurchase = await purchase('avatar-refund-multi-instance-2', buyer);
+    expect(secondPurchase.response.status).toBe(201);
+
+    const equipped = await api('/builders/me/avatar', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-multi-template' }),
+    }));
+    expect(equipped.response.status).toBe(200);
+
+    // Refund only the FIRST purchase — the second is still fully valid.
+    const refunded = await api(`/purchases/${firstPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+
+    const stillOwned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, 'avatar-refund-multi-template').all();
+    expect(stillOwned.results).toHaveLength(1);
+
+    const stillEquipped = await api('/builders/me/avatar', buyer.session());
+    expect(stillEquipped.body.avatar.equippedTemplateId).toBe('avatar-refund-multi-template');
+
+    // Now refund the SECOND (last remaining) purchase — ownership and equip
+    // should finally be revoked.
+    const secondRefunded = await api(`/purchases/${secondPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(secondRefunded.response.status).toBe(200);
+
+    const finallyRevoked = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, 'avatar-refund-multi-template').all();
+    expect(finallyRevoked.results).toHaveLength(0);
+
+    const finallyUnequipped = await api('/builders/me/avatar', buyer.session());
+    expect(finallyUnequipped.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+  });
+
   // #801: revocation used to be gated on the template's *live* category
   // instead of the purchase-time-locked owned_avatars row — a seller
   // changing category away from 'avatar' between purchase and refund

@@ -6799,6 +6799,23 @@ than aborting the whole purchase-writing batch — `owned_avatars.builder_id`
 is a real foreign key, mirroring the existing `builderStillExists` pattern
 already used for the seller side.
 
+Refunding an avatar purchase (#754) revokes the grant and clears
+`equipped_avatar_template_id` if that avatar was the one equipped — this
+survives a template's `category` changing away from `avatar` between
+purchase and refund (#801: gated on the purchase-time-locked grant record,
+never the template's own live, mutable category). Since `owned_avatars`
+itself only ever tracks one `builder_id`+`template_id` pair (idempotent
+across repeat purchases, above), migration 0094 adds a small
+`owned_avatar_purchases(purchase_id, builder_id, template_id)` side table
+— one row per granting purchase, not just the first — so a refund can
+correctly tell whether *another* unrefunded purchase of the same template
+still backs the buyer's ownership before revoking it (#1033: a buyer
+legitimately holding two separately-placed, separately-purchased instances
+of the same avatar template used to lose the whole grant the moment either
+one was refunded, regardless of whether the other was still valid). Same
+"don't retrofit a buyer-identity column onto the shared `purchases` table"
+reasoning as above, applied a second time.
+
 ### `GET /api/builders/me/avatars`
 
 Lists every avatar-category template the session-authenticated builder

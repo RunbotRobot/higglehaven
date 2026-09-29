@@ -10330,10 +10330,24 @@ async function buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood) {
 // find and revoke this exact grant later, without needing purchases to
 // carry its own buyer-account column (see that migration's own comment on
 // why this link lives here instead).
-function ownedAvatarStatement(db, buyerBuilderId, templateId, purchaseId) {
-  return db.prepare(
-    'INSERT OR IGNORE INTO owned_avatars (builder_id, template_id, purchase_id) VALUES (?, ?, ?)',
-  ).bind(buyerBuilderId, templateId, purchaseId);
+function ownedAvatarStatements(db, buyerBuilderId, templateId, purchaseId) {
+  return [
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_avatars (builder_id, template_id, purchase_id) VALUES (?, ?, ?)',
+    ).bind(buyerBuilderId, templateId, purchaseId),
+    // #1033: owned_avatars' own purchase_id column only ever records the
+    // FIRST purchase of a given template (the INSERT OR IGNORE above is a
+    // no-op for a second, independent purchase of the same template), so
+    // handlePurchaseRefund's revocation lookup couldn't tell whether
+    // another unrefunded purchase still backs the same ownership before
+    // deleting it. This dedicated side table records every granting
+    // purchase, not just the first, without retrofitting a buyer-identity
+    // column onto the shared purchases table itself (deliberately avoided
+    // twice already — see 0083_avatar_ownership.sql's own comment).
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_avatar_purchases (purchase_id, builder_id, template_id) VALUES (?, ?, ?)',
+    ).bind(purchaseId, buyerBuilderId, templateId),
+  ];
 }
 
 async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
@@ -10385,7 +10399,7 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
     );
   }
   if (buyerBuilderStillExists) {
-    statements.push(ownedAvatarStatement(db, meta.buyerBuilderId, meta.templateId, purchaseId));
+    statements.push(...ownedAvatarStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
 
@@ -10444,7 +10458,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
-    ...(buyerBuilderStillExists ? [ownedAvatarStatement(db, buyerBuilderId, template.template_id, purchaseId)] : []),
+    ...(buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
@@ -10771,20 +10785,39 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   // /api/catalog/:id), so a seller changing it away from 'avatar' after the
   // sale silently skipped this whole block, letting the buyer keep the item
   // (and their refund) forever, the exact fraud shape #754 existed to
-  // close. The owned_avatars row keyed by purchase_id is already the
-  // correct, purchase-time-locked signal (migrations/0085's own comment:
-  // "look it up directly by purchase_id... rather than needing to know the
-  // buyer at all") — it only ever exists when the template genuinely was
-  // category 'avatar' at purchase time, so checking it directly is both
-  // sufficient and immune to a later category edit.
-  const owned = await db.prepare('SELECT builder_id FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId).first();
-  if (owned) {
-    await db.batch([
-      db.prepare('DELETE FROM owned_avatars WHERE purchase_id = ?').bind(purchaseId),
-      db.prepare(
-        'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
-      ).bind(owned.builder_id, purchase.template_id),
-    ]);
+  // close. The owned_avatar_purchases row keyed by purchase_id is already
+  // the correct, purchase-time-locked signal (same reasoning migrations/
+  // 0085's own comment gave for owned_avatars.purchase_id) — it only ever
+  // exists when the template genuinely was category 'avatar' at purchase
+  // time, so checking it directly is both sufficient and immune to a later
+  // category edit.
+  //
+  // #1033: a buyer can legitimately hold more than one unrefunded purchase
+  // of the same avatar template (two separately-placed instances, both
+  // bought) — owned_avatars' own single nullable purchase_id column only
+  // ever tracked the FIRST one, so refunding it used to revoke ownership
+  // even while a second, still-valid purchase backed the exact same grant.
+  // owned_avatar_purchases (migrations/0094) records one row per granting
+  // purchase, so this can now correctly check whether any OTHER unrefunded
+  // purchase still exists before revoking — only clearing owned_avatars/
+  // equip state once the count actually reaches zero.
+  const grant = await db.prepare(
+    'SELECT builder_id, template_id FROM owned_avatar_purchases WHERE purchase_id = ?',
+  ).bind(purchaseId).first();
+  if (grant) {
+    await db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchaseId).run();
+    const stillOwnedViaOtherPurchase = await db.prepare(
+      'SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?',
+    ).bind(grant.builder_id, grant.template_id).first();
+    if (!stillOwnedViaOtherPurchase) {
+      await db.batch([
+        db.prepare('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')
+          .bind(grant.builder_id, grant.template_id),
+        db.prepare(
+          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
+        ).bind(grant.builder_id, grant.template_id),
+      ]);
+    }
   }
 
   // Logged last, only once every step above (including the real Stripe
