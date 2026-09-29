@@ -1,0 +1,17 @@
+-- #1058 (misattribution half of yxt7ds607c25rn2oa03c -- #914/#917 already
+-- fixed the timing half by adding note_updated_at): the admin board's own
+-- threadEntries() falls back to `task.session || task.from` to attribute a
+-- task's `note` when rendering it in the thread. Once a session stands down
+-- from a card (the normal claim-release convention resets `session` to
+-- `''`), that fallback silently misattributes the note to `task.from`
+-- (posted_by -- whoever originally created the row, often "owner" for an
+-- owner-filed feedback item) instead of whoever actually wrote the current
+-- note.
+--
+-- Closing this needs the note's own author persisted separately from the
+-- task's current session/posted_by, the same way note_updated_at is already
+-- persisted separately from the task's own updated_at (#914's precedent).
+-- handleControlRoomTaskUpdate already requires a non-empty `caller` on every
+-- write (N31's own core fix) -- that's exactly the value to record here
+-- whenever `note` is set.
+ALTER TABLE control_room_tasks ADD COLUMN note_author TEXT;

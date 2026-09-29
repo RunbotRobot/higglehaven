@@ -342,6 +342,48 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.body.task.pr).toBeNull();
   });
 
+  // #1058: a note's own author used to go unrecorded, so the admin board's
+  // threadEntries() fell back to task.session (which a session resets to ''
+  // on stand-down) or task.from (posted_by -- whoever originally created the
+  // task, e.g. "owner"), misattributing the note whenever the two didn't
+  // match whoever actually wrote it. noteAuthor is set to the update's own
+  // `caller` whenever `note` is written, independent of session/from.
+  it('records the caller as noteAuthor when a note is set', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven3', note: 'Investigating.' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.note).toBe('Investigating.');
+    expect(got.body.task.noteAuthor).toBe('higglehaven3');
+  });
+
+  it('keeps noteAuthor as whoever wrote the note even after the task stands down to an empty session', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven3', session: 'higglehaven3', note: 'Progress update.' }),
+    }));
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven3', session: '' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.session).toBe('');
+    expect(got.body.task.noteAuthor).toBe('higglehaven3');
+  });
+
+  it('clears noteAuthor by clearing the note', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven3', note: 'Progress update.' }),
+    }));
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven3', note: null }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.note).toBeNull();
+    expect(got.body.task.noteAuthor).toBeNull();
+  });
+
   // The actual core of N31's fix: this exact transition is what kept
   // reverting with zero explanation (#610/#616/#653/#659). It must be
   // structurally impossible here, not just discouraged.
