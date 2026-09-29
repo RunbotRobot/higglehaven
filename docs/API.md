@@ -1216,10 +1216,13 @@ plus the redemption-specific one:
 }
 ```
 
-`availableCents` is simply the builder's current `higglesBalanceCents`
-(never negative) — unlike a seller's own held/available split, there's no
-separate "held" pool here since nothing about a higgles balance is ever
-pending release the way an unshipped physical sale is.
+`availableCents` is the builder's current `higglesBalanceCents` minus
+whatever their own currently-leading bid(s) on other active auctions are
+holding (#1029) — the same live-computed `heldElsewhere` shape
+`POST /api/auctions/:id/bids` already uses for the identical "#629: a bid
+holds what it needs until outbid or the auction closes" concept, applied
+here so redeeming can't silently pull the rug out from under a bid the
+builder believes is still winning. Never negative.
 
 `POST` body — `amountCents` is optional; an empty `{}` body redeems the
 full available balance:

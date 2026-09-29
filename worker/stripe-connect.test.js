@@ -1,7 +1,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { claimOrResumeBuilderRedemption } from './index.js';
-import { api, signupAdmin, signupBuilder, signupSeller } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder, signupSeller, createGreenbeltLandletAs } from './test-helpers.js';
 
 let adminSession;
 
@@ -266,6 +266,45 @@ describe('Higgles redemption (#625)', () => {
     expect(response.status).toBe(200);
     expect(body.availableCents).toBe(5000);
     expect(body.connected).toBe(false); // no Stripe account yet
+  });
+
+  // #1029: handleAuctionBids already nets a bidder's currently-leading bid
+  // on their other active auctions out of what a NEW bid may spend (#629's
+  // "held until outbid or the auction closes"), but handleBuilderRedeem
+  // used to report/allow redeeming the raw balance with no such netting —
+  // so a builder with a leading bid could see (and would eventually have
+  // been able to redeem) higgles their own bid still needs.
+  it("nets out higgles held by the caller's own active auction bid from availableCents", async () => {
+    const seller = await signupBuilder('redeem-held-bid-seller');
+    const builder = await signupBuilder('redeem-held-bid-bidder');
+    await creditHiggles(builder, 5000);
+    // Generous land-cap headroom so only the higgles hold is under test —
+    // same reasoning as commerce.test.js's own "Balance holding (#629)"
+    // tests.
+    await api(`/builders/${builder.builderId}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 100_000_000 }),
+    }));
+    await createGreenbeltLandletAs(adminSession, 'redeem-held-bid-landlet');
+    await api('/landlets/redeem-held-bid-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/redeem-held-bid-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(started.response.status).toBe(201);
+
+    const bid = await api(`/auctions/${started.body.auction.auctionId}/bids`, builder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 2000 }),
+    }));
+    expect(bid.response.status).toBe(201);
+
+    // 3000, not the raw 5000 balance — 2000 is held by the leading bid.
+    const status = await api('/builders/me/redeem', builder.session());
+    expect(status.body.availableCents).toBe(3000);
+
+    const tooMuch = await api('/builders/me/redeem', builder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 3001 }),
+    }));
+    expect(tooMuch.response.status).toBe(400);
+    expect(tooMuch.body.error).toMatch(/\$30\.00/);
   });
 
   it('rejects redeeming with nothing available', async () => {
