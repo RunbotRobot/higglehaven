@@ -2818,6 +2818,12 @@ async function handleMyOwnedAvatars(request, db) {
   });
 }
 
+// #1057: PUT below had no rate limit at all, unlike every comparable
+// authenticated mutation resource in this file (BUNDLE_MUTATE_RATE_LIMIT_MAX
+// #892, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899, and others) — #680 never got
+// the equivalent when it introduced this endpoint.
+const AVATAR_EQUIP_RATE_LIMIT_MAX = 20;
+
 // #680: which owned avatar (if any) this account currently has equipped
 // as their own in-world character. GET returns the current choice (null
 // means today's hardcoded default — see createShopAvatar in src/main.js
@@ -2834,6 +2840,7 @@ async function handleMyAvatar(request, db) {
   }
 
   if (request.method === 'PUT') {
+    await checkRateLimit(db, `avatar-equip:${builder.builder_id}`, AVATAR_EQUIP_RATE_LIMIT_MAX);
     const input = await readJson(request);
     let templateId = null;
     if (input.templateId !== null && input.templateId !== undefined) {

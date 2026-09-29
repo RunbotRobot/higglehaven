@@ -305,6 +305,23 @@ describe('Equip endpoint (GET/PUT /api/builders/me/avatar, #680)', () => {
     expect(got.response.status).toBe(200);
     expect(got.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
   });
+
+  // #1057: PUT had no rate limit at all, unlike every comparable
+  // authenticated mutation resource in this file (friendship-mutate #899,
+  // bundle-mutate #892, ...).
+  it('rate-limits repeated equip attempts from the same account', async () => {
+    const account = await signupBuilder('avatar-equip-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/avatar', account.session({
+        method: 'PUT', body: JSON.stringify({ templateId: null }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders/me/avatar', account.session({
+      method: 'PUT', body: JSON.stringify({ templateId: null }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });
 
 describe('Refund revokes avatar ownership (#754)', () => {
