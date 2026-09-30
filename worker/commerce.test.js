@@ -4124,6 +4124,31 @@ describe('Simulated purchases', () => {
         expect(summary.body.availableCents).toBe(4900);
       });
 
+      // #1087: `eligible` (unpaidSellerPurchases) has no year filter, but
+      // annualGrossIncome's own sellerPayoutCents total is year-filtered —
+      // a prior-year unpaid purchase that only just became eligible must
+      // not count toward "this payout's own gross" when isolating
+      // otherEarnedCents, or its total gets subtracted from a total that
+      // never included it, understating otherEarnedCents and letting real
+      // current-year income slip past this gate.
+      it('does not let a stale prior-year unpaid purchase inflate this year\'s tax-reporting headroom', async () => {
+        const builder = await signupBuilder('tax-gate-crossyear-builder');
+        const otherBuilder = await signupBuilder('tax-gate-crossyear-builder-2');
+        const seller = await createConnectedSeller('tax-gate-crossyear-seller');
+        await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true }); // this year, 5000 cents, eligible+unpaid
+
+        const stalePurchaseId = await makeRealMoneyPurchase(otherBuilder, seller, { isDigitalGood: true });
+        await env.DB.prepare("UPDATE purchases SET created_at = '2020-06-15T00:00:00.000Z' WHERE purchase_id = ?")
+          .bind(stalePurchaseId).run();
+
+        const sellerBuilder = await api('/builders/me', seller.session());
+        await grantHiggles(sellerBuilder.body.builder.builderId, 2000000); // hits the $20,000 threshold on its own
+
+        const blocked = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
+        expect(blocked.response.status).toBe(403);
+        expect(blocked.body.error).toMatch(/tax-reporting/i);
+      });
+
       it('does not block a payout while combined earnings stay under the threshold', async () => {
         const builder = await signupBuilder('tax-gate-under-builder');
         const seller = await createConnectedSeller('tax-gate-under-seller');
