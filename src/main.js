@@ -6510,10 +6510,23 @@ levelRemoveBtn.addEventListener('click', async () => {
     // a saved layout first) — without pruning them here too, their meshes
     // stay selectable/draggable in the scene and can later get swept into
     // an undo snapshot or group move, failing an otherwise-unrelated sync.
+    // #1078: a swept mesh may still be the one attached to the Move/Rotate/
+    // Trim gizmo — drop it from selectedMeshes (mirroring restoreSnapshot's
+    // own handling) and refresh the selection UI so the gizmo detaches
+    // before the mesh leaves the scene graph, instead of being left
+    // attached to an object TransformControls no longer considers valid.
+    let selectionChanged = false;
     for (const instanceId of sweptInstanceIds || []) {
       const mesh = productMeshes.find((m) => m.userData.instanceId === instanceId);
-      if (mesh) deleteInstance(mesh, { sync: false });
+      if (!mesh) continue;
+      if (selectedMeshes.has(mesh)) {
+        removeSelectionOutline(mesh);
+        selectedMeshes.delete(mesh);
+        selectionChanged = true;
+      }
+      deleteInstance(mesh, { sync: false });
     }
+    if (selectionChanged) updateSelectionUI();
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
     currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
     setLevelStatus('');
