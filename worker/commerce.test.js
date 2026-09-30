@@ -4,7 +4,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker, {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
-  auctionSettlementEventId,
+  auctionSettlementEventId, resolveFinalizeBuilderId,
 } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
@@ -3191,6 +3191,43 @@ describe('Simulated purchases', () => {
         headers: { 'cf-connecting-ip': ip },
       });
       expect(limited.response.status).toBe(429);
+    });
+  });
+
+  // #1084: handlePurchaseFinalize used to re-derive the builder to credit
+  // from a live `landlets.owner_builder_id` lookup instead of the
+  // checkout-time-locked `meta.builderId` -- if an auction on the same
+  // landlet resolved in the gap between checkout and finalize, the live
+  // lookup would silently credit the auction's new winner instead of the
+  // seller who actually made the sale. resolveFinalizeBuilderId is the
+  // extracted decision logic that now backs handlePurchaseFinalize's own
+  // choice -- exercised directly here (rather than via the real checkout->
+  // finalize HTTP flow) since that flow only ever reaches this logic via a
+  // live Stripe call, which this test suite deliberately never configures.
+  describe('resolveFinalizeBuilderId honors the checkout-time-locked builder (#1084)', () => {
+    it('returns the checkout-time builderId regardless of who currently owns the landlet', async () => {
+      const originalSeller = await signupBuilder('finalize-builder-original-seller');
+      // A second, unrelated builder stands in for "whoever a live landlet
+      // lookup would now return" (e.g. an auction winner) -- the fix means
+      // this account is never even queried, let alone credited.
+      await signupBuilder('finalize-builder-auction-winner');
+
+      const resolved = await resolveFinalizeBuilderId(env.DB, { builderId: originalSeller.builderId });
+      expect(resolved).toBe(originalSeller.builderId);
+    });
+
+    it('returns null when the checkout-time builder has since self-deleted', async () => {
+      const seller = await signupBuilder('finalize-builder-self-deleted');
+      const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const resolved = await resolveFinalizeBuilderId(env.DB, { builderId: seller.builderId });
+      expect(resolved).toBeNull();
+    });
+
+    it('returns null when the metadata carries no builderId at all', async () => {
+      const resolved = await resolveFinalizeBuilderId(env.DB, {});
+      expect(resolved).toBeNull();
     });
   });
 

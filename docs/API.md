@@ -4997,7 +4997,15 @@ server's own secret key, which the client never has) and only writes the
 `purchases` row — crediting the builder's higgles exactly as the simulated
 path does — once Stripe itself reports `status: 'succeeded'`, using the
 amounts from that PaymentIntent's own metadata rather than any fresh
-client input. Validation (`paymentIntentId` must be a non-empty string)
+client input. That includes *who* gets credited (#1084): the builder is
+the one locked into `meta.builderId` at checkout time, never re-derived
+from a live `landlets.owner_builder_id` lookup — otherwise an auction on
+the same landlet resolving in the gap between checkout and this call would
+credit the auction's new winner instead of the seller who actually made
+the sale. If that locked-in builder has since self-deleted, this falls
+back to the same "still write the purchase, credit nobody" orphaned-row
+path described below rather than crediting a different, live builder.
+Validation (`paymentIntentId` must be a non-empty string)
 runs first, so a malformed call gets a real `400` rather than a `503`
 masking it — same ordering "Stripe Connect" above already established.
 Idempotent: calling this again for a `paymentIntentId` that already backs
