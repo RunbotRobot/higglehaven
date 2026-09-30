@@ -6757,8 +6757,18 @@ async function handleSellerPayouts(request, env, db) {
     // already includes this exact `eligible` pool's own gross — subtract
     // that back out to isolate everything this payout would be stacked on
     // top of (higgles, held/ineligible purchases, and anything already
-    // paid out this year).
-    const eligibleGrossCents = eligible.reduce((sum, p) => sum + p.total_cents, 0);
+    // paid out this year). `eligible` itself has no year filter (drawn
+    // from unpaidSellerPurchases, so a prior-year purchase that only just
+    // became eligible can be in it) — restrict the subtraction to this
+    // same [yearStart, yearEnd) window annualGrossIncome used, or a
+    // cross-year purchase's total gets subtracted from a total that never
+    // included it, understating otherEarnedCents and letting real
+    // current-year income slip past the #615 reporting-threshold gate.
+    const yearStart = `${taxYear}-01-01T00:00:00.000Z`;
+    const yearEnd = `${taxYear + 1}-01-01T00:00:00.000Z`;
+    const eligibleGrossCents = eligible
+      .filter((p) => p.created_at >= yearStart && p.created_at < yearEnd)
+      .reduce((sum, p) => sum + p.total_cents, 0);
     const otherEarnedCents = grossIncome.totalCents - eligibleGrossCents;
     const taxBudgetCents = hasTaxPaperworkOnFile
       ? Infinity
