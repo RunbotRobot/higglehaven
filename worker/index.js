@@ -10465,6 +10465,24 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
   });
 }
 
+// #1084: the seller to credit is whoever was locked into this PaymentIntent's
+// own metadata at checkout time (createPurchaseCheckout), never re-derived
+// from a live landlet lookup -- if an auction on the same landlet resolves
+// in the gap between checkout and finalize, a live lookup would credit the
+// auction's new winner instead of the seller who actually made the sale.
+// Same "does it still resolve to a live builder" existence check
+// writeOrphanedPurchaseRow already does for this exact snapshot, since the
+// locked-in seller may have self-deleted in the meantime. Exported so a
+// direct test can verify this resolution without going through the real
+// checkout->finalize flow, which only ever reaches here via a live Stripe
+// call this test suite deliberately never configures.
+export async function resolveFinalizeBuilderId(db, meta) {
+  const checkoutBuilderId = meta.builderId || null;
+  if (!checkoutBuilderId) return null;
+  const stillExists = await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(checkoutBuilderId).first();
+  return stillExists ? checkoutBuilderId : null;
+}
+
 // #453: called once the buyer's card has been confirmed client-side via
 // Stripe Elements (stripe.confirmCardPayment) — never trusts that client
 // signal on its own. Instead it re-fetches the PaymentIntent from Stripe
@@ -10513,9 +10531,6 @@ async function handlePurchaseFinalize(request, env) {
   const meta = paymentIntent.metadata || {};
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(meta.instanceId).first();
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(meta.templateId).first();
-  const landlet = instance
-    ? await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first()
-    : null;
 
   const amounts = {
     quantity: Number(meta.quantity) || 1,
@@ -10536,9 +10551,10 @@ async function handlePurchaseFinalize(request, env) {
   // template.category that may have changed underneath this purchase by
   // the time finalize runs.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
+  const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
-  if (instance && template && landlet?.owner_builder_id) {
-    return writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory);
+  if (instance && template && checkoutBuilderId) {
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory);
   }
 
   // #472: the buyer has already been charged and the seller's connected
