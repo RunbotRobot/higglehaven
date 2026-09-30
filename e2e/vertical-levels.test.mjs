@@ -60,6 +60,14 @@ await page.click('#level-build-btn');
 // the other's result depending on which server round-trip finishes last.
 const digDisabledMidFlight = await page.isDisabled('#level-dig-btn');
 console.log('Dig button disabled while Build request is in flight (should be true):', digDisabledMidFlight);
+// #1077: Up/Down were never part of the same busy gate as Build/Dig/Remove
+// — clickable mid-flight, they let a manual navigation get silently
+// discarded the moment the in-flight action's own completion handler
+// overwrote currentLevelIndex back to whatever it just built/dug/removed.
+const upDisabledMidFlight = await page.isDisabled('#level-up-btn');
+const downDisabledMidFlight = await page.isDisabled('#level-down-btn');
+console.log('Up button disabled while Build request is in flight (should be true):', upDisabledMidFlight);
+console.log('Down button disabled while Build request is in flight (should be true):', downDisabledMidFlight);
 await page.waitForTimeout(800);
 const digEnabledAfterBuild = !(await page.isDisabled('#level-dig-btn'));
 console.log('Dig button re-enabled after Build settles (should be true):', digEnabledAfterBuild);
@@ -105,9 +113,52 @@ const removeVisibleAfterReload = !(await removeHidden());
 console.log('level label after nav up post-reload (should be Level +1 — level persisted):', labelAfterReloadNavUp);
 console.log('Remove button visible post-reload (should be true):', removeVisibleAfterReload);
 
+// #1077: place a fresh item first so there's real undo history to gate —
+// the reload above wiped the in-page undoStack, and an empty stack already
+// disables #undo-btn on its own, which would make the mid-flight check
+// below meaningless (disabled either way, gate engaged or not).
+await page.click('#add-item-btn');
+await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
+await page.locator('#catalog-picker-grid button').first().click();
+await page.waitForTimeout(300);
+// Offset from (210, 400), where the pre-reload placement above landed (and
+// persisted through the reload, re-rendering at the same screen position) —
+// close enough to still land on the buildable ground plane in view, far
+// enough to clear that item's own TransformControls gizmo.
+await page.mouse.click(150, 600);
+await page.waitForTimeout(800);
+const undoEnabledBeforeRemove = !(await page.isDisabled('#undo-btn'));
+console.log('Undo enabled before removing the level (should be true — real history to undo):', undoEnabledBeforeRemove);
+// Deselect (tap empty space, well clear of both placed items) before
+// removing the level: placement auto-selects the new item, and removing a
+// level with a selected/gizmo-attached item still on it orphans the gizmo
+// (filed separately as #1078 — a different bug in the same handler, out of
+// #1077's own scope). Undo history is already captured above; this suite
+// only needs #1077's busy-gate behavior, not #1078's.
+await page.mouse.click(30, 700);
+await page.waitForTimeout(300);
+
 // Remove the level (it's outermost, so this should succeed), then dig one
 // down from ground instead.
+let removeDelayedOnce = false;
+await page.route('**/api/landlets/*/levels/*', async (route) => {
+  if (!removeDelayedOnce) {
+    removeDelayedOnce = true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await route.continue();
+});
 await page.click('#level-remove-btn');
+// #1077: levelRemoveBtn's own handler mutates productMeshes (pruning #901's
+// swept instances) after this request resolves, but never claimed the
+// shared beginSceneMutation()/endSceneMutation() gate Undo/Redo/Place/Paste
+// all go through — an Undo racing this in-flight request could splice
+// productMeshes concurrently with the pruning loop, the exact orphaned-mesh
+// shape #402 fixed everywhere else. #undo-btn's own disabled state directly
+// reflects sceneMutationBusy (updateUndoRedoButtons), so it doubles as a
+// direct observation of whether the gate is actually held.
+const undoDisabledMidFlight = await page.isDisabled('#undo-btn');
+console.log('Undo disabled while Remove request is in flight (should be true — the gate is held):', undoDisabledMidFlight);
 await page.waitForTimeout(800);
 const labelAfterRemove = await levelLabel();
 const removeHiddenAfterRemove = await removeHidden();
@@ -125,6 +176,8 @@ const pass =
   buildBtnAtGround.includes('m²') &&
   labelAfterBuild === 'Level +1' &&
   digDisabledMidFlight &&
+  upDisabledMidFlight &&
+  downDisabledMidFlight &&
   digEnabledAfterBuild &&
   removeVisibleAfterBuild &&
   labelAfterNavDown === 'Ground' &&
@@ -133,6 +186,8 @@ const pass =
   labelAfterReload === 'Ground' &&
   labelAfterReloadNavUp === 'Level +1' &&
   removeVisibleAfterReload &&
+  undoEnabledBeforeRemove &&
+  undoDisabledMidFlight &&
   labelAfterRemove === 'Ground' &&
   removeHiddenAfterRemove &&
   labelAfterDig === 'Level -1' &&
