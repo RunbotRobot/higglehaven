@@ -6457,6 +6457,14 @@ function setLevelButtonsDisabled(disabled) {
   levelBuildBtn.disabled = disabled;
   levelDigBtn.disabled = disabled;
   levelRemoveBtn.disabled = disabled;
+  // #1077: Up/Down were never part of this gate, so navigating to a
+  // different level while a Build/Dig/Remove was still in flight let that
+  // action's own completion handler (currentLevelIndex = ...;
+  // renderLevelControls()) unconditionally snap the camera back to the
+  // level it just created/removed, discarding the manual navigation with
+  // no warning.
+  levelUpBtn.disabled = disabled;
+  levelDownBtn.disabled = disabled;
 }
 
 async function addLevel(direction, failureMessage) {
@@ -6485,6 +6493,15 @@ levelDigBtn.addEventListener('click', () => addLevel('down', 'Could not dig a ne
 
 levelRemoveBtn.addEventListener('click', async () => {
   if (levelActionBusy) return;
+  // #1077: this handler prunes swept instances out of productMeshes
+  // (below, #901) after a real await, the same "mutates the shared array
+  // across an await" shape #402/PR #413's shared gate exists to serialize
+  // against Undo/Redo/Place/Paste/Trim-commit — missed here since the
+  // pruning loop was added after that gate already existed on the other
+  // paths. Without it, an Undo clicked while the delete request is still
+  // in flight races restoreSnapshot() against this loop, both splicing
+  // productMeshes, reproducing #402's orphaned-mesh failure.
+  if (!beginSceneMutation()) return;
   levelActionBusy = true;
   setLevelButtonsDisabled(true);
   try {
@@ -6506,6 +6523,7 @@ levelRemoveBtn.addEventListener('click', async () => {
   } finally {
     levelActionBusy = false;
     setLevelButtonsDisabled(false);
+    endSceneMutation();
   }
 });
 
