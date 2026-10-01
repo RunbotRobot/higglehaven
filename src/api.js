@@ -68,6 +68,18 @@ export async function fetchCurrentUser() {
   return user;
 }
 
+// #1181: a real in-session change-password form, separate from the
+// forgot-password email-link flow below (requestPasswordReset/
+// resetPassword), which stays as-is for the logged-out case. Requires the
+// caller's current password (see worker/index.js's handleChangePassword).
+export async function changePassword(currentPassword, newPassword) {
+  await requestJson('/auth/change-password', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 export async function requestPasswordReset(email) {
   return requestJson('/auth/request-password-reset', {
     method: 'POST',
@@ -94,6 +106,18 @@ export async function verifyEmail(token) {
 
 export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
+}
+
+// #1182: resets email verification and re-sends the verification email for
+// the new address (see worker/index.js's handleChangeEmail for why) —
+// callers should refresh currentAuthUser from the returned `user` rather
+// than assuming the old emailVerified value still applies.
+export async function changeEmail(password, email) {
+  return requestJson('/auth/change-email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, email }),
+  });
 }
 
 // #556 (docs/SPEC.md §6): lets an existing session attest age after the

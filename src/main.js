@@ -10,11 +10,13 @@ import {
   logIn,
   logOut,
   deleteAccount,
+  changePassword,
   fetchCurrentUser,
   requestPasswordReset,
   resetPassword,
   verifyEmail,
   resendVerificationEmail,
+  changeEmail,
   ageAttest,
   cardSetupIntent,
   confirmCard,
@@ -9840,6 +9842,64 @@ authLogoutBtn.addEventListener('click', async () => {
   closeAuthModal();
 });
 
+// #1182 (sub-issue of #1126): in-session change-email form, collapsed
+// behind its own trigger the same way delete-account is below — not
+// because it's irreversible, but to keep the logged-in panel's default
+// view uncluttered, matching the existing pattern for any action beyond
+// the always-visible ones.
+const authChangeEmailBtn = document.getElementById('auth-change-email-btn');
+const authChangeEmailForm = document.getElementById('auth-change-email-form');
+const authChangeEmailNewInput = document.getElementById('auth-change-email-new');
+const authChangeEmailPasswordInput = document.getElementById('auth-change-email-password');
+const authChangeEmailPasswordToggleBtn = document.getElementById('auth-change-email-password-toggle');
+const authChangeEmailCancelBtn = document.getElementById('auth-change-email-cancel-btn');
+bindPasswordToggle(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn);
+
+function closeChangeEmailForm() {
+  authChangeEmailForm.hidden = true;
+  authChangeEmailBtn.hidden = false;
+  authChangeEmailForm.reset();
+  setPasswordToggleState(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn, false);
+}
+
+authChangeEmailBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangeEmailBtn.hidden = true;
+  authChangeEmailForm.hidden = false;
+  authChangeEmailNewInput.focus();
+});
+authChangeEmailCancelBtn.addEventListener('click', () => {
+  closeChangeEmailForm();
+  setAuthStatus('');
+});
+
+authChangeEmailForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangeEmailForm);
+  const newEmail = authChangeEmailNewInput.value;
+  const password = authChangeEmailPasswordInput.value;
+  const submitBtn = authChangeEmailForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your email…');
+  try {
+    const result = await changeEmail(password, newEmail);
+    currentAuthUser = result.user;
+    refreshAccountAuthUI();
+    closeChangeEmailForm();
+    // devVerifyUrl mirrors the signup handler's own dev-mode fallback
+    // above — only present when no real email provider is configured.
+    if (result.devVerifyUrl) {
+      setAuthStatus(`Email changed! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else {
+      setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
+    }
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not change your email.', 'error');
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');
 const authDeleteAccountForm = document.getElementById('auth-delete-account-form');
 const authDeleteAccountPasswordInput = document.getElementById('auth-delete-account-password');
@@ -9892,6 +9952,56 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   // panel back to the logged-out login/signup view underneath it.
   refreshAccountAuthUI();
   setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
+});
+
+const authChangePasswordBtn = document.getElementById('auth-change-password-btn');
+const authChangePasswordForm = document.getElementById('auth-change-password-form');
+const authChangePasswordCurrentInput = document.getElementById('auth-change-password-current');
+const authChangePasswordCurrentToggleBtn = document.getElementById('auth-change-password-current-toggle');
+const authChangePasswordNewInput = document.getElementById('auth-change-password-new');
+const authChangePasswordNewToggleBtn = document.getElementById('auth-change-password-new-toggle');
+const authChangePasswordCancelBtn = document.getElementById('auth-change-password-cancel-btn');
+bindPasswordToggle(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn);
+bindPasswordToggle(authChangePasswordNewInput, authChangePasswordNewToggleBtn);
+
+function closeChangePasswordForm() {
+  authChangePasswordForm.hidden = true;
+  authChangePasswordBtn.hidden = false;
+  authChangePasswordForm.reset();
+  setPasswordToggleState(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn, false);
+  setPasswordToggleState(authChangePasswordNewInput, authChangePasswordNewToggleBtn, false);
+}
+
+// Same collapsed-behind-its-own-trigger shape as Delete Account above.
+authChangePasswordBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangePasswordBtn.hidden = true;
+  authChangePasswordForm.hidden = false;
+  authChangePasswordCurrentInput.focus();
+});
+authChangePasswordCancelBtn.addEventListener('click', () => {
+  closeChangePasswordForm();
+  setAuthStatus('');
+});
+
+authChangePasswordForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangePasswordForm);
+  const currentPassword = authChangePasswordCurrentInput.value;
+  const newPassword = authChangePasswordNewInput.value;
+  const submitBtn = authChangePasswordForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your password…');
+  try {
+    await changePassword(currentPassword, newPassword);
+  } catch (err) {
+    submitBtn.disabled = false;
+    setAuthStatus(err.message || 'Could not change your password.', 'error');
+    return;
+  }
+  submitBtn.disabled = false;
+  closeChangePasswordForm();
+  setAuthStatus('Your password has been changed. You have been signed out of your other devices.', 'success');
 });
 
 // A verify-email or reset-password link (see issueEmailVerification/
@@ -10119,22 +10229,20 @@ const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
 const SHOP_FLIGHT_VERTICAL_SPEED_M_S = 8; // ascend/descend rate once actually flying (the up/down buttons)
 const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
-// docs/SPEC.md §1: "New users spawn zoomed-out in flight mode above the
-// world" — a one-time first-ever-visit spawn, distinct from every later
-// Shop-mode entry's ordinary grounded start (see enterShopMode). Below the
-// initial flight ceiling (SHOP_WALL_HEIGHT_M + SHOP_DOME_INITIAL_RISE_M -
-// SHOP_DOME_CLEARANCE_MARGIN_M = 115 at launch) with real clearance to
-// spare, comfortably above "building height" (SHOP_FLIGHT_SPEED_REF_
-// ALTITUDE_M, 10) so the view actually reads as "above the world," not just
-// a slightly-elevated hover.
-const SHOP_NEW_VISITOR_START_ALTITUDE_M = 80;
-// Shop mode requires a real account too now (N44), but this specific flag
-// stays per-device rather than switching to a per-account field — it's a
-// low-stakes spawn-animation default (flying vs. grounded), not a security
-// gate, so there's no real benefit to a schema change here; a shared
-// device (or a second account on the same browser) just replays the
-// first-visit spawn once more, which is harmless.
-const SHOP_VISITED_BEFORE_KEY = 'higglehaven.shopVisitedBefore';
+// docs/SPEC.md §1/§2 (#1175): every Shop-mode spawn (not just a first-ever
+// visit) starts zoomed-out in flight mode above the world — see
+// enterShopMode's own spawn block. Below the initial flight ceiling
+// (SHOP_WALL_HEIGHT_M + SHOP_DOME_INITIAL_RISE_M - SHOP_DOME_CLEARANCE_
+// MARGIN_M = 115 at launch) with real clearance to spare, comfortably above
+// "building height" (SHOP_FLIGHT_SPEED_REF_ALTITUDE_M, 10) so the view
+// actually reads as "above the world," not just a slightly-elevated hover.
+const SHOP_SPAWN_START_ALTITUDE_M = 80;
+// #1175: the clockwise orbit around the world center that every spawn
+// starts in, until the shopper gives any navigation input (see
+// updateShopSpawnRotation/stopShopSpawnRotation). "Slowly" per the spec —
+// a full revolution takes a couple of minutes, plenty of time to take in
+// the view before (or without ever) touching a control.
+const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
 // governing rule, "each doubling of altitude ≈ 50% more max ground speed."
@@ -11281,6 +11389,18 @@ let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors t
 let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
 let shopLastSpacePressAt = -Infinity;
 
+// #1175: true for the span right after spawn during which the avatar
+// orbits the world center hands-off (see updateShopSpawnRotation) — ends
+// the instant the shopper gives any navigation input (stopShopSpawnRotation).
+// shopSpawnOrbitRadiusM is the (fixed, spawn-time-random) distance from the
+// center the orbit holds; shopYaw/shopAvatarFacing/shopAvatarPosition are
+// all driven directly off the shared angle tracked in updateShopSpawnRotation
+// rather than a separate angle field, since "facing the center" and "the
+// camera's own look direction" and "the orbit's own angle" are all the same
+// angle throughout the orbit (see that function's own comment).
+let shopSpawnRotating = false;
+let shopSpawnOrbitRadiusM = 0;
+
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
 // mid-stride — and phase only advances while actually moving, so a full
@@ -11395,10 +11515,19 @@ function clampShopCameraHeight() {
 // avatar's own ground position (so a builder can never walk past the wall)
 // and the follow camera (so a follow distance long enough to swing the
 // camera past the wall on its own can't peek through it either).
+// Shared with #1175's spawn-location pick (enterShopMode) — both need "how
+// far from center can the avatar actually be" from the same wall-clearance
+// formula, just used in opposite directions (clamping an existing position
+// in here vs. picking a fresh random one there).
+function shopMaxRadiusM() {
+  if (shopWorldRadiusM === null) return 0;
+  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
+  return shopWorldRadiusM - clearance;
+}
+
 function clampShopRadius(position) {
   if (shopWorldRadiusM === null) return;
-  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
-  const maxRadius = shopWorldRadiusM - clearance;
+  const maxRadius = shopMaxRadiusM();
   const distance = Math.hypot(position.x, position.y);
   if (distance > maxRadius) {
     const scale = maxRadius / distance;
@@ -11447,6 +11576,10 @@ function setShopFlyBtnFlying(flying) {
 // own starting altitude (shopFlightLandingStartAltitudeM) so its descent
 // ramps from wherever the player actually was, not always the same height.
 function toggleShopFlight() {
+  // #1175: a deliberate tap of the fly button is navigation input same as
+  // any joystick deflection — stop the hands-off spawn orbit immediately
+  // rather than leaving it fighting the player's own takeoff/landing.
+  stopShopSpawnRotation();
   if (shopFlightState === 'grounded') {
     shopFlightState = 'takingOff';
     shopFlightTransitionElapsedS = 0;
@@ -11464,6 +11597,35 @@ function toggleShopFlight() {
     // descend controls hide the instant it starts, not once it finishes.
     setShopFlyBtnFlying(false);
   }
+}
+
+// #1175: ends the hands-off spawn orbit the instant it's actually rotating
+// — a no-op otherwise, so every navigation-input path (joystick deflection,
+// vertical flight buttons, the fly-button tap in toggleShopFlight above)
+// can call this unconditionally without first checking shopSpawnRotating
+// itself.
+function stopShopSpawnRotation() {
+  shopSpawnRotating = false;
+}
+
+// #1175: drives the spawn-time "slow clockwise rotating aerial shot at a
+// random location" (docs/SPEC.md §1) each frame until navigation input
+// stops it. shopYaw doubles as the orbit's own angle here — at any point on
+// the circle, the camera direction that faces the world center IS the
+// orbit angle itself (see applyShopCameraOrientation's own SHOP_BASE_QUAT
+// comment: forward at yaw θ is (-sin θ, cos θ), so a position of
+// (r sin θ, -r cos θ) always has that forward vector pointing straight at
+// the origin). Decreasing θ over time therefore both turns the view
+// clockwise (as seen from above, looking down +Z) and swings the position
+// clockwise around the same center in lockstep — one angle, no separate
+// "facing" and "orbit position" math to keep in sync.
+function updateShopSpawnRotation(dt) {
+  if (!shopSpawnRotating) return;
+  shopYaw -= SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S * dt;
+  shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
+  shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
+  shopAvatarFacing = shopYaw;
+  applyShopCameraOrientation();
 }
 
 // Drives shopFlightAltitudeM through takeoff/landing (smoothstep-eased
@@ -11621,6 +11783,21 @@ function updateShopMovement(now) {
   }
   const dt = Math.min((now - shopLastFrameTime) / 1000, 0.1); // clamp against tab-switch-sized gaps
   shopLastFrameTime = now;
+
+  // #1175: any continuous navigation input (look, move, or vertical flight)
+  // stops the spawn orbit immediately, the same frame it starts — the
+  // discrete fly-button tap handles itself via toggleShopFlight's own
+  // stopShopSpawnRotation() call. While the orbit is still running, the
+  // blocks below see shopLookX/shopMoveX/shopVerticalInput all still at 0
+  // (that's exactly what "no navigation input yet" means) and simply don't
+  // fire, so no extra guard is needed to keep them from fighting the orbit.
+  if (shopSpawnRotating) {
+    if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 || shopVerticalInput !== 0) {
+      stopShopSpawnRotation();
+    } else {
+      updateShopSpawnRotation(dt);
+    }
+  }
 
   if (shopLookX !== 0 || shopLookY !== 0) {
     shopYaw -= shopLookX * SHOP_LOOK_SPEED_RAD_S * dt;
@@ -12975,16 +13152,17 @@ async function enterShopMode() {
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
   // entry on ensureShopperIdentity (N44/#678) before ever reaching this
-  // point, and the first-ever-visit flying-vs-grounded decision below
-  // still waits on fetchCatalog/fetchWorld/fetchAllLandlets to actually
-  // resolve first. Marking the fly button visible this early let it appear
-  // on screen — already showing its default grounded look — for that
-  // whole fetch window, only flipping to the tilted "flying" look once
-  // setShopFlyBtnFlying(isFirstShopVisit) finally runs: a real, visible
-  // flash of the wrong state for every first-time visitor (and the exact
-  // race #688's own e2e failure caught, once the identity gate made that
-  // window long enough to reliably lose). Made visible below instead,
-  // together with the moment the correct state is actually decided.
+  // point, and the spawn-flying decision below (#1175: every spawn now
+  // flies, not just a first-ever visit) still waits on fetchCatalog/
+  // fetchWorld/fetchAllLandlets to actually resolve first. Marking the fly
+  // button visible this early let it appear on screen — already showing
+  // its default grounded look — for that whole fetch window, only flipping
+  // to the tilted "flying" look once setShopFlyBtnFlying(true) finally
+  // runs: a real, visible flash of the wrong state for every visitor (and
+  // the exact race #688's own e2e failure caught, once the identity gate
+  // made that window long enough to reliably lose). Made visible below
+  // instead, together with the moment the correct state is actually
+  // decided.
   for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl]) {
     el.classList.add('visible');
   }
@@ -13195,7 +13373,6 @@ async function enterShopMode() {
   scene.add(shopAvatar.group);
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
-  shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
@@ -13205,37 +13382,44 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
-  // First-ever Shop-mode visit on this device spawns already flying, above
-  // the world (docs/SPEC.md §1) — every later visit starts grounded as
-  // before. Skips the takingOff ramp entirely (that's for a player-
-  // initiated toggle mid-session, not this one-time spawn), landing in
-  // 'flying' directly the same way toggleShopFlight's own takingOff path
-  // eventually would.
-  const isFirstShopVisit = !localStorage.getItem(SHOP_VISITED_BEFORE_KEY);
-  if (isFirstShopVisit) localStorage.setItem(SHOP_VISITED_BEFORE_KEY, '1');
-  shopFlightState = isFirstShopVisit ? 'flying' : 'grounded';
+  // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
+  // starts already flying, above a random world location, facing the
+  // world center, and slowly orbiting it clockwise until the shopper gives
+  // any navigation input (see updateShopSpawnRotation/stopShopSpawnRotation,
+  // driven from updateShopMovement). Skips the takingOff ramp entirely
+  // (that's for a player-initiated toggle mid-session, not this spawn),
+  // landing in 'flying' directly the same way toggleShopFlight's own
+  // takingOff path eventually would.
+  shopSpawnOrbitRadiusM = Math.random() * shopMaxRadiusM();
+  shopYaw = Math.random() * Math.PI * 2;
+  shopSpawnRotating = true;
+  shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
+  shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
+  shopFlightState = 'flying';
   shopFlightTransitionElapsedS = 0;
-  shopFlightAltitudeM = isFirstShopVisit ? SHOP_NEW_VISITOR_START_ALTITUDE_M : 0;
+  shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
   // Normally kept in sync every frame by the update loop (see
   // shopFlightAltitudeM's own comment) — set once here too so the
   // positionShopCamera() call below (synchronous, before that loop's first
-  // tick) doesn't position the camera against the stale z=0 this function's
-  // own shopAvatarPosition.set(0, 0, 0) just above left it at.
+  // tick) doesn't position the camera against a stale z.
   shopAvatarPosition.z =
     shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
-  setShopFlyBtnFlying(isFirstShopVisit);
+  setShopFlyBtnFlying(true);
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
 
-  shopYaw = 0;
   shopPitch = -0.12;
-  shopAvatarFacing = 0;
+  // shopYaw (set above, the orbit's starting angle) already faces the
+  // world center — see updateShopSpawnRotation's own comment on why that
+  // single angle does double duty as both the camera's look direction and
+  // the orbit position.
+  shopAvatarFacing = shopYaw;
   shopAvatarPitch = 0;
   applyShopCameraOrientation();
   positionShopCamera();
