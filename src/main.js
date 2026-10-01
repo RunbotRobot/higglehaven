@@ -10228,14 +10228,44 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 // Owner (Control Room, N46): flying should tip the avatar into a
 // Superman-style posture instead of staying upright — nose (head) forward
-// and down. Applied as a rotation.x pitch (the local left-right hinge axis
-// every limb already swings around) before rotation.z's own yaw — see the
-// main per-frame update — so the tip happens in the avatar's own local
-// frame first, then the whole tipped body turns to face the current
-// heading, same as a real flight rig would compose it. First shipped at
-// ~80deg (near-horizontal); owner follow-up (2026-09-12) asked for 45deg,
-// "halfway between vertical and horizontal," instead.
+// and down. Composed as a quaternion in the main per-frame update — yaw
+// (world Z, the avatar's current heading) applied first, then pitch around
+// the local left-right axis that yaw just established — so the tilt leans
+// toward wherever the avatar is actually facing, same as a real flight rig
+// would compose it. First shipped at ~80deg (near-horizontal); owner
+// follow-up (2026-09-12) asked for 45deg, "halfway between vertical and
+// horizontal," instead.
+//
+// #1168: this used to be set as independent Euler fields
+// (`group.rotation.x = pitch; group.rotation.z = yaw;`) — intending
+// exactly the composition described above, but Euler fields on the same
+// object don't compose that way. THREE's default 'XYZ' Euler order builds
+// the rotation matrix as Rx * Ry * Rz applied to a vector (see
+// applyShopCameraOrientation's own SHOP_BASE_QUAT comment above for the
+// same "which axis is actually local after a prior rotation" trap), which
+// pitches around a fixed world axis with yaw rotated separately underneath
+// it — not pitch-in-the-frame-yaw-just-produced. The owner's bug report
+// matched exactly: the tilt always leaned the same way regardless of which
+// direction the avatar was flying. Two intrinsic (body-frame) rotations
+// applied in sequence — yaw first, pitch second — compose as
+// `yawQuat.multiply(pitchQuat)` (yaw written first/outermost since it's
+// applied first, pitch second/innermost since it happens in the frame yaw
+// already established), not `pitchQuat.multiply(yawQuat)`.
 const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(45 * Math.PI) / 180;
+// Matches the plain rotation.z/rotation.x axes the old Euler-based code
+// used (world Z for yaw, since this is a Z-up world; local X for pitch,
+// the same left-right hinge every limb's walk-cycle swing already rotates
+// around) — no base-quat reorientation needed here the way
+// applyShopCameraOrientation's SHOP_BASE_QUAT needs one, since the avatar
+// model's own rest pose already faces correctly along these axes with no
+// rotation applied, unlike the camera's default -Z-forward/Y-up convention.
+const SHOP_AVATAR_YAW_AXIS = new THREE.Vector3(0, 0, 1);
+const SHOP_AVATAR_PITCH_AXIS = new THREE.Vector3(1, 0, 0);
+// Reused across frames rather than allocated fresh each one — same
+// reasoning as every other scratch object in this file (e.g.
+// scratchAttentionWorldPos above).
+const scratchAvatarYawQuat = new THREE.Quaternion();
+const scratchAvatarPitchQuat = new THREE.Quaternion();
 // Eases shopAvatarPitch toward the target above (or back to 0 on landing)
 // each frame — same idea as SHOP_AVATAR_SWING_EASE_PER_S, tuned to settle
 // over roughly the same ~1s span as SHOP_FLIGHT_TAKEOFF_DURATION_S so the
@@ -11686,20 +11716,32 @@ function updateShopMovement(now) {
   setShopAvatarAnimationState(shopAvatar, airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle'));
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
-  // instead of staying upright; landing eases it back to 0. Applied as
-  // rotation.x (the local left-right axis, same one every limb's walk-cycle
-  // swing already rotates around) BEFORE rotation.z's yaw below, so the tilt
-  // happens in the avatar's own local frame and then the whole tilted body
-  // turns to face the current heading — not the other way around.
+  // instead of staying upright; landing eases it back to 0. The avatar
+  // faces its own movement direction (shopAvatarFacing, turned by the left
+  // stick above), not the camera's look direction (shopYaw, the right
+  // stick) — a standard third-person rig where free-look and facing are
+  // independent. Plus a small idle weight-shift offset when standing still.
+  //
+  // #1168: yaw and pitch are composed as a single quaternion, yaw applied
+  // first (establishing which way the body faces) and pitch second (tilting
+  // around the local left-right axis that yaw just produced) — see
+  // SHOP_AVATAR_FLIGHT_PITCH_RAD's own comment above for why two
+  // independent `.rotation.x`/`.rotation.z` Euler fields (the old code
+  // here) can't express this and always tilted the same way regardless of
+  // facing direction.
   const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
-  shopAvatar.group.rotation.x = shopAvatarPitch;
-  // The avatar faces its own movement direction (shopAvatarFacing, turned
-  // by the left stick above), not the camera's look direction (shopYaw,
-  // the right stick) — a standard third-person rig where free-look and
-  // facing are independent. Plus a small idle weight-shift offset when
-  // standing still.
-  shopAvatar.group.rotation.z = shopAvatarFacing + shopIdleSwayYawOffset;
+  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset);
+  scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
+  shopAvatar.group.quaternion.copy(scratchAvatarYawQuat).multiply(scratchAvatarPitchQuat);
+  // #1168: same reasoning as window.__shopAvatarMetrics above — this file's
+  // own three.js-dependent orientation math has no unit-test pool to live
+  // in (vitest.config.js's own note), so e2e is how it gets verified. A
+  // plain, frame-updated snapshot (not the live THREE.Quaternion itself,
+  // which Playwright's page.evaluate can't structured-clone) is enough for
+  // a test to confirm the tilt direction actually tracks shopAvatarFacing
+  // rather than staying fixed.
+  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
