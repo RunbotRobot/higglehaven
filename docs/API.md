@@ -821,6 +821,14 @@ doesn't delete their account. A bid that's since been outbid, or that was
 on an auction which has already ended (whether or not it won), doesn't
 block deletion.
 
+`friendships.requester_builder_id`/`recipient_builder_id` are both `ON
+DELETE CASCADE` (migrations/0093), so every friendship involving this
+builder — pending or already-accepted — is silently removed along with
+it, with no notification to the other side and no guard (#1080). Owner's
+call, 2026-10-01: leave this behavior as is rather than adding a
+notification, consistent with the silent-unfriend decision on #858 — see
+"Notifications" below for the same choice recorded in that catalog.
+
 Response:
 
 ```json
@@ -3110,7 +3118,12 @@ can be added without their own table or endpoints — current sources are:
   unfriending an already-accepted friendship do not notify the other side —
   deliberate, per #858: matches the silent-unfriend convention most
   mainstream social platforms use, and avoids the awkwardness an explicit
-  "so-and-so unfriended you" notification would carry.
+  "so-and-so unfriended you" notification would carry. Deleting your own
+  builder account does not notify the other side of any friendship it
+  cascades away either — pending or accepted alike (see `DELETE
+  /api/builders/:builderId` above, #1080) — the owner's call there was to
+  leave this silent too, matching the unfriend decision rather than
+  treating account deletion as a separate case worth notifying on.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
