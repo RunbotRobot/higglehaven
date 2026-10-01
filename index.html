@@ -3849,6 +3849,25 @@
         <div id="auth-logged-in" hidden>
           <div id="auth-account-email"></div>
           <div id="auth-account-verified"></div>
+          <!-- #1182 (sub-issue of #1126): an in-session way to change
+               account email. Collapsed behind its own trigger, same shape
+               as Delete Account below — not destructive, but still a real
+               form with two fields rather than something worth showing
+               open by default. -->
+          <button id="auth-change-email-btn" type="button">Change Email</button>
+          <form id="auth-change-email-form" class="auth-form" hidden>
+            <label>New email
+              <input type="email" id="auth-change-email-new" required autocomplete="email" />
+            </label>
+            <label>Confirm your password
+              <div class="auth-password-field">
+                <input type="password" id="auth-change-email-password" required autocomplete="current-password" />
+                <button type="button" id="auth-change-email-password-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
+            <button type="submit">Change Email</button>
+            <button type="button" id="auth-change-email-cancel-btn" class="auth-link-btn">Cancel</button>
+          </form>
           <!-- docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
                verification via Didit — the higher trust tier that gates
                full social features, above the credit-card tier. -->
