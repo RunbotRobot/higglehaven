@@ -3274,9 +3274,9 @@ can be added without their own table or endpoints — current sources are:
   leave this silent too, matching the unfriend decision rather than
   treating account deletion as a separate case worth notifying on.
 
-There's no pagination cursor — one builder's outstanding count is expected
-to stay small — and no `DELETE`, since a read notification is still useful
-history ("wait, when did that change?").
+It's cursor-paginated (#320, see `GET /api/notifications` below), but has
+no `DELETE`, since a read notification is still useful history ("wait,
+when did that change?").
 
 ### Notification object
 

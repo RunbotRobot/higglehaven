@@ -3149,10 +3149,9 @@ async function handleSellers(request, env, db, route, url) {
 }
 
 // Builder-facing notifications (see notifyBuildersOfDimensionChange) — a
-// plain read-and-acknowledge list, not a full inbox: no pagination cursor
-// since one builder's outstanding count should stay small in practice,
-// and no DELETE since a read notification is still useful history for
-// "wait, when did that change?"
+// plain read-and-acknowledge list, not a full inbox: cursor-paginated
+// (#320, see GET below) but no DELETE, since a read notification is still
+// useful history for "wait, when did that change?"
 // #984: the mark-read (PATCH) and mark-all-read (POST) branches below had
 // no checkRateLimit call at all, unlike this file's other authenticated
 // mutation resources (BUNDLE_MUTATE_RATE_LIMIT_MAX #892,
