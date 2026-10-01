@@ -2408,9 +2408,11 @@ async function handleBuilders(request, env, db, route, url) {
     // #716: an exact (case-insensitive) label lookup, for the "Add friend"
     // flow to resolve a typed name without pulling the entire roster just
     // to filter it client-side. Still returns every matching row, not just
-    // the first — labels have no uniqueness constraint (migrations/0054's
-    // own comment), and the frontend's own "multiple builders share this
-    // name" handling depends on seeing all of them.
+    // the first — #1187 enforces uniqueness going forward on create/rename
+    // (see those handlers below), but doesn't retroactively guarantee it
+    // against whatever already existed before that, so the frontend's own
+    // "multiple builders share this name" handling still needs to see all
+    // of them, not just assume one.
     const label = url.searchParams.get('label');
     if (label) {
       const { results } = await db.prepare(
@@ -2478,7 +2480,34 @@ async function handleBuilders(request, env, db, route, url) {
     const builderId = input.builderId !== undefined
       ? stringValue(input.builderId, 'builderId')
       : `builder-${crypto.randomUUID()}`;
-    await db.prepare('INSERT INTO builders (builder_id, label) VALUES (?, ?)').bind(builderId, label).run();
+    // #1187: owner decision ("all accounts should be unique even when
+    // ignoring case") folded into this INSERT's own WHERE NOT EXISTS
+    // alongside the pre-existing builderId uniqueness check — that one
+    // used to be left to a raw UNIQUE-constraint violation on the primary
+    // key, caught generically by databaseHttpError; now explicit so both
+    // checks share one friendly-message disambiguation below. Deliberately
+    // an app-level check here and on the rename path below, not a
+    // schema-level UNIQUE index — see this issue's own PR for why a real
+    // index would also apply to getOrCreateBuilderForUser's own
+    // auto-provisioning INSERT OR IGNORE (label = the user's already-
+    // unique username), where a collision against some unrelated
+    // orphaned/test-created builder label would silently break signup for
+    // an unrelated, legitimate account instead of rejecting the create/
+    // rename this issue is actually about.
+    const inserted = await db.prepare(`
+      INSERT INTO builders (builder_id, label)
+      SELECT ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ? OR label = ? COLLATE NOCASE)
+    `).bind(builderId, label, builderId, label).run();
+    if (inserted.meta.changes === 0) {
+      // The atomic guard above already refused to happen — reading again
+      // here only decides which friendly message to show, it can't itself
+      // let a duplicate through (same idiom as signup's own email/username
+      // disambiguation).
+      const builderIdTaken = await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(builderId).first();
+      if (builderIdTaken) throw new HttpError('builderId is already taken', 409);
+      throw new HttpError('That builder name is already taken — names must be unique, ignoring case', 409);
+    }
     const row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
     return json({ builder: builderFromRow(row) }, 201);
   }
@@ -2494,9 +2523,22 @@ async function handleBuilders(request, env, db, route, url) {
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
     const label = labelValue(input.label, 'label');
-    await db.prepare(`
-      UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?
-    `).bind(label, route[1]).run();
+    // #1187: same case-insensitive uniqueness guard as the create path
+    // above — see its own comment for why this is an app-level NOT EXISTS
+    // rather than a schema-level UNIQUE index. Excludes this builder's own
+    // current row so a case-only rename of your own label (e.g. "Ada" ->
+    // "ADA") isn't rejected as colliding with itself.
+    const result = await db.prepare(`
+      UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ? AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
+    `).bind(label, route[1], label, route[1]).run();
+    if (result.meta.changes === 0) {
+      // requireBuilder/assertOwner above already confirmed this builder_id
+      // exists and belongs to the caller, so the only way the atomic guard
+      // just above could have refused this update is the NOT EXISTS
+      // failing — another builder already holds this label.
+      throw new HttpError('That builder name is already taken — names must be unique, ignoring case', 409);
+    }
     const updated = await requireBuilder(db, route[1]);
     return json({ builder: builderFromRow(updated) });
   }
@@ -3150,10 +3192,9 @@ async function handleSellers(request, env, db, route, url) {
 }
 
 // Builder-facing notifications (see notifyBuildersOfDimensionChange) — a
-// plain read-and-acknowledge list, not a full inbox: no pagination cursor
-// since one builder's outstanding count should stay small in practice,
-// and no DELETE since a read notification is still useful history for
-// "wait, when did that change?"
+// plain read-and-acknowledge list, not a full inbox: cursor-paginated
+// (#320, see GET below) but no DELETE, since a read notification is still
+// useful history for "wait, when did that change?"
 // #984: the mark-read (PATCH) and mark-all-read (POST) branches below had
 // no checkRateLimit call at all, unlike this file's other authenticated
 // mutation resources (BUNDLE_MUTATE_RATE_LIMIT_MAX #892,
