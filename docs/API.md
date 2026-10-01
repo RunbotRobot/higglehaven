@@ -3387,10 +3387,11 @@ Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars
 moving around the same shared world in real time"). `avatar_presence`
 (`migrations/0100_avatar_presence.sql`) holds one row per currently-online
 builder's live position — ephemeral state, not a history log, upserted on
-every position report. This is the foundation sub-issue (#1097) plus the
-read side (#1099, documented here); the write side (`POST /api/presence`,
-#1098) and the client-side report/poll/interpolate loop (#1100) are
-separate, not-yet-landed sub-issues of the same tracking issue.
+every position report. This covers the foundation sub-issue (#1097), the
+write side (`POST /api/presence`, #1098), the read side (`GET
+/api/presence`, #1099), and the stale-row cleanup sweep (#1101); the
+client-side report/poll/interpolate loop (#1100) is a separate,
+not-yet-landed sub-issue of the same tracking issue.
 
 **Transport**: a polling-based position broadcast on the existing D1/
 Workers free-tier stack, not a Durable-Objects/WebSocket push — see #1095's
@@ -3425,26 +3426,63 @@ already know where they are).
 
 A row whose `updated_at` is more than 10 seconds old is excluded as stale
 — treated as "this builder is no longer actually present" rather than a
-genuinely live position. #1098's own POST endpoint is expected to
-rate-limit a given builder to roughly one write per 1-2 seconds, so a
-handful of missed reports (a dropped request, a brief network hiccup)
-shouldn't make them flicker out of other builders' views, but someone who
-closed the tab or lost connectivity entirely disappears within a few
-seconds rather than lingering indefinitely. This is read-time filtering
-only — the fuller version (actually deleting long-stale rows so the table
-doesn't grow unbounded) is #1101's own separate scope, not yet built.
+genuinely live position. `POST /api/presence` (below) rate-limits a given
+builder to roughly one write per 1-2 seconds, so a handful of missed
+reports (a dropped request, a brief network hiccup) shouldn't make them
+flicker out of other builders' views, but someone who closed the tab or
+lost connectivity entirely disappears within a few seconds rather than
+lingering indefinitely. This is read-time filtering only — the physical
+cleanup sweep that actually deletes a long-stale row (so the table itself
+doesn't grow unbounded) is `pruneStaleAvatarPresence` (#1101, below),
+run from the existing `scheduled()` cron on a longer (5-minute) threshold,
+since its job is table hygiene, not hiding a briefly-stale builder.
+
+### `POST /api/presence` — report your own position (#1098)
+
+Requires a real, verified session (`requireSessionBuilder`). Upserts the
+caller's own row — there is exactly one `avatar_presence` row per
+`builder_id` at any time, never a growing log.
+
+Request body:
+
+```json
+{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
+```
+
+- `x`/`y`/`z` are required finite numbers.
+- `heading` is optional (omit or pass `null` for "unknown"); when given,
+  must be a finite number.
+- `landletId` is optional free-form scoping (no foreign key — a builder
+  can be anywhere in the shared world, not just on a landlet a `landlets`
+  row models). When given, it must name a landlet that actually exists —
+  this is a deliberately cheap spoof guard, not a claim that the caller
+  is actually near it; an unrecognized id 404s rather than being stored,
+  since the `GET` endpoint above scopes its query by this column and
+  would otherwise be silently poisoned by a bogus value.
+
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
+"updatedAt" } }` — the row as stored, after the upsert.
+
+Rate-limited server-side (`presence-report:<builderId>`, 600 per the
+shared 15-minute rate-limit window — enough headroom for roughly one
+report every 1-2 seconds sustained, with some burst tolerance) — this is
+the only thing bounding write frequency; client-side throttling (only
+reporting on meaningful movement) is the client-integration sub-issue's
+own scope (#1100), not this endpoint's. Never trust a client to self-
+throttle: this endpoint stays safe to call as often as any client
+actually does.
 
 ### Testing note
 
-`worker/presence.test.js` owns the GET contract: the anonymous-session
-`401`, the missing-`landletId` `400`, a same-landlet position being
-returned while the caller's own and a different-landlet builder's are
-excluded, and a stale report being excluded. Since #1098's POST endpoint
-doesn't exist yet, these tests seed `avatar_presence` rows directly via
-`env.DB` rather than through a real write path — the same "insert the
-state a real write would have produced" shortcut
-`worker/seller-feedback.test.js`'s own `createPurchase` helper already
-uses for a different not-yet-built dependency.
+`worker/avatar-presence.test.js` owns the `POST` contract (session
+gating, validation, the upsert-not-duplicate behavior, the landlet spoof
+guard, and the rate limit) and `worker/presence.test.js` owns the `GET`
+contract (the anonymous-session `401`, the missing-`landletId` `400`, a
+same-landlet position being returned while the caller's own and a
+different-landlet builder's are excluded, and a stale report being
+excluded). `worker/avatar-presence-cleanup.test.js` covers
+`pruneStaleAvatarPresence` directly, seeding a long-stale and a fresh row
+via `env.DB` rather than through a real write path.
 
 ## Bundles
 
@@ -7151,49 +7189,6 @@ the field entirely otherwise — never hardcoding the server's own
 the one source of truth for what an unchecked listing's category is. The
 buyer-facing "browse owned avatars and equip one" half is #713's own
 separate scope, not this one's.
-
-## Multiplayer presence (#1095)
-
-Core multiplayer presence — seeing other avatars live in the shared
-world — is tracked via `avatar_presence`
-(`migrations/0100_avatar_presence.sql`, #1097): one row per currently
-online builder's live `x`/`y`/`z`/`heading`, independent of whichever
-real-time transport the feature eventually settles on (#1102).
-
-### `POST /api/presence` — report your own position (#1098)
-
-Requires a real, verified session (`requireSessionBuilder`). Upserts the
-caller's own row — there is exactly one `avatar_presence` row per
-`builder_id` at any time, never a growing log.
-
-Request body:
-
-```json
-{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
-```
-
-- `x`/`y`/`z` are required finite numbers.
-- `heading` is optional (omit or pass `null` for "unknown"); when given,
-  must be a finite number.
-- `landletId` is optional free-form scoping (no foreign key — a builder
-  can be anywhere in the shared world, not just on a landlet a `landlets`
-  row models). When given, it must name a landlet that actually exists —
-  this is a deliberately cheap spoof guard, not a claim that the caller
-  is actually near it; an unrecognized id 404s rather than being stored,
-  since #1099's own `GET` scopes its query by this column and would
-  otherwise be silently poisoned by a bogus value.
-
-Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
-"updatedAt" } }` — the row as stored, after the upsert.
-
-Rate-limited server-side (`presence-report:<builderId>`, 600 per the
-shared 15-minute rate-limit window — enough headroom for roughly one
-report every 1-2 seconds sustained, with some burst tolerance) — this is
-the only thing bounding write frequency; client-side throttling (only
-reporting on meaningful movement) is the client-integration sub-issue's
-own scope (#1100), not this endpoint's. Never trust a client to self-
-throttle: this endpoint stays safe to call as often as any client
-actually does.
 
 ## Automated tests
 
