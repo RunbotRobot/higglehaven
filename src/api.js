@@ -886,11 +886,14 @@ export async function fetchProductReviews(templateId) {
   return requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`);
 }
 
-export async function createProductReview(templateId, { authorLabel, rating, text } = {}) {
+// #1113: authorLabel is no longer accepted here -- the server derives it
+// from the session (closing #893's spoofing gap), so a caller needs a real
+// session (ensureBuilderIdentity()) before this will ever succeed.
+export async function createProductReview(templateId, { rating, text } = {}) {
   const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, rating, text }),
+    body: JSON.stringify({ rating, text }),
   });
   return review;
 }

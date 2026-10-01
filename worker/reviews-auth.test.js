@@ -39,71 +39,96 @@ describe('Product reviews', () => {
     return templateId;
   }
 
-  // Standard marketplace practice: only someone who actually bought the
-  // product can review it (see worker/index.js's own comment on the POST
-  // handler). There's no real account system to check purchase history
-  // against, so eligibility is matched the same way a purchase's own
-  // buyerLabel already is elsewhere — a case-insensitive free-text label.
-  // instance_id/seller_id have no FK constraints (migrations/0051's own
-  // "permanent receipt, not tied to a live reference" design), so this can
-  // insert directly without a real placed instance — only builder_id needs
-  // a real row to satisfy its FK.
-  async function createPurchase(templateId, buyerLabel, { refunded = false } = {}) {
-    const builder = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Purchaser for ${templateId}` }) })).body.builder;
+  // #1113: eligibility is now a real purchases.buyer_builder_id foreign key
+  // (migrations/0099), not a free-text buyer_label match — `buyer` is a
+  // signupBuilder() account (or omitted, for a legacy/pre-#1113 purchase
+  // with no buyer identity at all). instance_id/seller_id have no FK
+  // constraints (migrations/0051's own "permanent receipt, not tied to a
+  // live reference" design), so this can insert directly without a real
+  // placed instance — a throwaway host builder created via plain POST
+  // /api/builders (unrelated to review eligibility, just satisfies
+  // purchases.builder_id's own FK) stands in for the landlet owner.
+  async function createPurchase(templateId, buyer, { refunded = false } = {}) {
+    const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host for ${templateId}` }) })).body.builder;
     await env.DB.prepare(`
       INSERT INTO purchases
-        (purchase_id, instance_id, template_id, builder_id, buyer_label,
+        (purchase_id, instance_id, template_id, builder_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, refunded_at)
-      VALUES (?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5, ?)
-    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, builder.builderId, buyerLabel,
+      VALUES (?, ?, ?, ?, ?, ?, 500, 1, 500, 10, 5, 5, ?)
+    `).bind(`purchase-${crypto.randomUUID()}`, `instance-${crypto.randomUUID()}`, templateId, host.builderId,
+      buyer ? buyer.builder.label : null, buyer ? buyer.builderId : null,
       refunded ? new Date().toISOString() : null).run();
   }
 
   it('rejects a review on a catalog template that does not exist', async () => {
     const rejected = await api('/catalog/template-does-not-exist/reviews', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
+      body: JSON.stringify({ rating: 5 }),
     });
     expect(rejected.response.status).toBe(404);
   });
 
-  // Found via backlog audit (#337): authorLabel had no length cap at all.
-  it('rejects a review authorLabel over the length cap', async () => {
-    const templateId = await createTemplate('review-author-label-too-long');
+  it('rejects an unauthenticated review on a real template', async () => {
+    const templateId = await createTemplate('review-requires-session');
     const rejected = await api(`/catalog/${templateId}/reviews`, {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'x'.repeat(101), rating: 5 }),
+      body: JSON.stringify({ rating: 5 }),
     });
-    expect(rejected.response.status).toBe(400);
+    expect(rejected.response.status).toBe(401);
   });
 
   it('rejects a review from a shopper who never purchased the product', async () => {
     const templateId = await createTemplate('review-gate-unpurchased');
-    const rejected = await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('review-gate-unpurchased-shopper');
+    const rejected = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Never Bought It', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(rejected.response.status).toBe(400);
   });
 
-  it('rejects a review backed only by an anonymous (blank buyerLabel) purchase', async () => {
-    const templateId = await createTemplate('review-gate-anonymous-purchase');
+  // A purchase from before migrations/0099 (or any other row with no
+  // buyer_builder_id) has no real buyer identity to match a session
+  // against — it can never back a review, unlike the old design's
+  // anonymous-buyerLabel case, which this replaces.
+  it('rejects a review backed only by a purchase with no buyer_builder_id', async () => {
+    const templateId = await createTemplate('review-gate-no-buyer-id-purchase');
     await createPurchase(templateId, null);
-    const rejected = await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('review-gate-no-buyer-id-shopper');
+    const rejected = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Someone', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(rejected.response.status).toBe(400);
   });
 
-  it('accepts a review whose authorLabel matches a real purchase\'s buyerLabel, case-insensitively', async () => {
+  it('accepts a review from the real buyer of a matching purchase', async () => {
     const templateId = await createTemplate('review-gate-matching-purchase');
-    await createPurchase(templateId, 'A Shopper');
-    const accepted = await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('review-gate-matching-shopper');
+    await createPurchase(templateId, shopper);
+    const accepted = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'a shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(accepted.response.status).toBe(201);
+    // authorLabel is derived server-side from the session, never accepted
+    // from the request body.
+    expect(accepted.body.review.authorLabel).toBe(shopper.builder.label);
+    expect(accepted.body.review.purchaseId).toMatch(/^purchase-/);
+  });
+
+  // A different builder's purchase of the same product doesn't make the
+  // caller eligible — eligibility is per-buyer, not per-template.
+  it('rejects a review from a builder who did not make the matching purchase', async () => {
+    const templateId = await createTemplate('review-gate-wrong-buyer');
+    const buyer = await signupBuilder('review-gate-wrong-buyer-real');
+    const stranger = await signupBuilder('review-gate-wrong-buyer-stranger');
+    await createPurchase(templateId, buyer);
+    const rejected = await api(`/catalog/${templateId}/reviews`, stranger.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 5 }),
+    }));
+    expect(rejected.response.status).toBe(400);
   });
 
   // Found during a broader backlog-exploration pass (#357): the eligibility
@@ -113,66 +138,81 @@ describe('Product reviews', () => {
   // purchase" review under that same refunded transaction.
   it('rejects a review backed only by a refunded purchase', async () => {
     const templateId = await createTemplate('review-gate-refunded-purchase');
-    await createPurchase(templateId, 'Refunded Shopper', { refunded: true });
-    const rejected = await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('review-gate-refunded-shopper');
+    await createPurchase(templateId, shopper, { refunded: true });
+    const rejected = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Refunded Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(rejected.response.status).toBe(400);
   });
 
-  it('rejects a second review from the same purchaser label, case-insensitively — one review per purchase', async () => {
-    const templateId = await createTemplate('review-one-per-purchaser');
-    await createPurchase(templateId, 'A Shopper');
-    const first = await api(`/catalog/${templateId}/reviews`, {
+  it('rejects a second review attempt once the buyer\'s only purchase is already reviewed — one review per purchase', async () => {
+    const templateId = await createTemplate('review-one-per-purchase');
+    const shopper = await signupBuilder('review-one-per-purchase-shopper');
+    await createPurchase(templateId, shopper);
+    const first = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(first.response.status).toBe(201);
 
-    // Same label, different case — still the same reviewer.
-    const second = await api(`/catalog/${templateId}/reviews`, {
+    // #1113: unlike the old per-label design, the buyer now simply has no
+    // *eligible* purchase left (the only one they have is already
+    // reviewed) — a clean 400, not a 409, since there's nothing concrete
+    // left to conflict with.
+    const second = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'a shopper', rating: 1, text: 'Actually terrible' }),
-    });
-    expect(second.response.status).toBe(409);
-    expect(second.body).toEqual({ error: 'This purchaser has already reviewed this product' });
+      body: JSON.stringify({ rating: 1, text: 'Actually terrible' }),
+    }));
+    expect(second.response.status).toBe(400);
 
     const listed = await api(`/catalog/${templateId}/reviews`);
     expect(listed.body.reviews).toHaveLength(1);
     expect(listed.body.averageRating).toBe(5);
 
-    // Deleting the first review frees the label up to review again.
+    // Deleting the first review frees that same purchase up to review again.
     await api(`/catalog/${templateId}/reviews/${first.body.review.reviewId}`, { method: 'DELETE' });
-    const third = await api(`/catalog/${templateId}/reviews`, {
+    const third = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 2 }),
-    });
+      body: JSON.stringify({ rating: 2 }),
+    }));
     expect(third.response.status).toBe(201);
   });
 
-  it('rejects a concurrent burst of the same purchaser label to exactly one review — regression test for a check-then-act race', async () => {
-    // A separate SELECT-then-INSERT for the one-review-per-purchaser check
-    // would be a check-then-act race: concurrent submits under the same
-    // label could all read "no existing review" before any INSERT
-    // committed. Firing every request at once (rather than the sequential
-    // test above, which an unfixed version would also pass) is what
-    // actually exercises that race — and an unfixed version wouldn't just
-    // let duplicates through, it would 500 on the unique index's own
-    // constraint violation instead of the clean 409 this guards.
+  it('rejects a concurrent burst against the same purchase to exactly one review — regression test for a check-then-act race', async () => {
+    // The real atomicity guard is the INSERT's own WHERE NOT EXISTS against
+    // purchase_id — without it, concurrent submits against the same
+    // purchase could all pass a separate SELECT-then-INSERT eligibility
+    // check before any INSERT committed, creating duplicate reviews (or
+    // 500ing on the unique index's own constraint violation instead of a
+    // clean error). Firing every request at once (rather than the
+    // sequential test above, which an unfixed version would also pass) is
+    // what actually exercises that race.
+    //
+    // Unlike the old per-label design, the losing attempts here aren't
+    // guaranteed a single status code: the eligibility SELECT itself now
+    // excludes an already-reviewed purchase, so a losing attempt gets 409
+    // only if it reaches the INSERT with the same purchase_id before
+    // losing that race too, and 400 ("no eligible purchase left") if its
+    // own SELECT runs after the winner's INSERT already committed — both
+    // are a correct rejection, not a bug, and which one happens depends on
+    // scheduling. The one invariant this test actually guards is that
+    // exactly one review is ever created, never more.
     const templateId = await createTemplate('review-burst-race');
-    await createPurchase(templateId, 'A Shopper');
+    const shopper = await signupBuilder('review-burst-race-shopper');
+    await createPurchase(templateId, shopper);
 
     const attempts = await Promise.all(
-      Array.from({ length: 10 }, () => api(`/catalog/${templateId}/reviews`, {
+      Array.from({ length: 10 }, () => api(`/catalog/${templateId}/reviews`, shopper.session({
         method: 'POST',
-        body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-      })),
+        body: JSON.stringify({ rating: 5 }),
+      }))),
     );
     const created = attempts.filter((a) => a.response.status === 201);
-    const conflicted = attempts.filter((a) => a.response.status === 409);
+    const rejected = attempts.filter((a) => a.response.status === 400 || a.response.status === 409);
     expect(created).toHaveLength(1);
-    expect(conflicted).toHaveLength(9);
+    expect(rejected).toHaveLength(9);
 
     const listed = await api(`/catalog/${templateId}/reviews`);
     expect(listed.body.reviews).toHaveLength(1);
@@ -180,8 +220,10 @@ describe('Product reviews', () => {
 
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
-    await createPurchase(templateId, 'A Shopper');
-    await createPurchase(templateId, 'Another Shopper');
+    const shopperA = await signupBuilder('reviewable-product-shopper-a');
+    const shopperB = await signupBuilder('reviewable-product-shopper-b');
+    await createPurchase(templateId, shopperA);
+    await createPurchase(templateId, shopperB);
 
     const emptyList = await api(`/catalog/${templateId}/reviews`);
     expect(emptyList.response.status).toBe(200);
@@ -189,44 +231,44 @@ describe('Product reviews', () => {
     expect(emptyList.body.averageRating).toBeNull();
     expect(emptyList.body.count).toBe(0);
 
-    const missingRating = await api(`/catalog/${templateId}/reviews`, {
+    const missingRating = await api(`/catalog/${templateId}/reviews`, shopperA.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper' }),
-    });
+      body: JSON.stringify({}),
+    }));
     expect(missingRating.response.status).toBe(400);
 
     for (const badRating of [0, 6, 3.5, 'five']) {
-      const rejected = await api(`/catalog/${templateId}/reviews`, {
+      const rejected = await api(`/catalog/${templateId}/reviews`, shopperA.session({
         method: 'POST',
-        body: JSON.stringify({ authorLabel: 'A Shopper', rating: badRating }),
-      });
+        body: JSON.stringify({ rating: badRating }),
+      }));
       expect(rejected.response.status).toBe(400);
     }
 
-    const tooLong = await api(`/catalog/${templateId}/reviews`, {
+    const tooLong = await api(`/catalog/${templateId}/reviews`, shopperA.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 4, text: 'x'.repeat(281) }),
-    });
+      body: JSON.stringify({ rating: 4, text: 'x'.repeat(281) }),
+    }));
     expect(tooLong.response.status).toBe(400);
 
-    const firstReview = await api(`/catalog/${templateId}/reviews`, {
+    const firstReview = await api(`/catalog/${templateId}/reviews`, shopperA.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5, text: 'Lovely product!' }),
-    });
+      body: JSON.stringify({ rating: 5, text: 'Lovely product!' }),
+    }));
     expect(firstReview.response.status).toBe(201);
     expect(firstReview.body.review).toMatchObject({
       templateId,
-      authorLabel: 'A Shopper',
+      authorLabel: shopperA.builder.label,
       rating: 5,
       text: 'Lovely product!',
     });
     expect(firstReview.body.review.reviewId).toMatch(/^review-/);
 
     // text is genuinely optional — a bare star rating is still a real review.
-    const secondReview = await api(`/catalog/${templateId}/reviews`, {
+    const secondReview = await api(`/catalog/${templateId}/reviews`, shopperB.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Another Shopper', rating: 3 }),
-    });
+      body: JSON.stringify({ rating: 3 }),
+    }));
     expect(secondReview.response.status).toBe(201);
     expect(secondReview.body.review.text).toBeNull();
 
@@ -283,6 +325,7 @@ describe('Product reviews', () => {
   it('gates review moderation (DELETE) to the template\'s own seller, unlike an unowned template', async () => {
     const seller = await signupSeller('review-moderation-seller');
     const otherSeller = await signupSeller('review-moderation-other-seller');
+    const shopper = await signupBuilder('review-moderation-shopper');
     const created = await api('/catalog', seller.session({
       method: 'POST',
       body: JSON.stringify({
@@ -295,11 +338,11 @@ describe('Product reviews', () => {
     }));
     expect(created.response.status).toBe(201);
     const templateId = created.body.template.templateId;
-    await createPurchase(templateId, 'A Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(posted.response.status).toBe(201);
     const reviewId = posted.body.review.reviewId;
 
@@ -326,6 +369,7 @@ describe('Product reviews', () => {
   // same user_id) is what receives it.
   it('notifies the template\'s own seller (via their builder profile) when a new review is posted', async () => {
     const seller = await signupSeller('review-notify-seller');
+    const shopper = await signupBuilder('review-notify-shopper');
     const created = await api('/catalog', seller.session({
       method: 'POST',
       body: JSON.stringify({
@@ -340,18 +384,18 @@ describe('Product reviews', () => {
     const templateId = created.body.template.templateId;
     const sellerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
 
-    await createPurchase(templateId, 'A Notifying Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Notifying Shopper', rating: 4 }),
-    });
+      body: JSON.stringify({ rating: 4 }),
+    }));
     expect(posted.response.status).toBe(201);
 
     const { results } = await env.DB.prepare(
       'SELECT message FROM notifications WHERE builder_id = ?',
     ).bind(sellerBuilderId).all();
     expect(results).toHaveLength(1);
-    expect(results[0].message).toContain('A Notifying Shopper');
+    expect(results[0].message).toContain(shopper.builder.label);
     expect(results[0].message).toContain('Notify-worthy product');
   });
 
@@ -359,11 +403,12 @@ describe('Product reviews', () => {
   // to notify — must not throw trying to resolve a notification target.
   it('does not error posting a review on a seller-less template — nobody to notify', async () => {
     const templateId = await createTemplate('review-notify-no-seller');
-    await createPurchase(templateId, 'A Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('review-notify-no-seller-shopper');
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(posted.response.status).toBe(201);
   });
 
@@ -377,6 +422,7 @@ describe('Product reviews', () => {
   // permanently blocked for everyone, including admins.
   it('unlocks review moderation, and catalog PATCH/DELETE, once the template\'s seller has since deleted their account', async () => {
     const seller = await signupSeller('review-moderation-deleted-seller');
+    const shopper = await signupBuilder('review-moderation-deleted-seller-shopper');
     const created = await api('/catalog', seller.session({
       method: 'POST',
       body: JSON.stringify({
@@ -389,11 +435,11 @@ describe('Product reviews', () => {
     }));
     expect(created.response.status).toBe(201);
     const templateId = created.body.template.templateId;
-    await createPurchase(templateId, 'A Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(posted.response.status).toBe(201);
     const reviewId = posted.body.review.reviewId;
 
@@ -473,24 +519,31 @@ describe('Product reviews', () => {
   // no rate limit at all on that unauthenticated path either.
   it('rate-limits repeated unauthenticated review DELETEs on a seller-less template', async () => {
     const templateId = await createTemplate('review-delete-rate-limit');
+    // A fresh shopper per iteration — PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX
+    // is now keyed by builder_id (#1113), so reusing one session across 21
+    // POSTs here would trip *that* unrelated limit before this test ever
+    // reaches its own 21st DELETE. DELETE's own rate limit (keyed by
+    // clientIp, since this unauthenticated path has no session) doesn't
+    // care which buyer backs each review either way.
     const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 20; i++) {
-      await createPurchase(templateId, `Shopper ${i}`);
-      const posted = await api(`/catalog/${templateId}/reviews`, {
+      const shopper = await signupBuilder(`review-delete-rate-limit-shopper-${i}`);
+      await createPurchase(templateId, shopper);
+      const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
         method: 'POST',
-        headers,
-        body: JSON.stringify({ authorLabel: `Shopper ${i}`, rating: 5 }),
-      });
+        body: JSON.stringify({ rating: 5 }),
+      }));
       const attempt = await api(`/catalog/${templateId}/reviews/${posted.body.review.reviewId}`, {
         method: 'DELETE', headers,
       });
       expect(attempt.response.status).not.toBe(429);
     }
-    await createPurchase(templateId, 'Final Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    const finalShopper = await signupBuilder('review-delete-rate-limit-shopper-final');
+    await createPurchase(templateId, finalShopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, finalShopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Final Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     const limited = await api(`/catalog/${templateId}/reviews/${posted.body.review.reviewId}`, {
       method: 'DELETE', headers,
     });
@@ -514,23 +567,28 @@ describe('Product reviews', () => {
       }),
     }));
     const templateId = created.body.template.templateId;
+    // A fresh shopper per iteration — same reasoning as the unauthenticated
+    // DELETE rate-limit test above: reusing one buyer session across 21
+    // POSTs would trip the unrelated per-builder CREATE rate limit first.
     for (let i = 0; i < 20; i++) {
-      await createPurchase(templateId, `Owner Rate Limit Shopper ${i}`);
-      const posted = await api(`/catalog/${templateId}/reviews`, {
+      const shopper = await signupBuilder(`review-owner-rl-shopper-${i}`);
+      await createPurchase(templateId, shopper);
+      const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
         method: 'POST',
-        body: JSON.stringify({ authorLabel: `Owner Rate Limit Shopper ${i}`, rating: 5 }),
-      });
+        body: JSON.stringify({ rating: 5 }),
+      }));
       const attempt = await api(
         `/catalog/${templateId}/reviews/${posted.body.review.reviewId}`,
         seller.session({ method: 'DELETE' }),
       );
       expect(attempt.response.status).not.toBe(429);
     }
-    await createPurchase(templateId, 'Owner Rate Limit Final Shopper');
-    const posted = await api(`/catalog/${templateId}/reviews`, {
+    const finalShopper = await signupBuilder('review-owner-rl-shopper-final');
+    await createPurchase(templateId, finalShopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, finalShopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'Owner Rate Limit Final Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     const limited = await api(
       `/catalog/${templateId}/reviews/${posted.body.review.reviewId}`,
       seller.session({ method: 'DELETE' }),
@@ -540,36 +598,37 @@ describe('Product reviews', () => {
 
   // #804: review *creation* itself had no rate limit at all, unlike its own
   // sibling DELETE branch (tested just above) and every comparable write in
-  // this file — a caller could cheaply mint many distinct "verified
-  // purchaser" labels and post one review under each, with nothing
-  // throttling the create path itself.
-  it('rate-limits repeated review creations from the same client', async () => {
+  // this file. #1113 moved this from clientIp-keyed to builder_id-keyed
+  // (POST now requires a session) and moved it ahead of the purchase-
+  // eligibility lookup, so the limit itself fires regardless of whether any
+  // given attempt would otherwise succeed — no real purchases needed here,
+  // just the same session making repeated attempts.
+  it('rate-limits repeated review creations from the same builder', async () => {
     const templateId = await createTemplate('review-create-rate-limit');
-    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    const shopper = await signupBuilder('review-create-rate-limit-shopper');
     for (let i = 0; i < 20; i++) {
-      await createPurchase(templateId, `Rate Limit Shopper ${i}`);
-      const attempt = await api(`/catalog/${templateId}/reviews`, {
-        method: 'POST', headers,
-        body: JSON.stringify({ authorLabel: `Rate Limit Shopper ${i}`, rating: 5 }),
-      });
+      const attempt = await api(`/catalog/${templateId}/reviews`, shopper.session({
+        method: 'POST',
+        body: JSON.stringify({ rating: 5 }),
+      }));
       expect(attempt.response.status).not.toBe(429);
     }
-    await createPurchase(templateId, 'One Too Many Shopper');
-    const limited = await api(`/catalog/${templateId}/reviews`, {
-      method: 'POST', headers,
-      body: JSON.stringify({ authorLabel: 'One Too Many Shopper', rating: 5 }),
-    });
+    const limited = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(limited.response.status).toBe(429);
   });
 
   it('keeps reviews independent between two different catalog templates', async () => {
     const templateA = await createTemplate('reviewable-product-a');
     const templateB = await createTemplate('reviewable-product-b');
-    await createPurchase(templateA, 'A Shopper');
-    await api(`/catalog/${templateA}/reviews`, {
+    const shopper = await signupBuilder('reviewable-product-ab-shopper');
+    await createPurchase(templateA, shopper);
+    await api(`/catalog/${templateA}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
 
     const listA = await api(`/catalog/${templateA}/reviews`);
     const listB = await api(`/catalog/${templateB}/reviews`);
@@ -579,11 +638,12 @@ describe('Product reviews', () => {
 
   it('cascades review deletion when the catalog template itself is deleted', async () => {
     const templateId = await createTemplate('reviewable-product-to-delete');
-    await createPurchase(templateId, 'A Shopper');
-    await api(`/catalog/${templateId}/reviews`, {
+    const shopper = await signupBuilder('reviewable-product-to-delete-shopper');
+    await createPurchase(templateId, shopper);
+    await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', rating: 4 }),
-    });
+      body: JSON.stringify({ rating: 4 }),
+    }));
     await api(`/catalog/${templateId}`, { method: 'DELETE' });
 
     const afterDelete = await api(`/catalog/${templateId}/reviews`);
