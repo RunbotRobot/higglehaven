@@ -2,9 +2,9 @@
 // Shop and Build modes, hidden in Sell (no free-look camera/avatar facing
 // there to orient by — see SELL_HIDDEN_BUILDER_UI_IDS's own comment).
 //
-// Shop mode's needle is driven by shopAvatarFacing (resets to 0 = North on
-// every mode entry); Build mode has no avatar, so it's driven directly off
-// the free OrbitControls camera's own current look direction instead. Real
+// Shop mode's needle is driven by shopAvatarFacing; Build mode has no
+// avatar, so it's driven directly off the free OrbitControls camera's own
+// current look direction instead. Real
 // joystick-driven turning in Shop mode isn't exercised here — raw Shop-mode
 // movement/camera simulation isn't automated anywhere in this suite (see
 // e2e/community-signs.test.mjs's own comment on why) — but Build mode's
@@ -65,8 +65,15 @@ await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
+// #1175: every Shop-mode entry now spawns at a random world location
+// facing the world center, rather than always resetting shopAvatarFacing
+// to a fixed 0/North — so the exact bearing varies run to run (confirmed
+// non-deterministic: two separate local runs read -135.16 and -244.185
+// here). The needle-tracks-facing behavior itself is already demonstrated
+// by the Build-mode drag-and-compare above; this just confirms the needle
+// renders a real numeric bearing in Shop mode too.
 const initialShopRotation = await needleRotationDeg();
-console.log('initial Shop-mode needle rotation (should be 0 — shopAvatarFacing resets to 0/North on every mode entry):', initialShopRotation);
+console.log('initial Shop-mode needle rotation (should be a real number, exact bearing is spawn-random since #1175):', initialShopRotation);
 
 await page.click('button[data-mode="sell"]');
 await page.waitForTimeout(500);
@@ -81,7 +88,7 @@ const pass =
   typeof rotatedBuildRotation === 'number' &&
   Math.abs(rotatedBuildRotation - initialBuildRotation) > 5 &&
   compassVisibleInShop &&
-  near(initialShopRotation, 0, 0.1) &&
+  typeof initialShopRotation === 'number' &&
   compassHiddenInSell &&
   errors.length === 0;
 await finish(browser, { pass, label: 'On-screen compass: Shop/Build visibility, Sell hidden, needle tracks facing (#1169)', errors });
