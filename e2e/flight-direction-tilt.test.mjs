@@ -21,20 +21,15 @@ await chooseIdentity(page, { mode: 'shop', label: 'Flight Tilt Tester', isNew: t
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-// #119: a genuinely first-ever Shop-mode visit spawns already flying, no
-// tap needed — same quirk flight.test.mjs's own first block documents and
-// works around the same way. Without this, the click below would toggle
-// flight OFF (it's already on), landing the avatar right before this test
-// reads its (now-zero) pitch.
-await page.evaluate(() => localStorage.setItem('higglehaven.shopVisitedBefore', '1'));
-await page.reload({ waitUntil: 'networkidle' });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
-
-// Take off and let the takeoff animation (~1s, SHOP_FLIGHT_TAKEOFF_DURATION_S)
-// and the pitch ease (SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S) both settle so
-// shopAvatarPitch has actually converged close to SHOP_AVATAR_FLIGHT_PITCH_RAD
-// before anything below reads it.
-await page.click('#shop-fly-btn');
+// #1175: every spawn (not just a first-ever visit) now spawns already
+// flying above a random world location — no tap needed at all, and a tap
+// now would toggle flight OFF instead of on (see flight.test.mjs's own
+// "flyingOnSpawn" check, which lands the spawn's own flight deliberately
+// before testing manual takeoff). This test wants to stay flying, so it
+// just waits for the pitch ease (SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S) to
+// settle close to SHOP_AVATAR_FLIGHT_PITCH_RAD before reading it below —
+// no click, no reload, no stale shopVisitedBefore localStorage flag (that
+// one-time-ever-flag mechanism #1175 itself replaced).
 await page.waitForTimeout(2000);
 
 // Drags the move joystick (left stick — walks/flies forward-back-strafe,
