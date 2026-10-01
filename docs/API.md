@@ -6259,15 +6259,27 @@ here are pure altitude ramps, no fade — there's no one else to fade for)
 and "occupied landing spots offset to nearest open space" (nothing exists
 yet to occupy a spot with).
 
-**First-ever-visit spawn** (docs/SPEC.md §1: "new users spawn zoomed-out in
-flight mode above the world") — a genuinely first-ever Shop-mode entry on
-this device (`enterShopMode` in `src/main.js`, gated by a
-`localStorage.higglehaven.shopVisitedBefore` flag, since Shop mode itself
-needs no login to track this against an account) spawns straight into
-`'flying'` at a fixed starting altitude, skipping the `'takingOff'` ramp
-entirely — that ramp is for a player-initiated toggle mid-session, not this
-one-time spawn. Every later Shop-mode entry (same device, flag now set)
-starts `'grounded'` as before.
+**Every-spawn rotating aerial shot** (#1175, docs/SPEC.md §1/§2: "new users
+spawn zoomed-out in flight mode above the world," and every login sees a
+"slow clockwise rotating aerial shot at a random location") —
+`enterShopMode` in `src/main.js` spawns straight into `'flying'` at a fixed
+starting altitude (`SHOP_SPAWN_START_ALTITUDE_M`) on **every** Shop-mode
+entry, not just a first-ever visit, skipping the `'takingOff'` ramp
+entirely (that ramp is for a player-initiated toggle mid-session, not this
+spawn). The spawn location is random — a radius drawn uniformly between 0
+and `shopMaxRadiusM()` (the same wall-clearance-bounded max radius
+`clampShopRadius` enforces everywhere else) and a random starting angle —
+and the avatar immediately begins a slow clockwise orbit around the world
+center at that fixed radius, always facing the center as it goes
+(`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The
+camera's own look direction (`shopYaw`) doubles as the orbit's angle
+throughout, since "facing the center" and "the orbit position" are the
+same angle at every point on the circle. The orbit ends the instant the
+shopper gives any navigation input — a joystick deflection, a vertical
+flight button, or a fly-button tap (`stopShopSpawnRotation`, checked every
+frame in `updateShopMovement` and once directly in `toggleShopFlight`) —
+after which normal flight/movement control takes over exactly as if the
+avatar had spawned in place.
 
 ## Frontend-only avatar idle animation
 
