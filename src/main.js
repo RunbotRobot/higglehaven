@@ -7310,6 +7310,7 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
+const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -8607,6 +8608,39 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
+// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
+// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
+// avatar-facing angle (shopAvatarFacing, declared further down with the
+// rest of the Shop-mode state — safe to reference here since this only
+// ever runs once shopActive is true, well after full module evaluation);
+// Build mode has no avatar at all, just the free OrbitControls camera, so
+// its "facing" is read directly off the camera's own current look
+// direction instead. The two are deliberately not the same value
+// (shopAvatarFacing eases toward movement direction rather than tracking
+// the camera instantly), but each is the right analog for its own mode.
+//
+// "North" is a convention this codebase never previously defined for its
+// world coordinates — inferred here from the one existing precedent:
+// loadLandletMap's claim-flyover camera starts south of center looking
+// toward +Y, which only reads sensibly if +Y is already "up"/North on
+// that map. +X is then East, the only orientation consistent with
+// standard map/compass reading once a Z-up world has a chosen North.
+// Facing angle 0 means +Y (North); the in-world yaw convention turns a
+// positive angle toward -X (see applyShopCameraOrientation's own
+// comment), so the clockwise bearing an ordinary compass face uses is the
+// negation of that facing angle.
+const compassScratchDir = new THREE.Vector3();
+function currentFacingRad() {
+  if (shopActive) return shopAvatarFacing;
+  camera.getWorldDirection(compassScratchDir);
+  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
+}
+
+function updateCompassNeedle() {
+  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
+  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
+}
+
 function animate(now) {
   requestAnimationFrame(animate);
   if (shopActive) {
@@ -8618,6 +8652,7 @@ function animate(now) {
     controls.update();
     updateCameraDebug(now);
   }
+  updateCompassNeedle();
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -13648,6 +13683,10 @@ function findRootSellerShowcaseMesh(object) {
 // are genuinely useful for.
 const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
+  // #1169: the compass orients by Shop/Build's own free-look camera or
+  // avatar facing — Sell has neither (its own faux-landlet showcase is a
+  // fixed, non-orbiting preview), so there's no facing for it to show.
+  'compass-panel',
 ];
 
 // #635 (sub-issue of #631): the faux-layout preview — a dedicated,
@@ -14566,6 +14605,46 @@ async function claimSelectedLandlet(landlet, resolve) {
   }
 }
 
+// #1170 (owner request, 2026-10-01): a grayed-out, non-interactive outline
+// of every other landlet within SHOP_LOAD_RADIUS_M of this one — the same
+// "how far" radius Shop mode already uses to decide what's visible/loaded
+// (SHOP_LOAD_RADIUS_M's own comment) — so a builder gets spatial context
+// for what's next to their plot without it reading as part of their own
+// buildable area. Scoped to plot-boundary outlines only, matching
+// applyLandletShape's own treatment of the main plot (a flat ShapeGeometry
+// built from the record's own plot-local polygon, curveGroundGeometry
+// applied directly to it rather than accounting for true world position —
+// negligible at landlet scale, same simplification the main plot already
+// relies on) — not a full dimmed render of whatever a neighbor has
+// actually built. #1170's own comment leaves that fuller render as a
+// reasonable follow-up, not attempted here. Never used as a raycast
+// target (ground-click placement only ever raycasts against `landlet`
+// itself, never the whole scene), so no interactivity guard is needed.
+const BUILD_NEIGHBOR_OUTLINE_COLOR = 0x888888;
+function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
+  const neighborMaterial = new THREE.MeshStandardMaterial({
+    color: BUILD_NEIGHBOR_OUTLINE_COLOR,
+    transparent: true,
+    opacity: 0.35,
+    side: THREE.DoubleSide,
+  });
+  for (const record of allLandlets) {
+    if (record.landletId === currentLandletRecord.landletId) continue;
+    const dx = record.center.x - currentLandletRecord.center.x;
+    const dy = record.center.y - currentLandletRecord.center.y;
+    if (Math.hypot(dx, dy) > SHOP_LOAD_RADIUS_M) continue;
+    const geometry = new THREE.ShapeGeometry(shapeForLandlet(record));
+    curveGroundGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry, neighborMaterial);
+    const group = new THREE.Group();
+    // Just under the main plot's own ground (z 0.02, applyLandletShape/the
+    // initial landletGeometry) so the two never z-fight at the shared edge.
+    group.position.set(dx, dy, -0.01);
+    group.add(mesh);
+    scene.add(group);
+  }
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -14639,9 +14718,9 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles, shared, levels] = await Promise.all([
+    const [catalog, remoteInstances, landletRecord, bundles, shared, levels, allLandlets] = await Promise.all([
       fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
-      fetchLandletLevels(currentLandletId),
+      fetchLandletLevels(currentLandletId), fetchAllLandlets(),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
@@ -14651,6 +14730,7 @@ async function bootstrap() {
     currentLandletAreaM2 = landletRecord.areaM2;
     currentLandletLevels = levels;
     currentLevelIndex = 0;
+    addBuildModeNeighborOutlines(landletRecord, allLandlets);
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
