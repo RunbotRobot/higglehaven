@@ -899,6 +899,24 @@ export async function deleteProductReview(templateId, reviewId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
 }
 
+// Seller feedback (issue #1096) — distinct from product reviews above:
+// rates a specific seller's own service for one specific purchase from
+// them, rather than the product itself. GET's response carries
+// averageRating/count for the same "callers don't need to recompute it"
+// reasoning fetchProductReviews' own comment gives.
+export async function fetchSellerFeedback(sellerId) {
+  return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
+}
+
+export async function createSellerFeedback(purchaseId, { authorLabel, rating, text } = {}) {
+  const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorLabel, rating, text }),
+  });
+  return feedback;
+}
+
 // Land acquisition auctions (see migrations/0045_auctions.sql). builderId is
 // never sent — the server derives "who's starting this auction" from the
 // session cookie (and requires it to be the landlet's current owner).
