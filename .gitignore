@@ -4,3 +4,16 @@ dist
 .DS_Store
 *.local
 .dev.vars
+
+# Terraform (terraform/) — local state/plugin cache, and any file carrying
+# a real API token or account id. The lock file (.terraform.lock.hcl) is
+# NOT ignored; it's checked in like a lockfile so provider versions stay
+# pinned across machines.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+terraform/backend.hcl
+terraform/crash.log
+terraform/override.tf

@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values, or set the
+# equivalent TF_VAR_cloudflare_api_token / TF_VAR_cloudflare_account_id
+# environment variables instead so the token never touches a file at all.
+
+cloudflare_api_token  = "<see issue #1138 for scoping; the owner creates this in the dashboard>"
+cloudflare_account_id = "<the Cloudflare account id that owns the higglehaven Worker/D1/R2 resources>"

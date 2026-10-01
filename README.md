@@ -90,3 +90,8 @@ configures both the static asset build (`dist/`) and the Worker
 To deploy manually: `npm run deploy` (requires `wrangler login` once,
 locally). `npm run deploy:ci` additionally applies pending migrations to
 the remote D1 database first.
+
+Cloudflare-side configuration that currently only lives in the dashboard
+(the Worker's Build trigger deploy command, among others) is being brought
+under Terraform management — see `terraform/README.md` and tracking issue
+#1136.
