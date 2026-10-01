@@ -3396,7 +3396,9 @@ async function handleFriendships(request, db, route, url) {
     // Scoped to an actual decline (still pending, recipient is the one
     // deleting it) — the requester cancelling their own pending request,
     // and unfriending an already-accepted friendship, are deliberately out
-    // of scope here (see #858 for the unfriend-notification question).
+    // of scope here. #858: the owner confirmed unfriending an accepted
+    // friendship should stay silent (no notification), matching the
+    // mainstream silent-unfriend convention, so this isn't a gap to fix.
     const isDecline = existing.status === 'pending' && sessionBuilder.builder_id === existing.recipient_builder_id;
     // #1006: gated on the DELETE's own `WHERE status = 'pending'`, the same
     // shape #353 already established for the sibling PATCH/accept branch —

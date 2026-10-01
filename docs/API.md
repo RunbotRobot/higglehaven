@@ -3107,8 +3107,10 @@ can be added without their own table or endpoints — current sources are:
   below): the recipient is notified of a new request, and the requester is
   notified once it's accepted or, if it's still pending when the recipient
   declines it, once it's declined. Canceling your own pending request and
-  unfriending an already-accepted friendship do not notify the other side
-  (see #858 for the open question of whether unfriending should).
+  unfriending an already-accepted friendship do not notify the other side —
+  deliberate, per #858: matches the silent-unfriend convention most
+  mainstream social platforms use, and avoids the awkwardness an explicit
+  "so-and-so unfriended you" notification would carry.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
