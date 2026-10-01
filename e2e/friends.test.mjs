@@ -50,8 +50,8 @@ await alicePage.click('#friends-add-btn');
 // rather than guessing a fixed delay, which flaked under CI load (a fixed
 // 500ms here read stale/empty state on a loaded runner even though the
 // request itself succeeded moments later — see e2e/helpers.mjs's
-// waitForText, used the same way auth.test.mjs/pioneer-badge.test.mjs
-// already do for this exact shape of race).
+// waitForText, used the same way auth.test.mjs already does for this
+// exact shape of race).
 const aliceStatusAfterSend = await waitForText(alicePage, '#friends-status', BOB);
 console.log('Alice status after sending the request (should mention Bob):', aliceStatusAfterSend);
 await alicePage.waitForFunction(() => document.querySelectorAll('#friends-outgoing-list .friend-row').length === 1, { timeout: 5000 });

@@ -9196,7 +9196,6 @@ const authForms = {
 const authStatusEl = document.getElementById('auth-status');
 const authAccountEmailEl = document.getElementById('auth-account-email');
 const authAccountVerifiedEl = document.getElementById('auth-account-verified');
-const authAccountPioneerEl = document.getElementById('auth-account-pioneer');
 const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier');
 const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
 const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
@@ -9232,15 +9231,15 @@ function showAuthView(view) {
   setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
 }
 
-// Found via backlog audit (#373): refreshAccountAuthUI's pioneer-badge
-// fetch had no re-entrancy guard, unlike the monotonic load-token pattern
-// used everywhere else in this file for an async render that can be
-// called again before its own fetch resolves (axisPreviewLoadToken,
+// Found via backlog audit (#373): refreshAccountAuthUI's own async fetches
+// had no re-entrancy guard, unlike the monotonic load-token pattern used
+// everywhere else in this file for an async render that can be called
+// again before its own fetch resolves (axisPreviewLoadToken,
 // uploadFlowToken, friendsLoadToken above, ...). Reopening the account
 // menu quickly, or a login -> logout -> login-as-different-account
 // sequence within one round trip, could let an earlier, slower fetch
-// resolve after a newer one and overwrite the pioneer badge with stale
-// data from the wrong request.
+// resolve after a newer one and overwrite the panel with stale data from
+// the wrong request.
 let accountAuthLoadToken = 0;
 
 function refreshAccountAuthUI() {
@@ -9267,27 +9266,16 @@ function refreshAccountAuthUI() {
     // account" — nothing here actually did that until now. Reconciles a
     // stalled-pending session (one the redirect/poll never resolved) the
     // same way pollDiditVerificationStatus itself does, fire-and-forget
-    // with the same re-entrancy guard as the pioneer-badge fetch just
-    // below. Cheap when there's nothing pending — handleDiditVerificationStatus
-    // no-ops with no outbound Didit call in that case.
+    // with the same accountAuthLoadToken re-entrancy guard the rest of
+    // this function uses. Cheap when there's nothing pending —
+    // handleDiditVerificationStatus no-ops with no outbound Didit call in
+    // that case.
     if (currentAuthUser.trustTier !== 'id_verified') {
       fetchDiditVerificationStatus().then(({ status }) => {
         if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading
         if (status === 'approved') refreshCurrentUser();
       }).catch(() => {});
     }
-    // Founding/pioneer recognition (docs/SPEC.md §3) — this app has no
-    // separate profile page, so the account panel is the closest fit (the
-    // old dev-mode identity roster used to show this — see
-    // migrations/0054_link_builders_sellers_to_users.sql's own comment for
-    // why that roster no longer drives Build entry at all). Fetched fresh
-    // on every open rather than cached, since rank/land cap can change
-    // between one open and the next.
-    authAccountPioneerEl.textContent = '';
-    fetchMyBuilder().then((builder) => {
-      if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading — a newer call owns the panel now
-      if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
-    }).catch(() => {});
   } else {
     accountAuthBtn.textContent = 'Log In / Sign Up';
     authLoggedOutEl.hidden = false;
@@ -9323,11 +9311,10 @@ async function refreshCurrentUser() {
 }
 
 accountAuthBtn.addEventListener('click', () => {
-  // refreshAccountAuthUI's own pioneer-rank/land-cap fetch only otherwise
-  // runs right after a login/signup/logout state change — reopening the
-  // panel later without this would keep showing whatever was true at that
-  // moment (e.g. "not yet a pioneer," even well after actually claiming a
-  // landlet and earning the badge).
+  // refreshAccountAuthUI's own trust-tier reconciliation fetch only
+  // otherwise runs right after a login/signup/logout state change —
+  // reopening the panel later without this would keep showing whatever
+  // was true at that moment.
   if (currentAuthUser) refreshAccountAuthUI();
   openAuthModal('login');
 });
@@ -9528,7 +9515,7 @@ async function pollDiditVerificationStatus() {
     } catch (err) {
       // A transient failure here shouldn't give up outright — keep
       // polling until the deadline, the same "best-effort background
-      // refresh" spirit as refreshAccountAuthUI's own pioneer-badge fetch.
+      // refresh" spirit as refreshAccountAuthUI's own trust-tier fetch.
       console.warn('Could not check Didit verification status:', err);
     }
     if (Date.now() >= deadline) {

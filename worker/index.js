@@ -128,15 +128,6 @@ const ACCESS_COOKIE_NAME = 'hh_access';
 // LIMIT_MAX below, since both are "compare against one Worker secret, no
 // account behind it" endpoints.
 const ACCESS_LOGIN_RATE_LIMIT_MAX = 10;
-// Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) — how
-// many of the earliest landlet-claimers make up the founding cohort.
-// Deliberately a plain constant, not configurable world_settings state:
-// this is a one-time-per-world creative decision ("how big is the
-// founding hundred"), not something a builder or the running world ever
-// needs to tune live. Chosen size: a "founding hundred" is a common,
-// legible round-number convention for this kind of recognition — sized
-// for real early-adopter breadth without diluting into "everyone."
-const PIONEER_COHORT_SIZE = 100;
 
 async function computeAccessToken(passphrase) {
   const key = await crypto.subtle.importKey(
@@ -2753,13 +2744,6 @@ function publicBuilderFromRow(row) {
   return {
     builderId: row.builder_id,
     label: row.label,
-    // pioneerRank is the founding-cohort position (1 = very first claimer);
-    // isPioneer is just a convenience boolean derived from it so the
-    // frontend doesn't need a null-check everywhere it only cares about
-    // membership, not rank (see docs/API.md's "Founding/pioneer
-    // recognition").
-    pioneerRank: row.pioneer_rank ?? null,
-    isPioneer: row.pioneer_rank !== null,
     // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
     // area this builder may own at once, distinct from higglesBalanceCents
     // (which land-specific lándlets can be acquired via auction).
@@ -5306,7 +5290,7 @@ function normalizeEmail(value) {
 // (`you+tag@gmail.com`, or Gmail's own dot-insensitivity:
 // `first.last@gmail.com`/`firstlast@gmail.com` are the same inbox), which
 // matters here specifically because of the one-claimed-landlet-per-builder
-// fairness invariant and the pioneer-cohort ranking. Deliberately only
+// fairness invariant. Deliberately only
 // used to *detect* a collision at signup (see handleSignup) — the actual
 // `email` column stays the plain lowercased address forever, so this
 // never touches login, password reset, or any already-stored row.
@@ -8116,44 +8100,6 @@ async function handleLandlets(request, db, route, url) {
 
     if (result.meta.changes === 0) {
       await explainClaimConflict(db, route[1], builderId);
-    } else {
-      // Founding/pioneer recognition (docs/SPEC.md §3, migrations/0044) —
-      // this builder's first-ever successful claim earns the next
-      // sequential rank in the founding cohort, as long as fewer than
-      // PIONEER_COHORT_SIZE ranks have been handed out so far. No-ops
-      // silently past the cutoff, or if this builder already has a rank
-      // (e.g. claiming a second landlet after releasing an earlier one).
-      //
-      // #787: assigning MAX(pioneer_rank) + 1 only matches the gate's own
-      // live-member COUNT check while ranks stay a contiguous 1..N — but
-      // DELETE /api/builders/:id hard-deletes a builder row with no
-      // pioneer-rank compaction, so a deleted non-max-ranked pioneer
-      // leaves a gap: COUNT drops below PIONEER_COHORT_SIZE while MAX
-      // still sits at the old high watermark, so the next claimer used to
-      // get handed rank 101+ even though live membership never actually
-      // exceeded 100. Naively assigning COUNT + 1 instead doesn't fix
-      // this either — with a gap in the middle (not at the tail), COUNT+1
-      // can collide with a rank some other still-live builder already
-      // holds. The only value that's always both <= PIONEER_COHORT_SIZE
-      // and never a duplicate is the smallest 1..PIONEER_COHORT_SIZE rank
-      // nobody currently holds — which is exactly what "frees one cohort
-      // slot... rather than leaving ranks permanently sparse"
-      // (docs/API.md) describes: reusing the specific freed slot, not
-      // just keeping the live count topped up.
-      await db.prepare(`
-        WITH RECURSIVE seq(n) AS (
-          SELECT 1
-          UNION ALL
-          SELECT n + 1 FROM seq WHERE n < ?
-        )
-        UPDATE builders
-        SET pioneer_rank = (
-          SELECT MIN(n) FROM seq
-          WHERE n NOT IN (SELECT pioneer_rank FROM builders WHERE pioneer_rank IS NOT NULL)
-        )
-        WHERE builder_id = ? AND pioneer_rank IS NULL
-          AND (SELECT COUNT(*) FROM builders WHERE pioneer_rank IS NOT NULL) < ?
-      `).bind(PIONEER_COHORT_SIZE, builderId, PIONEER_COHORT_SIZE).run();
     }
 
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
@@ -8170,7 +8116,7 @@ async function handleLandlets(request, db, route, url) {
     // already-claimed landlet (any polygon, any location) under any
     // builder's id from the request body alone, bypassing every invariant
     // POST .../claim enforces (available-greenbelt-only, one claimed
-    // landlet per builder, pioneer-rank bookkeeping) — the exact vector
+    // landlet per builder) — the exact vector
     // PUT/PATCH's own comment below describes closing, just never applied
     // to this creation path too. Creating a landlet already claimed by
     // *yourself* is still allowed (existing test/dev-tooling usage relies
