@@ -49,7 +49,12 @@ describe('Product reviews', () => {
   // /api/builders (unrelated to review eligibility, just satisfies
   // purchases.builder_id's own FK) stands in for the landlet owner.
   async function createPurchase(templateId, buyer, { refunded = false } = {}) {
-    const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host for ${templateId}` }) })).body.builder;
+    // #1187: label is now unique case-insensitively, and this helper can be
+    // called more than once for the same templateId within one test — a
+    // random suffix keeps each throwaway host builder's own label from
+    // colliding with an earlier call's, the same way its builder_id
+    // already does via crypto.randomUUID() below.
+    const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host for ${templateId} ${crypto.randomUUID()}` }) })).body.builder;
     await env.DB.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, buyer_label, buyer_builder_id,
