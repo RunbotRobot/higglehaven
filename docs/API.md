@@ -4127,16 +4127,20 @@ removed outright by a DB-level cascade, not transitioned to `ended` — see
 
 ### `POST /api/landlets/:landletId/auction`
 
-Requires a session (`401` without one). Starts a voluntary auction as the
-calling account's own builder — `builderId` is derived from the session,
-never a client-supplied field. Body: `{ "startingBidCents"?,
-"durationHours"? }`. `startingBidCents` defaults to `0`, capped at
-100,000,000 (the same money-field sanity bound as `priceCents` above);
-`durationHours` defaults to `24` (docs/SPEC.md §5's own default), capped
-at `8760` (one year) as a sanity bound against a malformed request, not a
-spec requirement. `400` unless the calling builder is the landlet's
-current owner and the landlet is `claimed`. `409` if that landlet already
-has an active auction — one at a time per landlet.
+Requires a session (`401` without one). Rate-limited per builder (`429`
+past `AUCTION_START_RATE_LIMIT_MAX`, 20 per window — #886: a safety net
+against a compromised session or a runaway script, not a restriction on
+deliberate action, same limit as this file's other per-builder mutation
+rate limits). Starts a voluntary auction as the calling account's own
+builder — `builderId` is derived from the session, never a client-supplied
+field. Body: `{ "startingBidCents"?, "durationHours"? }`.
+`startingBidCents` defaults to `0`, capped at 100,000,000 (the same
+money-field sanity bound as `priceCents` above); `durationHours` defaults
+to `24` (docs/SPEC.md §5's own default), capped at `8760` (one year) as a
+sanity bound against a malformed request, not a spec requirement. `400`
+unless the calling builder is the landlet's current owner and the landlet
+is `claimed`. `409` if that landlet already has an active auction — one at
+a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather
