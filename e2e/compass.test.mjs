@@ -2,15 +2,24 @@
 // Shop and Build modes, hidden in Sell (no free-look camera/avatar facing
 // there to orient by — see SELL_HIDDEN_BUILDER_UI_IDS's own comment).
 //
-// Shop mode's needle is driven by shopAvatarFacing (resets to 0 = North on
-// every mode entry); Build mode has no avatar, so it's driven directly off
-// the free OrbitControls camera's own current look direction instead. Real
-// joystick-driven turning in Shop mode isn't exercised here — raw Shop-mode
-// movement/camera simulation isn't automated anywhere in this suite (see
-// e2e/community-signs.test.mjs's own comment on why) — but Build mode's
-// camera responds to an ordinary pointer drag on the main canvas, which
-// *is* reliably testable, so that's used to confirm the needle actually
-// tracks a real camera rotation, not just its own static initial value.
+// Shop mode's needle is driven by shopAvatarFacing; Build mode has no
+// avatar, so it's driven directly off the free OrbitControls camera's own
+// current look direction instead. Real joystick-driven turning in Shop
+// mode isn't exercised here — raw Shop-mode movement/camera simulation
+// isn't automated anywhere in this suite (see e2e/community-signs.test.mjs's
+// own comment on why) — but Build mode's camera responds to an ordinary
+// pointer drag on the main canvas, which *is* reliably testable, so that's
+// used to confirm the needle actually tracks a real camera rotation, not
+// just its own static initial value.
+//
+// #1175 (landed after this file did, same spawn-flow tracking issue as
+// #1176): every Shop-mode spawn now picks a random location and faces the
+// world center from there, rather than always resetting shopAvatarFacing
+// to a fixed 0/North — so the needle's own initial Shop-mode bearing is no
+// longer a fixed, predictable value either. Checked for "is a real finite
+// bearing at all" (confirms the needle is actually reading shopAvatarFacing
+// in Shop mode, the actual thing #1169 asked for) rather than a specific
+// angle.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
@@ -66,7 +75,7 @@ await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
 const initialShopRotation = await needleRotationDeg();
-console.log('initial Shop-mode needle rotation (should be 0 — shopAvatarFacing resets to 0/North on every mode entry):', initialShopRotation);
+console.log('initial Shop-mode needle rotation is a real finite bearing (#1175: spawn facing is now random, not a fixed 0):', initialShopRotation);
 
 await page.click('button[data-mode="sell"]');
 await page.waitForTimeout(500);
@@ -81,7 +90,7 @@ const pass =
   typeof rotatedBuildRotation === 'number' &&
   Math.abs(rotatedBuildRotation - initialBuildRotation) > 5 &&
   compassVisibleInShop &&
-  near(initialShopRotation, 0, 0.1) &&
+  typeof initialShopRotation === 'number' && Number.isFinite(initialShopRotation) &&
   compassHiddenInSell &&
   errors.length === 0;
 await finish(browser, { pass, label: 'On-screen compass: Shop/Build visibility, Sell hidden, needle tracks facing (#1169)', errors });
