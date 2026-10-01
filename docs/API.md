@@ -5748,6 +5748,28 @@ whether that payee has a W-9/W-8BEN on file (`GET /api/auth/me`'s own
 with this `false` (crossing the income threshold and having paperwork on
 file are independent facts), but approving it requires it to be `true`.
 
+**Retention through account deletion (#1147, sub-issue of #1145).**
+`tax_1099_forms.user_id` is `ON DELETE SET NULL` (migrations/0103,
+replacing the table's original implicit `ON DELETE CASCADE` from
+migrations/0081) — deleting a payee's `users` row orphans the form rather
+than destroying it, per #1145's own direction to retain financial/tax
+records "disconnected from any live personal profile rather than deleted
+outright." SET NULL alone isn't enough on its own, since nothing else on
+this table identified who a form was for or what to file: `email` and the
+payee's tax ID have always been read live from `users` via `GET`'s own
+JOIN and `/file`'s own lookup. `POST /:formId/approve` (below) now
+snapshots `payee_email`/`payee_tax_id_encrypted`/`payee_tax_form_type`
+onto the form row itself at the moment it already confirms paperwork is
+on file, and `GET` / `POST /:formId/file` both read from that snapshot
+first, falling back to a live `users` lookup only for a still-`"draft"`
+form (which has no snapshot yet — nothing to snapshot before an admin
+confirms paperwork is on file). A `"draft"` form whose payee is deleted
+before ever being approved is a real, currently-unresolved gap this
+sub-issue's own scope doesn't cover — see the coordination note on #1145
+about why #1146 (the deletion endpoint itself) should leave
+`tax_id_encrypted`/`tax_form_type`/`tax_form_completed_at` on `users`
+alone rather than wiping them alongside login credentials.
+
 `POST /:formId/approve` transitions a `"draft"` form to `"approved"`,
 stamping `approvedAt`. `409` if the payee has no tax paperwork on file yet
 (`Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet`),
@@ -5761,7 +5783,10 @@ uses for auction bids/purchase claims). `404` for an unknown `formId`.
 
 `POST /:formId/file` transitions an `"approved"` form to `"filed"`,
 transmitting it to TaxBandits and stamping `filedAt`/`filingReference`
-(the vendor's own submission id) on success. Requires
+(the vendor's own submission id) on success. Decrypts the form's own
+`payee_tax_id_encrypted` snapshot (set at `/approve`, not a live lookup —
+see above), so filing still works even if the payee's account has since
+been deleted. Requires
 `TAX_ID_ENCRYPTION_KEY` (to decrypt the payee's on-file W-9/W-8BEN — see
 `POST /api/tax/id-form` above) and `TAX_1099_EFILING_CLIENT_ID`/
 `TAX_1099_EFILING_CLIENT_SECRET`/`TAX_1099_EFILING_USER_TOKEN`/
@@ -5819,7 +5844,14 @@ a `1099-k` only once the $20,000 threshold is crossed, refreshing a still-draft
 snapshot on regeneration while never touching an already-approved one,
 rejecting an approval with no tax paperwork on file, rejecting a
 double-approval and an unknown `formId`, and the approve endpoint's own
-admin gate. Its nested "1099 e-filing transmission (#646)" describe block
+admin gate. A further #1147 test hard-deletes the payee's `users` row
+directly (no real account-deletion endpoint exists yet — #1146 is still
+in progress) after approval, then confirms `user_id` is `NULL`,
+`payee_email`/`payee_tax_id_encrypted`/`payee_tax_form_type` survive on
+the form row, the form still shows up in `GET` via its snapshot, and
+`POST /:formId/file` reaches the "not configured" `503` rather than a
+"no paperwork on file" `409` — proving it read the tax ID from the
+snapshot, not a now-gone live row. Its nested "1099 e-filing transmission (#646)" describe block
 covers `file`'s own admin gate, unknown/still-draft-form rejection, and the
 `503` once a form is genuinely `"approved"` but e-filing isn't configured —
 the only path this environment can actually exercise, same convention as
