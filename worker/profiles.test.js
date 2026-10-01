@@ -81,6 +81,41 @@ describe('Builders', () => {
     expect(renameMissing.response.status).toBe(404);
   });
 
+  // #1187: "all accounts should be unique even when ignoring case" — two
+  // real rows ("Runbot"/"runbot") made Shop mode's "built by X" label look
+  // like the same builder despite owning different land.
+  describe('label uniqueness, case-insensitive (#1187)', () => {
+    it('rejects POST /builders with a label that collides case-insensitively with an existing one', async () => {
+      await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Unique Label Tester' }) });
+      const collided = await api('/builders', {
+        method: 'POST', body: JSON.stringify({ label: 'UNIQUE label tester' }),
+      });
+      expect(collided.response.status).toBe(409);
+    });
+
+    it('rejects renaming to a label another builder already holds, case-insensitively', async () => {
+      await api('/builders', { method: 'POST', body: JSON.stringify({ label: 'Existing Holder' }) });
+      const renamer = await signupBuilder('label-collision-renamer');
+      const collided = await api(`/builders/${renamer.builderId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: 'existing HOLDER' }),
+      }));
+      expect(collided.response.status).toBe(409);
+      // The rejected attempt must not have partially applied.
+      const me = await api('/builders/me', renamer.session());
+      expect(me.body.builder.label).not.toBe('existing HOLDER');
+    });
+
+    it('allows a case-only rename of a builder\'s own existing label', async () => {
+      const renamer = await signupBuilder('label-self-case-rename');
+      const original = renamer.builder.label;
+      const renamed = await api(`/builders/${renamer.builderId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: original.toUpperCase() }),
+      }));
+      expect(renamed.response.status).toBe(200);
+      expect(renamed.body.builder.label).toBe(original.toUpperCase());
+    });
+  });
+
   // #717 (sub-issue of #711): GET /builders?ids=... narrows the roster to
   // exactly the requested (and existing) builders, the batch lookup Shop
   // mode's per-landlet owner-label map needs once the unfiltered list gets
@@ -119,19 +154,23 @@ describe('Builders', () => {
     expect(found.response.status).toBe(200);
     expect(found.body.builders.map((b) => b.builderId)).toEqual([onlyMatch.body.builder.builderId]);
 
-    // Labels have no uniqueness constraint (migrations/0054's own
-    // comment) — a shared label must still return every matching row, not
-    // just the first, so the frontend's own ambiguous-match handling keeps
-    // working against this filter.
+    // #1187 now rejects creating a second builder with a colliding label
+    // through POST /builders itself (see its own describe block below) —
+    // but doesn't retroactively guarantee uniqueness against whatever
+    // duplicate rows already exist (the exact real "Runbot"/"runbot" case
+    // #1187 was filed over), so this filter still has to handle more than
+    // one match. Seeded directly via env.DB instead of POST /builders,
+    // since that's realistically the only way such a duplicate pair can
+    // still come to exist going forward.
     const second = await api('/builders', {
       method: 'POST', body: JSON.stringify({ label: 'Shared Filter Label' }),
     });
-    const third = await api('/builders', {
-      method: 'POST', body: JSON.stringify({ label: 'Shared Filter Label' }),
-    });
+    const thirdId = `builder-${crypto.randomUUID()}`;
+    await env.DB.prepare('INSERT INTO builders (builder_id, label) VALUES (?, ?)')
+      .bind(thirdId, 'Shared Filter Label').run();
     const ambiguous = await api(`/builders?${new URLSearchParams({ label: 'Shared Filter Label' })}`);
     expect(ambiguous.body.builders.map((b) => b.builderId)).toEqual(
-      expect.arrayContaining([second.body.builder.builderId, third.body.builder.builderId]),
+      expect.arrayContaining([second.body.builder.builderId, thirdId]),
     );
     expect(ambiguous.body.builders).toHaveLength(2);
   });

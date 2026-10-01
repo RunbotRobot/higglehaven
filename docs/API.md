@@ -832,8 +832,11 @@ Unknown IDs are silently omitted rather than erroring; an empty/all-blank
 catalog-batch handlers use to cap `templateIds`.
 
 `?label=` (#716) filters to an exact, case-insensitive label match instead
-— still every matching row, not just the first, since labels have no
-uniqueness constraint (migrations/0054's own comment). Used by the "Add
+— still every matching row, not just the first: #1187 enforces uniqueness
+going forward on create/rename, but doesn't retroactively guarantee it
+against whatever already existed before that (or the handful of write
+paths #1187 deliberately leaves unchecked — see `POST /api/builders`
+above), so this still can't assume at most one match. Used by the "Add
 friend" flow to resolve a typed name without pulling the whole roster
 client-side; unmatched or ambiguous still surfaces as a status message
 the same way it always has, just resolved server-side now. `ids` and
@@ -870,7 +873,10 @@ Request body:
 
 `label` is required, capped at 100 characters like every other short
 free-text field in this API. Returns `409` if `builderId` is already
-taken. Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
+taken, or if `label` collides case-insensitively with an existing
+builder's (#1187 — "all accounts should be unique even when ignoring
+case"; `builders.label` had no uniqueness constraint at all before this).
+Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
 window) — unauthenticated and repeatable, the same abuse-cost reasoning as
 sign posts/purchases (#362, mirroring #337).
 
@@ -879,7 +885,20 @@ sign posts/purchases (#362, mirroring #337).
 
 Renames a builder. `label` is required. Returns `404` if the builder
 doesn't exist, `403` if it isn't your own (see "Authorization model"
-above) — requires a session logged in as this builder.
+above) — requires a session logged in as this builder. `409` if `label`
+collides case-insensitively with a *different* builder's (#1187) — a
+case-only change to your own existing label (e.g. "Ada" → "ADA") is fine,
+only another builder already holding it is rejected.
+
+Deliberately an app-level check (an atomic `NOT EXISTS` folded into the
+`INSERT`/`UPDATE`'s own `WHERE`, same idiom `PUT /api/landlets/:landletId`'s
+own name-uniqueness guard above uses), not a schema-level `COLLATE NOCASE`
+unique index on `builders.label` — a real index would also apply to
+`getOrCreateBuilderForUser`'s own auto-provisioning `INSERT OR IGNORE`
+(label = the signing-up user's already-unique username), where a collision
+against some unrelated orphaned/test-created builder label would silently
+break signup for an unrelated, legitimate account instead of rejecting the
+create/rename this is actually about.
 
 ### `DELETE /api/builders/:builderId`
 
@@ -3274,9 +3293,9 @@ can be added without their own table or endpoints — current sources are:
   leave this silent too, matching the unfriend decision rather than
   treating account deletion as a separate case worth notifying on.
 
-There's no pagination cursor — one builder's outstanding count is expected
-to stay small — and no `DELETE`, since a read notification is still useful
-history ("wait, when did that change?").
+It's cursor-paginated (#320, see `GET /api/notifications` below), but has
+no `DELETE`, since a read notification is still useful history ("wait,
+when did that change?").
 
 ### Notification object
 

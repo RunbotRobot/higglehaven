@@ -21,17 +21,21 @@ await chooseIdentity(page, { mode: 'shop', label: 'Flight Tilt Tester', isNew: t
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-// #1175: every Shop-mode spawn now starts already flying, not just a
-// genuinely-first-ever visit (the old SHOP_VISITED_BEFORE_KEY/localStorage
-// one-time flag this block used to work around is gone from src/main.js
-// entirely) — so there's no "take off" step left to do here at all.
-// Clicking #shop-fly-btn now would instead toggle flight OFF (it's already
-// on from spawn), landing the avatar right before this test reads its
-// (now-zero) pitch — the exact bug this block used to carefully avoid by
-// forcing a *non*-first-visit, which no longer has anything to avoid.
-// Still wait for the pitch ease (SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S) to
-// settle toward SHOP_AVATAR_FLIGHT_PITCH_RAD before anything below reads it.
-await page.waitForTimeout(2000);
+// #1175: every Shop-mode spawn is already flying (above a random world
+// location, orbiting the center hands-off until navigation input) — not
+// just a first-ever visit the way it used to be. No fly-button tap is
+// needed (or wanted: toggleShopFlight() on an already-'flying' state lands
+// it instead of taking off — the exact prior-version-of-this-comment's own
+// warning, now true unconditionally rather than only pre-first-visit).
+// shopAvatarPitch eases toward SHOP_AVATAR_FLIGHT_PITCH_RAD as soon as the
+// avatar is airborne, independent of the spawn orbit still running — wait
+// for that convergence directly (rather than a fixed sleep guessing how
+// long it takes) via the same diagnostic snapshot the assertions below
+// already read.
+await page.waitForFunction(
+  () => Math.abs(window.__shopAvatarOrientation?.pitchRad ?? 0) > 0.5,
+  { timeout: 10000 },
+);
 
 // Drags the move joystick (left stick — walks/flies forward-back-strafe,
 // relative to the camera's current facing) from its base's own center
