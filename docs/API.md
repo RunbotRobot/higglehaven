@@ -4900,6 +4900,7 @@ with the created `purchase`; on the real-money path, returns `200` with
     "builderId": "...",
     "sellerId": "...",
     "buyerLabel": "A Shopper",
+    "buyerBuilderId": "builder-...",
     "unitPriceCents": 2500,
     "quantity": 2,
     "totalCents": 5000,
@@ -4915,6 +4916,17 @@ with the created `purchase`; on the real-money path, returns `200` with
 
 `paymentIntentId` is only ever non-null for a purchase that went through
 the real-money path below.
+
+`buyerBuilderId` (#1112) is the buyer's own `builder_id`, captured at
+purchase time now that every real purchase already requires a verified
+session (N44) — distinct from `builderId` above, which is the *host*
+builder whose landlet the instance sits on (who earns the commission).
+Unlike `buyerLabel` (free text, unauthenticated, spoofable — see "Product
+reviews" above), `buyerBuilderId` is a real foreign key, set from the
+session's own resolved builder on both the simulated and real-money paths.
+`null` for a purchase made before this column existed, or whose buyer has
+since self-deleted their account (`ON DELETE SET NULL`, same pattern
+`builderId` itself already uses).
 
 **Session and verification requirement (N44, owner direction 2026-09-12):**
 `401` with no session (`Not authenticated`), `403` if the session hasn't

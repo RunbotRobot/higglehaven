@@ -2535,6 +2535,30 @@ describe('Simulated purchases', () => {
     expect(badBuyerLabel.response.status).toBe(400);
   });
 
+  // #1112: unlike buyerLabel (free text, always just the session builder's
+  // own label here since both requests above omit/override it), this is the
+  // session's actual resolved builder_id -- a real foreign key, distinct
+  // from the purchase's own top-level builderId (the host who earns
+  // commission; the seller and the buyer are the same builder in this test,
+  // so asserting both separately matters).
+  it('stores the session builder as buyerBuilderId on a simulated purchase', async () => {
+    const seller = await signupBuilder('purchase-buyer-id-seller');
+    const buyer = await signupBuilder('purchase-buyer-id-buyer');
+    await createGreenbeltLandletWithArea('purchase-buyer-id-landlet', 1000);
+    await claim('purchase-buyer-id-landlet', seller);
+    await createTemplate('purchase-buyer-id-template', { priceCents: 1000 });
+    await placeInstance('purchase-buyer-id-instance', 'purchase-buyer-id-landlet', 'purchase-buyer-id-template', seller);
+
+    const purchased = await api('/instances/purchase-buyer-id-instance/purchase', buyer.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    expect(purchased.body.purchase.builderId).toBe(seller.builderId);
+    expect(purchased.body.purchase.buyerBuilderId).toBe(buyer.builderId);
+
+    const row = await env.DB.prepare('SELECT buyer_builder_id FROM purchases WHERE purchase_id = ?')
+      .bind(purchased.body.purchase.purchaseId).first();
+    expect(row.buyer_builder_id).toBe(buyer.builderId);
+  });
+
   // #761: the in-world "Simulate Purchase" button (src/main.js) — the only
   // real purchase path this app ships — never sends an explicit buyerLabel
   // at all, so before this fix every real purchase landed anonymous
