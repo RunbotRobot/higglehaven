@@ -125,9 +125,11 @@ describe('POST /api/presence', () => {
     expect(limited.response.status).toBe(429);
   });
 
-  it('404s on an unsupported method/path shape', async () => {
+  // GET /api/presence is a real, separate endpoint (#1099) — only an
+  // actually-unsupported method is a 404 here.
+  it('404s on an unsupported method', async () => {
     const builder = await signupBuilder('presence-bad-route');
-    const getAttempt = await api('/presence', builder.session({ method: 'GET' }));
-    expect(getAttempt.response.status).toBe(404);
+    const deleteAttempt = await api('/presence', builder.session({ method: 'DELETE' }));
+    expect(deleteAttempt.response.status).toBe(404);
   });
 });

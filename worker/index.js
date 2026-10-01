@@ -515,10 +515,6 @@ async function handleApi(request, env, url, ctx) {
     return handleFriendships(request, env.DB, route, url);
   }
 
-  if (route[0] === 'presence') {
-    return handlePresence(request, env.DB, route);
-  }
-
   if (route[0] === 'purchases') {
     return handlePurchases(request, env, route, url);
   }
@@ -3261,6 +3257,14 @@ function notificationFromRow(row) {
 // filtering them at read time) is #1101's own scope.
 const PRESENCE_STALE_AFTER_MS = 10_000;
 
+// #1098 (sub-issue of #1095, multiplayer presence): a 15-minute window is
+// this file's one shared RATE_LIMIT_WINDOW_MS (defined further below), so a
+// literal cap here is picked to approximate the issue's own "~1 write per
+// 1-2s" sustained target over that window, not a true per-second throttle —
+// a burst can still spend the whole budget faster, same tradeoff every
+// other checkRateLimit call in this file already accepts.
+const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
+
 async function handlePresence(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
@@ -3271,6 +3275,52 @@ async function handlePresence(request, db, route, url) {
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
     `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
     return json({ avatars: results.map(avatarPresenceFromRow) });
+  }
+
+  // #1098: upserts the caller's own live position into avatar_presence
+  // (#1097/migrations/0100). Client-side movement throttling (only report
+  // on meaningful movement) is the client-integration sub-issue's job
+  // (#1100) — this endpoint stays safe to call as often as a client
+  // likes, the rate limit above is the only thing actually bounding
+  // write frequency.
+  if (request.method === 'POST' && route.length === 1) {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `presence-report:${sessionBuilder.builder_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const x = finiteNumber(input.x, 'x');
+    const y = finiteNumber(input.y, 'y');
+    const z = finiteNumber(input.z, 'z');
+    const heading = input.heading === undefined || input.heading === null ? null : finiteNumber(input.heading, 'heading');
+    let landletId = null;
+    if (input.landletId !== undefined && input.landletId !== null) {
+      landletId = stringValue(input.landletId, 'landletId');
+      // Cheap spoof guard: reject a report for a landlet that doesn't even
+      // exist rather than trusting any client-supplied string verbatim —
+      // #1099's own GET scopes its query by this column, so a bogus value
+      // here would otherwise silently poison that lookup. This doesn't (and
+      // can't cheaply) confirm the caller is actually near this landlet,
+      // only that it's a real one.
+      await requireLandlet(db, landletId);
+    }
+    await db.prepare(`
+      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      ON CONFLICT(builder_id) DO UPDATE SET
+        landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
+        heading = excluded.heading, updated_at = excluded.updated_at
+    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading).run();
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    return json({
+      presence: {
+        landletId: row.landlet_id,
+        x: row.x,
+        y: row.y,
+        z: row.z,
+        heading: row.heading,
+        updatedAt: row.updated_at,
+      },
+    });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -3478,63 +3528,6 @@ async function handleFriendships(request, db, route, url) {
         `${sessionBuilder.label} declined your friend request.`).run();
     }
     return json({ deleted: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #1098 (sub-issue of #1095, multiplayer presence): a 15-minute window is
-// this file's one shared RATE_LIMIT_WINDOW_MS (defined further below), so a
-// literal cap here is picked to approximate the issue's own "~1 write per
-// 1-2s" sustained target over that window, not a true per-second throttle —
-// a burst can still spend the whole budget faster, same tradeoff every
-// other checkRateLimit call in this file already accepts.
-const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
-
-// #1098: upserts the caller's own live position into avatar_presence
-// (#1097/migrations/0100). Client-side movement throttling (only report on
-// meaningful movement) is the client-integration sub-issue's job (#1100) —
-// this endpoint stays safe to call as often as a client likes, the rate
-// limit above is the only thing actually bounding write frequency.
-async function handlePresence(request, db, route) {
-  if (request.method === 'POST' && route.length === 1) {
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `presence-report:${sessionBuilder.builder_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const x = finiteNumber(input.x, 'x');
-    const y = finiteNumber(input.y, 'y');
-    const z = finiteNumber(input.z, 'z');
-    const heading = input.heading === undefined || input.heading === null ? null : finiteNumber(input.heading, 'heading');
-    let landletId = null;
-    if (input.landletId !== undefined && input.landletId !== null) {
-      landletId = stringValue(input.landletId, 'landletId');
-      // Cheap spoof guard: reject a report for a landlet that doesn't even
-      // exist rather than trusting any client-supplied string verbatim —
-      // #1099's own GET scopes its query by this column, so a bogus value
-      // here would otherwise silently poison that lookup. This doesn't (and
-      // can't cheaply) confirm the caller is actually near this landlet,
-      // only that it's a real one.
-      await requireLandlet(db, landletId);
-    }
-    await db.prepare(`
-      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-      ON CONFLICT(builder_id) DO UPDATE SET
-        landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-        heading = excluded.heading, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading).run();
-    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
-    return json({
-      presence: {
-        landletId: row.landlet_id,
-        x: row.x,
-        y: row.y,
-        z: row.z,
-        heading: row.heading,
-        updatedAt: row.updated_at,
-      },
-    });
   }
 
   return json({ error: 'Not found' }, 404);
