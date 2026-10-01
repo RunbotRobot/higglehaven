@@ -821,6 +821,14 @@ doesn't delete their account. A bid that's since been outbid, or that was
 on an auction which has already ended (whether or not it won), doesn't
 block deletion.
 
+`friendships.requester_builder_id`/`recipient_builder_id` are both `ON
+DELETE CASCADE` (migrations/0093), so every friendship involving this
+builder — pending or already-accepted — is silently removed along with
+it, with no notification to the other side and no guard (#1080). Owner's
+call, 2026-10-01: leave this behavior as is rather than adding a
+notification, consistent with the silent-unfriend decision on #858 — see
+"Notifications" below for the same choice recorded in that catalog.
+
 Response:
 
 ```json
@@ -3110,7 +3118,12 @@ can be added without their own table or endpoints — current sources are:
   unfriending an already-accepted friendship do not notify the other side —
   deliberate, per #858: matches the silent-unfriend convention most
   mainstream social platforms use, and avoids the awkwardness an explicit
-  "so-and-so unfriended you" notification would carry.
+  "so-and-so unfriended you" notification would carry. Deleting your own
+  builder account does not notify the other side of any friendship it
+  cascades away either — pending or accepted alike (see `DELETE
+  /api/builders/:builderId` above, #1080) — the owner's call there was to
+  leave this silent too, matching the unfriend decision rather than
+  treating account deletion as a separate case worth notifying on.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
@@ -3893,6 +3906,95 @@ shared `errors.length === 0` check — and instead relies on the frontend's
 existing generic `catch (err) { alert(err.message) }` around every review
 submission, which needed no new code to surface this specific rejection.
 
+## Seller feedback
+
+Owner decision via Control Room, 2026-10-01 (issue #1096), filed alongside
+a refinement of #893: a product can be sold by multiple sellers, and
+"Product reviews" above stays scoped to the product itself — one shared
+review list across every seller who lists it. Seller feedback is the
+separate, eBay-style concept the owner asked for on top of that: rating a
+specific seller's own service (listing accuracy, timeliness,
+communication) for one specific purchase from them, independent of
+whatever the product itself gets rated.
+
+**One to one with a purchase (the owner's own ask), not with a
+template/author-label pair:** `seller_feedback.purchase_id` is a real
+foreign key into `purchases` with a `UNIQUE` constraint
+(`migrations/0098_seller_feedback.sql`) — simpler than product reviews'
+own template_id+author_label uniqueness, since a purchase already *is* the
+one-per-transaction unit the owner described. Unlike `purchases.instance_id`/
+`template_id`/`seller_id` (deliberately NOT FKs — see "Product reviews"
+above and `migrations/0051_purchases.sql`'s own comment), `purchase_id`
+here is a genuine `ON DELETE CASCADE` FK: feedback has no existence
+independent of the one purchase it's about, so there's nothing left worth
+keeping once that purchase row itself is gone. `seller_id` is still
+deliberately NOT a FK, same reasoning as `purchases.seller_id` itself — a
+permanent record that must survive the seller later self-deleting.
+
+**Eligibility gate, mirroring "Product reviews" above exactly:**
+`POST /api/purchases/:purchaseId/feedback` requires the purchase to exist
+(`404`), to have a non-null `seller_id` (`400` — nobody to rate), and for
+`authorLabel` to match that purchase's own `buyer_label`,
+case-insensitively (`400` otherwise, same as the review gate — an
+anonymous purchase can't back feedback under anyone's name). The same
+#357 refund exclusion applies (`refunded_at IS NULL` — a shopper made
+whole by a refund has no standing to also rate the service on that
+transaction). `rating` is a required integer 1-5 (`400` outside that
+range); `text` is optional, capped at 280 characters when present, same
+as reviews. The existence check and the `INSERT` are folded into one
+atomic `INSERT ... SELECT ... WHERE NOT EXISTS (...)` statement, same
+check-then-act-race-avoiding idiom "Product reviews" above explains in
+full — `409` on a second attempt for the same purchase, never a raw
+constraint error.
+
+### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`
+
+```json
+POST /api/purchases/:purchaseId/feedback
+{ "authorLabel": "...", "rating": 5, "text": "Shipped fast, exactly as described!" }
+```
+
+`GET`'s response shape mirrors `GET .../reviews` exactly — the raw list
+(capped at 200, newest-200 window) plus an unlimited, all-time
+`averageRating`/`count` aggregate so no caller needs to recompute it:
+
+```json
+{ "feedback": [ { "feedbackId": "seller-feedback-...", "purchaseId": "...", "sellerId": "...", "authorLabel": "...", "rating": 5, "text": "...", "createdAt": "..." } ], "averageRating": 4.5, "count": 2 }
+```
+
+`averageRating` is `null` with zero feedback, never `0`, same reasoning as
+reviews. `GET` is intentionally public/unauthenticated, same as
+`GET .../reviews` — a rating is meant to be seen, not gated to the seller
+themself; the only UI surfacing it today (below) happens to be the
+Seller modal, which reads as "seller-facing" in practice without the API
+itself needing to restrict who can ask. There is no `DELETE` — unlike
+product reviews, where the product's own seller has a legitimate stake in
+moderating what's said about their listing, letting a seller delete
+feedback about their *own service* would defeat the purpose entirely;
+moderation of this is deliberately left unbuilt rather than handed to the
+one party with a conflict of interest in it.
+
+### Frontend wiring
+
+Scoped deliberately narrow: the owner's own ask was schema + API + "a
+seller-facing display of their aggregate rating, similar to how product
+review averages are already shown" — a full shopper-facing "my orders"
+history to leave feedback from later doesn't exist in this app at all
+(see "Product reviews"' own `#454` comment on why — the server never
+stores a raw token/receipt a shopper could come back to), so submission
+instead happens at the one moment a shopper is guaranteed to still have
+their own purchase in hand: immediately after `#shop-buy-hint` completes a
+purchase (both the real-money and simulated paths), via a `confirm()` then
+the same two-`prompt()` rating+comment flow `#shop-review-hint` already
+uses. `promptSellerFeedback` silently no-ops when the purchase has no
+`sellerId` (nothing to rate) or no `buyerLabel` (can't pass the eligibility
+gate anyway) — never shown for a product with no seller or an
+unidentified buyer. The seller's own aggregate — `#seller-feedback-summary`
+in the Seller modal, right below `#seller-hint` — is fetched fresh on
+every modal open (`renderSellerFeedbackSummary`) and stays hidden entirely
+until that seller has at least one real rating, same "nothing to show yet
+stays invisible" convention `#product-info`'s own comment documents.
+
 ## Scheduled calendar events + creative-tool trigger
 
 docs/SPEC.md §6's own example of where "Community calendar" could grow —
@@ -4114,16 +4216,20 @@ removed outright by a DB-level cascade, not transitioned to `ended` — see
 
 ### `POST /api/landlets/:landletId/auction`
 
-Requires a session (`401` without one). Starts a voluntary auction as the
-calling account's own builder — `builderId` is derived from the session,
-never a client-supplied field. Body: `{ "startingBidCents"?,
-"durationHours"? }`. `startingBidCents` defaults to `0`, capped at
-100,000,000 (the same money-field sanity bound as `priceCents` above);
-`durationHours` defaults to `24` (docs/SPEC.md §5's own default), capped
-at `8760` (one year) as a sanity bound against a malformed request, not a
-spec requirement. `400` unless the calling builder is the landlet's
-current owner and the landlet is `claimed`. `409` if that landlet already
-has an active auction — one at a time per landlet.
+Requires a session (`401` without one). Rate-limited per builder (`429`
+past `AUCTION_START_RATE_LIMIT_MAX`, 20 per window — #886: a safety net
+against a compromised session or a runaway script, not a restriction on
+deliberate action, same limit as this file's other per-builder mutation
+rate limits). Starts a voluntary auction as the calling account's own
+builder — `builderId` is derived from the session, never a client-supplied
+field. Body: `{ "startingBidCents"?, "durationHours"? }`.
+`startingBidCents` defaults to `0`, capped at 100,000,000 (the same
+money-field sanity bound as `priceCents` above); `durationHours` defaults
+to `24` (docs/SPEC.md §5's own default), capped at `8760` (one year) as a
+sanity bound against a malformed request, not a spec requirement. `400`
+unless the calling builder is the landlet's current owner and the landlet
+is `claimed`. `409` if that landlet already has an active auction — one at
+a time per landlet.
 
 Per docs/SPEC.md §5, what `startingBidCents` is decides the unsold
 outcome, read directly off the stored value at resolution time rather

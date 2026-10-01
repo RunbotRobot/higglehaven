@@ -3585,6 +3585,11 @@
           Products this seller identity has uploaded (plus any custom upload nobody's claimed yet). Extensible axis
           and minimum length are the only fields editable here for now — see docs/API.md's "Extensible products" section.
         </div>
+        <!-- #1096: this seller's own aggregate feedback rating (listing
+             accuracy/timeliness/communication, distinct from per-product
+             reviews below) — hidden until renderSellerFeedbackSummary has a
+             real count to show. -->
+        <div id="seller-feedback-summary" hidden></div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
         <div id="seller-view-toggle">
           <button type="button" class="seller-view-btn" data-view="manage">Manage</button>

@@ -72,6 +72,34 @@ describe('Auctions', () => {
     expect(secondAttempt.response.status).toBe(409);
   });
 
+  // #886: unlike every other authenticated, row-creating, repeatable POST
+  // endpoint in this file, starting an auction had no rate limit at all.
+  // Pre-seeding rate_limit_events directly rather than looping 20 real
+  // auction starts keeps this fast and sidesteps the "one active auction
+  // per landlet" invariant entirely -- same approach as the instance-write
+  // and self-claim rate-limit tests' own direct table access.
+  it('rate-limits repeated auction starts from the same builder', async () => {
+    const owner = await signupBuilder('auction-start-rate-limit-owner');
+    await createGreenbeltLandlet('auction-start-rate-limit-landlet');
+    await claim('auction-start-rate-limit-landlet', owner);
+
+    const bucketKey = `auction-start:${owner.builderId}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/landlets/auction-start-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(atLimit.response.status).toBe(201);
+
+    const limited = await api('/landlets/auction-start-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');
