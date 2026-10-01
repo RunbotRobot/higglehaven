@@ -5569,6 +5569,12 @@ function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  const historyLoadMoreBtn = document.createElement('button');
+  historyLoadMoreBtn.type = 'button';
+  historyLoadMoreBtn.className = 'version-action-btn';
+  historyLoadMoreBtn.textContent = 'Load more';
+  historyLoadMoreBtn.hidden = true;
+  historyField.appendChild(historyLoadMoreBtn);
   settingsSectionEl.appendChild(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
@@ -5671,14 +5677,100 @@ function renderBuildSettingsSection() {
   // with out-of-date version/activeVersionId data. Same monotonic-token
   // fix as friendsLoadToken (#448).
   let versionHistoryLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load, same shape as
+  // notificationsNextCursor (#320) and savedLayoutsNextCursor (#1215).
+  // Reset to null every time renderVersionHistory starts a fresh first
+  // page; advanced by historyLoadMoreBtn's click handler as later pages
+  // come in.
+  let versionHistoryNextCursor = null;
+  // Set by renderVersionHistory on the initial load; historyLoadMoreBtn's
+  // click handler reuses it for later pages rather than re-fetching
+  // fetchLandlet on every "Load more" click just to learn the same id again.
+  let versionHistoryActiveVersionId = null;
+
+  function appendVersionRow(version, activeVersionId) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+    const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+    info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const setLiveBtn = document.createElement('button');
+    setLiveBtn.type = 'button';
+    setLiveBtn.className = 'version-action-btn';
+    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.disabled = version.versionId === activeVersionId;
+    setLiveBtn.addEventListener('click', async () => {
+      setLiveBtn.disabled = true;
+      try {
+        await activateLandletVersion(landletId, version.versionId);
+        // Feedback goes through the shared publishStatus, not a status
+        // element inside this row — renderVersionHistory() (below) tears
+        // down and rebuilds every row's DOM, including this one, so
+        // anything set on a per-row element here would be wiped before
+        // ever actually being visible.
+        publishStatus.textContent = `Shoppers now see "${version.name}".`;
+        publishStatus.classList.remove('error');
+        renderVersionHistory();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.classList.add('error');
+        setLiveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(setLiveBtn);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'version-action-btn';
+    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+      restoreBtn.disabled = true;
+      publishStatus.textContent = 'Restoring…';
+      publishStatus.classList.remove('error');
+      try {
+        const full = await fetchLandletVersion(landletId, version.versionId);
+        await replaceLandletDraft(landletId, {
+          instances: full.instances,
+          versionName: `Restored from "${version.name}"`,
+        });
+        // Simplest correct way to get the live scene back in sync with
+        // whatever the server now holds — the same "something changed
+        // server-side, reload" pattern claimBackBtn already uses
+        // elsewhere in this file.
+        sessionStorage.setItem(START_MODE_KEY, 'build');
+        location.reload();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not restore.';
+        publishStatus.classList.add('error');
+        restoreBtn.disabled = false;
+      }
+    });
+    actions.appendChild(restoreBtn);
+
+    row.appendChild(actions);
+    historyList.appendChild(row);
+  }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    historyLoadMoreBtn.hidden = true;
+    versionHistoryNextCursor = null;
     let versions;
     let activeVersionId;
+    let nextCursor;
     try {
-      [{ versions }, { activeVersionId }] = await Promise.all([
+      [{ versions, nextCursor }, { activeVersionId }] = await Promise.all([
         fetchLandletVersions(landletId, { limit: 20 }),
         fetchLandlet(landletId),
       ]);
@@ -5697,78 +5789,27 @@ function renderBuildSettingsSection() {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
       return;
     }
-    for (const version of versions) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = version.instanceCount === 1 ? 'item' : 'items';
-      const liveTag = version.versionId === activeVersionId ? ' — live' : '';
-      info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const setLiveBtn = document.createElement('button');
-      setLiveBtn.type = 'button';
-      setLiveBtn.className = 'version-action-btn';
-      setLiveBtn.textContent = 'Set Live';
-      setLiveBtn.disabled = version.versionId === activeVersionId;
-      setLiveBtn.addEventListener('click', async () => {
-        setLiveBtn.disabled = true;
-        try {
-          await activateLandletVersion(landletId, version.versionId);
-          // Feedback goes through the shared publishStatus, not a status
-          // element inside this row — renderVersionHistory() (below) tears
-          // down and rebuilds every row's DOM, including this one, so
-          // anything set on a per-row element here would be wiped before
-          // ever actually being visible.
-          publishStatus.textContent = `Shoppers now see "${version.name}".`;
-          publishStatus.classList.remove('error');
-          renderVersionHistory();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not activate.';
-          publishStatus.classList.add('error');
-          setLiveBtn.disabled = false;
-        }
-      });
-      actions.appendChild(setLiveBtn);
-
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'version-action-btn';
-      restoreBtn.textContent = 'Restore to Editor';
-      restoreBtn.addEventListener('click', async () => {
-        if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-        restoreBtn.disabled = true;
-        publishStatus.textContent = 'Restoring…';
-        publishStatus.classList.remove('error');
-        try {
-          const full = await fetchLandletVersion(landletId, version.versionId);
-          await replaceLandletDraft(landletId, {
-            instances: full.instances,
-            versionName: `Restored from "${version.name}"`,
-          });
-          // Simplest correct way to get the live scene back in sync with
-          // whatever the server now holds — the same "something changed
-          // server-side, reload" pattern claimBackBtn already uses
-          // elsewhere in this file.
-          sessionStorage.setItem(START_MODE_KEY, 'build');
-          location.reload();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not restore.';
-          publishStatus.classList.add('error');
-          restoreBtn.disabled = false;
-        }
-      });
-      actions.appendChild(restoreBtn);
-
-      row.appendChild(actions);
-      historyList.appendChild(row);
-    }
+    for (const version of versions) appendVersionRow(version, activeVersionId);
+    versionHistoryNextCursor = nextCursor;
+    versionHistoryActiveVersionId = activeVersionId;
+    historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
   }
+
+  historyLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = versionHistoryLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    historyLoadMoreBtn.disabled = true;
+    try {
+      const { versions, nextCursor } = await fetchLandletVersions(landletId, { limit: 20, cursor: versionHistoryNextCursor });
+      if (myLoadToken !== versionHistoryLoadToken) return; // panel was reset while this page was loading
+      for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
+      versionHistoryNextCursor = nextCursor;
+      historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    } catch (err) {
+      console.warn('Could not load more versions:', err);
+    } finally {
+      historyLoadMoreBtn.disabled = false;
+    }
+  });
 
   publishBtn.addEventListener('click', async () => {
     publishBtn.disabled = true;
