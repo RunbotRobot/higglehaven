@@ -802,6 +802,77 @@
         background: var(--brand-green);
         color: #16240a;
       }
+      /* #1169: on-screen compass, Shop and Build modes only (Sell has no
+         free-look camera to orient — added to SELL_HIDDEN_BUILDER_UI_IDS
+         rather than SHOP_HIDDEN_BUILDER_UI_IDS in main.js, the inverse of
+         most builder chrome, since this one should stay visible in Shop).
+         Third row under #mode-nav/#undo-redo-panel on the same right-hand
+         stack (top: 10px, 48px) — the only right-side spot free in both
+         modes (#undo-redo-panel itself is Build-only). The dial face never
+         rotates (N/E/S/W stay at their fixed screen positions); only the
+         needle turns, driven by updateCompassNeedle() in main.js. */
+      #compass-panel {
+        position: fixed;
+        top: 86px;
+        right: 8px;
+        z-index: 10;
+        width: 48px;
+        height: 48px;
+      }
+      #compass-dial {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgb(var(--pill-rgb) / 0.65);
+      }
+      .compass-label {
+        position: absolute;
+        color: var(--pill-text-soft);
+        font: 10px/1 sans-serif;
+        pointer-events: none;
+      }
+      .compass-label.compass-n {
+        top: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .compass-label.compass-e {
+        top: 50%;
+        right: 3px;
+        transform: translateY(-50%);
+      }
+      .compass-label.compass-s {
+        bottom: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .compass-label.compass-w {
+        top: 50%;
+        left: 3px;
+        transform: translateY(-50%);
+      }
+      /* A simple CSS-triangle needle, apex up at rotate(0) — rotated in JS
+         by updateCompassNeedle() to point toward the current facing
+         direction's compass bearing, clockwise from North (matching
+         rotate()'s own clockwise-for-positive-degrees convention, so no
+         sign flip is needed between the computed bearing and this
+         transform). transform-origin sits at the triangle's own base
+         center (4px, 14px within its 8x14 box — see border-bottom below),
+         which is also the dial's exact center, so it swings like a clock
+         hand anchored there rather than around its own bounding box. */
+      #compass-needle {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        margin: -14px 0 0 -4px;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 14px solid rgb(var(--ink-rgb) / 0.85);
+        transform-origin: 4px 14px;
+      }
       #undo-redo-panel button {
         padding: 8px 16px;
         border-radius: 999px;
@@ -3498,6 +3569,15 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
+    </div>
+    <div id="compass-panel" title="Facing direction">
+      <div id="compass-dial">
+        <span class="compass-label compass-n">N</span>
+        <span class="compass-label compass-e">E</span>
+        <span class="compass-label compass-s">S</span>
+        <span class="compass-label compass-w">W</span>
+        <div id="compass-needle"></div>
+      </div>
     </div>
     <div id="camera-debug-panel">
       <div id="camera-debug"></div>
