@@ -341,6 +341,13 @@ export default {
     ctx.waitUntil(scheduledModelCleanup(env).catch((error) => {
       console.error('scheduledModelCleanup failed', error);
     }));
+    // #1101 (sub-issue of #1095, multiplayer presence): without this, a
+    // builder who stops reporting (closed the tab, lost connectivity)
+    // leaves a permanent row in avatar_presence forever -- nothing else
+    // ever deletes one.
+    ctx.waitUntil(pruneStaleAvatarPresence(env.DB).catch((error) => {
+      console.error('pruneStaleAvatarPresence failed', error);
+    }));
   },
 };
 
@@ -5235,6 +5242,26 @@ async function pruneExpiredAuthState(db) {
     db.prepare('DELETE FROM model_upload_reservations WHERE created_at < ?')
       .bind(Date.now() - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS),
   ]);
+}
+
+// #1101 (sub-issue of #1095, multiplayer presence): avatar_presence (#1097)
+// is live state upserted on every position report (#1098) -- nothing else
+// ever deletes a row once a builder stops reporting (closed the tab, lost
+// connectivity), so without this sweep the table accumulates one permanent
+// row per builder who has ever gone online. #1099's GET endpoint already
+// excludes a stale row from its own response at read time, on a much
+// shorter window (that's "is this builder visibly online right now" --
+// see its own staleness threshold); this is the complementary physical
+// cleanup on a longer window, since its only job is keeping the table from
+// growing unbounded, not hiding a briefly-stale builder from someone
+// else's GET response. Mirrors autoAuctionInactiveLandlets' own
+// `new Date(Date.now() - ...).toISOString()` cutoff pattern against a
+// TEXT timestamp column.
+const AVATAR_PRESENCE_STALE_CLEANUP_MS = 5 * 60 * 1000;
+
+export async function pruneStaleAvatarPresence(db) {
+  const cutoff = new Date(Date.now() - AVATAR_PRESENCE_STALE_CLEANUP_MS).toISOString();
+  await db.prepare('DELETE FROM avatar_presence WHERE updated_at < ?').bind(cutoff).run();
 }
 
 function bytesToHex(bytes) {
