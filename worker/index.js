@@ -7476,10 +7476,18 @@ async function handleTax(request, env, db, route, url) {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
     const year = queryTaxYear(url.searchParams.get('year'));
     await generateTax1099Drafts(db, year);
+    // #1147: LEFT JOIN, not JOIN -- user_id can now be NULL (the payee's
+    // account was deleted; see migrations/0103), and an approved/filed
+    // form must keep showing up here regardless, via its own snapshot
+    // columns. COALESCE prefers the form's own snapshot (set once at
+    // /approve) over the live users row, since the snapshot is what was
+    // actually true at approval time; a still-'draft' form has no
+    // snapshot yet, so it falls back to the live row.
     const rows = await db.prepare(`
-      SELECT f.*, u.email, u.tax_form_type, u.tax_form_completed_at
-      FROM tax_1099_forms f JOIN users u ON u.user_id = f.user_id
-      WHERE f.tax_year = ? ORDER BY u.email, f.form_type
+      SELECT f.*, COALESCE(f.payee_email, u.email) AS email,
+        COALESCE(f.payee_tax_form_type, u.tax_form_type) AS tax_form_type
+      FROM tax_1099_forms f LEFT JOIN users u ON u.user_id = f.user_id
+      WHERE f.tax_year = ? ORDER BY email, f.form_type
     `).bind(year).all();
     return json({
       year,
@@ -7515,11 +7523,18 @@ async function handleTax(request, env, db, route, url) {
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
     if (form.status !== 'draft') throw new HttpError(`Cannot approve a form in status "${form.status}"`, 409);
-    const payee = await db.prepare('SELECT tax_form_completed_at FROM users WHERE user_id = ?').bind(form.user_id).first();
+    const payee = await db.prepare('SELECT email, tax_form_completed_at, tax_id_encrypted, tax_form_type FROM users WHERE user_id = ?').bind(form.user_id).first();
     if (!payee?.tax_form_completed_at) {
       throw new HttpError("Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet", 409);
     }
     const approvedAt = new Date().toISOString();
+    // #1147: snapshot the payee's email/tax ID/form type onto the form
+    // itself, the one point this flow already confirms real paperwork is
+    // on file. This is what keeps the form reviewable and filable after
+    // user_id goes NULL (migrations/0103, ON DELETE SET NULL) -- /file
+    // below reads these snapshot columns instead of looking the payee up
+    // live, so an account deletion after approval can't strand an
+    // already-approved form with nothing left to transmit.
     // #897: this UPDATE's own status='draft' guard means it can legitimately
     // affect 0 rows (a concurrent approval already won), unlike grant-admin's
     // unconditional write -- batching the log INSERT with it would commit a
@@ -7528,8 +7543,10 @@ async function handleTax(request, env, db, route, url) {
     // error). Same "logged only after confirmed" idiom delete_land_candidate
     // already uses for the identical reason.
     const result = await db.prepare(`
-      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ? WHERE form_id = ? AND status = 'draft'
-    `).bind(approvedAt, approvedAt, formId).run();
+      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ?,
+        payee_email = ?, payee_tax_id_encrypted = ?, payee_tax_form_type = ?
+      WHERE form_id = ? AND status = 'draft'
+    `).bind(approvedAt, approvedAt, payee.email, payee.tax_id_encrypted, payee.tax_form_type, formId).run();
     if (result.meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
     await adminActionLogStatement(db, user.user_id, 'approve_1099_form', 'tax_1099_form', formId, {
       formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id,
@@ -7552,8 +7569,12 @@ async function handleTax(request, env, db, route, url) {
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
     if (form.status !== 'approved') throw new HttpError(`Cannot file a form in status "${form.status}"`, 409);
-    const payee = await db.prepare('SELECT email, tax_id_encrypted FROM users WHERE user_id = ?').bind(form.user_id).first();
-    if (!payee?.tax_id_encrypted) throw new HttpError('Cannot file: this payee has no W-9/W-8BEN tax paperwork on file', 409);
+    // #1147: read the payee's tax ID from the form's own snapshot
+    // (captured at /approve, see above), not a live lookup against
+    // `users` -- an approved form must stay filable even once user_id has
+    // gone NULL (migrations/0103, e.g. the payee's account was since
+    // deleted).
+    if (!form.payee_tax_id_encrypted) throw new HttpError('Cannot file: this payee has no W-9/W-8BEN tax paperwork on file', 409);
     // Configured checks sit here, after every local validation above, so a
     // typo'd form id or a form that isn't actually ready still gets a real
     // 404/409 rather than always masking it behind a 503 — same idea as
@@ -7565,8 +7586,8 @@ async function handleTax(request, env, db, route, url) {
     if (!tax1099EfilingConfigured(env)) {
       throw new HttpError('1099 e-filing is not configured on this server yet.', 503);
     }
-    const payeeTaxId = await decryptTaxIdPayload(env, payee.tax_id_encrypted);
-    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: payee.email, payeeTaxId });
+    const payeeTaxId = await decryptTaxIdPayload(env, form.payee_tax_id_encrypted);
+    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: form.payee_email, payeeTaxId });
     const filedAt = new Date().toISOString();
     // #897: same reasoning as approve_1099_form above -- this UPDATE's own
     // status='approved' guard can legitimately affect 0 rows, so the log
