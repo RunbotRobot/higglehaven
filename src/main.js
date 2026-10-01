@@ -14283,6 +14283,46 @@ async function claimSelectedLandlet(landlet, resolve) {
   }
 }
 
+// #1170 (owner request, 2026-10-01): a grayed-out, non-interactive outline
+// of every other landlet within SHOP_LOAD_RADIUS_M of this one — the same
+// "how far" radius Shop mode already uses to decide what's visible/loaded
+// (SHOP_LOAD_RADIUS_M's own comment) — so a builder gets spatial context
+// for what's next to their plot without it reading as part of their own
+// buildable area. Scoped to plot-boundary outlines only, matching
+// applyLandletShape's own treatment of the main plot (a flat ShapeGeometry
+// built from the record's own plot-local polygon, curveGroundGeometry
+// applied directly to it rather than accounting for true world position —
+// negligible at landlet scale, same simplification the main plot already
+// relies on) — not a full dimmed render of whatever a neighbor has
+// actually built. #1170's own comment leaves that fuller render as a
+// reasonable follow-up, not attempted here. Never used as a raycast
+// target (ground-click placement only ever raycasts against `landlet`
+// itself, never the whole scene), so no interactivity guard is needed.
+const BUILD_NEIGHBOR_OUTLINE_COLOR = 0x888888;
+function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
+  const neighborMaterial = new THREE.MeshStandardMaterial({
+    color: BUILD_NEIGHBOR_OUTLINE_COLOR,
+    transparent: true,
+    opacity: 0.35,
+    side: THREE.DoubleSide,
+  });
+  for (const record of allLandlets) {
+    if (record.landletId === currentLandletRecord.landletId) continue;
+    const dx = record.center.x - currentLandletRecord.center.x;
+    const dy = record.center.y - currentLandletRecord.center.y;
+    if (Math.hypot(dx, dy) > SHOP_LOAD_RADIUS_M) continue;
+    const geometry = new THREE.ShapeGeometry(shapeForLandlet(record));
+    curveGroundGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry, neighborMaterial);
+    const group = new THREE.Group();
+    // Just under the main plot's own ground (z 0.02, applyLandletShape/the
+    // initial landletGeometry) so the two never z-fight at the shared edge.
+    group.position.set(dx, dy, -0.01);
+    group.add(mesh);
+    scene.add(group);
+  }
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -14356,9 +14396,9 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles, shared, levels] = await Promise.all([
+    const [catalog, remoteInstances, landletRecord, bundles, shared, levels, allLandlets] = await Promise.all([
       fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
-      fetchLandletLevels(currentLandletId),
+      fetchLandletLevels(currentLandletId), fetchAllLandlets(),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
@@ -14368,6 +14408,7 @@ async function bootstrap() {
     currentLandletAreaM2 = landletRecord.areaM2;
     currentLandletLevels = levels;
     currentLevelIndex = 0;
+    addBuildModeNeighborOutlines(landletRecord, allLandlets);
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
