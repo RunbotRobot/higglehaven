@@ -13386,13 +13386,24 @@ async function enterShopMode() {
   }
 
   // #1176: the shopper's own last-reported position, if any — powers the
-  // "Go to Last Location" button shown during the spawn orbit below. Same
-  // "never blocks Shop mode entry, only attempted when actually logged in"
-  // treatment as equippedAvatarModelUrl just above; null (no button shown)
-  // on a brand-new account that's never reported a position, or on fetch
-  // failure.
+  // "Go to Last Location" button shown during the spawn orbit below. Never
+  // blocks Shop mode entry on failure, same as equippedAvatarModelUrl just
+  // above — but unlike that one, this also skips the call entirely during
+  // accountRecoveryFlowActive, not just when logged out: GET /api/presence/me
+  // is gated by requireSessionBuilder (full age/trust-tier verification,
+  // same bar every other presence endpoint already uses), while the
+  // equipped-avatar endpoint above only requires a login. A logged-in-but-
+  // not-yet-verified account reaching Shop mode specifically through the
+  // accountRecoveryFlowActive path (its own comment above: "mid verify-
+  // email/password-reset flow") would otherwise call this anyway and get a
+  // real 403 — caught here same as any other failure, but Chromium still
+  // logs the failed resource load as a console error regardless of the
+  // catch (the exact e2e/auth.test.mjs failure mode equippedAvatarModelUrl's
+  // own comment already describes for a 401; this is that same shape for a
+  // 403 instead, found via that file's own errors.length === 0 check during
+  // its reset-password flow). null (no button shown) either way.
   shopLastLocation = null;
-  if (currentAuthUser) {
+  if (currentAuthUser && !accountRecoveryFlowActive) {
     try {
       shopLastLocation = await fetchOwnLastPresence();
     } catch (err) {
