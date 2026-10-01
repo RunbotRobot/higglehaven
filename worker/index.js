@@ -7477,10 +7477,18 @@ async function handleTax(request, env, db, route, url) {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
     const year = queryTaxYear(url.searchParams.get('year'));
     await generateTax1099Drafts(db, year);
+    // #1147: LEFT JOIN, not JOIN -- user_id can now be NULL (the payee's
+    // account was deleted; see migrations/0103), and an approved/filed
+    // form must keep showing up here regardless, via its own snapshot
+    // columns. COALESCE prefers the form's own snapshot (set once at
+    // /approve) over the live users row, since the snapshot is what was
+    // actually true at approval time; a still-'draft' form has no
+    // snapshot yet, so it falls back to the live row.
     const rows = await db.prepare(`
-      SELECT f.*, u.email, u.tax_form_type, u.tax_form_completed_at
-      FROM tax_1099_forms f JOIN users u ON u.user_id = f.user_id
-      WHERE f.tax_year = ? ORDER BY u.email, f.form_type
+      SELECT f.*, COALESCE(f.payee_email, u.email) AS email,
+        COALESCE(f.payee_tax_form_type, u.tax_form_type) AS tax_form_type
+      FROM tax_1099_forms f LEFT JOIN users u ON u.user_id = f.user_id
+      WHERE f.tax_year = ? ORDER BY email, f.form_type
     `).bind(year).all();
     return json({
       year,
@@ -7516,11 +7524,18 @@ async function handleTax(request, env, db, route, url) {
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
     if (form.status !== 'draft') throw new HttpError(`Cannot approve a form in status "${form.status}"`, 409);
-    const payee = await db.prepare('SELECT tax_form_completed_at FROM users WHERE user_id = ?').bind(form.user_id).first();
+    const payee = await db.prepare('SELECT email, tax_form_completed_at, tax_id_encrypted, tax_form_type FROM users WHERE user_id = ?').bind(form.user_id).first();
     if (!payee?.tax_form_completed_at) {
       throw new HttpError("Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet", 409);
     }
     const approvedAt = new Date().toISOString();
+    // #1147: snapshot the payee's email/tax ID/form type onto the form
+    // itself, the one point this flow already confirms real paperwork is
+    // on file. This is what keeps the form reviewable and filable after
+    // user_id goes NULL (migrations/0103, ON DELETE SET NULL) -- /file
+    // below reads these snapshot columns instead of looking the payee up
+    // live, so an account deletion after approval can't strand an
+    // already-approved form with nothing left to transmit.
     // #897: this UPDATE's own status='draft' guard means it can legitimately
     // affect 0 rows (a concurrent approval already won), unlike grant-admin's
     // unconditional write -- batching the log INSERT with it would commit a
@@ -7529,8 +7544,10 @@ async function handleTax(request, env, db, route, url) {
     // error). Same "logged only after confirmed" idiom delete_land_candidate
     // already uses for the identical reason.
     const result = await db.prepare(`
-      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ? WHERE form_id = ? AND status = 'draft'
-    `).bind(approvedAt, approvedAt, formId).run();
+      UPDATE tax_1099_forms SET status = 'approved', approved_at = ?, updated_at = ?,
+        payee_email = ?, payee_tax_id_encrypted = ?, payee_tax_form_type = ?
+      WHERE form_id = ? AND status = 'draft'
+    `).bind(approvedAt, approvedAt, payee.email, payee.tax_id_encrypted, payee.tax_form_type, formId).run();
     if (result.meta.changes === 0) throw new HttpError('Tax form was no longer a draft', 409);
     await adminActionLogStatement(db, user.user_id, 'approve_1099_form', 'tax_1099_form', formId, {
       formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id,
@@ -7553,8 +7570,12 @@ async function handleTax(request, env, db, route, url) {
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
     if (form.status !== 'approved') throw new HttpError(`Cannot file a form in status "${form.status}"`, 409);
-    const payee = await db.prepare('SELECT email, tax_id_encrypted FROM users WHERE user_id = ?').bind(form.user_id).first();
-    if (!payee?.tax_id_encrypted) throw new HttpError('Cannot file: this payee has no W-9/W-8BEN tax paperwork on file', 409);
+    // #1147: read the payee's tax ID from the form's own snapshot
+    // (captured at /approve, see above), not a live lookup against
+    // `users` -- an approved form must stay filable even once user_id has
+    // gone NULL (migrations/0103, e.g. the payee's account was since
+    // deleted).
+    if (!form.payee_tax_id_encrypted) throw new HttpError('Cannot file: this payee has no W-9/W-8BEN tax paperwork on file', 409);
     // Configured checks sit here, after every local validation above, so a
     // typo'd form id or a form that isn't actually ready still gets a real
     // 404/409 rather than always masking it behind a 503 — same idea as
@@ -7566,8 +7587,8 @@ async function handleTax(request, env, db, route, url) {
     if (!tax1099EfilingConfigured(env)) {
       throw new HttpError('1099 e-filing is not configured on this server yet.', 503);
     }
-    const payeeTaxId = await decryptTaxIdPayload(env, payee.tax_id_encrypted);
-    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: payee.email, payeeTaxId });
+    const payeeTaxId = await decryptTaxIdPayload(env, form.payee_tax_id_encrypted);
+    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: form.payee_email, payeeTaxId });
     const filedAt = new Date().toISOString();
     // #897: same reasoning as approve_1099_form above -- this UPDATE's own
     // status='approved' guard can legitimately affect 0 rows, so the log
@@ -7625,6 +7646,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
     return handleDeleteAccount(request, db, url);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'change-password') {
+    return handleChangePassword(request, db);
+  }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
@@ -7633,6 +7657,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'reset-password') return handleResetPassword(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'resend-verification') {
     return handleResendVerification(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'change-email') {
+    return handleChangeEmail(request, env, db);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
     return handleAdminBootstrap(request, env, db);
@@ -7996,6 +8023,53 @@ async function handleResendVerification(request, env, db) {
   return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
+// #1182 (sub-issue of #1126, owner direction via Control Room 2026-10-01):
+// an in-session way to change your account email. Same current-password
+// bar as handleDeleteAccount, and the same atomic email/email_canonical
+// uniqueness idiom handleSignup's own INSERT ... WHERE NOT EXISTS uses
+// (a separate SELECT-then-UPDATE here would let two concurrent requests
+// both pass a pre-check before either write commits).
+//
+// Re-verification: the owner flagged "should changing email reset the
+// email-verification status" as its own open call rather than deciding it
+// up front. Resolved here by reading what email_verified_at actually does
+// in this codebase rather than guessing: userFromRow/docs/API.md's own
+// description of it is purely an informational "✓ Email verified" badge
+// (src/main.js's authAccountVerifiedEl) — unlike trust_tier/age_attested_at,
+// nothing gates real functionality on it (see assertVerified above, which
+// checks those two, never email_verified_at). So resetting it to NULL and
+// re-sending the verification email here is the direct, low-risk
+// application of the exact mechanism issueEmailVerification already uses
+// at signup to this same "new address, not yet confirmed" situation — not
+// a new policy, just the existing one applied consistently. Worth a glance
+// from the owner given they flagged it, but not blocking on it: nothing is
+// lost either way (no privilege revoked), and the alternative (leaving a
+// stale verified badge on an address that was never actually confirmed)
+// is the one that reads as clearly wrong.
+const CHANGE_EMAIL_RATE_LIMIT_MAX = 5;
+async function handleChangeEmail(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `change-email:${user.user_id}`, CHANGE_EMAIL_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!(await verifyPassword(password, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+  const email = emailValue(input.email);
+  if (email === user.email) throw new HttpError('That is already your current email', 400);
+  const emailCanonical = canonicalizeEmail(email);
+  const result = await db.prepare(`
+    UPDATE users SET email = ?, email_canonical = ?, email_verified_at = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+      AND NOT EXISTS (SELECT 1 FROM users WHERE (email = ? OR email_canonical = ?) AND user_id != ?)
+  `).bind(email, emailCanonical, user.user_id, email, emailCanonical, user.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
+  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
+  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
+}
+
 // #833: every sibling auth endpoint in this file rate-limits by IP
 // (signup/password-reset key by ip+email; access-login's passphrase gate
 // keys by ip alone) — this one had neither, unlike them with no comment
@@ -8147,6 +8221,48 @@ async function handleDeleteAccount(request, db, url) {
   ]);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// #1181 (sub-issue of #1126, owner decision via its own GitHub comment):
+// a real in-session change-password form, separate from the existing
+// forgot-password email-link flow (which stays as-is for the logged-out
+// case, per the owner's own direction). Requires re-entering the current
+// password -- same "prove it's still you" bar handleDeleteAccount already
+// uses -- and is rate-limited per-account for the same reason.
+//
+// Unlike handleResetPassword (which signs out every session, including
+// whichever one is making the request, since that flow proves identity
+// out-of-band via an emailed link with no "current" session to preserve),
+// this signs out every OTHER session but keeps the one making this
+// request alive: the caller just re-typed their current password a
+// moment ago, so immediately logging them out of their own in-progress
+// action would be pure friction, not a real security improvement -- the
+// actual risk this closes (an old password still working on some other
+// device/session) is the same either way.
+const CHANGE_PASSWORD_RATE_LIMIT_MAX = 5;
+
+async function handleChangePassword(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
+  if (!(await verifyPassword(currentPassword, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+  const newPassword = passwordValue(input.newPassword);
+  const passwordHash = await hashPassword(newPassword);
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
+
+  await db.batch([
+    db.prepare(`
+      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(passwordHash, user.user_id),
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
+  ]);
+  return json({ changed: true });
 }
 
 // Deliberately always 200, even with no session — a 401 here would be more
@@ -8463,6 +8579,70 @@ async function handleLandlets(request, db, route, url) {
 
     const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(route[1]).first();
     return json({ landlet: landletFromRow(row) });
+  }
+
+  // #1177: owner-requested admin tool for handling land-ownership
+  // situations by hand -- the generic PUT/PATCH above deliberately can
+  // never touch ownerBuilderId (see its own comment on why), and the only
+  // other paths that ever change it are a builder's own self-claim, an
+  // auction win, or a builder-deletion release. This is the one
+  // admin-only, directly-invariant-checked way to move an *already*-
+  // claimed landlet to a different builder by hand.
+  //
+  // Judgment calls flagged in the issue, decided here rather than left
+  // unresolved: (1) kept behind the same one-claimed-landlet-per-builder
+  // invariant POST .../claim enforces, rather than letting an admin
+  // override it -- nothing else in this file (recomputeLandCap,
+  // explainClaimConflict, the self-claim/create paths) is built to handle
+  // a builder legitimately owning two claimed landlets at once, so
+  // bypassing it here would risk a silently inconsistent state elsewhere,
+  // not just a one-off exception; (2) API-only, no new admin-page UI --
+  // every other admin mutation in this file (land-cap grants, higgles
+  // grants, land-candidate CRUD, ...) is API-only too, and a landlet id
+  // typed into a request is no heavier an operation than those.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'reassign-owner') {
+    const admin = await requireAdmin(request, db);
+    const existing = await requireLandlet(db, route[1]);
+    if (existing.status !== 'claimed' || existing.owner_builder_id === null) {
+      throw new HttpError('Landlet is not currently claimed -- use POST .../claim instead', 409);
+    }
+    const input = await readJson(request);
+    const newOwnerBuilderId = stringValue(input.ownerBuilderId, 'ownerBuilderId');
+    await requireBuilder(db, newOwnerBuilderId);
+    if (newOwnerBuilderId === existing.owner_builder_id) {
+      throw new HttpError('Landlet is already owned by this builder', 409);
+    }
+
+    // Same atomic guard+write idiom as POST .../claim just above: the
+    // concurrency check (both the still-matches-what-was-just-read guard
+    // and the one-claimed-landlet-per-builder invariant) lives inside the
+    // UPDATE's own WHERE, not a separate pre-check, so a concurrent claim/
+    // auction/reassignment landing in between can't be silently clobbered
+    // or bypassed.
+    const result = await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET owner_builder_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM landlets AS owned
+            WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+              AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+          )
+      `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId),
+      adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
+        fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
+      }),
+    ]);
+    if (result[0].meta.changes === 0) {
+      const current = await requireLandlet(db, route[1]);
+      if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      }
+      throw new HttpError('Target builder already owns a claimed landlet', 409);
+    }
+    const updated = await requireLandlet(db, route[1]);
+    return json({ landlet: landletFromRow(updated) });
   }
 
   if (request.method === 'POST' && route.length === 1) {

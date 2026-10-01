@@ -28,8 +28,8 @@ await chooseIdentity(page, { mode: 'shop', label: 'Flight Tester', isNew: true }
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 // #688: `#shop-fly-btn.visible` (and `#shop-status.visible`, "Loading the
 // world…") both get set at the *start* of enterShopMode's post-gate world
-// build (src/main.js), well before the first-ever-visit flight spawn this
-// test is about to check gets set at the very *end* of it, once
+// build (src/main.js), well before the spawn-flight state this test is
+// about to check gets set at the very *end* of it, once
 // fetchCatalog/fetchWorld/fetchAllLandlets and the landlet meshes have
 // actually finished. Before N44/#678 added the login/verification gate
 // above, launchPage's own fixed 1500ms settle time already covered that
@@ -43,21 +43,17 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
 const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-fly-btn').classList.contains('active'));
 
-// #119: a genuinely first-ever Shop-mode visit on this device (no
-// localStorage flag set yet — exactly this fresh browser context's state
-// right now) spawns already flying, above the world, with no double-tap
-// at all — checked before anything below sets that flag.
-const flyingOnFirstEverVisit = await isFlyingClassSet();
-const flyBtnActiveOnFirstEverVisit = await isFlyBtnActive();
+// #1175: every spawn (not just a first-ever visit) now spawns already
+// flying, above a random world location — no tap needed at all.
+const flyingOnSpawn = await isFlyingClassSet();
+const flyBtnActiveOnSpawn = await isFlyBtnActive();
 
-// The rest of this file is about the manual double-tap toggle flow, not
-// the first-visit spawn above — set the "visited before" flag and reload
-// so it starts from the ordinary grounded baseline every later Shop-mode
-// entry uses (matching src/main.js's own enterShopMode distinction).
-await page.evaluate(() => localStorage.setItem('higglehaven.shopVisitedBefore', '1'));
-await page.reload({ waitUntil: 'networkidle' });
-await page.waitForTimeout(1500);
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+// The rest of this file is about the manual tap-to-toggle takeoff/landing
+// flow, not the spawn-flying behavior above — land the spawn's own flight
+// with a single tap and wait past the landing duration so it starts from
+// the ordinary grounded baseline the takeoff flow below expects.
+await page.click('#shop-fly-btn');
+await page.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s)
 
 const groundedBeforeTakeoff = !(await isFlyingClassSet());
 
@@ -97,8 +93,8 @@ const flyBtnActiveRightAfterLandingTap = await isFlyBtnActive();
 await page.waitForTimeout(2500);
 const groundedAfterLanding = !(await isFlyingClassSet());
 
-console.log('flying immediately on a genuinely first-ever visit, no tap needed (should be true):', flyingOnFirstEverVisit);
-console.log('#shop-fly-btn.active on that same first-ever visit (should be true):', flyBtnActiveOnFirstEverVisit);
+console.log('flying immediately on spawn, no tap needed (should be true):', flyingOnSpawn);
+console.log('#shop-fly-btn.active on that same spawn (should be true):', flyBtnActiveOnSpawn);
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
 console.log('#shop-fly-btn.active immediately after the takeoff tap (should be true):', flyBtnActiveRightAfterTakeoffTap);
@@ -110,8 +106,8 @@ console.log('#shop-fly-btn.active cleared immediately after the landing tap (sho
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
 const pass =
-  flyingOnFirstEverVisit &&
-  flyBtnActiveOnFirstEverVisit &&
+  flyingOnSpawn &&
+  flyBtnActiveOnSpawn &&
   groundedBeforeTakeoff &&
   flyingClassRightAfterTakeoffTap &&
   flyBtnActiveRightAfterTakeoffTap &&

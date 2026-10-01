@@ -512,6 +512,33 @@ deliberately — deletes every existing session for that account, signing
 out every device. If the reset was prompted by a compromised password, an
 attacker riding an existing session loses it too.
 
+### `POST /api/auth/change-password`
+
+```json
+{ "currentPassword": "correct horse battery staple", "newPassword": "a brand new password" }
+```
+
+Issue #1181 (sub-issue of #1126, owner decision via its own GitHub comment
+on 2026-10-01): a real in-session change-password form, distinct from
+`request-password-reset`/`reset-password` above, which stay exactly as-is
+for the logged-out case. Session-gated (`401` without one). Requires
+re-entering the current password — same "prove it's really you" bar
+`delete-account` above uses — `401 "Incorrect password"` on a mismatch,
+with no other change. Rate-limited per account (5 attempts per 15
+minutes, same bucket shape as `delete-account`/`resend-verification`).
+`newPassword` follows the same 8–200 character rule as signup.
+
+On success: updates `password_hash`, clears any lockout, and deletes
+every *other* session for the account — deliberately **not** the one
+making this request, unlike `reset-password` above (which signs out
+every session including the caller's own, since that flow proves
+identity out-of-band via an emailed link with no "current" session to
+preserve). Here the caller just re-typed their current password a moment
+ago, so signing them out of their own in-progress action would be pure
+friction, not a real security improvement — the actual risk being closed
+(an old password still working on some other device/session) is the same
+either way. Returns `{ "changed": true }`.
+
 ### `POST /api/auth/resend-verification`
 
 No body — requires a valid session cookie (`401` without one). `400` if
@@ -538,6 +565,15 @@ dev-mode fallback (no `RESEND_API_KEY` in the test environment) — the
 actual Resend network call itself is the one part of this that can't be
 exercised by the automated suite, since that would require a real API key
 and would depend on an external service being reachable during `npm test`.
+
+`worker/change-password.test.js` (#1181) separately covers
+`change-password`: requires a session, rejects an incorrect current
+password with the account untouched, rejects a too-short new password,
+rate-limits (6th attempt is `429`), and the full happy path — the
+session making the change stays logged in while a second session for the
+same account is signed out, the old password stops working, and the new
+one logs in. `worker/account-deletion.test.js` (#1146) is the equivalent
+file for `delete-account`.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
@@ -5748,6 +5784,28 @@ whether that payee has a W-9/W-8BEN on file (`GET /api/auth/me`'s own
 with this `false` (crossing the income threshold and having paperwork on
 file are independent facts), but approving it requires it to be `true`.
 
+**Retention through account deletion (#1147, sub-issue of #1145).**
+`tax_1099_forms.user_id` is `ON DELETE SET NULL` (migrations/0103,
+replacing the table's original implicit `ON DELETE CASCADE` from
+migrations/0081) — deleting a payee's `users` row orphans the form rather
+than destroying it, per #1145's own direction to retain financial/tax
+records "disconnected from any live personal profile rather than deleted
+outright." SET NULL alone isn't enough on its own, since nothing else on
+this table identified who a form was for or what to file: `email` and the
+payee's tax ID have always been read live from `users` via `GET`'s own
+JOIN and `/file`'s own lookup. `POST /:formId/approve` (below) now
+snapshots `payee_email`/`payee_tax_id_encrypted`/`payee_tax_form_type`
+onto the form row itself at the moment it already confirms paperwork is
+on file, and `GET` / `POST /:formId/file` both read from that snapshot
+first, falling back to a live `users` lookup only for a still-`"draft"`
+form (which has no snapshot yet — nothing to snapshot before an admin
+confirms paperwork is on file). A `"draft"` form whose payee is deleted
+before ever being approved is a real, currently-unresolved gap this
+sub-issue's own scope doesn't cover — see the coordination note on #1145
+about why #1146 (the deletion endpoint itself) should leave
+`tax_id_encrypted`/`tax_form_type`/`tax_form_completed_at` on `users`
+alone rather than wiping them alongside login credentials.
+
 `POST /:formId/approve` transitions a `"draft"` form to `"approved"`,
 stamping `approvedAt`. `409` if the payee has no tax paperwork on file yet
 (`Cannot approve: this payee has no W-9/W-8BEN tax paperwork on file yet`),
@@ -5761,7 +5819,10 @@ uses for auction bids/purchase claims). `404` for an unknown `formId`.
 
 `POST /:formId/file` transitions an `"approved"` form to `"filed"`,
 transmitting it to TaxBandits and stamping `filedAt`/`filingReference`
-(the vendor's own submission id) on success. Requires
+(the vendor's own submission id) on success. Decrypts the form's own
+`payee_tax_id_encrypted` snapshot (set at `/approve`, not a live lookup —
+see above), so filing still works even if the payee's account has since
+been deleted. Requires
 `TAX_ID_ENCRYPTION_KEY` (to decrypt the payee's on-file W-9/W-8BEN — see
 `POST /api/tax/id-form` above) and `TAX_1099_EFILING_CLIENT_ID`/
 `TAX_1099_EFILING_CLIENT_SECRET`/`TAX_1099_EFILING_USER_TOKEN`/
@@ -5819,7 +5880,14 @@ a `1099-k` only once the $20,000 threshold is crossed, refreshing a still-draft
 snapshot on regeneration while never touching an already-approved one,
 rejecting an approval with no tax paperwork on file, rejecting a
 double-approval and an unknown `formId`, and the approve endpoint's own
-admin gate. Its nested "1099 e-filing transmission (#646)" describe block
+admin gate. A further #1147 test hard-deletes the payee's `users` row
+directly (no real account-deletion endpoint exists yet — #1146 is still
+in progress) after approval, then confirms `user_id` is `NULL`,
+`payee_email`/`payee_tax_id_encrypted`/`payee_tax_form_type` survive on
+the form row, the form still shows up in `GET` via its snapshot, and
+`POST /:formId/file` reaches the "not configured" `503` rather than a
+"no paperwork on file" `409` — proving it read the tax ID from the
+snapshot, not a now-gone live row. Its nested "1099 e-filing transmission (#646)" describe block
 covers `file`'s own admin gate, unknown/still-draft-form rejection, and the
 `503` once a form is genuinely `"approved"` but e-filing isn't configured —
 the only path this environment can actually exercise, same convention as
@@ -6227,15 +6295,27 @@ here are pure altitude ramps, no fade — there's no one else to fade for)
 and "occupied landing spots offset to nearest open space" (nothing exists
 yet to occupy a spot with).
 
-**First-ever-visit spawn** (docs/SPEC.md §1: "new users spawn zoomed-out in
-flight mode above the world") — a genuinely first-ever Shop-mode entry on
-this device (`enterShopMode` in `src/main.js`, gated by a
-`localStorage.higglehaven.shopVisitedBefore` flag, since Shop mode itself
-needs no login to track this against an account) spawns straight into
-`'flying'` at a fixed starting altitude, skipping the `'takingOff'` ramp
-entirely — that ramp is for a player-initiated toggle mid-session, not this
-one-time spawn. Every later Shop-mode entry (same device, flag now set)
-starts `'grounded'` as before.
+**Every-spawn rotating aerial shot** (#1175, docs/SPEC.md §1/§2: "new users
+spawn zoomed-out in flight mode above the world," and every login sees a
+"slow clockwise rotating aerial shot at a random location") —
+`enterShopMode` in `src/main.js` spawns straight into `'flying'` at a fixed
+starting altitude (`SHOP_SPAWN_START_ALTITUDE_M`) on **every** Shop-mode
+entry, not just a first-ever visit, skipping the `'takingOff'` ramp
+entirely (that ramp is for a player-initiated toggle mid-session, not this
+spawn). The spawn location is random — a radius drawn uniformly between 0
+and `shopMaxRadiusM()` (the same wall-clearance-bounded max radius
+`clampShopRadius` enforces everywhere else) and a random starting angle —
+and the avatar immediately begins a slow clockwise orbit around the world
+center at that fixed radius, always facing the center as it goes
+(`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The
+camera's own look direction (`shopYaw`) doubles as the orbit's angle
+throughout, since "facing the center" and "the orbit position" are the
+same angle at every point on the circle. The orbit ends the instant the
+shopper gives any navigation input — a joystick deflection, a vertical
+flight button, or a fly-button tap (`stopShopSpawnRotation`, checked every
+frame in `updateShopMovement` and once directly in `toggleShopFlight`) —
+after which normal flight/movement control takes over exactly as if the
+avatar had spawned in place.
 
 ## Frontend-only avatar idle animation
 
@@ -7272,7 +7352,7 @@ skeleton at all (an ordinary rigid prop), the same "nothing to report"
 shape `loadModelAnimations` already uses for a model with no animation
 clips.
 
-Persisted as `catalog_templates.skeleton_signature` (migration 0103),
+Persisted as `catalog_templates.skeleton_signature` (migration 0104),
 passed through `createCatalogTemplate`/`updateCatalogTemplate` as
 `skeletonSignature` the same way `modelSizeBytes` already flows —
 `PATCH`/`PUT` merges against the existing row when omitted, so an

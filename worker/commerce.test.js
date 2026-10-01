@@ -4556,6 +4556,51 @@ describe('Simulated purchases', () => {
         });
       });
 
+      // #1147 (sub-issue of #1145, real account deletion): an approved
+      // form must keep its own payee snapshot once user_id goes NULL
+      // (migrations/0103, ON DELETE SET NULL replacing the old implicit
+      // CASCADE) -- otherwise deleting the payee's account would silently
+      // destroy, or permanently strand, a record the owner explicitly
+      // wants retained. #1146 (the deletion endpoint itself) hasn't
+      // landed yet, so this simulates a hard delete directly against the
+      // `users` row to prove the schema/snapshot side of the fix on its
+      // own, independent of how #1146 ends up implemented.
+      it('keeps an approved form listed and filable after its payee\'s users row is deleted', async () => {
+        const builder = await signupBuilder('tax-1099-orphaned-approved');
+        const builderMe = await api('/builders/me', builder.session());
+        await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ?, tax_id_encrypted = ? WHERE email = ?')
+          .bind('w9', '2026-01-01T00:00:00.000Z', 'aesgcm$00$00', builder.email).run();
+        await grantHiggles(builderMe.body.builder.builderId, 70000);
+        const year = new Date().getUTCFullYear();
+        const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const form = listed.body.forms.find((f) => f.email === builder.email);
+
+        const approved = await api(`/tax/admin-forms/${form.formId}/approve`, adminSession({ method: 'POST' }));
+        expect(approved.response.status).toBe(200);
+
+        await env.DB.prepare('DELETE FROM users WHERE email = ?').bind(builder.email).run();
+
+        const orphanedRow = await env.DB.prepare(
+          'SELECT user_id, payee_email, payee_tax_id_encrypted, payee_tax_form_type FROM tax_1099_forms WHERE form_id = ?',
+        ).bind(form.formId).first();
+        expect(orphanedRow.user_id).toBeNull();
+        expect(orphanedRow.payee_email).toBe(builder.email);
+        expect(orphanedRow.payee_tax_id_encrypted).toBe('aesgcm$00$00');
+        expect(orphanedRow.payee_tax_form_type).toBe('w9');
+
+        // Still shows up in the review list -- the LEFT JOIN + snapshot
+        // COALESCE means losing the live `users` row doesn't drop it.
+        const afterDelete = await api(`/tax/admin-forms?year=${year}`, adminSession());
+        const stillListed = afterDelete.body.forms.find((f) => f.formId === form.formId);
+        expect(stillListed).toMatchObject({ status: 'approved', email: builder.email, taxPaperworkOnFile: true });
+
+        // /file reaches the "not configured" 503, not the "no paperwork on
+        // file" 409 -- proving it read the tax ID from the form's own
+        // snapshot, not a live lookup against the now-gone `users` row.
+        const fileAttempt = await api(`/tax/admin-forms/${form.formId}/file`, adminSession({ method: 'POST' }));
+        expect(fileAttempt.response.status).toBe(503);
+      });
+
       // #646: the e-filing transmission #645 was built to feed into. The
       // test environment never configures TAX_1099_EFILING_CLIENT_ID/
       // _CLIENT_SECRET/_USER_TOKEN, TAX_1099_PAYER_NAME/_EIN, or

@@ -10,11 +10,13 @@ import {
   logIn,
   logOut,
   deleteAccount,
+  changePassword,
   fetchCurrentUser,
   requestPasswordReset,
   resetPassword,
   verifyEmail,
   resendVerificationEmail,
+  changeEmail,
   ageAttest,
   cardSetupIntent,
   confirmCard,
@@ -9333,6 +9335,12 @@ accountMenuToggle.addEventListener('click', () => {
   if (expanding) {
     refreshAccountMenuLandCap();
     refreshAccountMenuTaxNotice();
+    // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
+    // the Build tab, not Shop or Sell — it shipped visible in every mode
+    // since nothing here ever gated it on currentMode. Recomputed on open
+    // rather than at mode-switch time, same timing refreshAccountMenuLandCap
+    // just above already uses for this same panel.
+    myLandsBtn.hidden = currentMode !== 'build';
   }
 });
 for (const row of accountMenuPanel.querySelectorAll('button')) {
@@ -9891,6 +9899,64 @@ authLogoutBtn.addEventListener('click', async () => {
   closeAuthModal();
 });
 
+// #1182 (sub-issue of #1126): in-session change-email form, collapsed
+// behind its own trigger the same way delete-account is below — not
+// because it's irreversible, but to keep the logged-in panel's default
+// view uncluttered, matching the existing pattern for any action beyond
+// the always-visible ones.
+const authChangeEmailBtn = document.getElementById('auth-change-email-btn');
+const authChangeEmailForm = document.getElementById('auth-change-email-form');
+const authChangeEmailNewInput = document.getElementById('auth-change-email-new');
+const authChangeEmailPasswordInput = document.getElementById('auth-change-email-password');
+const authChangeEmailPasswordToggleBtn = document.getElementById('auth-change-email-password-toggle');
+const authChangeEmailCancelBtn = document.getElementById('auth-change-email-cancel-btn');
+bindPasswordToggle(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn);
+
+function closeChangeEmailForm() {
+  authChangeEmailForm.hidden = true;
+  authChangeEmailBtn.hidden = false;
+  authChangeEmailForm.reset();
+  setPasswordToggleState(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn, false);
+}
+
+authChangeEmailBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangeEmailBtn.hidden = true;
+  authChangeEmailForm.hidden = false;
+  authChangeEmailNewInput.focus();
+});
+authChangeEmailCancelBtn.addEventListener('click', () => {
+  closeChangeEmailForm();
+  setAuthStatus('');
+});
+
+authChangeEmailForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangeEmailForm);
+  const newEmail = authChangeEmailNewInput.value;
+  const password = authChangeEmailPasswordInput.value;
+  const submitBtn = authChangeEmailForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your email…');
+  try {
+    const result = await changeEmail(password, newEmail);
+    currentAuthUser = result.user;
+    refreshAccountAuthUI();
+    closeChangeEmailForm();
+    // devVerifyUrl mirrors the signup handler's own dev-mode fallback
+    // above — only present when no real email provider is configured.
+    if (result.devVerifyUrl) {
+      setAuthStatus(`Email changed! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else {
+      setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
+    }
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not change your email.', 'error');
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
 const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');
 const authDeleteAccountForm = document.getElementById('auth-delete-account-form');
 const authDeleteAccountPasswordInput = document.getElementById('auth-delete-account-password');
@@ -9943,6 +10009,56 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   // panel back to the logged-out login/signup view underneath it.
   refreshAccountAuthUI();
   setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
+});
+
+const authChangePasswordBtn = document.getElementById('auth-change-password-btn');
+const authChangePasswordForm = document.getElementById('auth-change-password-form');
+const authChangePasswordCurrentInput = document.getElementById('auth-change-password-current');
+const authChangePasswordCurrentToggleBtn = document.getElementById('auth-change-password-current-toggle');
+const authChangePasswordNewInput = document.getElementById('auth-change-password-new');
+const authChangePasswordNewToggleBtn = document.getElementById('auth-change-password-new-toggle');
+const authChangePasswordCancelBtn = document.getElementById('auth-change-password-cancel-btn');
+bindPasswordToggle(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn);
+bindPasswordToggle(authChangePasswordNewInput, authChangePasswordNewToggleBtn);
+
+function closeChangePasswordForm() {
+  authChangePasswordForm.hidden = true;
+  authChangePasswordBtn.hidden = false;
+  authChangePasswordForm.reset();
+  setPasswordToggleState(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn, false);
+  setPasswordToggleState(authChangePasswordNewInput, authChangePasswordNewToggleBtn, false);
+}
+
+// Same collapsed-behind-its-own-trigger shape as Delete Account above.
+authChangePasswordBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangePasswordBtn.hidden = true;
+  authChangePasswordForm.hidden = false;
+  authChangePasswordCurrentInput.focus();
+});
+authChangePasswordCancelBtn.addEventListener('click', () => {
+  closeChangePasswordForm();
+  setAuthStatus('');
+});
+
+authChangePasswordForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangePasswordForm);
+  const currentPassword = authChangePasswordCurrentInput.value;
+  const newPassword = authChangePasswordNewInput.value;
+  const submitBtn = authChangePasswordForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your password…');
+  try {
+    await changePassword(currentPassword, newPassword);
+  } catch (err) {
+    submitBtn.disabled = false;
+    setAuthStatus(err.message || 'Could not change your password.', 'error');
+    return;
+  }
+  submitBtn.disabled = false;
+  closeChangePasswordForm();
+  setAuthStatus('Your password has been changed. You have been signed out of your other devices.', 'success');
 });
 
 // A verify-email or reset-password link (see issueEmailVerification/
@@ -10169,22 +10285,20 @@ const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
 const SHOP_FLIGHT_VERTICAL_SPEED_M_S = 8; // ascend/descend rate once actually flying (the up/down buttons)
 const SHOP_FLIGHT_DOUBLE_PRESS_WINDOW_MS = 400;
-// docs/SPEC.md §1: "New users spawn zoomed-out in flight mode above the
-// world" — a one-time first-ever-visit spawn, distinct from every later
-// Shop-mode entry's ordinary grounded start (see enterShopMode). Below the
-// initial flight ceiling (SHOP_WALL_HEIGHT_M + SHOP_DOME_INITIAL_RISE_M -
-// SHOP_DOME_CLEARANCE_MARGIN_M = 115 at launch) with real clearance to
-// spare, comfortably above "building height" (SHOP_FLIGHT_SPEED_REF_
-// ALTITUDE_M, 10) so the view actually reads as "above the world," not just
-// a slightly-elevated hover.
-const SHOP_NEW_VISITOR_START_ALTITUDE_M = 80;
-// Shop mode requires a real account too now (N44), but this specific flag
-// stays per-device rather than switching to a per-account field — it's a
-// low-stakes spawn-animation default (flying vs. grounded), not a security
-// gate, so there's no real benefit to a schema change here; a shared
-// device (or a second account on the same browser) just replays the
-// first-visit spawn once more, which is harmless.
-const SHOP_VISITED_BEFORE_KEY = 'higglehaven.shopVisitedBefore';
+// docs/SPEC.md §1/§2 (#1175): every Shop-mode spawn (not just a first-ever
+// visit) starts zoomed-out in flight mode above the world — see
+// enterShopMode's own spawn block. Below the initial flight ceiling
+// (SHOP_WALL_HEIGHT_M + SHOP_DOME_INITIAL_RISE_M - SHOP_DOME_CLEARANCE_
+// MARGIN_M = 115 at launch) with real clearance to spare, comfortably above
+// "building height" (SHOP_FLIGHT_SPEED_REF_ALTITUDE_M, 10) so the view
+// actually reads as "above the world," not just a slightly-elevated hover.
+const SHOP_SPAWN_START_ALTITUDE_M = 80;
+// #1175: the clockwise orbit around the world center that every spawn
+// starts in, until the shopper gives any navigation input (see
+// updateShopSpawnRotation/stopShopSpawnRotation). "Slowly" per the spec —
+// a full revolution takes a couple of minutes, plenty of time to take in
+// the view before (or without ever) touching a control.
+const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
 // governing rule, "each doubling of altitude ≈ 50% more max ground speed."
@@ -10279,14 +10393,44 @@ const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 // Owner (Control Room, N46): flying should tip the avatar into a
 // Superman-style posture instead of staying upright — nose (head) forward
-// and down. Applied as a rotation.x pitch (the local left-right hinge axis
-// every limb already swings around) before rotation.z's own yaw — see the
-// main per-frame update — so the tip happens in the avatar's own local
-// frame first, then the whole tipped body turns to face the current
-// heading, same as a real flight rig would compose it. First shipped at
-// ~80deg (near-horizontal); owner follow-up (2026-09-12) asked for 45deg,
-// "halfway between vertical and horizontal," instead.
+// and down. Composed as a quaternion in the main per-frame update — yaw
+// (world Z, the avatar's current heading) applied first, then pitch around
+// the local left-right axis that yaw just established — so the tilt leans
+// toward wherever the avatar is actually facing, same as a real flight rig
+// would compose it. First shipped at ~80deg (near-horizontal); owner
+// follow-up (2026-09-12) asked for 45deg, "halfway between vertical and
+// horizontal," instead.
+//
+// #1168: this used to be set as independent Euler fields
+// (`group.rotation.x = pitch; group.rotation.z = yaw;`) — intending
+// exactly the composition described above, but Euler fields on the same
+// object don't compose that way. THREE's default 'XYZ' Euler order builds
+// the rotation matrix as Rx * Ry * Rz applied to a vector (see
+// applyShopCameraOrientation's own SHOP_BASE_QUAT comment above for the
+// same "which axis is actually local after a prior rotation" trap), which
+// pitches around a fixed world axis with yaw rotated separately underneath
+// it — not pitch-in-the-frame-yaw-just-produced. The owner's bug report
+// matched exactly: the tilt always leaned the same way regardless of which
+// direction the avatar was flying. Two intrinsic (body-frame) rotations
+// applied in sequence — yaw first, pitch second — compose as
+// `yawQuat.multiply(pitchQuat)` (yaw written first/outermost since it's
+// applied first, pitch second/innermost since it happens in the frame yaw
+// already established), not `pitchQuat.multiply(yawQuat)`.
 const SHOP_AVATAR_FLIGHT_PITCH_RAD = -(45 * Math.PI) / 180;
+// Matches the plain rotation.z/rotation.x axes the old Euler-based code
+// used (world Z for yaw, since this is a Z-up world; local X for pitch,
+// the same left-right hinge every limb's walk-cycle swing already rotates
+// around) — no base-quat reorientation needed here the way
+// applyShopCameraOrientation's SHOP_BASE_QUAT needs one, since the avatar
+// model's own rest pose already faces correctly along these axes with no
+// rotation applied, unlike the camera's default -Z-forward/Y-up convention.
+const SHOP_AVATAR_YAW_AXIS = new THREE.Vector3(0, 0, 1);
+const SHOP_AVATAR_PITCH_AXIS = new THREE.Vector3(1, 0, 0);
+// Reused across frames rather than allocated fresh each one — same
+// reasoning as every other scratch object in this file (e.g.
+// scratchAttentionWorldPos above).
+const scratchAvatarYawQuat = new THREE.Quaternion();
+const scratchAvatarPitchQuat = new THREE.Quaternion();
 // Eases shopAvatarPitch toward the target above (or back to 0 on landing)
 // each frame — same idea as SHOP_AVATAR_SWING_EASE_PER_S, tuned to settle
 // over roughly the same ~1s span as SHOP_FLIGHT_TAKEOFF_DURATION_S so the
@@ -11301,6 +11445,18 @@ let shopFlightAltitudeM = 0; // authoritative — shopAvatarPosition.z mirrors t
 let shopFlightLandingStartAltitudeM = 0; // altitude captured the instant landing begins, so its ramp has a real start point
 let shopLastSpacePressAt = -Infinity;
 
+// #1175: true for the span right after spawn during which the avatar
+// orbits the world center hands-off (see updateShopSpawnRotation) — ends
+// the instant the shopper gives any navigation input (stopShopSpawnRotation).
+// shopSpawnOrbitRadiusM is the (fixed, spawn-time-random) distance from the
+// center the orbit holds; shopYaw/shopAvatarFacing/shopAvatarPosition are
+// all driven directly off the shared angle tracked in updateShopSpawnRotation
+// rather than a separate angle field, since "facing the center" and "the
+// camera's own look direction" and "the orbit's own angle" are all the same
+// angle throughout the orbit (see that function's own comment).
+let shopSpawnRotating = false;
+let shopSpawnOrbitRadiusM = 0;
+
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
 // mid-stride — and phase only advances while actually moving, so a full
@@ -11415,10 +11571,19 @@ function clampShopCameraHeight() {
 // avatar's own ground position (so a builder can never walk past the wall)
 // and the follow camera (so a follow distance long enough to swing the
 // camera past the wall on its own can't peek through it either).
+// Shared with #1175's spawn-location pick (enterShopMode) — both need "how
+// far from center can the avatar actually be" from the same wall-clearance
+// formula, just used in opposite directions (clamping an existing position
+// in here vs. picking a fresh random one there).
+function shopMaxRadiusM() {
+  if (shopWorldRadiusM === null) return 0;
+  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
+  return shopWorldRadiusM - clearance;
+}
+
 function clampShopRadius(position) {
   if (shopWorldRadiusM === null) return;
-  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
-  const maxRadius = shopWorldRadiusM - clearance;
+  const maxRadius = shopMaxRadiusM();
   const distance = Math.hypot(position.x, position.y);
   if (distance > maxRadius) {
     const scale = maxRadius / distance;
@@ -11468,6 +11633,10 @@ function setShopFlyBtnFlying(flying) {
 // own starting altitude (shopFlightLandingStartAltitudeM) so its descent
 // ramps from wherever the player actually was, not always the same height.
 function toggleShopFlight() {
+  // #1175: a deliberate tap of the fly button is navigation input same as
+  // any joystick deflection — stop the hands-off spawn orbit immediately
+  // rather than leaving it fighting the player's own takeoff/landing.
+  stopShopSpawnRotation();
   if (shopFlightState === 'grounded') {
     shopFlightState = 'takingOff';
     shopFlightTransitionElapsedS = 0;
@@ -11485,6 +11654,35 @@ function toggleShopFlight() {
     // descend controls hide the instant it starts, not once it finishes.
     setShopFlyBtnFlying(false);
   }
+}
+
+// #1175: ends the hands-off spawn orbit the instant it's actually rotating
+// — a no-op otherwise, so every navigation-input path (joystick deflection,
+// vertical flight buttons, the fly-button tap in toggleShopFlight above)
+// can call this unconditionally without first checking shopSpawnRotating
+// itself.
+function stopShopSpawnRotation() {
+  shopSpawnRotating = false;
+}
+
+// #1175: drives the spawn-time "slow clockwise rotating aerial shot at a
+// random location" (docs/SPEC.md §1) each frame until navigation input
+// stops it. shopYaw doubles as the orbit's own angle here — at any point on
+// the circle, the camera direction that faces the world center IS the
+// orbit angle itself (see applyShopCameraOrientation's own SHOP_BASE_QUAT
+// comment: forward at yaw θ is (-sin θ, cos θ), so a position of
+// (r sin θ, -r cos θ) always has that forward vector pointing straight at
+// the origin). Decreasing θ over time therefore both turns the view
+// clockwise (as seen from above, looking down +Z) and swings the position
+// clockwise around the same center in lockstep — one angle, no separate
+// "facing" and "orbit position" math to keep in sync.
+function updateShopSpawnRotation(dt) {
+  if (!shopSpawnRotating) return;
+  shopYaw -= SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S * dt;
+  shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
+  shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
+  shopAvatarFacing = shopYaw;
+  applyShopCameraOrientation();
 }
 
 // Drives shopFlightAltitudeM through takeoff/landing (smoothstep-eased
@@ -11643,6 +11841,21 @@ function updateShopMovement(now) {
   const dt = Math.min((now - shopLastFrameTime) / 1000, 0.1); // clamp against tab-switch-sized gaps
   shopLastFrameTime = now;
 
+  // #1175: any continuous navigation input (look, move, or vertical flight)
+  // stops the spawn orbit immediately, the same frame it starts — the
+  // discrete fly-button tap handles itself via toggleShopFlight's own
+  // stopShopSpawnRotation() call. While the orbit is still running, the
+  // blocks below see shopLookX/shopMoveX/shopVerticalInput all still at 0
+  // (that's exactly what "no navigation input yet" means) and simply don't
+  // fire, so no extra guard is needed to keep them from fighting the orbit.
+  if (shopSpawnRotating) {
+    if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 || shopVerticalInput !== 0) {
+      stopShopSpawnRotation();
+    } else {
+      updateShopSpawnRotation(dt);
+    }
+  }
+
   if (shopLookX !== 0 || shopLookY !== 0) {
     shopYaw -= shopLookX * SHOP_LOOK_SPEED_RAD_S * dt;
     shopPitch = Math.max(
@@ -11737,20 +11950,32 @@ function updateShopMovement(now) {
   setShopAvatarAnimationState(shopAvatar, airborne ? 'fly' : (moveMagnitude > SHOP_AVATAR_ANIM_WALK_THRESHOLD ? 'walk' : 'idle'));
   updateShopItemHandling(dt, airborne ? 0 : moveMagnitude, airborne);
   // Owner (N46): flying tips the avatar toward SHOP_AVATAR_FLIGHT_PITCH_RAD
-  // instead of staying upright; landing eases it back to 0. Applied as
-  // rotation.x (the local left-right axis, same one every limb's walk-cycle
-  // swing already rotates around) BEFORE rotation.z's yaw below, so the tilt
-  // happens in the avatar's own local frame and then the whole tilted body
-  // turns to face the current heading — not the other way around.
+  // instead of staying upright; landing eases it back to 0. The avatar
+  // faces its own movement direction (shopAvatarFacing, turned by the left
+  // stick above), not the camera's look direction (shopYaw, the right
+  // stick) — a standard third-person rig where free-look and facing are
+  // independent. Plus a small idle weight-shift offset when standing still.
+  //
+  // #1168: yaw and pitch are composed as a single quaternion, yaw applied
+  // first (establishing which way the body faces) and pitch second (tilting
+  // around the local left-right axis that yaw just produced) — see
+  // SHOP_AVATAR_FLIGHT_PITCH_RAD's own comment above for why two
+  // independent `.rotation.x`/`.rotation.z` Euler fields (the old code
+  // here) can't express this and always tilted the same way regardless of
+  // facing direction.
   const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
-  shopAvatar.group.rotation.x = shopAvatarPitch;
-  // The avatar faces its own movement direction (shopAvatarFacing, turned
-  // by the left stick above), not the camera's look direction (shopYaw,
-  // the right stick) — a standard third-person rig where free-look and
-  // facing are independent. Plus a small idle weight-shift offset when
-  // standing still.
-  shopAvatar.group.rotation.z = shopAvatarFacing + shopIdleSwayYawOffset;
+  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset);
+  scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
+  shopAvatar.group.quaternion.copy(scratchAvatarYawQuat).multiply(scratchAvatarPitchQuat);
+  // #1168: same reasoning as window.__shopAvatarMetrics above — this file's
+  // own three.js-dependent orientation math has no unit-test pool to live
+  // in (vitest.config.js's own note), so e2e is how it gets verified. A
+  // plain, frame-updated snapshot (not the live THREE.Quaternion itself,
+  // which Playwright's page.evaluate can't structured-clone) is enough for
+  // a test to confirm the tilt direction actually tracks shopAvatarFacing
+  // rather than staying fixed.
+  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
@@ -12984,16 +13209,17 @@ async function enterShopMode() {
   // shopFlyBtn/shopVerticalControlsEl are deliberately NOT marked visible
   // here — #119/#688: they used to be, but this app now blocks Shop's own
   // entry on ensureShopperIdentity (N44/#678) before ever reaching this
-  // point, and the first-ever-visit flying-vs-grounded decision below
-  // still waits on fetchCatalog/fetchWorld/fetchAllLandlets to actually
-  // resolve first. Marking the fly button visible this early let it appear
-  // on screen — already showing its default grounded look — for that
-  // whole fetch window, only flipping to the tilted "flying" look once
-  // setShopFlyBtnFlying(isFirstShopVisit) finally runs: a real, visible
-  // flash of the wrong state for every first-time visitor (and the exact
-  // race #688's own e2e failure caught, once the identity gate made that
-  // window long enough to reliably lose). Made visible below instead,
-  // together with the moment the correct state is actually decided.
+  // point, and the spawn-flying decision below (#1175: every spawn now
+  // flies, not just a first-ever visit) still waits on fetchCatalog/
+  // fetchWorld/fetchAllLandlets to actually resolve first. Marking the fly
+  // button visible this early let it appear on screen — already showing
+  // its default grounded look — for that whole fetch window, only flipping
+  // to the tilted "flying" look once setShopFlyBtnFlying(true) finally
+  // runs: a real, visible flash of the wrong state for every visitor (and
+  // the exact race #688's own e2e failure caught, once the identity gate
+  // made that window long enough to reliably lose). Made visible below
+  // instead, together with the moment the correct state is actually
+  // decided.
   for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl]) {
     el.classList.add('visible');
   }
@@ -13077,7 +13303,19 @@ async function enterShopMode() {
     allLandlets.map((landlet) => landlet.ownerBuilderId).filter((id) => id),
   )];
   fetchBuildersByIds(visibleOwnerBuilderIds)
-    .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
+    .then((builders) => {
+      shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label]));
+      // #1172: updateShopLandletInfo only re-renders on a landlet-transition
+      // (found === shopCurrentLandletEntry short-circuits otherwise), so a
+      // shopper who spawned already standing on a landlet before this fetch
+      // resolved would see the "unknown builder" fallback stuck until they
+      // walked off and back. Forcing shopCurrentLandletEntry back to null
+      // makes the next call recompute from scratch and re-render — same
+      // effect as the bootstrap reset above, just re-triggered once real
+      // labels are in.
+      shopCurrentLandletEntry = null;
+      updateShopLandletInfo();
+    })
     .catch(() => {});
 
   // The wall sits at the largest gap-free radius, not the administrative
@@ -13192,7 +13430,6 @@ async function enterShopMode() {
   scene.add(shopAvatar.group);
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
-  shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
@@ -13202,37 +13439,44 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
-  // First-ever Shop-mode visit on this device spawns already flying, above
-  // the world (docs/SPEC.md §1) — every later visit starts grounded as
-  // before. Skips the takingOff ramp entirely (that's for a player-
-  // initiated toggle mid-session, not this one-time spawn), landing in
-  // 'flying' directly the same way toggleShopFlight's own takingOff path
-  // eventually would.
-  const isFirstShopVisit = !localStorage.getItem(SHOP_VISITED_BEFORE_KEY);
-  if (isFirstShopVisit) localStorage.setItem(SHOP_VISITED_BEFORE_KEY, '1');
-  shopFlightState = isFirstShopVisit ? 'flying' : 'grounded';
+  // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
+  // starts already flying, above a random world location, facing the
+  // world center, and slowly orbiting it clockwise until the shopper gives
+  // any navigation input (see updateShopSpawnRotation/stopShopSpawnRotation,
+  // driven from updateShopMovement). Skips the takingOff ramp entirely
+  // (that's for a player-initiated toggle mid-session, not this spawn),
+  // landing in 'flying' directly the same way toggleShopFlight's own
+  // takingOff path eventually would.
+  shopSpawnOrbitRadiusM = Math.random() * shopMaxRadiusM();
+  shopYaw = Math.random() * Math.PI * 2;
+  shopSpawnRotating = true;
+  shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
+  shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
+  shopFlightState = 'flying';
   shopFlightTransitionElapsedS = 0;
-  shopFlightAltitudeM = isFirstShopVisit ? SHOP_NEW_VISITOR_START_ALTITUDE_M : 0;
+  shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
   // Normally kept in sync every frame by the update loop (see
   // shopFlightAltitudeM's own comment) — set once here too so the
   // positionShopCamera() call below (synchronous, before that loop's first
-  // tick) doesn't position the camera against the stale z=0 this function's
-  // own shopAvatarPosition.set(0, 0, 0) just above left it at.
+  // tick) doesn't position the camera against a stale z.
   shopAvatarPosition.z =
     shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
-  setShopFlyBtnFlying(isFirstShopVisit);
+  setShopFlyBtnFlying(true);
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
 
-  shopYaw = 0;
   shopPitch = -0.12;
-  shopAvatarFacing = 0;
+  // shopYaw (set above, the orbit's starting angle) already faces the
+  // world center — see updateShopSpawnRotation's own comment on why that
+  // single angle does double duty as both the camera's look direction and
+  // the orbit position.
+  shopAvatarFacing = shopYaw;
   shopAvatarPitch = 0;
   applyShopCameraOrientation();
   positionShopCamera();
