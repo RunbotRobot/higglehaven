@@ -171,9 +171,9 @@ describe('Builders', () => {
   // owner's #325 decision: "any login... even if only logging in for
   // shopping or selling" counts as activity). A builder created directly
   // via the DB (never through a real session, the way a pre-existing
-  // dev-mode row or the pioneer-cohort filler rows above come to exist)
-  // still reads as NULL — matching migrations/0067's own comment on why
-  // that should never be backdated to a guess.
+  // dev-mode row comes to exist) still reads as NULL — matching
+  // migrations/0067's own comment on why that should never be backdated to
+  // a guess.
   it('bumps last_active_at on any resolved session (including a mere GET /builders/me), not on a DB-only row', async () => {
     const direct = await env.DB.prepare(
       "INSERT INTO builders (builder_id, label) VALUES ('builder-activity-test-direct', 'Direct row') RETURNING last_active_at",
@@ -665,99 +665,6 @@ describe('Builders', () => {
     expect(auctionBAfter.body.auction.status).toBe('active');
   });
 
-  it('assigns sequential pioneer ranks to successive first-time claimers', async () => {
-    // Earlier tests in this file already claimed landlets, so some
-    // builders very likely already hold ranks by this point — reset
-    // directly via the DB (not exposed over the HTTP API on purpose; a
-    // test-only escape hatch) so this test's own outcome is deterministic
-    // regardless of execution order.
-    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
-
-    const first = await signupBuilder('first-claimer');
-    const second = await signupBuilder('second-claimer');
-    await createGreenbeltLandlet('pioneer-first-landlet');
-    await createGreenbeltLandlet('pioneer-second-landlet');
-
-    await api('/landlets/pioneer-first-landlet/claim', first.session({ method: 'POST' }));
-    await api('/landlets/pioneer-second-landlet/claim', second.session({ method: 'POST' }));
-
-    const list = await api('/builders');
-    const firstAfter = list.body.builders.find((b) => b.builderId === first.builderId);
-    const secondAfter = list.body.builders.find((b) => b.builderId === second.builderId);
-    expect(firstAfter.isPioneer).toBe(true);
-    expect(firstAfter.pioneerRank).toBe(1);
-    expect(secondAfter.isPioneer).toBe(true);
-    expect(secondAfter.pioneerRank).toBe(2);
-
-    // A second claim (after releasing the first, so no rank was granted
-    // the first time around) still gets one, since it's this builder's
-    // first landing in the ranked cohort — the rule is "not yet ranked,"
-    // not "this exact claim is chronologically their first ever."
-    const third = await signupBuilder('third-claimer');
-    await createGreenbeltLandlet('pioneer-third-landlet');
-    await api('/landlets/pioneer-third-landlet/claim', third.session({ method: 'POST' }));
-    const thirdList = await api('/builders');
-    const thirdAfter = thirdList.body.builders.find((b) => b.builderId === third.builderId);
-    expect(thirdAfter.pioneerRank).toBe(3);
-  });
-
-  it('stops assigning pioneer ranks once the founding cohort is full', async () => {
-    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
-    // Fill the cohort with throwaway rows directly via the DB — cheap and
-    // exact, versus actually claiming 100 real landlets through the API.
-    const fillerValues = Array.from({ length: 100 }, (_, i) => `('builder-cohort-filler-${i}', 'Filler ${i}', ${i + 1})`).join(', ');
-    await env.DB.prepare(`INSERT INTO builders (builder_id, label, pioneer_rank) VALUES ${fillerValues}`).run();
-
-    const late = await signupBuilder('late-claimer');
-    await createGreenbeltLandlet('pioneer-late-landlet');
-    const lateClaim = await api('/landlets/pioneer-late-landlet/claim', late.session({ method: 'POST' }));
-    expect(lateClaim.response.status).toBe(200);
-
-    // #715 gave GET /builders its own LIMIT (default 100) — the 100 filler
-    // rows above now fill that page entirely, so the late claimer (the
-    // 101st builder, oldest-first) would never show up in it. Check via
-    // their own GET /builders/me instead, unaffected by the cap.
-    const lateAfter = await api('/builders/me', late.session());
-    expect(lateAfter.body.builder.isPioneer).toBe(false);
-    expect(lateAfter.body.builder.pioneerRank).toBeNull();
-  });
-
-  // #787: the assignment used to hand out MAX(pioneer_rank) + 1, which
-  // only matches the gate's own live-member COUNT check while ranks stay
-  // contiguous. Deleting a non-max-ranked pioneer breaks that — COUNT
-  // drops below the cohort size while MAX doesn't move — so the next
-  // claimer used to get assigned a rank past PIONEER_COHORT_SIZE even
-  // though live membership never actually exceeded it. The fix backfills
-  // the smallest still-unused rank (here, the freed 50 — not 100, which
-  // some other still-live filler already holds and a naive COUNT + 1
-  // would have collided with).
-  it('reuses the specific freed rank instead of exceeding the cohort size after a non-max-ranked pioneer is deleted', async () => {
-    await env.DB.prepare('UPDATE builders SET pioneer_rank = NULL').run();
-    const fillerValues = Array.from({ length: 100 }, (_, i) => `('builder-cohort-gap-filler-${i}', 'Filler ${i}', ${i + 1})`).join(', ');
-    await env.DB.prepare(`INSERT INTO builders (builder_id, label, pioneer_rank) VALUES ${fillerValues}`).run();
-
-    // Delete a non-max-ranked filler (rank 50, not rank 100) directly via
-    // the DB — equivalent to that builder having self-deleted through
-    // DELETE /api/builders/:id, which does the same plain row delete with
-    // no pioneer-rank compaction.
-    await env.DB.prepare(`DELETE FROM builders WHERE builder_id = 'builder-cohort-gap-filler-49'`).run();
-
-    const late = await signupBuilder('gap-late-claimer');
-    await createGreenbeltLandlet('pioneer-gap-landlet');
-    await api('/landlets/pioneer-gap-landlet/claim', late.session({ method: 'POST' }));
-
-    const lateAfter = await api('/builders/me', late.session());
-    expect(lateAfter.body.builder.isPioneer).toBe(true);
-    expect(lateAfter.body.builder.pioneerRank).toBe(50);
-
-    // Also assert no duplicate ranks exist among the whole live cohort —
-    // the real invariant a naive COUNT + 1 fix would have silently broken.
-    const { results } = await env.DB.prepare(
-      'SELECT pioneer_rank, COUNT(*) AS n FROM builders WHERE pioneer_rank IS NOT NULL GROUP BY pioneer_rank HAVING n > 1',
-    ).all();
-    expect(results).toEqual([]);
-  });
-
   // Found via backlog audit (#362): unlike every other public, repeatable
   // mutation in this file, POST /api/builders (unauthenticated on purpose
   // — see that handler's own comment) had no rate limit and no length cap
@@ -824,11 +731,11 @@ describe('Builders', () => {
   // INSERT, racing two concurrent requests against the partial UNIQUE INDEX
   // on builders.user_id (migrations/0054) -- the loser got a raw 409
   // instead of its own re-provisioned profile. Reachable only after a
-  // builder self-deletes (DELETE /api/builders/:id, stood in for here the
-  // same way the pioneer-rank test above does) while their account
-  // persists, since an ordinary signup already creates a builder
-  // synchronously and this function's own fallback path is otherwise never
-  // hit. Deterministically injects the "concurrent" insert via
+  // builder self-deletes (DELETE /api/builders/:id, stood in for here via
+  // a direct DB delete) while their account persists, since an ordinary
+  // signup already creates a builder synchronously and this function's
+  // own fallback path is otherwise never hit. Deterministically injects
+  // the "concurrent" insert via
   // env.DB.prepare (vitest-pool-workers shares this exact env.DB instance
   // with the worker's own fetch handler) instead of relying on real
   // concurrency, which can't reliably land two requests inside the same

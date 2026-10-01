@@ -366,7 +366,7 @@ export async function clickUntilSelected(page, { x, yStart, yEnd, yStep = 10, ex
 // `timeout` elapses, returning whatever text was showing when it stopped —
 // same "poll instead of guess a fixed delay" shape as clickUntilSelected
 // above. Several UI updates this suite checks (account-button label after
-// login/logout, the account panel's pioneer badge) are the client side of
+// login/logout, the account panel's trust-tier line) are the client side of
 // an async network round trip rather than a synchronous DOM write, so a
 // single fixed waitForTimeout before reading them is a real flake source
 // under variable load (e.g. several matrix runners hitting one CI host at
