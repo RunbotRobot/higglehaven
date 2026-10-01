@@ -2672,7 +2672,8 @@
         display: none;
       }
       #auth-resend-verify-btn,
-      #auth-logout-btn {
+      #auth-logout-btn,
+      #auth-change-password-btn {
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
@@ -2680,6 +2681,10 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
+      }
+      #auth-change-password-form {
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        padding-top: 10px;
       }
       /* #1149: the real "delete your login" action, distinct from the
          builder/seller "reset" actions in Settings — outlined in --danger
@@ -3849,6 +3854,25 @@
         <div id="auth-logged-in" hidden>
           <div id="auth-account-email"></div>
           <div id="auth-account-verified"></div>
+          <!-- #1182 (sub-issue of #1126): an in-session way to change
+               account email. Collapsed behind its own trigger, same shape
+               as Delete Account below — not destructive, but still a real
+               form with two fields rather than something worth showing
+               open by default. -->
+          <button id="auth-change-email-btn" type="button">Change Email</button>
+          <form id="auth-change-email-form" class="auth-form" hidden>
+            <label>New email
+              <input type="email" id="auth-change-email-new" required autocomplete="email" />
+            </label>
+            <label>Confirm your password
+              <div class="auth-password-field">
+                <input type="password" id="auth-change-email-password" required autocomplete="current-password" />
+                <button type="button" id="auth-change-email-password-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
+            <button type="submit">Change Email</button>
+            <button type="button" id="auth-change-email-cancel-btn" class="auth-link-btn">Cancel</button>
+          </form>
           <!-- docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
                verification via Didit — the higher trust tier that gates
                full social features, above the credit-card tier. -->
@@ -3856,6 +3880,33 @@
           <button id="auth-verify-id-btn" type="button" hidden>Verify with Government ID</button>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
           <button id="auth-logout-btn" type="button">Log Out</button>
+
+          <!-- #1181 (sub-issue of #1126): a real in-session change-password
+               form, separate from the forgot-password email-link flow
+               above (auth-forgot-form/auth-reset-form), which stays as the
+               logged-out path. Collapsed behind its own trigger, same
+               shape as Delete Account below, since it's a sensitive action
+               too even though it isn't irreversible the way deletion is. -->
+          <button id="auth-change-password-btn" type="button">Change Password</button>
+          <form id="auth-change-password-form" class="auth-form" hidden>
+            <div class="auth-hint">
+              Changing your password signs you out of every other device, but keeps this one signed in.
+            </div>
+            <label>Current password
+              <div class="auth-password-field">
+                <input type="password" id="auth-change-password-current" required autocomplete="current-password" />
+                <button type="button" id="auth-change-password-current-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
+            <label>New password (8+ characters)
+              <div class="auth-password-field">
+                <input type="password" id="auth-change-password-new" required autocomplete="new-password" minlength="8" />
+                <button type="button" id="auth-change-password-new-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
+            <button type="submit">Change Password</button>
+            <button type="button" id="auth-change-password-cancel-btn" class="auth-link-btn">Cancel</button>
+          </form>
 
           <!-- #1146/#1149: real account deletion, distinct from the
                builder/seller "reset" actions under Settings → Build/Sell
