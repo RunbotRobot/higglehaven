@@ -68,6 +68,18 @@ export async function fetchCurrentUser() {
   return user;
 }
 
+// #1181: a real in-session change-password form, separate from the
+// forgot-password email-link flow below (requestPasswordReset/
+// resetPassword), which stays as-is for the logged-out case. Requires the
+// caller's current password (see worker/index.js's handleChangePassword).
+export async function changePassword(currentPassword, newPassword) {
+  await requestJson('/auth/change-password', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 export async function requestPasswordReset(email) {
   return requestJson('/auth/request-password-reset', {
     method: 'POST',
