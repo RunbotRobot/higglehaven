@@ -911,11 +911,11 @@ export async function fetchSellerFeedback(sellerId) {
   return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
 }
 
-export async function createSellerFeedback(purchaseId, { authorLabel, rating, text } = {}) {
+export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
   const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, rating, text }),
+    body: JSON.stringify({ rating, text }),
   });
   return feedback;
 }
