@@ -3245,16 +3245,18 @@ gated to the recipient's own session, and `DELETE` to either party's — see
 each endpoint's own note below.
 
 **"Social map ... approximate location" is deliberately simplified** to
-each accepted friend's own claimed lándlet center, not a live position —
-this app has no avatar presence tracking at all (Shop-mode camera position
-is never persisted anywhere), so there is no real "current location" to
-report regardless of how this endpoint were built. A builder's claimed
-lándlet is the one stable, already-known location the backend actually
-has for them. The frontend renders this as plain text in the Friends
-modal, not an actual graphical map widget — a real map would need its own
-renderer/camera the way the claim flyover does (a full WebGL scene), which
-isn't justified just for a small modal list. Shipping the underlying "where
-do my friends live" data first, with a graphical map as a possible later
+each accepted friend's own claimed lándlet center, not a live position.
+This predates #1095's own `avatar_presence` table ("Avatar presence"
+below) — now that live position tracking exists, this section's own
+"approximate location" could in principle be upgraded to a friend's actual
+current position, but that's #1044's own remit (friend "follow"/"stay
+with"), not a change made here. A builder's claimed lándlet remains the
+one stable, already-known location the backend reports for this feature.
+The frontend renders this as plain text in the Friends modal, not an
+actual graphical map widget — a real map would need its own renderer/
+camera the way the claim flyover does (a full WebGL scene), which isn't
+justified just for a small modal list. Shipping the underlying "where do
+my friends live" data first, with a graphical map as a possible later
 enhancement, follows the same "honest simplest form first" precedent as
 the scheduled-event confetti effect and its own one-shot trigger.
 
@@ -3378,6 +3380,71 @@ Answering the "+ Add Friend" prompt with a different name than the
 session's own identity name needed `page.removeAllListeners('dialog')` to
 swap in a one-off handler, since `helpers.mjs`'s own dialog handler answers
 every prompt in a session with one fixed string.
+
+## Avatar presence
+
+Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars
+moving around the same shared world in real time"). `avatar_presence`
+(`migrations/0100_avatar_presence.sql`) holds one row per currently-online
+builder's live position — ephemeral state, not a history log, upserted on
+every position report. This is the foundation sub-issue (#1097) plus the
+read side (#1099, documented here); the write side (`POST /api/presence`,
+#1098) and the client-side report/poll/interpolate loop (#1100) are
+separate, not-yet-landed sub-issues of the same tracking issue.
+
+**Transport**: a polling-based position broadcast on the existing D1/
+Workers free-tier stack, not a Durable-Objects/WebSocket push — see #1095's
+own tracking-issue body and #1102 (the explicitly-flagged, not-yet-decided
+real-time upgrade path, which would require moving off the Workers Free
+plan). `landlet_id` is a free-form scoping key, not a foreign key — a
+builder can be anywhere in the shared world, not just standing on a
+landlet a `landlets` row models.
+
+### Avatar presence object
+
+```json
+{
+  "builderId": "builder-3c2b1a90-...",
+  "landletId": "landlet-7f3a1c20-...",
+  "x": 12.5,
+  "y": 0,
+  "z": -4.25,
+  "heading": 1.57,
+  "updatedAt": "2026-10-01T00:00:00.000Z"
+}
+```
+
+### `GET /api/presence?landletId=X`
+
+Requires a session. Returns every *other* builder's current position
+reported for landlet/region `X` (`landletId` is required — `400` if
+missing) — never the whole world's positions in one response, both for
+payload size and so a shopper elsewhere isn't visibly tracking someone's
+live position for no reason. The caller's own row is always excluded (they
+already know where they are).
+
+A row whose `updated_at` is more than 10 seconds old is excluded as stale
+— treated as "this builder is no longer actually present" rather than a
+genuinely live position. #1098's own POST endpoint is expected to
+rate-limit a given builder to roughly one write per 1-2 seconds, so a
+handful of missed reports (a dropped request, a brief network hiccup)
+shouldn't make them flicker out of other builders' views, but someone who
+closed the tab or lost connectivity entirely disappears within a few
+seconds rather than lingering indefinitely. This is read-time filtering
+only — the fuller version (actually deleting long-stale rows so the table
+doesn't grow unbounded) is #1101's own separate scope, not yet built.
+
+### Testing note
+
+`worker/presence.test.js` owns the GET contract: the anonymous-session
+`401`, the missing-`landletId` `400`, a same-landlet position being
+returned while the caller's own and a different-landlet builder's are
+excluded, and a stale report being excluded. Since #1098's POST endpoint
+doesn't exist yet, these tests seed `avatar_presence` rows directly via
+`env.DB` rather than through a real write path — the same "insert the
+state a real write would have produced" shortcut
+`worker/seller-feedback.test.js`'s own `createPurchase` helper already
+uses for a different not-yet-built dependency.
 
 ## Bundles
 
