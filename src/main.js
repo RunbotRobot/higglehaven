@@ -12460,7 +12460,7 @@ async function promptSellerFeedback(purchase) {
   }
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
   try {
-    await createSellerFeedback(purchase.purchaseId, { authorLabel: purchase.buyerLabel, rating, text: text?.trim() || undefined });
+    await createSellerFeedback(purchase.purchaseId, { rating, text: text?.trim() || undefined });
   } catch (err) {
     alert(err.message || 'Could not leave feedback for this seller.');
   }

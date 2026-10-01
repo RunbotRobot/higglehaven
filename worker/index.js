@@ -11043,10 +11043,14 @@ async function handleMarkShipped(request, env, purchaseId) {
 // shared across every seller who lists it; this rates one specific
 // seller's own service (listing accuracy, timeliness, communication) for
 // one specific purchase from them. Mirrors handleProductReviews' own
-// purchase-gating and rate-limit shape closely (see that function's own
-// comments for the full reasoning) — the differences are purely that this
-// is keyed to one exact purchase_id rather than a template_id/author_label
-// pair, since the owner's own ask was "one to one with a purchase."
+// purchase-gating and rate-limit shape (see that function's own comments
+// for the full reasoning) — the differences are purely that this is keyed
+// to one exact purchase_id rather than a template_id/buyer_builder_id
+// pair, since the owner's own ask was "one to one with a purchase." #1123:
+// this had drifted to mirror handleProductReviews' *pre*-#893-fix shape
+// (a client-supplied authorLabel matched against free-text buyer_label) —
+// now updated to the same session-derived, buyer_builder_id-based
+// eligibility check #1113/#1116 already brought to product reviews.
 const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 
 function sellerFeedbackFromRow(row) {
@@ -11068,15 +11072,20 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
   if (!purchase.seller_id) {
     throw new HttpError('This purchase has no seller to leave feedback for', 400);
   }
-  await checkRateLimit(db, `seller-feedback-create:${clientIp(request)}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
+  // #1123 (closing the same spoofing gap #893 already fixed for product
+  // reviews): requires a session — authorLabel is no longer client-supplied,
+  // and eligibility is a real buyer_builder_id match (migrations/0099)
+  // instead of a caller-supplied, non-unique, mutable label matched against
+  // purchases.buyer_label.
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  await checkRateLimit(db, `seller-feedback-create:${sessionBuilder.builder_id}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
-  const authorLabel = labelValue(input.authorLabel, 'authorLabel');
-  // Same "no real account system, match the purchase's own free-text
-  // buyerLabel" eligibility check handleProductReviews uses, and the same
-  // #357 refunded-purchase exclusion — a shopper made whole by a refund
-  // has no standing to also rate that same transaction's service.
-  if (!purchase.buyer_label || purchase.buyer_label.toLowerCase() !== authorLabel.toLowerCase() || purchase.refunded_at) {
-    throw new HttpError('Only the buyer of this purchase (under the same name) can leave feedback', 400);
+  const authorLabel = sessionBuilder.label;
+  // Same #357 refunded-purchase exclusion handleProductReviews uses — a
+  // shopper made whole by a refund has no standing to also rate that same
+  // transaction's service.
+  if (purchase.buyer_builder_id !== sessionBuilder.builder_id || purchase.refunded_at) {
+    throw new HttpError('Only the buyer of this purchase can leave feedback', 400);
   }
   const rating = Number(input.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) {

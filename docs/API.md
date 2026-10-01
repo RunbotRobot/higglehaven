@@ -4104,27 +4104,43 @@ keeping once that purchase row itself is gone. `seller_id` is still
 deliberately NOT a FK, same reasoning as `purchases.seller_id` itself — a
 permanent record that must survive the seller later self-deleting.
 
-**Eligibility gate, mirroring "Product reviews"' original (pre-#1113)
-design exactly — not its current one:** `POST /api/purchases/:purchaseId/feedback` requires the purchase to exist
-(`404`), to have a non-null `seller_id` (`400` — nobody to rate), and for
-`authorLabel` to match that purchase's own `buyer_label`,
-case-insensitively (`400` otherwise, same as the review gate — an
-anonymous purchase can't back feedback under anyone's name). The same
-#357 refund exclusion applies (`refunded_at IS NULL` — a shopper made
-whole by a refund has no standing to also rate the service on that
-transaction). `rating` is a required integer 1-5 (`400` outside that
-range); `text` is optional, capped at 280 characters when present, same
-as reviews. The existence check and the `INSERT` are folded into one
-atomic `INSERT ... SELECT ... WHERE NOT EXISTS (...)` statement, same
-check-then-act-race-avoiding idiom "Product reviews" above explains in
-full — `409` on a second attempt for the same purchase, never a raw
-constraint error.
+**Eligibility gate, mirroring "Product reviews"' current (post-#1113)
+design — #1123 closed a gap where this had instead drifted to mirror its
+original, pre-#1113 shape:** `POST /api/purchases/:purchaseId/feedback`
+requires a session (`401` without one) and the purchase to exist (`404`)
+and have a non-null `seller_id` (`400` — nobody to rate). `authorLabel` is
+no longer client-supplied — it's taken from the session builder's own
+`label`, the same "derive authorship server-side" discipline reviews and
+calendar events already use — and eligibility is a real foreign-key match,
+`purchases.buyer_builder_id = sessionBuilder.builder_id` (`migrations/0099`),
+not a caller-supplied label matched against free-text `buyer_label`
+(`400` when the session isn't the purchase's own buyer, or the purchase
+predates `buyer_builder_id` entirely). The same #357 refund exclusion
+applies (`refunded_at IS NULL` — a shopper made whole by a refund has no
+standing to also rate the service on that transaction). `rating` is a
+required integer 1-5 (`400` outside that range); `text` is optional,
+capped at 280 characters when present, same as reviews. The existence
+check and the `INSERT` are folded into one atomic `INSERT ... SELECT ...
+WHERE NOT EXISTS (...)` statement, same check-then-act-race-avoiding idiom
+"Product reviews" above explains in full — `409` on a second attempt for
+the same purchase, never a raw constraint error.
+
+**Original design (superseded by #1123 above, kept for history):** this
+endpoint originally mirrored "Product reviews"' own pre-#1113 shape —
+unauthenticated, with a client-supplied `authorLabel` matched
+case-insensitively against the purchase's free-text `buyer_label`. That
+shape had already been flagged and fixed for product reviews (#893) by
+the time this endpoint was written to deliberately mirror it, but the
+fix never carried over to this sibling — #1123 found and closed the same
+spoofing gap here: anyone who knew a `purchaseId` and the buyer's public
+display label, neither requiring a session or an account, could `POST`
+feedback as if they were that buyer.
 
 ### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`
 
 ```json
 POST /api/purchases/:purchaseId/feedback
-{ "authorLabel": "...", "rating": 5, "text": "Shipped fast, exactly as described!" }
+{ "rating": 5, "text": "Shipped fast, exactly as described!" }
 ```
 
 `GET`'s response shape mirrors `GET .../reviews` exactly — the raw list
@@ -4160,8 +4176,8 @@ their own purchase in hand: immediately after `#shop-buy-hint` completes a
 purchase (both the real-money and simulated paths), via a `confirm()` then
 the same two-`prompt()` rating+comment flow `#shop-review-hint` already
 uses. `promptSellerFeedback` silently no-ops when the purchase has no
-`sellerId` (nothing to rate) or no `buyerLabel` (can't pass the eligibility
-gate anyway) — never shown for a product with no seller or an
+`sellerId` (nothing to rate) or no `buyerLabel` (the purchase predates a
+real buyer identity) — never shown for a product with no seller or an
 unidentified buyer. The seller's own aggregate — `#seller-feedback-summary`
 in the Seller modal, right below `#seller-hint` — is fetched fresh on
 every modal open (`renderSellerFeedbackSummary`) and stays hidden entirely
