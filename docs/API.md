@@ -3387,10 +3387,11 @@ Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars
 moving around the same shared world in real time"). `avatar_presence`
 (`migrations/0100_avatar_presence.sql`) holds one row per currently-online
 builder's live position — ephemeral state, not a history log, upserted on
-every position report. This is the foundation sub-issue (#1097) plus the
-read side (#1099, documented here); the write side (`POST /api/presence`,
-#1098) and the client-side report/poll/interpolate loop (#1100) are
-separate, not-yet-landed sub-issues of the same tracking issue.
+every position report. This covers the foundation sub-issue (#1097), the
+write side (`POST /api/presence`, #1098), the read side (`GET
+/api/presence`, #1099), and the stale-row cleanup sweep (#1101); the
+client-side report/poll/interpolate loop (#1100) is a separate,
+not-yet-landed sub-issue of the same tracking issue.
 
 **Transport**: a polling-based position broadcast on the existing D1/
 Workers free-tier stack, not a Durable-Objects/WebSocket push — see #1095's
@@ -3425,26 +3426,63 @@ already know where they are).
 
 A row whose `updated_at` is more than 10 seconds old is excluded as stale
 — treated as "this builder is no longer actually present" rather than a
-genuinely live position. #1098's own POST endpoint is expected to
-rate-limit a given builder to roughly one write per 1-2 seconds, so a
-handful of missed reports (a dropped request, a brief network hiccup)
-shouldn't make them flicker out of other builders' views, but someone who
-closed the tab or lost connectivity entirely disappears within a few
-seconds rather than lingering indefinitely. This is read-time filtering
-only — the fuller version (actually deleting long-stale rows so the table
-doesn't grow unbounded) is #1101's own separate scope, not yet built.
+genuinely live position. `POST /api/presence` (below) rate-limits a given
+builder to roughly one write per 1-2 seconds, so a handful of missed
+reports (a dropped request, a brief network hiccup) shouldn't make them
+flicker out of other builders' views, but someone who closed the tab or
+lost connectivity entirely disappears within a few seconds rather than
+lingering indefinitely. This is read-time filtering only — the physical
+cleanup sweep that actually deletes a long-stale row (so the table itself
+doesn't grow unbounded) is `pruneStaleAvatarPresence` (#1101, below),
+run from the existing `scheduled()` cron on a longer (5-minute) threshold,
+since its job is table hygiene, not hiding a briefly-stale builder.
+
+### `POST /api/presence` — report your own position (#1098)
+
+Requires a real, verified session (`requireSessionBuilder`). Upserts the
+caller's own row — there is exactly one `avatar_presence` row per
+`builder_id` at any time, never a growing log.
+
+Request body:
+
+```json
+{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
+```
+
+- `x`/`y`/`z` are required finite numbers.
+- `heading` is optional (omit or pass `null` for "unknown"); when given,
+  must be a finite number.
+- `landletId` is optional free-form scoping (no foreign key — a builder
+  can be anywhere in the shared world, not just on a landlet a `landlets`
+  row models). When given, it must name a landlet that actually exists —
+  this is a deliberately cheap spoof guard, not a claim that the caller
+  is actually near it; an unrecognized id 404s rather than being stored,
+  since the `GET` endpoint above scopes its query by this column and
+  would otherwise be silently poisoned by a bogus value.
+
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
+"updatedAt" } }` — the row as stored, after the upsert.
+
+Rate-limited server-side (`presence-report:<builderId>`, 600 per the
+shared 15-minute rate-limit window — enough headroom for roughly one
+report every 1-2 seconds sustained, with some burst tolerance) — this is
+the only thing bounding write frequency; client-side throttling (only
+reporting on meaningful movement) is the client-integration sub-issue's
+own scope (#1100), not this endpoint's. Never trust a client to self-
+throttle: this endpoint stays safe to call as often as any client
+actually does.
 
 ### Testing note
 
-`worker/presence.test.js` owns the GET contract: the anonymous-session
-`401`, the missing-`landletId` `400`, a same-landlet position being
-returned while the caller's own and a different-landlet builder's are
-excluded, and a stale report being excluded. Since #1098's POST endpoint
-doesn't exist yet, these tests seed `avatar_presence` rows directly via
-`env.DB` rather than through a real write path — the same "insert the
-state a real write would have produced" shortcut
-`worker/seller-feedback.test.js`'s own `createPurchase` helper already
-uses for a different not-yet-built dependency.
+`worker/avatar-presence.test.js` owns the `POST` contract (session
+gating, validation, the upsert-not-duplicate behavior, the landlet spoof
+guard, and the rate limit) and `worker/presence.test.js` owns the `GET`
+contract (the anonymous-session `401`, the missing-`landletId` `400`, a
+same-landlet position being returned while the caller's own and a
+different-landlet builder's are excluded, and a stale report being
+excluded). `worker/avatar-presence-cleanup.test.js` covers
+`pruneStaleAvatarPresence` directly, seeding a long-stale and a fresh row
+via `env.DB` rather than through a real write path.
 
 ## Bundles
 
@@ -3840,35 +3878,51 @@ concept anywhere in this app to credit a bonus to — only builders ever hold
 higgles, and only for their own commission earnings. This covers the
 reviewable-content half only.
 
-**Purchase-gated (standard marketplace practice):** only a shopper who has
-actually bought the product can review it. There's no real account system
-here to check purchase history against, so eligibility is matched the same
-free-text-label way a purchase's own optional `buyerLabel` already is
-elsewhere (migrations/0051_purchases.sql) — `POST .../reviews` requires a
-real row in `purchases` for this `template_id` whose `buyer_label` matches
-the review's `authorLabel`, case-insensitively (`400` otherwise). An
-anonymous purchase (`buyerLabel` left blank, "buy one, anonymously") can't
-back a review under anyone's name — the shopper needs to have used the
-same label both times, the same "no accounts, just labels" constraint this
-identity system carries everywhere else it's used. `authorLabel` is capped
-at 100 characters, same as `buyerLabel` and sign-post `authorLabel`. A
-refunded purchase does **not** count (`AND refunded_at IS NULL` on the
-eligibility check, #357 — a shopper who was made whole by a refund can't
-also back a "verified purchase" review on that same transaction) — but a
-`template_id`/`author_label` pair (case-insensitive) can only ever back
-**one** review (migrations/0059, a `UNIQUE INDEX`
-enforced at the DB level): the purchase gate above is a one-time
-eligibility check, not a per-review consumption check, so without this cap
-the same purchase could otherwise back an unbounded number of reviews
-under one label, directly skewing `averageRating`. The existence check and
-the `INSERT` are folded into one atomic statement (`INSERT ... SELECT ...
-WHERE NOT EXISTS (...)`, same idiom `checkRateLimit` uses) rather than a
-separate `SELECT` then `INSERT`, which would be a check-then-act race
-between two concurrent submits under the same label — `409` either way,
-never a raw constraint error. Deleting the existing review frees that
-label to review again. This matches docs/SPEC.md §5's review
-incentives being "capped per account/period" — the purchase-matched
-`author_label` is this app's closest thing to an account.
+**Purchase-gated, tied to a real purchase (#1113, closing #893's spoofing
+gap):** only a shopper who has actually bought the product can review it,
+and — unlike the original design below — eligibility is now a real foreign
+key, not a free-text label match. `POST .../reviews` requires a session
+(`401` without one); `authorLabel` is no longer client-supplied at all —
+it's taken from the session builder's own `label` at write time, the same
+"derive authorship server-side" discipline calendar events already use.
+The handler looks up the caller's own oldest unreviewed, unrefunded
+purchase of this template (`purchases.buyer_builder_id = sessionBuilder.builder_id`,
+`migrations/0099` — populated at purchase time now that every real
+purchase already requires a verified session, N44) and stores its
+`purchase_id` on the new review (`migrations/0100`); `400` if no such
+purchase exists ("you haven't bought this, or you've already reviewed
+every purchase you have"). A refunded purchase does **not** count
+(`AND refunded_at IS NULL`, #357 — a shopper who was made whole by a
+refund can't also back a "verified purchase" review on that same
+transaction). A `purchase_id` can only ever back **one** review
+(`migrations/0100`'s `UNIQUE INDEX`, replacing `migrations/0059`'s
+per-label one) — the eligibility lookup above is a point-in-time read, not
+a consumption check, so without this cap the same purchase could otherwise
+back an unbounded number of reviews. The existence check and the `INSERT`
+are folded into one atomic statement (`INSERT ... SELECT ... WHERE NOT
+EXISTS (...)`, same idiom `checkRateLimit` uses) rather than a separate
+`SELECT` then `INSERT`, which would be a check-then-act race between two
+concurrent submits against the same purchase — `409` either way, never a
+raw constraint error. Deleting the existing review frees that purchase to
+back a new one. Unlike the old label-matched design, a buyer with several
+separate eligible purchases of the same product now gets one review slot
+**per purchase**, not one per product overall — a deliberate tightening
+matching the "strict one to one with a purchase" direction this redesign
+follows, not just a side effect. This still matches docs/SPEC.md §5's
+review incentives being "capped per account/period" — a purchase is this
+app's real stand-in for "one transaction," now backed by an actual account
+rather than a label.
+
+**Original design (superseded by #1113 above, kept for history):** before
+this redesign, there was no real account system to check purchase history
+against, so eligibility was matched the same free-text-label way a
+purchase's own optional `buyerLabel` already was elsewhere
+(`migrations/0051_purchases.sql`) — a real row in `purchases` for this
+`template_id` whose `buyer_label` matched the review's client-supplied
+`authorLabel`, case-insensitively. This was flagged (#893) as spoofable:
+builder labels are public, not unique, and mutable at will, so anyone
+could `POST` a review claiming to be any past purchaser's label with no
+session or authentication at all.
 
 **Corrected design (this section originally attached reviews to a
 builder-flagged placed instance, cloning the community sign/calendar
@@ -3895,9 +3949,10 @@ events, with one addition: `rating`, a required integer from 1 to 5 (`400`
 outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
 characters when present. `POST`/`DELETE` return `404` for a template that
-doesn't exist. `POST` additionally requires a matching purchase (see the
-purchase-gating paragraph above) — `400` without one, `409` if that same
-purchaser label has already reviewed this template. `DELETE`
+doesn't exist. `POST` requires a session and an eligible purchase (see the
+purchase-gating paragraph above) — `401` with no session, `400` with no
+eligible purchase, `409` if that purchase has already been reviewed.
+`DELETE`
 (moderation) requires a session (`401` without one) and is gated to the
 template's own seller once it has one — `403` for anyone else — the same
 `if (existing.seller_id)` ownership check the catalog template's own
@@ -3917,15 +3972,18 @@ nobody to notify and is silently skipped.
 
 ```json
 POST /api/catalog/:templateId/reviews
-{ "authorLabel": "...", "rating": 5, "text": "Lovely product!" }
+{ "rating": 5, "text": "Lovely product!" }
 ```
 
 `GET`'s response carries the raw list plus a computed summary, so no caller
 needs to re-derive it from the list itself:
 
 ```json
-{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
+{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "purchaseId": "purchase-...", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
 ```
+
+`purchaseId` is `null` for a review created before `migrations/0100` (the
+old label-matched design above).
 
 `averageRating` is `null` when there are no reviews yet (never `0`, which
 would misleadingly read as "rated, and rated at the bottom"). `reviews`
@@ -3969,12 +4027,19 @@ product — a shopper posting a review near one placement won't instantly
 update another loaded instance of the same product elsewhere, an edge case
 rare and purely cosmetic enough that the added bookkeeping isn't worth it.
 
-Rating is collected via a `prompt()` asking for a whole number 1-5
-(re-prompted with an `alert()` on anything else), then an optional second
-`prompt()` for a text comment — mirroring the calendar hint's own optional
-third step for scheduling. In-world, each review renders as floating fading
-text reading `"<author> ★★★☆☆: <text>"` (or just the author/stars when no
-text was left), stacked the same way sign posts/calendar events are.
+`#shop-review-hint`'s click handler requires a real session
+(`ensureBuilderIdentity()`, #1113 — the same gate the checkout flow already
+uses) before prompting at all, replacing the old `shopperLabel()`
+`localStorage`-backed free-text name prompt that used to supply
+`authorLabel` client-side (the actual client-side manifestation of #893's
+spoofing gap — the server now derives it from the session instead, and no
+longer accepts it in the request body). Rating is then collected via a
+`prompt()` asking for a whole number 1-5 (re-prompted with an `alert()` on
+anything else), then an optional second `prompt()` for a text comment —
+mirroring the calendar hint's own optional third step for scheduling.
+In-world, each review renders as floating fading text reading `"<author>
+★★★☆☆: <text>"` (or just the author/stars when no text was left), stacked
+the same way sign posts/calendar events are.
 
 ### Testing note
 
@@ -3985,15 +4050,21 @@ correct past the list's own 200-row cap, moderation delete (both an
 unowned template's unrestricted delete and a seller-owned template's
 `401`/`403`/owning-seller-succeeds gate), independence between two
 different templates' review lists, cascade delete
-when the template itself is deleted, and the purchase gate itself — no
-purchase, an anonymous-only purchase, and a real matching purchase
-including the case-insensitive label match — including the `404` for
-posting to a template that doesn't exist). `e2e/product-reviews.test.mjs`
-uploads a real seller-owned priced product (same flow as
-`e2e/flooring.test.mjs`), "buys" it via the same API the in-world
-"Simulate Purchase" hint calls (once per reviewer label, satisfying the
-gate), posts reviews directly via the API, and confirms the Seller modal's
-own "Reviews" row panel displays and moderates them correctly. The in-world
+when the template itself is deleted, and the `purchase_id`-based eligibility
+gate itself (#1113) — no session, no purchase, a purchase with no
+`buyer_builder_id` (a pre-#1113 or otherwise legacy row), a purchase made
+by a *different* builder than the caller, a refunded purchase, a real
+matching purchase (confirming `authorLabel`/`purchaseId` are both derived
+server-side, never from the request body), and one review per purchase
+(not per account) once that purchase's own review is deleted and
+re-reviewed — including the `404` for posting to a template that doesn't
+exist. `e2e/product-reviews.test.mjs` uploads a real seller-owned priced
+product (same flow as `e2e/flooring.test.mjs`), "buys" it via the same API
+the in-world "Simulate Purchase" hint calls (twice, under the one logged-in
+session the whole test runs as — two purchases still grant two independent
+review slots for the same buyer), posts reviews directly via the API, and
+confirms the Seller modal's own "Reviews" row panel displays and moderates
+them correctly. The in-world
 Shop-mode "Rate this Product" hint isn't reachable without real camera
 movement (same limitation as signs/calendar), so its visibility and the
 actual on-screen star-rating sprite rendering were verified manually
@@ -4033,8 +4104,8 @@ keeping once that purchase row itself is gone. `seller_id` is still
 deliberately NOT a FK, same reasoning as `purchases.seller_id` itself — a
 permanent record that must survive the seller later self-deleting.
 
-**Eligibility gate, mirroring "Product reviews" above exactly:**
-`POST /api/purchases/:purchaseId/feedback` requires the purchase to exist
+**Eligibility gate, mirroring "Product reviews"' original (pre-#1113)
+design exactly — not its current one:** `POST /api/purchases/:purchaseId/feedback` requires the purchase to exist
 (`404`), to have a non-null `seller_id` (`400` — nobody to rate), and for
 `authorLabel` to match that purchase's own `buyer_label`,
 case-insensitively (`400` otherwise, same as the review gate — an

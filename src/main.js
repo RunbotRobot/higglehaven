@@ -12087,8 +12087,13 @@ shopCalendarHintEl.addEventListener('click', async () => {
 shopReviewHintEl.addEventListener('click', async () => {
   const review = shopTappedProduct;
   if (!review) return;
-  const authorLabel = shopperLabel();
-  if (!authorLabel) return;
+  // #1113: the server now derives authorship from a real logged-in builder
+  // and verifies an actual purchase, not a caller-supplied name matched
+  // against a free-text label (#893's spoofing gap) — same "builder-
+  // authored, needs a real identity" shape the calendar hint above already
+  // uses, replacing this handler's own former shopperLabel() name prompt.
+  const builder = await ensureBuilderIdentity();
+  if (!builder) return;
   const ratingInput = prompt('Rate this product 1-5 stars:', '5');
   if (!ratingInput || !ratingInput.trim()) return;
   const rating = Number(ratingInput.trim());
@@ -12102,7 +12107,7 @@ shopReviewHintEl.addEventListener('click', async () => {
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
   shopReviewHintEl.disabled = true;
   try {
-    const posted = await createProductReview(review.templateId, { authorLabel, rating, text: text?.trim() || undefined });
+    const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
     // Same unloaded-landlet guard as the sign-post and calendar handlers
     // above (#426) — registerShopReview's own fetch already checks this.
     if (!shopReviews.includes(review)) return;

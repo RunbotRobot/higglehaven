@@ -53,11 +53,15 @@ const { templates } = (await fetchJson('/api/catalog?limit=100')).body;
 const template = templates.find((t) => t.name === PRODUCT_NAME);
 console.log('uploaded product found in catalog:', !!template);
 
-// A review requires a real purchase under the same name first (standard
-// marketplace practice — see worker/index.js's own comment on the reviews
-// POST handler) — place an instance of the product on the already-claimed
-// landlet, then "buy" it once per reviewer via the same API the in-world
-// "Simulate Purchase" hint calls, before posting each review.
+// #1113: a review requires a real purchase made by the caller's own
+// session (purchases.buyer_builder_id), not a client-supplied label match
+// — place an instance of the product on the already-claimed landlet, then
+// "buy" it twice via the same API the in-world "Simulate Purchase" hint
+// calls, before posting each review. Both purchases land under this same
+// logged-in identity (the page's own session) now that eligibility is
+// per-purchase rather than per-label — two separate purchases still grant
+// two separate review slots for the same buyer, which is exactly what this
+// exercises.
 const { builders } = (await fetchJson('/api/builders')).body;
 const me = builders.find((b) => b.label === LABEL);
 const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${me.builderId}&limit=100`)).body;
@@ -67,26 +71,24 @@ await fetchJson('/api/instances', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId, landletId: landlets[0].landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
-for (const buyerLabel of ['A Shopper', 'Another Shopper']) {
-  await fetchJson(`/api/instances/${instanceId}/purchase`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ buyerLabel }),
-  });
+for (let i = 0; i < 2; i++) {
+  await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' });
 }
 
 // Reviews attach to the product with no opt-in needed — post directly via
 // the API the in-world "Rate this Product" hint calls (createProductReview
-// in src/api.js).
+// in src/api.js). authorLabel is no longer accepted from the client at all
+// (#1113) — the server derives it from the session, so both reviews below
+// are authored as LABEL.
 await fetchJson(`/api/catalog/${template.templateId}/reviews`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'A Shopper', rating: 5, text: 'Lovely product!' }),
+  body: JSON.stringify({ rating: 5, text: 'Lovely product!' }),
 });
 await fetchJson(`/api/catalog/${template.templateId}/reviews`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'Another Shopper', rating: 3 }),
+  body: JSON.stringify({ rating: 3 }),
 });
 const { reviews, averageRating, count } = (await fetchJson(`/api/catalog/${template.templateId}/reviews`)).body;
 console.log('reviews on the product (should be 2, oldest first):', reviews.map((r) => `${r.authorLabel}: ${r.rating}★${r.text ? ` (${r.text})` : ''}`));
@@ -103,21 +105,26 @@ await row().locator('.seller-review-toggle').click();
 await page.waitForTimeout(500);
 
 const rowCountInPanel = await row().locator('.product-review-row').count();
+// Both reviews are authored by the same real session now (#1113) — the
+// first (oldest) row is distinguished by its text instead of a per-review
+// author label.
 const firstRowText = await row().locator('.product-review-row').first().textContent();
 const summaryText = await row().locator('.seller-review-summary').textContent();
 console.log('rows shown in the panel (should be 2):', rowCountInPanel);
-console.log('first row mentions author+rating+text (should mention "A Shopper", stars, and "Lovely product"):', firstRowText);
+console.log('first row mentions author+rating+text (should mention LABEL, stars, and "Lovely product"):', firstRowText);
 console.log('summary text (should mention the 4.0 average and "2 reviews"):', summaryText);
 
-// Delete the second review via its row's own × button (not the API
-// directly) — this is the actual moderation path a seller would use.
-await row().locator('.product-review-row').filter({ hasText: 'Another Shopper' }).locator('.product-review-row-delete').click();
+// Delete the second (3-star, no text) review via its row's own × button —
+// not the API directly, since this is the actual moderation path a seller
+// would use. Distinguished by the absence of "Lovely product" rather than
+// a differing author label.
+await row().locator('.product-review-row').filter({ hasNotText: 'Lovely product' }).locator('.product-review-row-delete').click();
 await page.waitForFunction(() => document.querySelectorAll('.product-review-row').length === 1, { timeout: 5000 });
 const rowCountAfterDelete = await row().locator('.product-review-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 
 const afterDelete = (await fetchJson(`/api/catalog/${template.templateId}/reviews`)).body;
-console.log('reviews persisted server-side after the panel delete (should be 1, the surviving one authored by "A Shopper"):', afterDelete.reviews.map((r) => r.authorLabel));
+console.log('reviews persisted server-side after the panel delete (should be 1, the surviving one with text "Lovely product!"):', afterDelete.reviews.map((r) => r.text));
 
 // (Rating-bounds validation, the optional text field, average computation,
 // and cascade-on-template-delete are covered by worker/reviews-auth.test.js's own
@@ -127,12 +134,13 @@ const pass = !!template &&
   reviewToggleBefore.trim() === 'Reviews ▾' &&
   reviews.length === 2 &&
   reviews[0].text === 'Lovely product!' &&
+  reviews.every((r) => r.authorLabel === LABEL) &&
   averageRating === 4 &&
   count === 2 &&
   rowCountInPanel === 2 &&
-  firstRowText.includes('A Shopper') && firstRowText.includes('Lovely product') &&
+  firstRowText.includes(LABEL) && firstRowText.includes('Lovely product') &&
   summaryText.includes('4.0') && summaryText.includes('2 reviews') &&
   rowCountAfterDelete === 1 &&
-  afterDelete.reviews.length === 1 && afterDelete.reviews[0].authorLabel === 'A Shopper' &&
+  afterDelete.reviews.length === 1 && afterDelete.reviews[0].text === 'Lovely product!' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Product Reviews: Seller-modal moderation panel + reviews API', errors });
