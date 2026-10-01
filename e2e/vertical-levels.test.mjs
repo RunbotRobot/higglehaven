@@ -5,7 +5,7 @@
 // building up a level through #level-controls, navigating between
 // already-built levels, the cap-cost preview shown before committing, and
 // that a level (and an item placed on it) survives a reload.
-import { launchPage, chooseIdentity, claimLandlet, grantLandCapHeadroomAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, grantLandCapHeadroomAsAdmin, openLevelMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Vertical Levels Suite Tester';
 
@@ -24,6 +24,12 @@ await grantLandCapHeadroomAsAdmin(builderId);
 
 const levelLabel = () => page.textContent('#level-label');
 const removeHidden = () => page.isHidden('#level-remove-btn');
+
+// #1153: the nav/build/dig/remove controls this whole suite drives are now
+// tucked behind #level-menu-toggle — opened once here, and it stays open
+// (doesn't auto-close on an inner click, see openLevelMenu's own comment)
+// for every interaction below until the reload partway through resets it.
+await openLevelMenu(page);
 
 const initialLabel = await levelLabel();
 const removeHiddenAtGround = await removeHidden();
@@ -103,6 +109,7 @@ await page.waitForTimeout(1500);
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: false });
 await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(1500);
+await openLevelMenu(page);
 
 const labelAfterReload = await levelLabel();
 console.log('level label right after reload (should be Ground — always starts there):', labelAfterReload);
@@ -148,6 +155,10 @@ await page.route('**/api/landlets/*/levels/*', async (route) => {
   }
   await route.continue();
 });
+// The add-item/placement/deselect taps above all landed outside the level
+// menu's own toggle/panel, closing it per its own outside-click handler —
+// reopen before driving it again.
+await openLevelMenu(page);
 await page.click('#level-remove-btn');
 // #1077: levelRemoveBtn's own handler mutates productMeshes (pruning #901's
 // swept instances) after this request resolves, but never claimed the

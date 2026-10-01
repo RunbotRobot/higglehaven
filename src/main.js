@@ -6450,6 +6450,34 @@ const levelDigBtn = document.getElementById('level-dig-btn');
 const levelRemoveBtn = document.getElementById('level-remove-btn');
 const levelStatusEl = document.getElementById('level-status');
 
+// #1153: collapses the nav/build/dig/remove/status controls above into one
+// small toggle (showing just the current level) that expands a dropdown on
+// tap — the same expand-on-demand idiom #account-menu uses elsewhere in
+// this file, adapted to open upward since this control sits at the bottom
+// of the screen. Deliberately doesn't close on an inner button click the
+// way #account-menu's rows do: Up/Down/Build/Dig get used repeatedly while
+// reviewing levelStatusEl's own result, which renders inside this same
+// panel, so auto-closing on click would hide the very message a failed
+// Build/Dig needs to show.
+const levelMenuToggle = document.getElementById('level-menu-toggle');
+const levelMenuPanel = document.getElementById('level-menu-panel');
+levelMenuToggle.addEventListener('click', () => {
+  levelMenuPanel.classList.toggle('expanded');
+  levelMenuToggle.classList.toggle('active', levelMenuPanel.classList.contains('expanded'));
+});
+document.addEventListener('click', (event) => {
+  if (!levelMenuPanel.classList.contains('expanded')) return;
+  // .contains(), not a strict === against the toggle itself — unlike
+  // #account-menu-toggle (plain text, so it's always its own click
+  // target), this toggle wraps #level-label in a child <span> so its text
+  // can be updated independently; a click landing on that span would
+  // otherwise read as an outside click and immediately re-close the panel
+  // this same click just opened, in the same tick.
+  if (levelMenuToggle.contains(event.target) || levelMenuPanel.contains(event.target)) return;
+  levelMenuPanel.classList.remove('expanded');
+  levelMenuToggle.classList.remove('active');
+});
+
 function setLevelStatus(message, { isError = false } = {}) {
   levelStatusEl.textContent = message ?? '';
   levelStatusEl.classList.toggle('error', isError);
