@@ -7245,6 +7245,56 @@ report), and shown unconditionally rather than gated on the checkbox
 below, since the async animation check doesn't wait on (or care about)
 whatever the seller ends up choosing there.
 
+### Skeleton-compatibility signature (#1162, sub-issue of #1161)
+
+The first piece of a new tracking feature (#1161): selling avatar
+animations separately from the avatar model itself. Sellers keep full
+freedom to upload any avatar with any skeleton — no mandatory standard
+rig — so a standalone animation (#1163, not yet built) needs a way to
+tell whether it's actually compatible with a given avatar's specific rig
+before a shopper buys or equips it (#1164/#1165, also not yet built):
+an animation authored for one skeleton generally doesn't play correctly
+on a different one without real retargeting, which this app doesn't do.
+
+`computeSkeletonSignature` (`src/main.js`) computes a deterministic
+signature from a model's skeleton — its `THREE.SkinnedMesh.skeleton`'s
+bone names and parent/child hierarchy — at upload time, inside
+`showUploadDimensionPreview` (awaited, unlike the animation-clip
+detection above, since `createCatalogTemplate` needs the result settled
+before the seller can submit; `loadModelGltf`'s own URL cache means this
+doesn't re-fetch anything the dimension-preview load above didn't
+already fetch). Root bones (no bone parent) and the rest (as
+`parent>child` name pairs) are each gathered and sorted independently so
+the signature doesn't depend on bone order within the file, then hashed
+to a SHA-256 hex digest — compact, and content-opaque since a rig's bone
+names aren't meaningful to store verbatim. `null` for a model with no
+skeleton at all (an ordinary rigid prop), the same "nothing to report"
+shape `loadModelAnimations` already uses for a model with no animation
+clips.
+
+Persisted as `catalog_templates.skeleton_signature` (migration 0103),
+passed through `createCatalogTemplate`/`updateCatalogTemplate` as
+`skeletonSignature` the same way `modelSizeBytes` already flows —
+`PATCH`/`PUT` merges against the existing row when omitted, so an
+unrelated edit never silently wipes it, and the "Duplicate" button
+(Seller modal) copies it by reference alongside `modelUrl` rather than
+recomputing it, since duplicating doesn't touch the underlying file.
+Server-side validation (`optionalSkeletonSignature`) only checks the
+*shape* — 64-character lowercase hex, or omitted — never re-derives it
+from the actual model file; a malformed value is rejected as a defensive
+measure, not because this server can verify it against anything.
+
+Compatibility itself is exact-match equality, not a fuzzy/partial
+comparison: `THREE.AnimationMixer` binds each keyframe track to a bone
+by name alone, so an animation plays correctly against a different
+file's skeleton only when the two skeletons share the exact same bone
+names in the exact same hierarchy — anything looser risks a silently
+broken retarget (a limb not moving, or moving through the wrong pivot)
+with no error to warn the shopper. That comparison itself, and the UI/
+runtime pieces that act on it, are #1163/#1164/#1165's own scope, not
+built yet — this piece only computes and persists the signature so they
+have something to compare against.
+
 ### The upload flow itself (#712, sub-issue of #710)
 
 #680's own scope note above ("the upload flow itself" is separate scope)
