@@ -26,6 +26,25 @@ export function landingAltitudeM(elapsedS, durationS, startAltitudeM) {
   return startAltitudeM * (1 - smoothstep(elapsedS / durationS));
 }
 
+// #1090: landingAltitudeM above has no idea what's directly underneath —
+// it just eases to 0 as a function of time, so a landing that started
+// above a placed item carries straight through its solid geometry on the
+// way down. updateShopFlight (src/main.js) is the one that actually knows
+// about placed items (via shopLandingObstructionTopZ, which needs the real
+// footprint/mesh data this file deliberately has no access to — see this
+// module's own header comment); it supplies minAltitudeM as the floor nothing
+// below should pass (0 when the ground itself is clear), and this function
+// just owns the "does the ramp still have room to fall, or has it already
+// hit something" arithmetic, the same way landingAltitudeM owns the ramp
+// itself. Landing finishes the instant the ramp would go at or past that
+// floor — whether that's because durationS has genuinely elapsed (the
+// ordinary case, minAltitudeM 0) or because an obstruction stopped it early.
+export function clampedLandingAltitudeM(elapsedS, durationS, startAltitudeM, minAltitudeM) {
+  const rampAltitudeM = landingAltitudeM(elapsedS, durationS, startAltitudeM);
+  if (rampAltitudeM <= minAltitudeM) return { altitudeM: minAltitudeM, landed: true };
+  return { altitudeM: rampAltitudeM, landed: elapsedS >= durationS };
+}
+
 // docs/SPEC.md §2's altitude/speed curve: "each doubling of altitude ≈ 50%
 // more max ground speed" fixes the curve's shape as a power law (speed ∝
 // altitude^p) with p = log2(1.5) ≈ 0.585 — a whole doubling of the input
