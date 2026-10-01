@@ -96,5 +96,6 @@
   "0096_control_room_note_author.sql",
   "0097_remove_pioneer_rank.sql",
   "0098_seller_feedback.sql",
-  "0099_avatar_presence.sql"
+  "0099_purchases_buyer_builder_id.sql",
+  "0100_avatar_presence.sql"
 ]
