@@ -7621,6 +7621,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
+    return handleDeleteAccount(request, db, url);
+  }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
@@ -8077,6 +8080,72 @@ async function handleLogout(request, db, url) {
     await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
   }
   return json({ loggedOut: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// #1146 (sub-issue of #1145, owner decision via a live Control Room
+// conversation): real account deletion, not the pre-existing "Delete
+// Account" under Builder/Seller Identity (DELETE /api/builders/:id /
+// DELETE /api/sellers/:id below), which only ever resets the in-world
+// profile -- the real login account (this `users` row) stayed active and a
+// fresh builder/seller got auto-created on next visit. This is the users-
+// row half of #1145's full breakdown: revoke login, free the email/
+// username for reuse, and sign out every device. It deliberately does NOT
+// touch builders/sellers, financial/tax records, or the Stripe Connect
+// account -- those are #1147/#1148's own scope, and whether the old
+// reset-only button still has a separate place in Settings is #1149's.
+//
+// A stolen/XSS'd session cookie alone must not be enough to irreversibly
+// kill an account, so this requires re-entering the current password, the
+// same bar a real "verify it's still you" action needs -- and like every
+// other password check in this file, it's rate-limited per-account so the
+// check itself can't be used to brute-force the real password.
+const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
+
+async function handleDeleteAccount(request, db, url) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!(await verifyPassword(password, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+
+  // Freed rather than hard-deleted, per #1145's "email/username freed ...
+  // per the owner's chosen approach" -- rewritten to a placeholder unique
+  // to this user_id so the real email/username are available again for a
+  // fresh signup, the same "last 8 chars of user_id" collision-acceptable
+  // uniqueness trick migrations/0056's own backfill already uses.
+  // `.invalid` is the RFC 2606 TLD reserved for exactly this
+  // "deliberately unreachable, not a real address" case. email_canonical
+  // is cleared outright (rather than given a placeholder of its own)
+  // since nothing ever looks it up again once it's gone, and leaving it
+  // set would needlessly keep blocking a future signup under some other
+  // address that happens to canonicalize the same way.
+  const suffix = user.user_id.slice(-8);
+  const deletedEmail = `deleted-${suffix}@deleted.invalid`;
+  const deletedUsername = `deleted-${suffix}`;
+  // Hashing a random, immediately-discarded password (rather than, say,
+  // nulling the column, which password_hash's own NOT NULL would reject
+  // anyway) means no one -- including this server -- ever holds a
+  // plaintext that could satisfy verifyPassword against this row again.
+  const revokedPasswordHash = await hashPassword(crypto.randomUUID());
+
+  await db.batch([
+    db.prepare(`
+      UPDATE users SET
+        email = ?, email_canonical = NULL, username = ?, password_hash = ?,
+        failed_login_attempts = 0, locked_until = NULL,
+        deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, user.user_id),
+    // Same "sign out every device" reasoning handleResetPassword's own
+    // session wipe already uses -- there is no more final an account
+    // action than this one to leave a live session riding on.
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.user_id),
+  ]);
+
+  return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
 }
 
 // Deliberately always 200, even with no session — a 401 here would be more
