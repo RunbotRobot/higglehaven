@@ -3529,6 +3529,17 @@ doesn't grow unbounded) is `pruneStaleAvatarPresence` (#1101, below),
 run from the existing `scheduled()` cron on a longer (5-minute) threshold,
 since its job is table hygiene, not hiding a briefly-stale builder.
 
+### `GET /api/presence/me` — your own last-reported position (#1176)
+
+Requires a session. Unlike `GET /api/presence?landletId=X` above, this
+returns the *caller's own* row — no `landletId` parameter, and no
+staleness filter — since "wherever I was last" is exactly what spawn
+flow's "Go to Last Location" button (below) needs, however long ago that
+report actually was. Response: `{ "presence": null }` when the caller has
+never reported a position at all (a brand-new account, or one that's
+never entered Shop mode before), otherwise `{ "presence": <avatar
+presence object, above> }`.
+
 ### `POST /api/presence` — report your own position (#1098)
 
 Requires a real, verified session (`requireSessionBuilder`). Upserts the
@@ -3572,9 +3583,11 @@ guard, and the rate limit) and `worker/presence.test.js` owns the `GET`
 contract (the anonymous-session `401`, the missing-`landletId` `400`, a
 same-landlet position being returned while the caller's own and a
 different-landlet builder's are excluded, and a stale report being
-excluded). `worker/avatar-presence-cleanup.test.js` covers
-`pruneStaleAvatarPresence` directly, seeding a long-stale and a fresh row
-via `env.DB` rather than through a real write path.
+excluded) along with `GET /api/presence/me`'s own (the anonymous-session
+`401`, `null` with no row at all, a long-stale row still being returned,
+and never leaking another builder's row). `worker/avatar-presence-cleanup.test.js`
+covers `pruneStaleAvatarPresence` directly, seeding a long-stale and a
+fresh row via `env.DB` rather than through a real write path.
 
 ## Bundles
 
@@ -6312,10 +6325,48 @@ camera's own look direction (`shopYaw`) doubles as the orbit's angle
 throughout, since "facing the center" and "the orbit position" are the
 same angle at every point on the circle. The orbit ends the instant the
 shopper gives any navigation input — a joystick deflection, a vertical
-flight button, or a fly-button tap (`stopShopSpawnRotation`, checked every
-frame in `updateShopMovement` and once directly in `toggleShopFlight`) —
-after which normal flight/movement control takes over exactly as if the
-avatar had spawned in place.
+flight button, or a fly-button tap (`stopShopSpawnRotationForNavigation`,
+checked every frame in `updateShopMovement` and once directly in
+`toggleShopFlight`) — after which normal flight/movement control takes
+over exactly as if the avatar had spawned in place.
+
+**"Go to Last Location" button** (#1176, docs/SPEC.md §1: "'Last
+Location' is offered as a choice, not automatic default") — shown
+(`#shop-last-location-btn` in `index.html`) during the rotating spawn
+orbit above, but only when `GET /api/presence/me` (above) returned a real
+last-known position for this shopper; never shown at all otherwise (a
+brand-new account, or one that's never entered Shop mode before, simply
+has nothing to offer — not escalated as a product decision, since there's
+nothing ambiguous about it). Two independent things end it:
+
+- **Clicking it** (`startGoToLastLocation`): stops the spawn orbit (plain
+  `stopShopSpawnRotation`, not the navigation-flavored wrapper below —
+  choosing this button is not "navigating on your own," so it must never
+  start the auto-hide countdown) and hides the button immediately, then
+  runs a fade-out/teleport/fade-in sequence (`updateGoToLastLocation`,
+  `SHOP_LAST_LOCATION_AVATAR_FADE_S` each way) that fades every material
+  in the avatar's own group to invisible (`setShopAvatarOpacity` — skips
+  the AFK sprite, which already drives its own opacity independently),
+  jumps the avatar and camera to the last-known position while fully
+  faded out, fades back in, then automatically hands off to the ordinary
+  `'landing'` flight state — the exact same descent-to-ground/obstruction-
+  top code (`updateShopFlight`) a manual fly-button landing already uses,
+  not a parallel implementation. No further input is needed or honored
+  mid-sequence: real joystick/look input is ignored for its duration
+  (`updateShopMovement`'s own `shopGoToLastLocationPhase` guards) rather
+  than being allowed to fight a predetermined teleport.
+- **The shopper navigating on their own instead** — ignoring the button
+  and giving real navigation input (the same input that ends the orbit
+  itself) starts a `SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S` (5-second)
+  countdown, after which the button fades out — a real CSS opacity
+  transition (`#shop-last-location-btn.visible` in `index.html`), not an
+  instant hide, per the owner's own explicit request. This path goes
+  through `stopShopSpawnRotationForNavigation`, a thin wrapper around
+  `stopShopSpawnRotation` that also starts the countdown (only once, and
+  only when a button is actually showing) — used everywhere a real
+  navigation input stops the orbit, so the click path above (which calls
+  the bare `stopShopSpawnRotation` directly) is the one deliberate
+  exception.
 
 ## Frontend-only avatar idle animation
 
