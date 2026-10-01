@@ -10706,10 +10706,29 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // together, resolve to wildly different angles, which reads as sharp
     // rays converging to a point rather than soft cloud cover. Rotating
     // real coordinates has no such singularity: nearby points stay nearby.
-    // Each height band rotates at a slightly different rate (the
-    // sin(heightFrac...) term) so bands shear past each other over time —
-    // that shear is what actually reads as "swirl."
-    float swirlAngle = uTime * (0.02 + 0.015 * sin(heightFrac * 6.2831));
+    // Each height band rotates at a slightly different rate so bands shear
+    // past each other over time — that shear is what actually reads as
+    // "swirl." Split into two terms: a uniform rotation (same for every
+    // height, so it has zero derivative w.r.t. heightFrac and is safe to
+    // keep accumulating forever) plus a height-dependent shear term.
+    //
+    // #1190: the height-dependent term used to be uTime * 0.015 *
+    // sin(heightFrac * 2pi) -- i.e. its own magnitude grew linearly with
+    // elapsed time forever. That means d(swirlAngle)/d(heightFrac), which
+    // directly drives how far apart in noise-space two vertically adjacent
+    // pixels sample, also grew linearly with uTime without bound: after
+    // long enough in Shop mode, adjacent height rows' samples became far
+    // enough apart to alias, visible as a seam/band (confirmed via direct
+    // footprint-heatmap debugging: fwidth(samplePos) spikes in a band near
+    // the horizon after ~20 simulated minutes, exactly where the normal
+    // render shows a washed-out edge, and is flat at t=0). Capping the
+    // term's own magnitude with a slow oscillating envelope instead of
+    // letting it grow linearly keeps that derivative bounded for any
+    // session length, while matching the original's instantaneous rate at
+    // t=0 (so a normal, short session looks identical to before).
+    float shearOmega = 0.0104719755; // 2*pi / 600s -- full envelope cycle every 10 minutes
+    float shearAmplitude = 1.4323944878; // 0.015 / shearOmega, so d/dt at t=0 matches the original 0.015 rad/s
+    float swirlAngle = uTime * 0.02 + shearAmplitude * sin(shearOmega * uTime) * sin(heightFrac * 6.2831);
     float s = sin(swirlAngle);
     float c = cos(swirlAngle);
     // Normalized by the world's own current radius (not a fixed meters
