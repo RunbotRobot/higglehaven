@@ -45,10 +45,11 @@ await page.waitForTimeout(1200);
 const originalBuilderId = ownerBuilderIdsSeen.at(-1);
 console.log('builderId the Auction section used before delete:', originalBuilderId);
 
-// --- Delete Account (launchPage's own dialog handler auto-accepts confirm()) ---
-await page.click('#settings-section button:has-text("Delete Account")');
-const deleteStatus = await waitForText(page, '#settings-section', 'Deleted', { timeout: 8000 });
-console.log('Settings section text right after delete (should mention "Deleted"):', deleteStatus);
+// --- Reset Builder Profile, renamed from "Delete Account" by #1149
+// (launchPage's own dialog handler auto-accepts confirm()) ---
+await page.click('#settings-section button:has-text("Reset Builder Profile")');
+const deleteStatus = await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });
+console.log('Settings section text right after delete (should mention "Reset"):', deleteStatus);
 
 // Ground truth: whichever builder the session now really maps to, read
 // directly from the server rather than trusting the app's own client
@@ -73,7 +74,7 @@ await page.waitForTimeout(1200);
 const postDeleteBuilderId = ownerBuilderIdsSeen.at(-1);
 console.log('builderId the Auction section used right after delete, no reload (should equal the fresh one, not the original):', postDeleteBuilderId);
 
-const pass = deleteStatus.includes('Deleted') &&
+const pass = deleteStatus.includes('Reset') &&
   Boolean(freshBuilderId) && freshBuilderId !== originalBuilderId &&
   postDeleteBuilderId === freshBuilderId &&
   postDeleteBuilderId !== originalBuilderId &&

@@ -2637,7 +2637,8 @@
         display: none;
       }
       #auth-resend-verify-btn,
-      #auth-logout-btn {
+      #auth-logout-btn,
+      #auth-delete-account-cancel-btn {
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
@@ -2645,6 +2646,22 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
+      }
+      /* #1149: real account deletion — deliberately styled with --danger,
+         unlike the neutral-pill Reset Profile buttons under Build/Sell
+         Settings, since this one is permanent and irreversible. */
+      #auth-delete-account-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: var(--danger);
+        color: #fff;
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #auth-delete-account-confirm-btn {
+        background: var(--danger);
+        color: #fff;
       }
       /* Same modal shell as #settings-modal. */
       #notifications-modal {
@@ -3734,6 +3751,25 @@
           <button id="auth-verify-id-btn" type="button" hidden>Verify with Government ID</button>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
           <button id="auth-logout-btn" type="button">Log Out</button>
+          <!-- #1149: real, permanent account deletion (#1145/#1146) — distinct
+               from "Reset Builder/Seller Profile" under Build/Sell Settings,
+               which only resets an in-world identity and leaves the login
+               itself active. -->
+          <button id="auth-delete-account-btn" type="button">Delete Account</button>
+          <form id="auth-delete-account-form" class="auth-form" hidden>
+            <div class="auth-hint">
+              This permanently revokes your login — you'll be signed out
+              everywhere and will never be able to sign back in. Your
+              builder/seller profile, land, and balance are not touched by
+              this ("Reset Builder/Seller Profile" under Build/Sell Settings
+              handles those separately). Financial and tax records the law
+              requires us to keep are retained, disconnected from your
+              identity. This cannot be undone.
+            </div>
+            <label>Confirm your password<input type="password" id="auth-delete-account-password" required autocomplete="current-password" /></label>
+            <button type="submit" id="auth-delete-account-confirm-btn">Permanently Delete Account</button>
+            <button type="button" id="auth-delete-account-cancel-btn">Cancel</button>
+          </form>
         </div>
 
         <div id="auth-status"></div>

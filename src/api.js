@@ -41,6 +41,20 @@ export async function logOut() {
   await requestJson('/auth/logout', { method: 'POST' });
 }
 
+// #1149: real full account deletion (#1145/#1146), distinct from
+// deleteBuilder/deleteSeller below — those only reset an in-world identity
+// while the login itself stays active. This revokes the login entirely;
+// see docs/API.md's own "POST /api/auth/delete-account" for the full
+// behavior (password re-check, 401 "Incorrect password" on mismatch,
+// every session invalidated, email/username freed for reuse).
+export async function deleteAccount(password) {
+  return requestJson('/auth/delete-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+}
+
 // GET /auth/me always returns 200 with `user: null` when nobody's logged
 // in (see handleMe's own comment on why) — called unconditionally on every
 // page load, so a 4xx here for the common "nobody's logged in" case would

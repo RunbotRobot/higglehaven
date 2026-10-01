@@ -403,18 +403,23 @@ Issue #1146 (sub-issue of #1145's "real full account deletion" tracking
 issue, an owner decision via a live Control Room conversation on
 2026-10-01). This is the `users`-row half of real account deletion — not
 the pre-existing `DELETE /api/builders/:builderId` /
-`DELETE /api/sellers/:sellerId` ("Delete Account" under Builder/Seller
-Identity today), which only ever resets the in-world profile: land,
-balance, and build get released/wiped, but the real login account stays
-active and a fresh builder/seller is auto-created the next time that
-account visits. This endpoint is the other half — it revokes the login
-itself — and deliberately does nothing to the builder/seller profile,
-financial/tax records, or a connected Stripe account; see #1147
+`DELETE /api/sellers/:sellerId` ("Reset Builder/Seller Profile" under
+Build/Sell Settings, renamed from "Delete Account" by #1149 to avoid
+confusion with this endpoint), which only ever resets the in-world
+profile: land, balance, and build get released/wiped, but the real login
+account stays active and a fresh builder/seller is auto-created the next
+time that account visits. This endpoint is the other half — it revokes
+the login itself — and deliberately does nothing to the builder/seller
+profile, financial/tax records, or a connected Stripe account; see #1147
 (disconnecting retained financial/tax records from the deleted identity)
-and #1148 (the Stripe Connect account's own fate) for those, and #1149 for
-whether the old reset-only button keeps a separate place in Settings once
-this exists. Work leaves of #1145, not the trunk — none of this closes
-#1145 itself.
+and #1148 (the Stripe Connect account's own fate) for those. #1149 wired
+this endpoint up to a "Delete Account" button of its own under the Account
+menu (distinct from, and alongside, the renamed Reset Profile buttons) and
+decided the old reset-only behavior still earns its own place — it's a
+materially different, less drastic action (keeps the login, just starts
+the in-world identity over) that some builders/sellers may still want
+without killing their whole account. Work leaves of #1145, not the trunk —
+none of this closes #1145 itself.
 
 Session-gated (`401` without one). Requires re-entering the account's
 current password in the body — a stolen/XSS'd session cookie alone must

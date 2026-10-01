@@ -9,6 +9,7 @@ import {
   signUp,
   logIn,
   logOut,
+  deleteAccount,
   fetchCurrentUser,
   requestPasswordReset,
   resetPassword,
@@ -4739,7 +4740,7 @@ const trimUnitLabelEls = [...document.querySelectorAll('.trim-unit-label')];
 let activeSettingsTab = 'general';
 
 // #1124: set right before renderSettingsSection() redraws the tab a
-// Delete Account click just fired from, so the freshly re-rendered
+// Reset Profile click just fired from, so the freshly re-rendered
 // identity field (renderIdentityField below) can still show its own
 // "Deleted" confirmation even though the DOM node that would have shown
 // it got torn down along with everything else in the tab. Consumed
@@ -5144,6 +5145,12 @@ async function renderLandCapField() {
 // UI ever called any of them. Shared between the Build and Sell settings
 // tabs since a builder identity and a seller identity work identically
 // here — only the fetch/rename/delete calls and the delete warning differ.
+// #1149: this button only ever resets the in-world identity (land, balance,
+// build/products wiped, a fresh one auto-created on next visit) — it never
+// touches the login itself, unlike the real, permanent account deletion
+// under the Account menu (authDeleteAccountBtn's own handler, further
+// below). Labeled "Reset ... Profile" rather than "Delete Account" so the
+// two aren't confused.
 async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted, onRenamed }) {
   const field = document.createElement('div');
   field.className = 'settings-field';
@@ -5182,7 +5189,7 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
   if (deleteProfile) {
     deleteBtn.type = 'button';
     deleteBtn.className = 'version-action-btn';
-    deleteBtn.textContent = 'Delete Account';
+    deleteBtn.textContent = `Reset ${kind} Profile`;
     actions.appendChild(deleteBtn);
   }
 
@@ -5191,13 +5198,13 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
   }
   renderName();
   // #1124: this render may be the one renderSettingsSection() triggered
-  // right after a Delete Account click redrew the whole tab — if so, show
+  // right after a Reset Profile click redrew the whole tab — if so, show
   // the same confirmation the old, identity-field-only refresh used to,
   // rather than a blank status now that a fresh profile (not the deleted
   // one) is what fetchProfile() above actually returned.
   if (justDeletedIdentityKind === kind) {
     justDeletedIdentityKind = null;
-    status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
+    status.textContent = `Reset — a fresh ${kind.toLowerCase()} identity was created.`;
   } else {
     status.textContent = '';
   }
@@ -5455,7 +5462,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote}`;
+      return `Reset your builder profile? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone. Your login stays active and a fresh builder profile is created automatically.${balanceNote}`;
     },
     onDeleted: () => { builderId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
@@ -5477,7 +5484,7 @@ function renderSellerIdentityField() {
     // of deleting while a real purchase's proceeds are still unpaid, so
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
-    deleteWarning: 'Delete your seller account? This cannot be undone.',
+    deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active and a fresh seller profile is created automatically.',
     onDeleted: () => { sellerId = null; },
   });
 }
@@ -9281,6 +9288,11 @@ const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier'
 const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
 const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
 const authLogoutBtn = document.getElementById('auth-logout-btn');
+const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');
+const authDeleteAccountForm = document.getElementById('auth-delete-account-form');
+const authDeleteAccountPasswordInput = document.getElementById('auth-delete-account-password');
+const authDeleteAccountConfirmBtn = document.getElementById('auth-delete-account-confirm-btn');
+const authDeleteAccountCancelBtn = document.getElementById('auth-delete-account-cancel-btn');
 
 function setAuthStatus(text, type) {
   authStatusEl.textContent = text || '';
@@ -9342,6 +9354,12 @@ function refreshAccountAuthUI() {
     authAccountTrustTierEl.textContent = trustTierLabels[currentAuthUser.trustTier] || '';
     authAccountTrustTierEl.classList.toggle('verified', currentAuthUser.trustTier === 'id_verified');
     authVerifyIdBtn.hidden = currentAuthUser.trustTier === 'id_verified';
+    // Collapse back to the plain "Delete Account" button on every refresh
+    // (e.g. reopening the panel) rather than leaving a stale confirmation
+    // form, with its typed password, sitting open from a previous visit.
+    authDeleteAccountForm.hidden = true;
+    authDeleteAccountBtn.hidden = false;
+    authDeleteAccountPasswordInput.value = '';
     // #1067: pollDiditVerificationStatus's own 5-minute-timeout copy
     // promises this "will pick up automatically next time you open your
     // account" — nothing here actually did that until now. Reconciles a
@@ -9671,6 +9689,61 @@ authLogoutBtn.addEventListener('click', async () => {
   }
   refreshAccountAuthUI();
   closeAuthModal();
+});
+
+// #1149: real, permanent account deletion (#1145/#1146) — a second,
+// password-gated step behind its own reveal button rather than a single
+// confirm() dialog like the Reset Profile buttons use, since the backend
+// itself requires the current password in the request body (a stolen/
+// XSS'd session cookie alone must not be enough to kill the account).
+authDeleteAccountBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authDeleteAccountBtn.hidden = true;
+  authDeleteAccountForm.hidden = false;
+  authDeleteAccountPasswordInput.focus();
+});
+
+authDeleteAccountCancelBtn.addEventListener('click', () => {
+  authDeleteAccountForm.hidden = true;
+  authDeleteAccountBtn.hidden = false;
+  authDeleteAccountPasswordInput.value = '';
+  setAuthStatus('');
+});
+
+authDeleteAccountForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = authDeleteAccountPasswordInput.value;
+  setAuthStatus('');
+  authDeleteAccountConfirmBtn.disabled = true;
+  authDeleteAccountCancelBtn.disabled = true;
+  try {
+    await deleteAccount(password);
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not delete your account.', 'error');
+    authDeleteAccountConfirmBtn.disabled = false;
+    authDeleteAccountCancelBtn.disabled = false;
+    return;
+  }
+  authDeleteAccountConfirmBtn.disabled = false;
+  authDeleteAccountCancelBtn.disabled = false;
+  authDeleteAccountPasswordInput.value = '';
+  stopDiditPoll();
+  // Same cleanup authLogoutBtn's own handler above does — the account is
+  // gone and its session cookie already cleared server-side, so every
+  // cached identity here is equally stale.
+  currentAuthUser = null;
+  builderId = null;
+  sellerId = null;
+  builderIdentityFlowPromise = null;
+  sellerIdentityFlowPromise = null;
+  closeAuthModal();
+  alert('Your account has been permanently deleted. You have been signed out.');
+  if (currentMode === 'build' || currentMode === 'sell') {
+    sessionStorage.setItem(START_MODE_KEY, 'shop');
+    location.reload();
+    return;
+  }
+  refreshAccountAuthUI();
 });
 
 // A verify-email or reset-password link (see issueEmailVerification/

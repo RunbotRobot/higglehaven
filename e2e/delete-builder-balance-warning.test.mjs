@@ -34,7 +34,7 @@ page.on('dialog', (dialog) => {
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('#settings-section button:has-text("Delete Account")');
+await page.click('#settings-section button:has-text("Reset Builder Profile")');
 // launchPage's own dialog handler (registered before ours, in helpers.mjs)
 // auto-accepts the confirm() this click triggers -- give both listeners
 // time to run and the delete's own async follow-up (fetchProfile/renderName)

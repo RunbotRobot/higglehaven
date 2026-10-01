@@ -7,7 +7,9 @@
 // Rename but never a Delete Account button at all.
 //
 // Covers the happy path per the issue's own suggested test scope: clicking
-// Delete Account in Settings > Sell actually calls the real endpoint,
+// what's now labeled "Reset Seller Profile" (renamed from "Delete Account"
+// by #1149, once a separate real account-deletion endpoint existed to
+// disambiguate from) in Settings > Sell actually calls the real endpoint,
 // shows a success message, and the account has a fresh, different seller
 // identity behind it afterward (the endpoint's own 409-blocked-by-unpaid-
 // proceeds case is already covered server-side by worker/commerce.test.js's
@@ -34,13 +36,13 @@ const originalSellerId = await page.evaluate(() =>
   fetch('/api/sellers/me').then((r) => r.json()).then((d) => d.seller.sellerId));
 console.log('sellerId before delete:', originalSellerId);
 
-const deleteBtnVisible = await page.locator('#settings-section button:has-text("Delete Account")').isVisible();
-console.log('Delete Account button present in Settings > Sell (should be true -- this is the bug #744 fixes):', deleteBtnVisible);
+const deleteBtnVisible = await page.locator('#settings-section button:has-text("Reset Seller Profile")').isVisible();
+console.log('Reset Seller Profile button present in Settings > Sell (should be true -- this is the bug #744 fixes):', deleteBtnVisible);
 
-// --- Delete Account (launchPage's own dialog handler auto-accepts confirm()) ---
-await page.click('#settings-section button:has-text("Delete Account")');
-const deleteStatus = await waitForText(page, '#settings-section', 'Deleted', { timeout: 8000 });
-console.log('Settings section text right after delete (should mention "Deleted"):', deleteStatus);
+// --- Reset Seller Profile (launchPage's own dialog handler auto-accepts confirm()) ---
+await page.click('#settings-section button:has-text("Reset Seller Profile")');
+const deleteStatus = await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });
+console.log('Settings section text right after delete (should mention "Reset"):', deleteStatus);
 
 // Ground truth: whichever seller the session now really maps to, read
 // directly from the server -- this is exactly what deleteSeller's own
@@ -50,7 +52,7 @@ const freshSellerId = await page.evaluate(() =>
 console.log('Fresh sellerId the server now associates with this session:', freshSellerId);
 
 const pass = deleteBtnVisible &&
-  deleteStatus.includes('Deleted') &&
+  deleteStatus.includes('Reset') &&
   Boolean(freshSellerId) && freshSellerId !== originalSellerId &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Deleting a seller account works end-to-end from Settings > Sell (#744)', errors });
