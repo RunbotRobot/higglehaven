@@ -8322,6 +8322,9 @@ const LANDLET_CREATE_RATE_LIMIT_MAX = 20;
 // this guard never actually did -- this closes that gap for real, same
 // bucketing convention as every other repeatable-write limit in this file.
 const LANDLET_CLAIM_RATE_LIMIT_MAX = 20;
+// #1150: see this constant's own use (PATCH /api/landlets/:id's owned
+// branch) for why this needed adding now.
+const LANDLET_OWNED_PATCH_RATE_LIMIT_MAX = 20;
 
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
@@ -8566,6 +8569,13 @@ async function handleLandlets(request, db, route, url) {
     if (existing.owner_builder_id !== null) {
       const sessionBuilder = await requireSessionBuilder(request, db);
       assertOwner(existing.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
+      // #1150: this endpoint had no rate limit at all before "My Lands"
+      // gave it a real, repeatable, owner-facing write affordance (rename)
+      // — same bucketing convention as BUILDER_RENAME_RATE_LIMIT_MAX/
+      // SELLER_RENAME_RATE_LIMIT_MAX. Scoped to the owned branch only; the
+      // unauthenticated unowned/world-gen branch below has no builder id
+      // to bucket by and isn't the path this issue is about.
+      await checkRateLimit(db, `landlet-owned-patch:${sessionBuilder.builder_id}`, LANDLET_OWNED_PATCH_RATE_LIMIT_MAX);
     }
     const input = await readJson(request);
     // `status` needs the same pinning as `ownerBuilderId` above, for the
@@ -8598,6 +8608,28 @@ async function handleLandlets(request, db, route, url) {
     // owner_builder_id IS NULL case binds correctly. A lost race surfaces
     // as 409 so the caller knows to refetch, the same shape as every other
     // concurrent-write guard in this file.
+    // #1150: "names must be unique across all of Higglehaven" — folded
+    // into this UPDATE's own WHERE as a NOT EXISTS, same atomic idiom this
+    // file already uses for signup/friendships/product_reviews, rather
+    // than a schema-level UNIQUE index. A real index would also apply to
+    // every *unclaimed* landlet's auto-generated name (candidateMaterializationSweepStatements'
+    // own INSERT, landGenerator.js's `${prefix} ${index + 1}`) — ring
+    // generation can legitimately reuse a prefix across separate calls
+    // (confirmed via #849/#1055's own concurrent-expansion tests, which
+    // started failing with a real index in place), so this is scoped to
+    // the one write path this issue is actually about instead.
+    // renamingTo stays null on every PATCH that isn't actually renaming
+    // (the overwhelmingly common case — e.g. every ownership/status
+    // housekeeping PATCH elsewhere in this file re-sends the existing name
+    // unchanged), short-circuiting the NOT EXISTS subquery via `? IS NULL`
+    // below. This can't be a bare `name = ?` comparison inside the UPDATE's
+    // own WHERE instead: a bare column reference there reads the row's
+    // *pre-update* value, which already always equals `existing.name`
+    // outside of a genuine concurrent-write race — so a same-row check like
+    // that would short-circuit on every rename attempt too, not just
+    // no-op ones, silently defeating this guard entirely (caught by this
+    // issue's own test).
+    const renamingTo = landlet.name !== existing.name ? landlet.name : null;
     const result = await db.prepare(`
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
@@ -8605,14 +8637,27 @@ async function handleLandlets(request, db, route, url) {
           landlet_type = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
+        AND (
+          ? IS NULL OR NOT EXISTS (SELECT 1 FROM landlets WHERE name = ? COLLATE NOCASE AND landlet_id != ?)
+        )
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
       landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
       existing.status, existing.owner_builder_id,
+      renamingTo, renamingTo, route[1],
     ).run();
     if (result.meta.changes === 0) {
+      // The atomic guard above already refused to happen — reading again
+      // here only decides which friendly message to show, it can't itself
+      // let a duplicate through (same idiom as signup's own email/username
+      // disambiguation above).
+      if (landlet.name !== existing.name) {
+        const nameTaken = await db.prepare('SELECT 1 FROM landlets WHERE name = ? COLLATE NOCASE AND landlet_id != ?')
+          .bind(landlet.name, route[1]).first();
+        if (nameTaken) throw new HttpError('That land name is already taken — names must be unique across all of Higglehaven', 409);
+      }
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     return json({ landlet });

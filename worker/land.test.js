@@ -145,6 +145,68 @@ describe('Landlet updates', () => {
     expect(renamed.body.landlet.status).toBe('greenbelt');
   });
 
+  // #1150: a rename that collides with a *different* landlet's name
+  // (including a same-letters-different-case collision) must be rejected
+  // with a message that actually explains why, not databaseHttpError's
+  // generic "Resource already exists" 409 (or, worse, a silent success).
+  // Enforced via an atomic NOT EXISTS on the PATCH write itself, not a
+  // schema-level UNIQUE index — see that write's own comment for why a real
+  // index would collide with ring-generated landlets' auto-assigned names.
+  describe('land name uniqueness (#1150)', () => {
+    it('rejects a rename that collides with another landlet\'s name, case-insensitively', async () => {
+      await createGreenbeltLandlet('name-unique-taken-landlet');
+      await api('/landlets/name-unique-taken-landlet', {
+        method: 'PATCH', body: JSON.stringify({ name: 'Sunny Acres' }),
+      });
+      await createGreenbeltLandlet('name-unique-renaming-landlet');
+      const owner = await signupBuilder('name-unique-renaming-claimer');
+      await api('/landlets/name-unique-renaming-landlet/claim', owner.session({ method: 'POST' }));
+
+      const collided = await api('/landlets/name-unique-renaming-landlet', owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'sunny acres' }),
+      }));
+      expect(collided.response.status).toBe(409);
+      expect(collided.body.error).toMatch(/already taken/i);
+
+      // Rejected, not silently renamed — the landlet keeps its prior name.
+      const stored = await env.DB.prepare('SELECT name FROM landlets WHERE landlet_id = ?')
+        .bind('name-unique-renaming-landlet').first();
+      expect(stored.name).toBe(`Test name-unique-renaming-landlet`);
+    });
+
+    it('allows a rename to a genuinely available name', async () => {
+      await createGreenbeltLandlet('name-unique-available-landlet');
+      const owner = await signupBuilder('name-unique-available-claimer');
+      await api('/landlets/name-unique-available-landlet/claim', owner.session({ method: 'POST' }));
+
+      const renamed = await api('/landlets/name-unique-available-landlet', owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Maple Hollow' }),
+      }));
+      expect(renamed.response.status).toBe(200);
+      expect(renamed.body.landlet.name).toBe('Maple Hollow');
+    });
+
+    // #1150: PATCH /api/landlets/:id's owned branch had no rate limit at
+    // all before this issue gave it a real, repeatable, owner-facing write
+    // affordance (rename) -- same shape as the sign-post delete rate-limit
+    // test above (seeds the limit directly via repeated calls, not a
+    // separate create step).
+    it('rate-limits repeated PATCHes from the same owning builder', async () => {
+      await createGreenbeltLandlet('owned-patch-rate-limit-landlet');
+      const owner = await signupBuilder('owned-patch-rate-limit-claimer');
+      await api('/landlets/owned-patch-rate-limit-landlet/claim', owner.session({ method: 'POST' }));
+
+      let lastStatus;
+      for (let i = 0; i < 21; i++) {
+        const result = await api('/landlets/owned-patch-rate-limit-landlet', owner.session({
+          method: 'PATCH', body: JSON.stringify({ name: `Rate Limit Attempt ${i}` }),
+        }));
+        lastStatus = result.response.status;
+      }
+      expect(lastStatus).toBe(429);
+    });
+  });
+
   // Same "claimed implies non-null owner" invariant as the PUT/PATCH test
   // above (#224), but on the create path instead — an anonymous POST that
   // sets status:'claimed' while simply omitting ownerBuilderId used to sail

@@ -450,6 +450,20 @@ export async function deleteLandletLevel(landletId, levelIndex) {
   return sweptInstanceIds;
 }
 
+// #1150: PATCH merges onto the existing record server-side (handleLandlets'
+// own PATCH branch) — sending just `name` leaves every other field
+// untouched. The server enforces case-insensitive uniqueness across every
+// landlet, not just this builder's own; a collision throws via requestJson
+// with the server's own "already taken" message.
+export async function renameLandlet(landletId, name) {
+  const { landlet } = await requestJson(`/landlets/${encodeURIComponent(landletId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return landlet;
+}
+
 // builderId is never sent — the server derives "who's claiming" from the
 // session cookie, never from a client-supplied field.
 export async function claimLandlet(landletId) {

@@ -38,6 +38,7 @@ import {
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
+  renameLandlet,
   fetchLandletLevels,
   addLandletLevel,
   deleteLandletLevel,
@@ -188,6 +189,12 @@ const START_MODE_KEY = 'higglehaven.startMode';
 // saved layout to load across that reload, since START_MODE_KEY itself
 // only ever holds a bare mode name.
 const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
+// #1150: same reload-carries-one-value shape as PREVIEW_SAVED_LAYOUT_ID_KEY
+// above — the "My Lands" list's own "open for editing" link reaches a
+// specific one of a builder's (possibly several — see
+// resolveLandletId's own comment) owned landlets this way, since bootstrap()
+// is the only place Build mode ever loads a landlet from.
+const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 let currentMode = 'shop';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
@@ -8582,6 +8589,14 @@ animate(0);
 // before the modal is ever shown, same as it always has for catalog/instance
 // fetches — there's nothing to claim in offline/local-fallback mode.
 async function resolveLandletId() {
+  // #1150: "My Lands" (a builder can own more than one claimed landlet —
+  // auctions can transfer extra ones in, see ownedLandletsByBuilderId's own
+  // comment in worker/index.js) sets this to jump straight to a specific
+  // one rather than always landing on whichever this plain `limit: 1`
+  // query happens to return first.
+  const targetLandletId = sessionStorage.getItem(BUILD_TARGET_LANDLET_ID_KEY);
+  sessionStorage.removeItem(BUILD_TARGET_LANDLET_ID_KEY);
+  if (targetLandletId) return targetLandletId;
   const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
   if (owned.length > 0) return owned[0].landletId;
   return runClaimFlow();
@@ -9274,6 +9289,109 @@ document.addEventListener('click', (event) => {
   if (event.target === accountMenuToggle || accountMenuPanel.contains(event.target)) return;
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
+});
+
+// #1150 (owner request, 2026-10-01, via a live Control Room conversation):
+// a land's name/size were visible while standing on it in Shop mode
+// (updateShopLandletInfo above) but nowhere in Build mode at all, and a
+// builder who owns more than one claimed landlet (auctions can transfer
+// extra ones in — see ownedLandletsByBuilderId's own comment in
+// worker/index.js, and resolveLandletId's own comment above) had no way to
+// see or switch between them. Same modal shell/row-reuse shape as the
+// Settings > Build version-history list just above (.version-row/
+// .version-action-btn), and the same plain prompt()-based rename flow as
+// renameBuilder/renameSeller/updateCatalogTemplate's own UI call sites.
+const myLandsBtn = document.getElementById('my-lands-btn');
+const myLandsModalEl = document.getElementById('my-lands-modal');
+const myLandsCloseBtn = document.getElementById('my-lands-close-btn');
+const myLandsStatusEl = document.getElementById('my-lands-status');
+const myLandsListEl = document.getElementById('my-lands-list');
+const myLandsEmptyEl = document.getElementById('my-lands-empty');
+
+async function renderMyLands() {
+  myLandsStatusEl.textContent = '';
+  myLandsStatusEl.classList.remove('error');
+  myLandsEmptyEl.hidden = true;
+  myLandsListEl.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+  if (!builderId) {
+    myLandsListEl.innerHTML = '';
+    myLandsEmptyEl.hidden = false;
+    return;
+  }
+  let owned;
+  try {
+    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+  } catch (err) {
+    myLandsListEl.innerHTML = '';
+    myLandsStatusEl.textContent = err.message || 'Could not load your lands.';
+    myLandsStatusEl.classList.add('error');
+    return;
+  }
+  myLandsListEl.innerHTML = '';
+  if (owned.length === 0) {
+    myLandsEmptyEl.hidden = false;
+    return;
+  }
+  for (const landlet of owned) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    // A real <button>, not an <a> — this always goes through the same
+    // reload-into-Build dance every mode switch in this file already uses
+    // (START_MODE_KEY's own comment), never a same-page navigation.
+    const openLink = document.createElement('button');
+    openLink.type = 'button';
+    openLink.className = 'my-lands-open-link';
+    openLink.textContent = landlet.name;
+    openLink.addEventListener('click', () => {
+      sessionStorage.setItem(BUILD_TARGET_LANDLET_ID_KEY, landlet.landletId);
+      sessionStorage.setItem(START_MODE_KEY, 'build');
+      location.reload();
+    });
+    info.appendChild(openLink);
+    info.append(` — ${formatArea(landlet.areaM2)}`);
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'version-action-btn';
+    renameBtn.type = 'button';
+    renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', async () => {
+      const next = prompt('Rename this land', landlet.name);
+      if (!next || !next.trim() || next.trim() === landlet.name) return;
+      myLandsStatusEl.textContent = '';
+      myLandsStatusEl.classList.remove('error');
+      renameBtn.disabled = true;
+      try {
+        // #1150: server enforces uniqueness across every landlet, not just
+        // this builder's own — a collision surfaces here as the server's
+        // own friendly message via requestJson's rejection.
+        const updated = await renameLandlet(landlet.landletId, next.trim());
+        landlet.name = updated.name;
+        openLink.textContent = landlet.name;
+      } catch (err) {
+        myLandsStatusEl.textContent = err.message || 'Could not rename this land.';
+        myLandsStatusEl.classList.add('error');
+      } finally {
+        renameBtn.disabled = false;
+      }
+    });
+    actions.appendChild(renameBtn);
+    row.appendChild(actions);
+    myLandsListEl.appendChild(row);
+  }
+}
+
+myLandsBtn.addEventListener('click', () => {
+  myLandsModalEl.classList.add('visible');
+  renderMyLands();
+});
+myLandsCloseBtn.addEventListener('click', () => {
+  myLandsModalEl.classList.remove('visible');
 });
 
 // Real login (docs/API.md's "Authentication") — now the sole way a
