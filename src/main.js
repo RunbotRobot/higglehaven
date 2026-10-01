@@ -7253,6 +7253,7 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
+const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -8550,6 +8551,39 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
+// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
+// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
+// avatar-facing angle (shopAvatarFacing, declared further down with the
+// rest of the Shop-mode state — safe to reference here since this only
+// ever runs once shopActive is true, well after full module evaluation);
+// Build mode has no avatar at all, just the free OrbitControls camera, so
+// its "facing" is read directly off the camera's own current look
+// direction instead. The two are deliberately not the same value
+// (shopAvatarFacing eases toward movement direction rather than tracking
+// the camera instantly), but each is the right analog for its own mode.
+//
+// "North" is a convention this codebase never previously defined for its
+// world coordinates — inferred here from the one existing precedent:
+// loadLandletMap's claim-flyover camera starts south of center looking
+// toward +Y, which only reads sensibly if +Y is already "up"/North on
+// that map. +X is then East, the only orientation consistent with
+// standard map/compass reading once a Z-up world has a chosen North.
+// Facing angle 0 means +Y (North); the in-world yaw convention turns a
+// positive angle toward -X (see applyShopCameraOrientation's own
+// comment), so the clockwise bearing an ordinary compass face uses is the
+// negation of that facing angle.
+const compassScratchDir = new THREE.Vector3();
+function currentFacingRad() {
+  if (shopActive) return shopAvatarFacing;
+  camera.getWorldDirection(compassScratchDir);
+  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
+}
+
+function updateCompassNeedle() {
+  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
+  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
+}
+
 function animate(now) {
   requestAnimationFrame(animate);
   if (shopActive) {
@@ -8561,6 +8595,7 @@ function animate(now) {
     controls.update();
     updateCameraDebug(now);
   }
+  updateCompassNeedle();
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -13591,6 +13626,10 @@ function findRootSellerShowcaseMesh(object) {
 // are genuinely useful for.
 const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
+  // #1169: the compass orients by Shop/Build's own free-look camera or
+  // avatar facing — Sell has neither (its own faux-landlet showcase is a
+  // fixed, non-orbiting preview), so there's no facing for it to show.
+  'compass-panel',
 ];
 
 // #635 (sub-issue of #631): the faux-layout preview — a dedicated,
