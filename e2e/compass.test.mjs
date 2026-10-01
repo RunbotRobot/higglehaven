@@ -2,9 +2,9 @@
 // Shop and Build modes, hidden in Sell (no free-look camera/avatar facing
 // there to orient by — see SELL_HIDDEN_BUILDER_UI_IDS's own comment).
 //
-// Shop mode's needle is driven by shopAvatarFacing (resets to 0 = North on
-// every mode entry); Build mode has no avatar, so it's driven directly off
-// the free OrbitControls camera's own current look direction instead. Real
+// Shop mode's needle is driven by shopAvatarFacing; Build mode has no
+// avatar, so it's driven directly off the free OrbitControls camera's own
+// current look direction instead. Real
 // joystick-driven turning in Shop mode isn't exercised here — raw Shop-mode
 // movement/camera simulation isn't automated anywhere in this suite (see
 // e2e/community-signs.test.mjs's own comment on why) — but Build mode's
@@ -65,8 +65,24 @@ await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
-const initialShopRotation = await needleRotationDeg();
-console.log('initial Shop-mode needle rotation (should be 0 — shopAvatarFacing resets to 0/North on every mode entry):', initialShopRotation);
+// #1175: every Shop-mode spawn now starts facing a random direction
+// (toward the world center from a random orbit point, then keeps slowly
+// orbiting until navigation input), not always North — so the needle's
+// expected bearing has to be derived from the actual shopAvatarFacing the
+// spawn picked (window.__shopAvatarOrientation, already exposed for
+// exactly this kind of test — see its own comment), not a fixed 0. Both
+// values are read in one evaluate() call, not two round trips — the spawn
+// orbit keeps advancing shopAvatarFacing every animation frame, so reading
+// the needle's own rendered transform and the raw facing angle separately
+// could catch two different frames and spuriously disagree.
+const { rotation: initialShopRotation, facingRad: shopFacingRad } = await page.evaluate(() => {
+  const transform = document.getElementById('compass-needle').style.transform;
+  const match = /rotate\(([-\d.]+)deg\)/.exec(transform);
+  return { rotation: match ? parseFloat(match[1]) : null, facingRad: window.__shopAvatarOrientation?.facingRad };
+});
+const expectedShopRotation = ((-shopFacingRad * 180) / Math.PI + 540) % 360 - 180;
+const normalizedShopRotation = ((initialShopRotation + 540) % 360) - 180;
+console.log('initial Shop-mode needle rotation (should match shopAvatarFacing\'s own random spawn bearing):', initialShopRotation, 'vs expected', expectedShopRotation);
 
 await page.click('button[data-mode="sell"]');
 await page.waitForTimeout(500);
@@ -81,7 +97,7 @@ const pass =
   typeof rotatedBuildRotation === 'number' &&
   Math.abs(rotatedBuildRotation - initialBuildRotation) > 5 &&
   compassVisibleInShop &&
-  near(initialShopRotation, 0, 0.1) &&
+  near(normalizedShopRotation, expectedShopRotation, 0.1) &&
   compassHiddenInSell &&
   errors.length === 0;
 await finish(browser, { pass, label: 'On-screen compass: Shop/Build visibility, Sell hidden, needle tracks facing (#1169)', errors });
