@@ -3580,12 +3580,13 @@
             </select>
           </label>
           <label id="upload-file-label">
-            .glb file
-            <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary" />
+            .glb or .fbx file
+            <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
           </label>
           <div id="upload-hint">
             We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
-            80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster.
+            80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster. A .fbx file is converted
+            to .glb right in your browser first — nothing but the converted file ever gets uploaded.
           </div>
         </div>
         <div id="upload-step-dimensions" hidden>

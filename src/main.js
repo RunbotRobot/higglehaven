@@ -115,7 +115,7 @@ import {
   reportPresence,
   fetchNearbyPresence,
 } from './api.js';
-import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
+import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
@@ -2896,7 +2896,7 @@ async function handleUploadFileStep() {
   }
   const file = uploadFileInput.files[0];
   if (!file) {
-    setUploadStatus('Choose a .glb file first.', true);
+    setUploadStatus('Choose a .glb or .fbx file first.', true);
     return;
   }
 
@@ -2904,9 +2904,33 @@ async function handleUploadFileStep() {
   uploadSubmitBtn.disabled = true;
   try {
     let uploadable = file;
+    // #1166: an .fbx pick is converted to .glb right here, before anything
+    // else in this function ever sees it -- optimizeModelFile below (and
+    // the server) only ever deal with .glb, matching #1166's own direction
+    // that storage format stays exactly as it is today. Unlike
+    // optimization just below, a conversion failure has no original .glb
+    // to fall back to, so it aborts this upload attempt outright with a
+    // clear error pointing back at the manual Blender path, rather than
+    // silently uploading something broken (or the raw .fbx).
+    if (/\.fbx$/i.test(file.name)) {
+      setUploadStatus('Converting from FBX…');
+      try {
+        const glbBlob = await convertFbxToGlb(file, (status) => setUploadStatus(status));
+        uploadable = new File([glbBlob], file.name.replace(/\.fbx$/i, '.glb'), { type: 'model/gltf-binary' });
+        if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while converting
+      } catch (err) {
+        console.warn('Client-side FBX conversion failed:', err);
+        setUploadStatus(
+          `Could not convert this .fbx file (${err.message || 'unknown error'}). ` +
+            'Try exporting it to .glb in Blender first and uploading that instead.',
+          true,
+        );
+        return;
+      }
+    }
     try {
-      const optimized = await optimizeModelFile(file, (status) => setUploadStatus(status));
-      uploadable = new File([optimized.blob], file.name, { type: 'model/gltf-binary' });
+      const optimized = await optimizeModelFile(uploadable, (status) => setUploadStatus(status));
+      uploadable = new File([optimized.blob], uploadable.name, { type: 'model/gltf-binary' });
       const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
       setUploadStatus(
         `Reduced ${optimized.trianglesBefore.toLocaleString()} -> ${optimized.trianglesAfter.toLocaleString()} triangles ` +
