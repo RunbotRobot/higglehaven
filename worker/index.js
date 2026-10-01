@@ -2999,6 +2999,10 @@ async function existingSellerIds(db, sellerIds) {
 // in the roster, the same way a template can already have a null
 // seller_id for an unclaimed custom upload.
 async function handleSellers(request, env, db, route, url) {
+  if (request.method === 'GET' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackList(db, route[1]);
+  }
+
   if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
     return handleSellerStripeAccount(request, env, db);
   }
@@ -10761,6 +10765,10 @@ async function handlePurchases(request, env, route, url) {
     return handleMarkShipped(request, env, route[1]);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackCreate(request, env, route[1]);
+  }
+
   // Unauthenticated on purpose — see buildDeliveryConfirmFields' own
   // comment: there is no buyer account here to authenticate against, so
   // the unguessable token itself (hashed before ever reaching the DB) is
@@ -10827,6 +10835,109 @@ async function handleMarkShipped(request, env, purchaseId) {
   }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
+}
+
+// Issue #1096 (owner decision via Control Room, 2026-10-01): distinct from
+// product_reviews (migrations/0047/0048) — a review rates the *product*,
+// shared across every seller who lists it; this rates one specific
+// seller's own service (listing accuracy, timeliness, communication) for
+// one specific purchase from them. Mirrors handleProductReviews' own
+// purchase-gating and rate-limit shape closely (see that function's own
+// comments for the full reasoning) — the differences are purely that this
+// is keyed to one exact purchase_id rather than a template_id/author_label
+// pair, since the owner's own ask was "one to one with a purchase."
+const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
+
+function sellerFeedbackFromRow(row) {
+  return {
+    feedbackId: row.feedback_id,
+    purchaseId: row.purchase_id,
+    sellerId: row.seller_id,
+    authorLabel: row.author_label,
+    rating: row.rating,
+    text: row.text,
+    createdAt: row.created_at,
+  };
+}
+
+async function handleSellerFeedbackCreate(request, env, purchaseId) {
+  const db = env.DB;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) throw new HttpError('Purchase not found', 404);
+  if (!purchase.seller_id) {
+    throw new HttpError('This purchase has no seller to leave feedback for', 400);
+  }
+  await checkRateLimit(db, `seller-feedback-create:${clientIp(request)}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const authorLabel = labelValue(input.authorLabel, 'authorLabel');
+  // Same "no real account system, match the purchase's own free-text
+  // buyerLabel" eligibility check handleProductReviews uses, and the same
+  // #357 refunded-purchase exclusion — a shopper made whole by a refund
+  // has no standing to also rate that same transaction's service.
+  if (!purchase.buyer_label || purchase.buyer_label.toLowerCase() !== authorLabel.toLowerCase() || purchase.refunded_at) {
+    throw new HttpError('Only the buyer of this purchase (under the same name) can leave feedback', 400);
+  }
+  const rating = Number(input.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    throw new HttpError('rating must be an integer from 1 to 5', 400);
+  }
+  const text = input.text === undefined || input.text === null || input.text === ''
+    ? null
+    : stringValue(input.text, 'text');
+  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+  // One feedback per purchase (migrations/0097's own UNIQUE constraint on
+  // purchase_id is the DB-level backstop) — folding the existence check
+  // into the INSERT's own WHERE clause, same atomic check-and-insert idiom
+  // handleProductReviews' own comment explains, avoids a check-then-act
+  // race between two concurrent submits for the same purchase ever
+  // reaching the UNIQUE constraint as a raw, unhandled error.
+  const feedbackId = `seller-feedback-${crypto.randomUUID()}`;
+  const result = await db.prepare(`
+    INSERT INTO seller_feedback (feedback_id, purchase_id, seller_id, author_label, rating, text)
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (SELECT 1 FROM seller_feedback WHERE purchase_id = ?)
+  `).bind(feedbackId, purchaseId, purchase.seller_id, authorLabel, rating, text, purchaseId).run();
+  if (result.meta.changes === 0) {
+    throw new HttpError('Feedback has already been left for this purchase', 409);
+  }
+  // Best-effort notification, same convention as handleProductReviews'
+  // own POST — seller resolved to their own builder profile via the
+  // shared user_id both tables carry; a dangling seller_id has nobody to
+  // notify and is silently skipped (sellerExists already confirmed above
+  // isn't needed here since a dangling seller_id just means the join
+  // below returns nothing).
+  const owner = await db.prepare(`
+    SELECT b.builder_id AS builder_id FROM sellers s
+    JOIN builders b ON b.user_id = s.user_id
+    WHERE s.seller_id = ?
+  `).bind(purchase.seller_id).first();
+  if (owner) {
+    await notificationStatement(db, owner.builder_id,
+      `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`).run();
+  }
+  const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
+  return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+async function handleSellerFeedbackList(db, sellerId) {
+  // Public, same reasoning as GET .../reviews being unauthenticated — a
+  // rating is meant to be seen, not just by the seller themself. The only
+  // UI surfacing it today is the Seller modal (necessarily the seller's
+  // own, since opening someone else's isn't possible), which is what makes
+  // it read as "seller-facing" in practice without the API itself needing
+  // to restrict who can ask.
+  const { results } = await db.prepare(`
+    SELECT * FROM seller_feedback WHERE seller_id = ? ORDER BY created_at DESC LIMIT 200
+  `).bind(sellerId).all();
+  const feedback = results.reverse().map(sellerFeedbackFromRow);
+  // averageRating/count are the seller's real, all-time summary, not
+  // derived from the LIMIT-200 page above — same reasoning as
+  // handleProductReviews' own averageRating comment.
+  const summary = await db.prepare(`
+    SELECT AVG(rating) AS average_rating, COUNT(*) AS count FROM seller_feedback WHERE seller_id = ?
+  `).bind(sellerId).first();
+  const averageRating = summary.count === 0 ? null : summary.average_rating;
+  return json({ feedback, averageRating, count: summary.count });
 }
 
 async function handlePurchaseConfirmDelivery(request, env) {

@@ -89,6 +89,8 @@ import {
   fetchProductReviews,
   createProductReview,
   deleteProductReview,
+  fetchSellerFeedback,
+  createSellerFeedback,
   startAuction,
   fetchAuctions,
   fetchAllAuctions,
@@ -3070,6 +3072,7 @@ uploadSubmitBtn.addEventListener('click', () => {
 // uploaded before this feature — are still reachable here instead of
 // stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
+const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
 const sellerListEl = document.getElementById('seller-list');
 const sellerListViewEl = document.getElementById('seller-list-view');
 const sellerViewToggleEl = document.getElementById('seller-view-toggle');
@@ -4643,6 +4646,30 @@ updateSellerViewToggleUI();
 // genuinely has some. Confirmed via direct testing: an artificial 50ms
 // delay between clicking Build and Sell reproduced this every time;
 // waiting for Build's bootstrap to actually finish first did not.
+// #1096: this seller's own all-time feedback summary (distinct from any
+// one product's review average) — fetched fresh on every modal open since
+// new feedback can land between opens, same reasoning renderActiveSellerView
+// itself gets re-run on open rather than cached. Hidden entirely until this
+// seller has at least one piece of feedback, same "nothing to show yet"
+// convention #productInfoEl's own comment documents, rather than a
+// permanent "No feedback yet" placeholder taking up space.
+async function renderSellerFeedbackSummary(id) {
+  let feedback;
+  let averageRating;
+  try {
+    ({ feedback, averageRating } = await fetchSellerFeedback(id));
+  } catch (err) {
+    console.warn('Could not load seller feedback summary:', err);
+    sellerFeedbackSummaryEl.hidden = true;
+    return;
+  }
+  sellerFeedbackSummaryEl.hidden = feedback.length === 0;
+  if (feedback.length === 0) return;
+  const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
+  sellerFeedbackSummaryEl.textContent =
+    `Seller feedback: ${stars} ${averageRating.toFixed(1)} average (${feedback.length} rating${feedback.length === 1 ? '' : 's'})`;
+}
+
 async function openSellerModal() {
   await bootstrapPromise;
   const id = await ensureSellerIdentity();
@@ -4650,6 +4677,7 @@ async function openSellerModal() {
     updateModeNavUI(); // undoes the Sell button's own optimistic highlight below
     return;
   }
+  renderSellerFeedbackSummary(id);
   // #541: always opens back on Manage, same as activeSettingsTab resetting
   // to 'general' on next Settings open — a seller's view choice doesn't
   // need to survive a close/reopen yet.
@@ -12189,6 +12217,32 @@ refundPolicyCloseBtn.addEventListener('click', () => {
   refundPolicyModalEl.classList.remove('visible');
 });
 
+// #1096: distinct from shopReviewHintEl's product review above — this
+// rates the seller's own service (listing accuracy, timeliness,
+// communication) for one specific purchase, not the product itself, so it
+// only ever fires right after that purchase rather than from a standalone
+// in-world tap. Same lightweight prompt()-based rating+comment flow as the
+// review handler, for the same reason that handler uses it — a star
+// rating is already a complete, useful piece of feedback, and the comment
+// is an optional extra.
+async function promptSellerFeedback(purchase) {
+  if (!purchase?.sellerId || !purchase.buyerLabel) return;
+  if (!confirm('Leave feedback for the seller? (listing accuracy, timeliness, communication)')) return;
+  const ratingInput = prompt('Rate this seller 1-5 stars:', '5');
+  if (!ratingInput || !ratingInput.trim()) return;
+  const rating = Number(ratingInput.trim());
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    alert('Please enter a whole number from 1 to 5.');
+    return;
+  }
+  const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  try {
+    await createSellerFeedback(purchase.purchaseId, { authorLabel: purchase.buyerLabel, rating, text: text?.trim() || undefined });
+  } catch (err) {
+    alert(err.message || 'Could not leave feedback for this seller.');
+  }
+}
+
 shopBuyHintEl.addEventListener('click', async () => {
   const review = shopTappedProduct;
   if (!review) return;
@@ -12205,8 +12259,10 @@ shopBuyHintEl.addEventListener('click', async () => {
   const instanceId = review.mesh.userData.instanceId;
   try {
     const result = await purchaseInstance(instanceId);
+    let purchase;
     if (result.requiresPayment) {
-      const { deliveryConfirmUrl } = await runCheckoutFlow(result, { name, totalCents: priceCents });
+      const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });
+      purchase = finalized.purchase;
       // #473: only clear the persisted idempotency key (see purchaseInstance
       // in src/api.js) once the purchase has genuinely finalized — a
       // network failure anywhere before this point should leave it in
@@ -12218,13 +12274,25 @@ shopBuyHintEl.addEventListener('click', async () => {
       // page to come back and find it later. Present for a physical
       // (non-digital-good) purchase only; a digital good pays the seller
       // out instantly with nothing to confirm.
-      alert(deliveryConfirmUrl
-        ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${deliveryConfirmUrl}`
+      alert(finalized.deliveryConfirmUrl
+        ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${finalized.deliveryConfirmUrl}`
         : 'Purchase complete — thank you!');
     } else {
+      purchase = result.purchase;
       clearPurchaseIdempotencyKey(instanceId);
       alert('Purchase simulated — the seller has been credited.');
     }
+    // #1096: right after the purchase, while the shopper's own buyer_label
+    // (locked into the purchase row at checkout — see #761's own comment on
+    // why the in-world buy flow never sends an explicit one) is already
+    // known, is the only moment this dev-mode identity system can offer a
+    // "leave feedback" prompt at all — there's no "my orders" page to come
+    // back to later (#454's own comment above). sellerId/buyerLabel are
+    // both required server-side (handleSellerFeedbackCreate), so a
+    // seller-less product or a null buyer_label (shouldn't happen via this
+    // flow, but defends the same way the review gate does) just skips the
+    // prompt rather than offering feedback that would only 400.
+    await promptSellerFeedback(purchase);
   } catch (err) {
     if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {
