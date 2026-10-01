@@ -2559,16 +2559,16 @@ describe('Simulated purchases', () => {
     expect(row.buyer_builder_id).toBe(buyer.builderId);
   });
 
-  // #761: the in-world "Simulate Purchase" button (src/main.js) — the only
-  // real purchase path this app ships — never sends an explicit buyerLabel
-  // at all, so before this fix every real purchase landed anonymous
-  // (buyer_label NULL) and the review-eligibility check (an exact
-  // buyer_label match, worker/index.js) rejected every real reviewer
-  // unconditionally. This reproduces that exact path — a purchase POST with
-  // no buyerLabel in the body, same as the real button sends — then
-  // confirms the buyer can still leave a review under their own session
-  // builder's label.
-  it('lets a real buyer review the product after a purchase made with no explicit buyerLabel (#761)', async () => {
+  // #761/#1113: the in-world "Simulate Purchase" button (src/main.js) — the
+  // only real purchase path this app ships — never sends an explicit
+  // buyerLabel at all. #761 fixed that path leaving buyer_label NULL
+  // (defaulting it to the session's own label instead); #1113 later moved
+  // review eligibility off buyer_label entirely onto the real
+  // buyer_builder_id this purchase also carries. This reproduces the real
+  // button's exact path — a purchase POST with no buyerLabel in the body —
+  // then confirms the same buyer can review it under their own session,
+  // with no explicit purchaseId/authorLabel needed from the client either.
+  it('lets a real buyer review the product after a purchase made with no explicit buyerLabel (#761/#1113)', async () => {
     const buyer = await signupBuilder('review-eligibility-buyer');
     await createGreenbeltLandletWithArea('review-eligibility-landlet', 1000);
     await claim('review-eligibility-landlet', buyer);
@@ -2578,12 +2578,15 @@ describe('Simulated purchases', () => {
     const purchased = await api('/instances/review-eligibility-instance/purchase', buyer.session({ method: 'POST' }));
     expect(purchased.response.status).toBe(201);
     expect(purchased.body.purchase.buyerLabel).toBe(buyer.builder.label);
+    expect(purchased.body.purchase.buyerBuilderId).toBe(buyer.builderId);
 
-    const reviewed = await api('/catalog/review-eligibility-template/reviews', {
+    const reviewed = await api('/catalog/review-eligibility-template/reviews', buyer.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: buyer.builder.label, rating: 5 }),
-    });
+      body: JSON.stringify({ rating: 5 }),
+    }));
     expect(reviewed.response.status).toBe(201);
+    expect(reviewed.body.review.authorLabel).toBe(buyer.builder.label);
+    expect(reviewed.body.review.purchaseId).toBe(purchased.body.purchase.purchaseId);
   });
 
   it('rejects an absurd quantity rather than crediting an unbounded higgles amount', async () => {

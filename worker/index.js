@@ -1921,13 +1921,11 @@ const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
 // #804: review creation itself had no rate limit at all — the one outlier
 // among comparable free-text-identity writes in this file (sign posts,
 // calendar events, purchases, builder/seller creation, and even this
-// endpoint's own DELETE branch below all have one). authorLabel is
-// arbitrary free text checked only against purchases.buyer_label (also
-// free text), so a caller can cheaply mint many distinct "verified
-// purchaser" identities against a non-Stripe-connected template and post
-// one review under each — the same rating-skewing abuse the #59
-// unique-index migration closed for a single identity, left open across
-// identities without a throttle on creation itself.
+// endpoint's own DELETE branch below all have one). Originally keyed by
+// clientIp since authorLabel was free text matched only against
+// purchases.buyer_label (also free text); #1113 now requires a session, so
+// this is keyed by builder_id like this file's other session-gated mutation
+// rate limits (e.g. FRIENDSHIP_MUTATE_RATE_LIMIT_MAX).
 const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
 
 async function handleProductReviews(request, db, route) {
@@ -1961,24 +1959,30 @@ async function handleProductReviews(request, db, route) {
   if (request.method === 'POST' && route.length === 3) {
     const template = await db.prepare('SELECT template_id, name, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
-    await checkRateLimit(db, `product-review-create:${clientIp(request)}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
+    // #1113 (closing #893's spoofing gap): now requires a session —
+    // authorLabel is no longer client-supplied, and eligibility is a real
+    // purchase_id lookup (purchases.buyer_builder_id, migrations/0099)
+    // instead of a caller-supplied, non-unique, mutable label matched
+    // against purchases.buyer_label. Every real purchase already requires
+    // a verified session (N44), so this is a strict tightening, not a new
+    // restriction on anyone who could legitimately review something.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
-    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
-    // Standard practice on real marketplaces — a review is only credible
-    // coming from someone who actually bought the thing. There's no real
-    // account system here to check "did this person buy it" against, so
-    // this matches the same free-text label a purchase's own optional
-    // buyerLabel already uses (see migrations/0051_purchases.sql) —
-    // case-insensitive, same convention as the catalog search's own name
-    // matching. An anonymous purchase (buyerLabel left blank) can't back
-    // a review under anyone's name; the shopper needs to have used the
-    // same label both times, exactly like this dev-mode identity system's
-    // "no accounts, just labels" already means everywhere else it's used.
-    const purchase = await db.prepare(
-      'SELECT 1 FROM purchases WHERE template_id = ? AND buyer_label = ? COLLATE NOCASE AND refunded_at IS NULL LIMIT 1',
-    ).bind(templateId, authorLabel).first();
+    const authorLabel = sessionBuilder.label;
+    // The caller's own oldest unreviewed, unrefunded purchase of this
+    // template — a real foreign key, not a label match. This SELECT alone
+    // isn't the actual guard against double-reviewing (see the INSERT's own
+    // WHERE NOT EXISTS below for that); it's just what turns "no eligible
+    // purchase at all" into a clean 400 instead of a confusing 409.
+    const purchase = await db.prepare(`
+      SELECT purchase_id FROM purchases
+      WHERE template_id = ? AND buyer_builder_id = ? AND refunded_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM product_reviews WHERE purchase_id = purchases.purchase_id)
+      ORDER BY created_at ASC LIMIT 1
+    `).bind(templateId, sessionBuilder.builder_id).first();
     if (!purchase) {
-      throw new HttpError('Only a shopper who has purchased this product (under the same name) can review it', 400);
+      throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
     const rating = Number(input.rating);
     if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
@@ -1988,28 +1992,27 @@ async function handleProductReviews(request, db, route) {
       ? null
       : stringValue(input.text, 'text');
     if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // One review per matching purchaser label per template (migrations/
-    // 0059) — the verified-purchase check above is a one-time eligibility
-    // gate, not a per-review consumption check, so without this the same
-    // purchase could otherwise back an unbounded number of reviews under
-    // one label. A separate SELECT-then-INSERT here would be a
-    // check-then-act race (two concurrent submits under the same label
-    // could both pass the SELECT before either INSERT commits) — folding
-    // the existence check into the INSERT's own WHERE clause instead makes
-    // the whole check-and-insert one atomic statement, same idiom
-    // checkRateLimit uses for its own check-then-act race. `changes === 0`
-    // means the WHERE NOT EXISTS already found a matching review, i.e. the
-    // guard blocked the insert.
+    // One review per purchase (migrations/0100, replacing migrations/0059's
+    // per-label guard) — the SELECT above is a point-in-time read, not a
+    // consumption check, so without this the same purchase could otherwise
+    // back an unbounded number of reviews. A separate SELECT-then-INSERT
+    // here would be a check-then-act race (two concurrent submits against
+    // the same purchase_id could both pass the SELECT before either INSERT
+    // commits) — folding the existence check into the INSERT's own WHERE
+    // clause instead makes the whole check-and-insert one atomic statement,
+    // same idiom checkRateLimit uses for its own check-then-act race.
+    // `changes === 0` means the WHERE NOT EXISTS already found a review for
+    // this purchase, i.e. the guard blocked the insert.
     const reviewId = `review-${crypto.randomUUID()}`;
     const result = await db.prepare(`
-      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text)
-      SELECT ?, ?, ?, ?, ?
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id)
+      SELECT ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (
-        SELECT 1 FROM product_reviews WHERE template_id = ? AND author_label = ? COLLATE NOCASE
+        SELECT 1 FROM product_reviews WHERE purchase_id = ?
       )
-    `).bind(reviewId, templateId, authorLabel, rating, text, templateId, authorLabel).run();
+    `).bind(reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, purchase.purchase_id).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('This purchaser has already reviewed this product', 409);
+      throw new HttpError('This purchase has already been reviewed', 409);
     }
     // #1043: every other real "something happened that the other party
     // should passively learn about" event in this file fires a
@@ -2065,6 +2068,9 @@ function reviewFromRow(row) {
     authorLabel: row.author_label,
     rating: row.rating,
     text: row.text,
+    // #1113: the real purchase this review is tied to. Null for a review
+    // created before this column existed.
+    purchaseId: row.purchase_id,
     createdAt: row.created_at,
   };
 }
