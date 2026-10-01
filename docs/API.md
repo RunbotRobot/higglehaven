@@ -2729,6 +2729,13 @@ concurrently can't be silently clobbered back to the stale unowned values
 this request pinned them to — a lost race returns `409` instead of the `200`
 it would otherwise report despite having reverted the claim underneath it.
 
+`name` must be unique across every landlet in Higglehaven, case-insensitively
+(not just unique within one builder's own holdings) — a rename that collides
+with another landlet's name returns `409` with a message explaining why.
+On the owned branch, this endpoint is now rate-limited per owning builder
+(the "My Lands" rename UI, #1150, gave it a real, repeatable, owner-facing
+write affordance it never had before).
+
 ### `DELETE /api/landlets/:landletId`
 
 Once a landlet has an owner, this always fails with `409` — this raw delete
