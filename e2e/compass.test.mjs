@@ -2,15 +2,17 @@
 // Shop and Build modes, hidden in Sell (no free-look camera/avatar facing
 // there to orient by — see SELL_HIDDEN_BUILDER_UI_IDS's own comment).
 //
-// Shop mode's needle is driven by shopAvatarFacing (resets to 0 = North on
-// every mode entry); Build mode has no avatar, so it's driven directly off
-// the free OrbitControls camera's own current look direction instead. Real
-// joystick-driven turning in Shop mode isn't exercised here — raw Shop-mode
-// movement/camera simulation isn't automated anywhere in this suite (see
-// e2e/community-signs.test.mjs's own comment on why) — but Build mode's
-// camera responds to an ordinary pointer drag on the main canvas, which
-// *is* reliably testable, so that's used to confirm the needle actually
-// tracks a real camera rotation, not just its own static initial value.
+// Shop mode's needle is driven by shopAvatarFacing; Build mode has no
+// avatar, so it's driven directly off the free OrbitControls camera's own
+// current look direction instead. Neither mode's initial spawn facing is
+// asserted to a specific value here (#1210: #1175's spawn flow gives Shop
+// mode a random initial facing via its hands-off orbit, not a fixed 0/North
+// the way it used to be — the Build-mode camera's own fixed start position
+// is still deterministic, see its own comment below). Both modes instead
+// confirm the needle actually tracks a real rotation (a canvas drag in
+// Build, a move-joystick drag in Shop — the latter also doubles as the
+// navigation input that stops Shop's spawn orbit), not just its own static
+// initial value.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
@@ -66,7 +68,36 @@ await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();
 console.log('compass visible in Shop mode (should be true):', compassVisibleInShop);
 const initialShopRotation = await needleRotationDeg();
-console.log('initial Shop-mode needle rotation (should be 0 — shopAvatarFacing resets to 0/North on every mode entry):', initialShopRotation);
+console.log('initial Shop-mode needle rotation (random — #1175\'s spawn orbit picks a random facing, not asserted to a specific value):', initialShopRotation);
+
+// Drags the move joystick (left stick) from its base's own center toward
+// (dxPx, dyPx) — mirrors bindShopJoystick's real pointerdown/move pair, the
+// same idiom e2e/flight-direction-tilt.test.mjs already uses. The first
+// drag is also navigation input (#1175's stopShopSpawnRotation), so it
+// both ends the spawn orbit and turns the avatar to a new heading via the
+// ordinary turn-ease. Two drags in clearly different directions (forward,
+// then strafe-right — the same pair flight-direction-tilt.test.mjs uses)
+// rather than comparing against the pre-drag spawn reading: that reading
+// is random (see above), so a single before/after comparison could
+// coincidentally land within any fixed tolerance of it by chance, while
+// two independent, clearly-different manual headings can't.
+async function dragMoveJoystick(dxPx, dyPx) {
+  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const originX = box.x + box.width / 2;
+  const originY = box.y + box.height / 2;
+  await page.mouse.move(originX, originY);
+  await page.mouse.down();
+  await page.mouse.move(originX + dxPx, originY + dyPx, { steps: 5 });
+  await page.waitForTimeout(500); // past SHOP_AVATAR_TURN_EASE_PER_S's own convergence window
+  await page.mouse.up();
+}
+
+await dragMoveJoystick(0, -40); // forward
+const shopRotationForward = await needleRotationDeg();
+await dragMoveJoystick(40, 0); // strafe right — a clearly different heading
+const shopRotationRight = await needleRotationDeg();
+console.log('Shop-mode needle rotation facing forward (diagnostic only):', shopRotationForward);
+console.log('Shop-mode needle rotation facing right (should differ meaningfully from facing forward):', shopRotationRight);
 
 await page.click('button[data-mode="sell"]');
 await page.waitForTimeout(500);
@@ -74,6 +105,11 @@ const compassHiddenInSell = await page.locator('#compass-panel').isHidden();
 console.log('compass hidden in Sell mode (should be true):', compassHiddenInSell);
 
 const near = (actual, expected, tolerance) => typeof actual === 'number' && Math.abs(actual - expected) < tolerance;
+// Shortest signed angular distance in degrees — handles the wraparound a
+// plain subtraction gets wrong (e.g. 179 vs -179 is 2 degrees apart, not
+// 358), the same reasoning flight-direction-tilt.test.mjs's own
+// shortestAngleDeltaRad applies in radians.
+const angleDeltaDeg = (a, b) => Math.abs(((a - b + 180) % 360 + 360) % 360 - 180);
 
 const pass =
   compassVisibleInBuild &&
@@ -81,7 +117,10 @@ const pass =
   typeof rotatedBuildRotation === 'number' &&
   Math.abs(rotatedBuildRotation - initialBuildRotation) > 5 &&
   compassVisibleInShop &&
-  near(initialShopRotation, 0, 0.1) &&
+  typeof initialShopRotation === 'number' &&
+  typeof shopRotationForward === 'number' &&
+  typeof shopRotationRight === 'number' &&
+  angleDeltaDeg(shopRotationRight, shopRotationForward) > 30 &&
   compassHiddenInSell &&
   errors.length === 0;
 await finish(browser, { pass, label: 'On-screen compass: Shop/Build visibility, Sell hidden, needle tracks facing (#1169)', errors });
