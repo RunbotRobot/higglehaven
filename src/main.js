@@ -13514,8 +13514,16 @@ for (const btn of modeNavButtons) {
   btn.addEventListener('click', () => {
     const target = btn.dataset.mode;
     if (target === currentMode) return;
+    // #1152: show the press instantly rather than waiting for the reload's
+    // own bootstrap() to get far enough to call updateModeNavUI() — that
+    // can be a real, perceptible delay (Build mode's own chain in
+    // particular, see enterBuildMode's callers). The double rAF lets the
+    // browser actually paint this highlight before location.reload() tears
+    // the page down; a single rAF (or none) risks the reload winning the
+    // race and the user never seeing it.
+    for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === target);
     sessionStorage.setItem(START_MODE_KEY, target);
-    location.reload();
+    requestAnimationFrame(() => requestAnimationFrame(() => location.reload()));
   });
 }
 
