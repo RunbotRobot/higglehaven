@@ -3264,6 +3264,14 @@ function notificationFromRow(row) {
 // filtering them at read time) is #1101's own scope.
 const PRESENCE_STALE_AFTER_MS = 10_000;
 
+// #1098 (sub-issue of #1095, multiplayer presence): a 15-minute window is
+// this file's one shared RATE_LIMIT_WINDOW_MS (defined further below), so a
+// literal cap here is picked to approximate the issue's own "~1 write per
+// 1-2s" sustained target over that window, not a true per-second throttle —
+// a burst can still spend the whole budget faster, same tradeoff every
+// other checkRateLimit call in this file already accepts.
+const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
+
 async function handlePresence(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
@@ -3277,10 +3285,11 @@ async function handlePresence(request, db, route, url) {
   }
 
   // #1098: upserts the caller's own live position into avatar_presence
-  // (#1097/migrations/0100). Client-side movement throttling (only report on
-  // meaningful movement) is the client-integration sub-issue's job (#1100) —
-  // this endpoint stays safe to call as often as a client likes, the rate
-  // limit below is the only thing actually bounding write frequency.
+  // (#1097/migrations/0100). Client-side movement throttling (only report
+  // on meaningful movement) is the client-integration sub-issue's job
+  // (#1100) — this endpoint stays safe to call as often as a client
+  // likes, the rate limit above is the only thing actually bounding
+  // write frequency.
   if (request.method === 'POST' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `presence-report:${sessionBuilder.builder_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
@@ -3530,14 +3539,6 @@ async function handleFriendships(request, db, route, url) {
 
   return json({ error: 'Not found' }, 404);
 }
-
-// #1098 (sub-issue of #1095, multiplayer presence): a 15-minute window is
-// this file's one shared RATE_LIMIT_WINDOW_MS (defined further below), so a
-// literal cap here is picked to approximate the issue's own "~1 write per
-// 1-2s" sustained target over that window, not a true per-second throttle —
-// a burst can still spend the whole budget faster, same tradeoff every
-// other checkRateLimit call in this file already accepts.
-const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 
 async function labelsByBuilderId(db, builderIds) {
   const uniqueIds = [...new Set(builderIds)];

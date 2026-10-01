@@ -125,10 +125,9 @@ describe('POST /api/presence', () => {
     expect(limited.response.status).toBe(429);
   });
 
-  it('404s on an unsupported method/path shape', async () => {
-    // GET is itself a supported method on this same route (#1099's own
-    // endpoint) now that both land on main together, so this exercises a
-    // method neither handler supports, not GET.
+  // GET /api/presence is a real, separate endpoint (#1099) — only an
+  // actually-unsupported method is a 404 here.
+  it('404s on an unsupported method', async () => {
     const builder = await signupBuilder('presence-bad-route');
     const deleteAttempt = await api('/presence', builder.session({ method: 'DELETE' }));
     expect(deleteAttempt.response.status).toBe(404);
