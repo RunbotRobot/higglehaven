@@ -9196,7 +9196,6 @@ const authForms = {
 const authStatusEl = document.getElementById('auth-status');
 const authAccountEmailEl = document.getElementById('auth-account-email');
 const authAccountVerifiedEl = document.getElementById('auth-account-verified');
-const authAccountPioneerEl = document.getElementById('auth-account-pioneer');
 const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier');
 const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
 const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
@@ -9232,15 +9231,15 @@ function showAuthView(view) {
   setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
 }
 
-// Found via backlog audit (#373): refreshAccountAuthUI's pioneer-badge
-// fetch had no re-entrancy guard, unlike the monotonic load-token pattern
-// used everywhere else in this file for an async render that can be
-// called again before its own fetch resolves (axisPreviewLoadToken,
+// Found via backlog audit (#373): refreshAccountAuthUI's own async fetches
+// had no re-entrancy guard, unlike the monotonic load-token pattern used
+// everywhere else in this file for an async render that can be called
+// again before its own fetch resolves (axisPreviewLoadToken,
 // uploadFlowToken, friendsLoadToken above, ...). Reopening the account
 // menu quickly, or a login -> logout -> login-as-different-account
 // sequence within one round trip, could let an earlier, slower fetch
-// resolve after a newer one and overwrite the pioneer badge with stale
-// data from the wrong request.
+// resolve after a newer one and overwrite the panel with stale data from
+// the wrong request.
 let accountAuthLoadToken = 0;
 
 function refreshAccountAuthUI() {
@@ -9267,27 +9266,16 @@ function refreshAccountAuthUI() {
     // account" — nothing here actually did that until now. Reconciles a
     // stalled-pending session (one the redirect/poll never resolved) the
     // same way pollDiditVerificationStatus itself does, fire-and-forget
-    // with the same re-entrancy guard as the pioneer-badge fetch just
-    // below. Cheap when there's nothing pending — handleDiditVerificationStatus
-    // no-ops with no outbound Didit call in that case.
+    // with the same accountAuthLoadToken re-entrancy guard the rest of
+    // this function uses. Cheap when there's nothing pending —
+    // handleDiditVerificationStatus no-ops with no outbound Didit call in
+    // that case.
     if (currentAuthUser.trustTier !== 'id_verified') {
       fetchDiditVerificationStatus().then(({ status }) => {
         if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading
         if (status === 'approved') refreshCurrentUser();
       }).catch(() => {});
     }
-    // Founding/pioneer recognition (docs/SPEC.md §3) — this app has no
-    // separate profile page, so the account panel is the closest fit (the
-    // old dev-mode identity roster used to show this — see
-    // migrations/0054_link_builders_sellers_to_users.sql's own comment for
-    // why that roster no longer drives Build entry at all). Fetched fresh
-    // on every open rather than cached, since rank/land cap can change
-    // between one open and the next.
-    authAccountPioneerEl.textContent = '';
-    fetchMyBuilder().then((builder) => {
-      if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading — a newer call owns the panel now
-      if (builder.isPioneer) authAccountPioneerEl.textContent = `🏆 Pioneer #${builder.pioneerRank}`;
-    }).catch(() => {});
   } else {
     accountAuthBtn.textContent = 'Log In / Sign Up';
     authLoggedOutEl.hidden = false;
@@ -9323,11 +9311,10 @@ async function refreshCurrentUser() {
 }
 
 accountAuthBtn.addEventListener('click', () => {
-  // refreshAccountAuthUI's own pioneer-rank/land-cap fetch only otherwise
-  // runs right after a login/signup/logout state change — reopening the
-  // panel later without this would keep showing whatever was true at that
-  // moment (e.g. "not yet a pioneer," even well after actually claiming a
-  // landlet and earning the badge).
+  // refreshAccountAuthUI's own trust-tier reconciliation fetch only
+  // otherwise runs right after a login/signup/logout state change —
+  // reopening the panel later without this would keep showing whatever
+  // was true at that moment.
   if (currentAuthUser) refreshAccountAuthUI();
   openAuthModal('login');
 });
@@ -9528,7 +9515,7 @@ async function pollDiditVerificationStatus() {
     } catch (err) {
       // A transient failure here shouldn't give up outright — keep
       // polling until the deadline, the same "best-effort background
-      // refresh" spirit as refreshAccountAuthUI's own pioneer-badge fetch.
+      // refresh" spirit as refreshAccountAuthUI's own trust-tier fetch.
       console.warn('Could not check Didit verification status:', err);
     }
     if (Date.now() >= deadline) {
@@ -9910,6 +9897,14 @@ const SHOP_AVATAR_TURN_EASE_PER_S = 12;
 // low in frame rather than staring at the back of its skull.
 const SHOP_CAMERA_ANCHOR_HEIGHT_M =
   SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 0.6;
+// #1091: a custom equipped avatar (createCustomShopAvatar) can be any real
+// size, not the default body's own fixed proportions — this ratio (anchor
+// height as a fraction of total height, derived from the default body's own
+// two constants above) lets positionShopCamera scale the anchor to a custom
+// avatar's measured height instead of just reusing the default's absolute
+// SHOP_CAMERA_ANCHOR_HEIGHT_M, while staying exactly equivalent to today's
+// behavior for the default avatar itself.
+const SHOP_CAMERA_ANCHOR_HEIGHT_RATIO = SHOP_CAMERA_ANCHOR_HEIGHT_M / SHOP_AVATAR_HEIGHT_M;
 // A fixed-radius orbit around that anchor (`positionShopCamera` below) — the
 // classic over-the-shoulder third-person rig: subtracting the look
 // direction from the anchor means looking down swings the camera up and
@@ -10737,7 +10732,10 @@ function createShopAvatar() {
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, modelUrl: null };
+  // #1091: no real geometry to measure for the procedural default body —
+  // collision/camera code falls back to the SHOP_AVATAR_* constants above
+  // whenever these are null, exactly today's behavior.
+  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, modelUrl: null, measuredHeightM: null, measuredCollisionHalfM: null };
 }
 
 // #681 (sub-issue of #679/#680): the account's own equipped custom avatar
@@ -10774,6 +10772,11 @@ async function createCustomShopAvatar(modelUrl) {
   const box = new THREE.Box3().setFromObject(container);
   const height = Math.max(box.max.z - box.min.z, 0);
   container.position.z = height / 2;
+  // #1091: real horizontal footprint (approximated as a square, same
+  // SHOP_AVATAR_COLLISION_HALF_M convention as the default body) so
+  // collision/camera code can scale to this specific model's own measured
+  // size instead of always assuming the default body's proportions.
+  const horizontalHalfM = Math.max(box.max.x - box.min.x, box.max.y - box.min.y) / 2;
 
   const group = new THREE.Group();
   group.add(container);
@@ -10810,10 +10813,30 @@ async function createCustomShopAvatar(modelUrl) {
     if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
   }
 
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl };
+  return {
+    group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl,
+    measuredHeightM: height, measuredCollisionHalfM: horizontalHalfM,
+  };
 }
 
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState, modelUrl } — see createShopAvatar/createCustomShopAvatar
+let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState, modelUrl, measuredHeightM, measuredCollisionHalfM } — see createShopAvatar/createCustomShopAvatar
+
+// #1091: the currently-equipped avatar's own measured size when it's a
+// custom model (measuredHeightM/measuredCollisionHalfM are null for the
+// default procedural body, which has no real geometry to measure) — these
+// fall back to the default body's own fixed SHOP_AVATAR_* constants
+// whenever no avatar is loaded yet or the equipped one is the default.
+function shopAvatarCollisionHalfM() {
+  return shopAvatar?.measuredCollisionHalfM ?? SHOP_AVATAR_COLLISION_HALF_M;
+}
+function shopAvatarHeightM() {
+  return shopAvatar?.measuredHeightM ?? SHOP_AVATAR_HEIGHT_M;
+}
+function shopCameraAnchorHeightM() {
+  return shopAvatar?.measuredHeightM != null
+    ? shopAvatar.measuredHeightM * SHOP_CAMERA_ANCHOR_HEIGHT_RATIO
+    : SHOP_CAMERA_ANCHOR_HEIGHT_M;
+}
 
 // #713 (sub-issue of #710): swaps the live Shop-mode avatar the instant the
 // "My Avatars" settings picker equips a different one, so a builder standing
@@ -10856,6 +10879,12 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // (the Settings picker only ever shows server truth) -- exposed here so
   // this exact race (#982) is observable from an e2e test.
   window.__shopAvatarModelUrl = shopAvatar.modelUrl;
+  // #1091: same reasoning as __shopAvatarModelUrl above — nothing in the DOM
+  // reflects the collision/camera sizing actually in effect for whichever
+  // avatar just got equipped, so an e2e test can't otherwise tell a custom
+  // model's real measured size got threaded through instead of the default
+  // body's fixed constants.
+  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() };
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -11123,7 +11152,7 @@ function updateShopFlight(dt) {
 function positionShopCamera() {
   camera.getWorldDirection(shopViewDirection);
   shopCameraAnchor.copy(shopAvatarPosition);
-  shopCameraAnchor.z += SHOP_CAMERA_ANCHOR_HEIGHT_M;
+  shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
   clampShopRadius(camera.position);
@@ -11141,7 +11170,7 @@ function positionShopCamera() {
 // it's translated into world space by adding the landlet group's own
 // position before testing.
 function shopAvatarFootprintCorners(x, y) {
-  const half = SHOP_AVATAR_COLLISION_HALF_M;
+  const half = shopAvatarCollisionHalfM();
   return [
     [x + half, y + half],
     [x + half, y - half],
@@ -11165,7 +11194,7 @@ function shopPositionBlocked(x, y, z) {
       const { height } = meshDimensions(mesh);
       const itemZMin = mesh.position.z - height / 2;
       const itemZMax = mesh.position.z + height / 2;
-      if (z + SHOP_AVATAR_HEIGHT_M < itemZMin || z > itemZMax) continue; // no vertical overlap — e.g. flying above it
+      if (z + shopAvatarHeightM() < itemZMin || z > itemZMax) continue; // no vertical overlap — e.g. flying above it
       if (footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) return true;
     }
   }
@@ -12548,6 +12577,7 @@ async function enterShopMode() {
   if (!shopAvatar) shopAvatar = createShopAvatar();
   scene.add(shopAvatar.group);
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
+  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   shopAvatarPosition.set(0, 0, 0);
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;

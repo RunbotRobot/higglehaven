@@ -675,7 +675,7 @@ profile, auto-provisioning one if somehow missing (a defensive fallback —
 signup already creates it, so this should never actually need to):
 
 ```json
-{ "builder": { "builderId": "builder-...", "label": "Ada", "isPioneer": false, "pioneerRank": null, "higglesBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
+{ "builder": { "builderId": "builder-...", "label": "Ada", "higglesBalanceCents": 0, "landCapM2": 1000, "ownedAreaM2": 0, "createdAt": "...", "updatedAt": "..." } }
 ```
 
 Idempotent — the same profile every call, never a new one.
@@ -686,8 +686,6 @@ Idempotent — the same profile every call, never a new one.
 {
   "builderId": "builder-3c9e9c50-2b10-4ba9-b62c-2abfd48b64f7",
   "label": "Ada",
-  "isPioneer": false,
-  "pioneerRank": null,
   "higglesBalanceCents": 0,
   "landCapM2": 1000,
   "ownedAreaM2": 1000,
@@ -696,10 +694,9 @@ Idempotent — the same profile every call, never a new one.
 }
 ```
 
-`isPioneer`/`pioneerRank` are docs/SPEC.md §3's founding/pioneer
-recognition — see "Founding/pioneer recognition" below. `higglesBalanceCents`
-is docs/SPEC.md §5's land-acquisition-auction proceeds ledger — see "Land
-acquisition auctions" below for what can (and can't yet) change it.
+`higglesBalanceCents` is docs/SPEC.md §5's land-acquisition-auction
+proceeds ledger — see "Land acquisition auctions" below for what can (and
+can't yet) change it.
 `landCapM2`/`ownedAreaM2` are "Land cap" below's cap itself and the real
 ground-plus-levels total counted against it — `ownedAreaM2` is `null`
 instead of a number on a response that didn't just recompute both (a
@@ -740,8 +737,8 @@ today.
 None of these three branches (unfiltered list, `ids`, `label`) require a
 session — anyone can look up any builder this way. Because of that, they
 return a narrower shape than `GET /api/builders/me`: `builderId`, `label`,
-`pioneerRank`/`isPioneer`, `landCapM2`, `ownedAreaM2`, `createdAt`,
-`updatedAt` — but never `higglesBalanceCents` (#807). That field is a real,
+`landCapM2`, `ownedAreaM2`, `createdAt`, `updatedAt` — but never
+`higglesBalanceCents` (#807). That field is a real,
 Stripe-redeemable money balance; the others are already visible to any
 Shop-mode visitor via landlet ownership, so only the balance needed
 stripping out here. `higglesBalanceCents` stays on `GET /api/builders/me`
@@ -835,100 +832,20 @@ Response:
 
 Returns `404` if the builder doesn't exist.
 
-## Founding/pioneer recognition
+## Founding/pioneer recognition — removed (#1094)
 
-docs/SPEC.md §3: "permanent 'Pioneer' profile badge (grows in prestige
-over time)... **Explicitly no larger starter plot for founding
-builders**... Recognition stays reputational/historical only." Only the
-badge itself is built — the spec's separate "founding history" page (the
-real "nail-chalice" launch-day lore) isn't something a dev session can
-honestly fabricate; that's real narrative content only the operator can
-supply, so it's left for later as a known gap, not guessed at.
-
-**Revised to a ranked founding cohort, not a single "first ever" winner**
-(`migrations/0044_pioneer_cohort.sql`, superseding
-`migrations/0043_pioneer_recognition.sql`'s original single-`is_pioneer`-
-boolean design) — per explicit direction: "Pioneer status [should] extend
-to a larger population of early adopters." `pioneerRank` (1, 2, 3, ...) is
-granted to each builder's first-ever successful landlet claim, up to
-`PIONEER_COHORT_SIZE` (100, a plain constant in `worker/index.js` — a
-"founding hundred" is a common, legible round-number convention for this
-kind of recognition, chosen for real early-adopter breadth without
-diluting into "everyone"; adjust the constant directly if that number
-ever needs tuning). `isPioneer` is a convenience boolean derived from it
-(`pioneerRank !== null`) so the frontend doesn't need a null-check
-everywhere it only cares about membership, not rank.
-
-`pioneer_rank` lives on the builder, not derived live from current landlet
-ownership, so the distinction survives even if that builder later releases
-their land — matching "permanent." `POST /api/landlets/:id/claim` grants
-the next sequential rank on a builder's first-ever claim, as long as the
-cohort isn't full yet:
-
-```sql
-WITH RECURSIVE seq(n) AS (
-  SELECT 1
-  UNION ALL
-  SELECT n + 1 FROM seq WHERE n < ?
-)
-UPDATE builders
-SET pioneer_rank = (
-  SELECT MIN(n) FROM seq
-  WHERE n NOT IN (SELECT pioneer_rank FROM builders WHERE pioneer_rank IS NOT NULL)
-)
-WHERE builder_id = ? AND pioneer_rank IS NULL
-  AND (SELECT COUNT(*) FROM builders WHERE pioneer_rank IS NOT NULL) < ?
-```
-
-(the smallest rank `1..PIONEER_COHORT_SIZE` nobody currently holds — not simply `MAX(pioneer_rank) + 1`, since deleting a non-max-ranked pioneer can free a gap in the middle rather than at the tail; see #787.)
-
-No-ops silently once either condition fails: past the 100-builder cutoff,
-or if this builder already holds a rank (claiming a second landlet after
-releasing an earlier one doesn't grant a second one — the rule is "not yet
-ranked," not "this exact claim is chronologically their first ever").
-
-Deleting a ranked builder's account (`DELETE /api/builders/:id`, the only
-way today to lose a claim outright) deletes that row entirely, which frees
-one cohort slot for whoever claims next rather than leaving ranks
-permanently sparse — a reasonable dev-mode reading given the spec's
-real-world intent (real early builders, presumably permanent in practice)
-doesn't have to account for one being deleted at all.
-
-The migration backfills ranks for a world that already had claims before
-this feature shipped: every already-claimed builder is ranked by how
-early their first claim landed (`claimable_at`, ties broken by
-`builder_id`), the same "don't erase builders who got here before this
-feature existed" reasoning `migrations/0032`'s own builder-roster backfill
-already follows. Implemented as `UPDATE ... FROM` over a derived
-`ROW_NUMBER()` table, not a `CREATE TEMP TABLE` — D1 rejects temp-table
-DDL outright with `SQLITE_AUTH`, confirmed by hand against a local D1
-instance while writing this migration (window functions and
-`ALTER TABLE ... DROP COLUMN`, both also used here to retire the old
-`is_pioneer` column, are fine).
-
-This app has no separate profile page, so the account panel (`#auth-modal`'s
-logged-in view, `refreshAccountAuthUI` in `src/main.js` — see
-"Authentication") is the closest fit: a ranked builder gets a small
-"🏆 Pioneer #N" line there, fetched fresh via `GET /api/builders/me` every
-time the panel opens, showing the actual rank (not just membership) so it
-reads as more impressive the further the platform's real population grows
-past this fixed founding hundred — the spec's own "grows in prestige over
-time." (Before real login existed, this showed in the old free-text
-identity roster's row instead — see migrations/0054's own comment for why
-that roster no longer drives anything.) Sellers have no such concept;
-`isPioneer` is simply `undefined` on a seller row, so no badge applies.
-
-Covered by `e2e/pioneer-badge.test.mjs`: the first two claims on a fresh
-world land ranks #1 and #2 (demonstrating the cohort, not a single
-winner). The cutoff itself — rank stops being granted past
-`PIONEER_COHORT_SIZE` — is covered by `worker/profiles.test.js` instead,
-where filling 100 rows directly via the D1 binding is cheap; doing that
-through 100 real browser-driven claims would not be.
-
-### Known gaps
-
-The spec's "founding history" page (launch-day lore) isn't built — see
-this section's own opening paragraph for why.
+Previously documented here: a permanent, ranked "Pioneer #N" badge
+(`pioneerRank`/`isPioneer` on the builder object, `builders.pioneer_rank`,
+granted on a builder's first-ever successful landlet claim up to a
+100-builder founding cohort). Removed entirely per direct owner decision
+(2026-10-01, via Control Room): the cutoff between "pioneer" and "normal
+user" was arbitrary — whichever action a builder happened to take first —
+and the platform treats all users equally rather than rewarding early
+adopters with a badge. `migrations/0097_remove_pioneer_rank.sql` drops the
+column; `migrations/0043_pioneer_recognition.sql` and
+`migrations/0044_pioneer_cohort.sql` remain in history as the feature's
+original build-out. Can be revisited later if wanted — see #1094 for the
+full removal scope.
 
 ## Sellers
 
@@ -3190,8 +3107,10 @@ can be added without their own table or endpoints — current sources are:
   below): the recipient is notified of a new request, and the requester is
   notified once it's accepted or, if it's still pending when the recipient
   declines it, once it's declined. Canceling your own pending request and
-  unfriending an already-accepted friendship do not notify the other side
-  (see #858 for the open question of whether unfriending should).
+  unfriending an already-accepted friendship do not notify the other side —
+  deliberate, per #858: matches the silent-unfriend convention most
+  mainstream social platforms use, and avoids the awkwardness an explicit
+  "so-and-so unfriended you" notification would carry.
 
 There's no pagination cursor — one builder's outstanding count is expected
 to stay small — and no `DELETE`, since a read notification is still useful
