@@ -1091,8 +1091,9 @@ above — the owner still needs to register this endpoint's URL in the
 Stripe dashboard and copy the resulting signing secret here before any of
 this runs for real; the code itself doesn't need to wait for that.)
 
-Only the `account.updated` event type is handled (everything else is a
-no-op `200`). The account id on the event is looked up against both
+Four event types are handled; everything else is a no-op `200`.
+
+`account.updated`: the account id on the event is looked up against both
 `sellers` and `builders` — a given Stripe Custom account belongs to
 exactly one of the two, never both, and the event payload alone doesn't
 say which role created it — and whichever row matches gets its
@@ -1102,6 +1103,40 @@ above do (`deriveStripeOnboardingStatus`). An account id matching neither
 table is a safe no-op `200`, not an error — a normal outcome for events on
 Stripe accounts this app never created (a test event in the dashboard, a
 webhook still configured after an account was deleted, etc).
+
+**#1086**: `charge.refunded`, `charge.dispute.created`, and
+`charge.dispute.closed` — a charge can be reversed by Stripe's own
+initiative (a bank chargeback, or a dashboard-initiated refund) entirely
+outside this app's own `POST /api/purchases/:purchaseId/refund` below.
+Without handling these, that purchase's row and the builder's commission
+credit both go permanently stale: `refunded_at` never gets set,
+`higgles_balance_cents` is never clawed back, `unpaidSellerPurchases`
+still treats the seller-share as claimable, and the tax-reporting
+threshold gate still counts it as legitimate gross income. Each event's
+own object (a Charge or a Dispute) carries a top-level `payment_intent`
+field, the join key used to look the `purchases` row up. Whichever of a
+purchase's possibly-several reversal events lands first (a dispute
+created, then later closed; or a retried webhook delivery) wins the
+clawback via the same `refunded_at`-guarded update `/refund` itself
+uses — every later event for the same purchase is a deliberate no-op.
+Unlike `/refund`, this never checks `paid_out_at`: that guard exists on
+the endpoint to let it *refuse* a refund it would otherwise have to
+initiate itself, but a webhook is reporting money Stripe has already
+moved on its own, so there's nothing left to refuse — only a payout-
+bookkeeping mismatch left for manual reconciliation separately. The
+clawback itself (debit the full `builder_share_cents`, allowed to go
+negative, notify the builder, revoke any avatar ownership that purchase
+granted) is identical to `/refund`'s own, per the owner's Control Room
+decision (2026-10-01, on #1086) to treat a chargeback/dispute/dashboard
+refund the same way an ordinary refund already is. **Known residual
+gap, accepted rather than solved here**: an ordinary refund caps what
+reaches the buyer at `REFUND_PAYOUT_RATE` (99%) specifically to close a
+fraud triangle (buy a fake sale, cash out the commission, refund the
+purchase) — a real chargeback can't be capped the same way, since the
+card network controls the reversed amount, not this app, so that same
+fraud shape is still open through a chargeback. See #1109 for a separate,
+broader anti-fraud mechanism meant to cover this gap at the cash-out
+layer instead.
 
 ### `GET /api/builders/me/redeem`
 ### `POST /api/builders/me/redeem`

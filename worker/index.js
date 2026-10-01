@@ -5616,16 +5616,27 @@ function deriveStripeOnboardingStatus(account) {
 // (https://docs.stripe.com/webhooks#verify-manually), the HMAC-SHA256 is
 // computed over `${timestamp}.${rawBody}` keyed by a webhook-specific
 // secret, and verified via the same constant-time timingSafeEqual, never a
-// plain ===. Only `account.updated` is handled — the account id on the
-// event is looked up against both sellers and builders (a Custom account
-// belongs to exactly one, never both) since the event alone doesn't say
-// which role created it.
+// plain ===. `account.updated` is handled by looking up the account id
+// against both sellers and builders (a Custom account belongs to exactly
+// one, never both) since the event alone doesn't say which role created
+// it; #1086 added the three purchase-reversal event types below.
 // #872: Stripe's own webhook-verification guidance requires rejecting a
 // signature whose timestamp is more than a few minutes old, in addition to
 // the HMAC check itself -- otherwise a captured, still-cryptographically-
 // valid payload (a proxy log, an exposed devtools session, a compromised
 // intermediary) could be replayed against this endpoint indefinitely.
 const STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
+
+// #1086: a charge can be reversed by Stripe's own initiative -- a bank
+// chargeback (charge.dispute.created withholds the disputed amount from
+// the connected account's balance immediately, not just once resolved;
+// charge.dispute.closed follows once the dispute's outcome is final) or a
+// dashboard-initiated refund (charge.refunded) -- entirely outside this
+// app's own POST /purchases/:id/refund. Each of these three event types'
+// own object (a Charge or a Dispute) carries a top-level `payment_intent`
+// field, the same join key handlePurchaseReversalWebhookEvent below looks
+// purchases up by.
+const STRIPE_PURCHASE_REVERSAL_EVENT_TYPES = ['charge.refunded', 'charge.dispute.created', 'charge.dispute.closed'];
 
 async function handleStripeWebhook(request, env, db) {
   if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
@@ -5652,23 +5663,67 @@ async function handleStripeWebhook(request, env, db) {
   } catch {
     throw new HttpError('Webhook body is not valid JSON', 400);
   }
-  if (event.type !== 'account.updated') return json({ received: true });
-  const account = event.data?.object;
-  if (!account?.id) return json({ received: true });
-  const status = deriveStripeOnboardingStatus(account);
-  const requirementsDue = account.requirements?.currently_due || [];
-  const nowIso = new Date().toISOString();
-  await db.batch([
-    db.prepare(`
-      UPDATE sellers SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-      WHERE stripe_account_id = ?
-    `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
-    db.prepare(`
-      UPDATE builders SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-      WHERE stripe_account_id = ?
-    `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
-  ]);
+  if (event.type === 'account.updated') {
+    const account = event.data?.object;
+    if (!account?.id) return json({ received: true });
+    const status = deriveStripeOnboardingStatus(account);
+    const requirementsDue = account.requirements?.currently_due || [];
+    const nowIso = new Date().toISOString();
+    await db.batch([
+      db.prepare(`
+        UPDATE sellers SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+        WHERE stripe_account_id = ?
+      `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
+      db.prepare(`
+        UPDATE builders SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+        WHERE stripe_account_id = ?
+      `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
+    ]);
+    return json({ received: true });
+  }
+  if (STRIPE_PURCHASE_REVERSAL_EVENT_TYPES.includes(event.type)) {
+    await handlePurchaseReversalWebhookEvent(db, event);
+  }
   return json({ received: true });
+}
+
+// Owner (Control Room, 2026-10-01, on #1086): claw back the full
+// builder_share_cents the same way an ordinary refund already does,
+// balance allowed to go negative -- same precedent as the 2026-09-10
+// decision on #651 that handlePurchaseRefund's own comments reference.
+// Whichever of a purchase's possibly-several reversal events (a dispute
+// created then later closed, or a retried webhook delivery) lands first
+// wins the clawback via the same refunded_at-guarded update
+// handlePurchaseRefund itself uses below; every later one for the same
+// purchase affects 0 rows and is a deliberate no-op, not an error. Unlike
+// handlePurchaseRefund, this never checks paid_out_at: that guard exists
+// there to let the endpoint *refuse* a refund it would otherwise have to
+// initiate itself, but a webhook is reporting money Stripe has already
+// moved on its own -- there's nothing left here to refuse by rejecting
+// this write, only a payout-bookkeeping mismatch to leave for manual
+// reconciliation separately (same "leave the policy call to a human"
+// shape as writeOrphanedPurchaseRow's own comment elsewhere in this file).
+// Known residual gap, accepted rather than solved here (owner, same
+// thread): a chargeback can't be capped at REFUND_PAYOUT_RATE the way a
+// self-service refund is -- the card network controls the reversed
+// amount, not us -- so the fraud triangle #651 closed for ordinary
+// refunds is still open for a real chargeback; tracked separately at
+// #1109, not a blocker for this fix.
+async function handlePurchaseReversalWebhookEvent(db, event) {
+  const paymentIntentId = event.data?.object?.payment_intent;
+  if (!paymentIntentId) return;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+  if (!purchase) return;
+
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE purchase_id = ? AND refunded_at IS NULL`,
+  ).bind(purchase.purchase_id).run();
+  if (guard.meta.changes === 0) return;
+
+  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
 }
 
 // ---- W-9/W-8BEN tax-ID collection (#614, sub-issue of #350) — the
@@ -10967,6 +11022,81 @@ export function refundIdempotencyKey(purchaseId) {
   return `refund:${purchaseId}`;
 }
 
+// #1086: the builder-commission clawback a reversed purchase needs —
+// debit the host builder's higgles_balance_cents by the full
+// builder_share_cents (allowed to go negative, per the 2026-09-10
+// decision #651's own comments reference) and notify them, then revoke
+// any avatar ownership that purchase granted. Shared by
+// handlePurchaseRefund (this app's own seller/admin-initiated endpoint)
+// and handlePurchaseReversalWebhookEvent (a Stripe-initiated chargeback
+// or dashboard refund) — the side effect is identical either way; only
+// who's authorized to trigger it, and whether the caller also needs to
+// reverse the Stripe charge itself, differ.
+async function clawBackPurchaseCommission(db, purchase, templateName) {
+  // builder_id can be null (migrations/0062 — SET NULL on the host
+  // builder's account deletion, not CASCADE, so this purchase's own record
+  // survives). Nothing to claw a balance back from in that case, and
+  // notifications.builder_id is itself NOT NULL, so skip both statements
+  // rather than crediting/notifying a builder that no longer exists.
+  if (purchase.builder_id) {
+    await db.batch([
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
+        .bind(purchase.builder_share_cents, purchase.builder_id),
+      notificationStatement(db, purchase.builder_id,
+        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
+    ]);
+  }
+
+  // #754: without this, a refunded avatar purchase left the buyer holding
+  // (and able to keep equipped) an item they were just refunded for,
+  // forever — nothing else revokes owned_avatars on refund. Looked up by
+  // purchase_id (migrations/0085) rather than blindly deleted, so
+  // equipped_avatar_template_id is only cleared for the builder who
+  // actually held this exact grant (a no-op if the grant predates 0085, or
+  // was never made — e.g. the buyer had self-deleted by finalize time).
+  //
+  // #801: this used to be gated behind `template?.category === 'avatar'`,
+  // re-deriving "was this an avatar purchase" from catalog_templates' own
+  // *live* category — but category is an ordinary mutable field (PATCH
+  // /api/catalog/:id), so a seller changing it away from 'avatar' after the
+  // sale silently skipped this whole block, letting the buyer keep the item
+  // (and their refund) forever, the exact fraud shape #754 existed to
+  // close. The owned_avatar_purchases row keyed by purchase_id is already
+  // the correct, purchase-time-locked signal (same reasoning migrations/
+  // 0085's own comment gave for owned_avatars.purchase_id) — it only ever
+  // exists when the template genuinely was category 'avatar' at purchase
+  // time, so checking it directly is both sufficient and immune to a later
+  // category edit.
+  //
+  // #1033: a buyer can legitimately hold more than one unrefunded purchase
+  // of the same avatar template (two separately-placed instances, both
+  // bought) — owned_avatars' own single nullable purchase_id column only
+  // ever tracked the FIRST one, so refunding it used to revoke ownership
+  // even while a second, still-valid purchase backed the exact same grant.
+  // owned_avatar_purchases (migrations/0094) records one row per granting
+  // purchase, so this can now correctly check whether any OTHER unrefunded
+  // purchase still exists before revoking — only clearing owned_avatars/
+  // equip state once the count actually reaches zero.
+  const grant = await db.prepare(
+    'SELECT builder_id, template_id FROM owned_avatar_purchases WHERE purchase_id = ?',
+  ).bind(purchase.purchase_id).first();
+  if (grant) {
+    await db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+    const stillOwnedViaOtherPurchase = await db.prepare(
+      'SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?',
+    ).bind(grant.builder_id, grant.template_id).first();
+    if (!stillOwnedViaOtherPurchase) {
+      await db.batch([
+        db.prepare('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')
+          .bind(grant.builder_id, grant.template_id),
+        db.prepare(
+          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
+        ).bind(grant.builder_id, grant.template_id),
+      ]);
+    }
+  }
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
 // — see its own comment for why only higgles_balance_cents is touched, not
 // higgles_earnings_events/land cap). Reachable from the Seller modal's own
@@ -11111,68 +11241,13 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     }
   }
 
-  // builder_id can be null (migrations/0062 — SET NULL on the host
-  // builder's account deletion, not CASCADE, so this purchase's own record
-  // survives). Nothing to claw a balance back from in that case, and
-  // notifications.builder_id is itself NOT NULL, so skip both statements
-  // rather than crediting/notifying a builder that no longer exists.
-  if (purchase.builder_id) {
-    await db.batch([
-      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
-        .bind(purchase.builder_share_cents, purchase.builder_id),
-      notificationStatement(db, purchase.builder_id,
-        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-    ]);
-  }
-
-  // #754: without this, a refunded avatar purchase left the buyer holding
-  // (and able to keep equipped) an item they were just refunded for,
-  // forever — nothing else revokes owned_avatars on refund. Looked up by
-  // purchase_id (migrations/0085) rather than blindly deleted, so
-  // equipped_avatar_template_id is only cleared for the builder who
-  // actually held this exact grant (a no-op if the grant predates 0085, or
-  // was never made — e.g. the buyer had self-deleted by finalize time).
-  //
-  // #801: this used to be gated behind `template?.category === 'avatar'`,
-  // re-deriving "was this an avatar purchase" from catalog_templates' own
-  // *live* category — but category is an ordinary mutable field (PATCH
-  // /api/catalog/:id), so a seller changing it away from 'avatar' after the
-  // sale silently skipped this whole block, letting the buyer keep the item
-  // (and their refund) forever, the exact fraud shape #754 existed to
-  // close. The owned_avatar_purchases row keyed by purchase_id is already
-  // the correct, purchase-time-locked signal (same reasoning migrations/
-  // 0085's own comment gave for owned_avatars.purchase_id) — it only ever
-  // exists when the template genuinely was category 'avatar' at purchase
-  // time, so checking it directly is both sufficient and immune to a later
-  // category edit.
-  //
-  // #1033: a buyer can legitimately hold more than one unrefunded purchase
-  // of the same avatar template (two separately-placed instances, both
-  // bought) — owned_avatars' own single nullable purchase_id column only
-  // ever tracked the FIRST one, so refunding it used to revoke ownership
-  // even while a second, still-valid purchase backed the exact same grant.
-  // owned_avatar_purchases (migrations/0094) records one row per granting
-  // purchase, so this can now correctly check whether any OTHER unrefunded
-  // purchase still exists before revoking — only clearing owned_avatars/
-  // equip state once the count actually reaches zero.
-  const grant = await db.prepare(
-    'SELECT builder_id, template_id FROM owned_avatar_purchases WHERE purchase_id = ?',
-  ).bind(purchaseId).first();
-  if (grant) {
-    await db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchaseId).run();
-    const stillOwnedViaOtherPurchase = await db.prepare(
-      'SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?',
-    ).bind(grant.builder_id, grant.template_id).first();
-    if (!stillOwnedViaOtherPurchase) {
-      await db.batch([
-        db.prepare('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')
-          .bind(grant.builder_id, grant.template_id),
-        db.prepare(
-          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
-        ).bind(grant.builder_id, grant.template_id),
-      ]);
-    }
-  }
+  // #1086: the balance clawback, notification, and avatar-ownership
+  // revocation below are identical regardless of which side initiated the
+  // reversal (this endpoint, a bank chargeback, or a Stripe-dashboard
+  // refund) — extracted into clawBackPurchaseCommission so the webhook
+  // path handling the latter two can reuse the exact same logic rather
+  // than drifting out of sync with it over time.
+  await clawBackPurchaseCommission(db, purchase, templateName);
 
   // Logged last, only once every step above (including the real Stripe
   // reversal) has actually completed — not batched with any of them, since
