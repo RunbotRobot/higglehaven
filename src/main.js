@@ -11590,6 +11590,14 @@ function updateShopLandletInfo() {
   accountMenuLandletInfoEl.hidden = false;
 }
 
+// Same "logged in AND actually verified" check assertVerified enforces
+// server-side (worker/index.js: age_attested_at set, trust_tier !== 'none')
+// — mirrors the existing ageAttested/trustTier idiom requireCurrentUser's
+// own caller (ensureBuilderIdentity) already uses client-side.
+function hasVerifiedSession() {
+  return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none';
+}
+
 // #1100: the client-side half of #1098's own throttling split — the POST
 // endpoint stays safe to call often, so this is what actually keeps calls
 // infrequent: a minimum interval AND a minimum movement/turn delta, same
@@ -11598,6 +11606,20 @@ function updateShopLandletInfo() {
 // should never stall the render loop; errors are swallowed the same way
 // updateShopLandletInfo's own best-effort neighbors in this file are.
 function reportOwnPresenceIfNeeded(now) {
+  // Shop mode itself never requires a real account, let alone a verified
+  // one (anonymous browsing is the whole point — only Build/Sell/
+  // purchasing gate on either) — calling an authenticated endpoint for a
+  // not-logged-in or not-yet-verified shopper would just fail every single
+  // time (401 logged out, 403 unverified per the backend's own
+  // assertVerified), logging a browser-level "Failed to load resource"
+  // console error that the catch below can't suppress — a `fetch()` call
+  // doesn't reject on a non-2xx response (only on a real network failure),
+  // and Chromium logs that console line itself, independent of anything
+  // the JS layer does with the response afterward. Confirmed via
+  // e2e/auth.test.mjs's own logout-reloads-into-Shop step, and separately
+  // its freshly-signed-up-but-unverified second account, which both leave
+  // the page in exactly one of these two states.
+  if (!hasVerifiedSession()) return;
   const sinceLastReport = now - shopLastPresenceReportAt;
   if (sinceLastReport < SHOP_PRESENCE_REPORT_INTERVAL_MS) return;
   const { x, y, z } = shopAvatarPosition;
@@ -11642,6 +11664,16 @@ function shortestAngleDelta(from, to) {
 // wherever the shopper stood before. Never awaited by its caller
 // (updateShopMovement) for the same reason as the report side above.
 async function pollNearbyPresenceIfNeeded(now) {
+  // Same reasoning as reportOwnPresenceIfNeeded's own guard above — GET
+  // /api/presence requires a verified session too, so skip it entirely
+  // rather than failing every poll tick. An anonymous or not-yet-verified
+  // shopper simply doesn't see other avatars; the moment they do log in
+  // and verify, this starts working on the very next tick with no extra
+  // wiring.
+  if (!hasVerifiedSession()) {
+    despawnOtherShopAvatars();
+    return;
+  }
   if (now - shopLastPresencePollAt < SHOP_PRESENCE_POLL_INTERVAL_MS) return;
   shopLastPresencePollAt = now;
   const landletId = shopCurrentLandletEntry?.record.landletId;
