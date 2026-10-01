@@ -13020,7 +13020,19 @@ async function enterShopMode() {
     allLandlets.map((landlet) => landlet.ownerBuilderId).filter((id) => id),
   )];
   fetchBuildersByIds(visibleOwnerBuilderIds)
-    .then((builders) => { shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label])); })
+    .then((builders) => {
+      shopBuilderLabels = new Map(builders.map((b) => [b.builderId, b.label]));
+      // #1172: updateShopLandletInfo only re-renders on a landlet-transition
+      // (found === shopCurrentLandletEntry short-circuits otherwise), so a
+      // shopper who spawned already standing on a landlet before this fetch
+      // resolved would see the "unknown builder" fallback stuck until they
+      // walked off and back. Forcing shopCurrentLandletEntry back to null
+      // makes the next call recompute from scratch and re-render — same
+      // effect as the bootstrap reset above, just re-triggered once real
+      // labels are in.
+      shopCurrentLandletEntry = null;
+      updateShopLandletInfo();
+    })
     .catch(() => {});
 
   // The wall sits at the largest gap-free radius, not the administrative
