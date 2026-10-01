@@ -21,15 +21,21 @@ await chooseIdentity(page, { mode: 'shop', label: 'Flight Tilt Tester', isNew: t
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-// #1175: every spawn (not just a first-ever visit) now starts already
-// flying — no tap needed, and no localStorage flag to force it either (the
-// one this test used to set here no longer does anything; a tap of
-// #shop-fly-btn now would land it instead, since it's already flying). Just
-// let the pitch ease (SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S) converge close to
-// SHOP_AVATAR_FLIGHT_PITCH_RAD before anything below reads it — airborne-ness
-// (and so the pitch target) depends only on shopFlightState !== 'grounded',
-// not on whether the spawn's own hands-off orbit is still active.
-await page.waitForTimeout(2000);
+// #1175: every Shop-mode spawn is already flying (above a random world
+// location, orbiting the center hands-off until navigation input) — not
+// just a first-ever visit the way it used to be. No fly-button tap is
+// needed (or wanted: toggleShopFlight() on an already-'flying' state lands
+// it instead of taking off — the exact prior-version-of-this-comment's own
+// warning, now true unconditionally rather than only pre-first-visit).
+// shopAvatarPitch eases toward SHOP_AVATAR_FLIGHT_PITCH_RAD as soon as the
+// avatar is airborne, independent of the spawn orbit still running — wait
+// for that convergence directly (rather than a fixed sleep guessing how
+// long it takes) via the same diagnostic snapshot the assertions below
+// already read.
+await page.waitForFunction(
+  () => Math.abs(window.__shopAvatarOrientation?.pitchRad ?? 0) > 0.5,
+  { timeout: 10000 },
+);
 
 // Drags the move joystick (left stick — walks/flies forward-back-strafe,
 // relative to the camera's current facing) from its base's own center
