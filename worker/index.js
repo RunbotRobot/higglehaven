@@ -348,6 +348,14 @@ export default {
     ctx.waitUntil(pruneStaleAvatarPresence(env.DB).catch((error) => {
       console.error('pruneStaleAvatarPresence failed', error);
     }));
+    // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
+    // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
+    // run on every */10 tick the other jobs above share.
+    if (event.cron === DB_BACKUP_CRON_EXPRESSION) {
+      ctx.waitUntil(backupDatabaseToR2(env).catch((error) => {
+        console.error('backupDatabaseToR2 failed', error);
+      }));
+    }
   },
 };
 
@@ -5370,6 +5378,79 @@ const AVATAR_PRESENCE_STALE_CLEANUP_MS = 5 * 60 * 1000;
 export async function pruneStaleAvatarPresence(db) {
   const cutoff = new Date(Date.now() - AVATAR_PRESENCE_STALE_CLEANUP_MS).toISOString();
   await db.prepare('DELETE FROM avatar_presence WHERE updated_at < ?').bind(cutoff).run();
+}
+
+// #1135: production D1 (users, builders, purchases, balances, ...) has no
+// backup anywhere outside Cloudflare's own copy -- if the account were
+// ever suspended or lost, that data would be gone with no recovery path.
+// This is the mechanical half of a real fix: a scheduled JSON dump of
+// every real table into its own R2 bucket, kept within this project's
+// existing Cloudflare-free-tier-compatible convention (no new owner-
+// provisioned external credentials required to ship something today).
+// It does not fully close the "Cloudflare account itself is lost" case --
+// a copy that lives entirely inside the same account doesn't survive that
+// specific scenario -- see this change's own PR description for why that
+// residual risk is flagged rather than silently treated as solved.
+//
+// Must stay in sync with wrangler.jsonc's own second cron entry -- that
+// file's own comment points back here.
+const DB_BACKUP_CRON_EXPRESSION = '0 3 * * *';
+// Daily backups, so 14 is exactly two weeks of history -- comfortably
+// enough to recover from "a mistake landed and nobody noticed for a few
+// days" without the bucket (or its small free-tier allowance) growing
+// unbounded.
+const DB_BACKUP_RETENTION_COUNT = 14;
+const DB_BACKUP_KEY_PREFIX = 'backups/';
+
+// The pure "what does a backup contain" half, kept separate from the R2
+// put/retention side below so a test can assert on the dump's own shape
+// without needing a real R2 binding. sqlite's own bookkeeping tables and
+// D1's own d1_migrations are excluded -- that schema history already
+// lives in migrations/*.sql, not in a data backup. Table names come
+// straight from sqlite_master (this database's own catalog), never from
+// any external input, so interpolating them into each SELECT -- the only
+// way to reference a table name at all, since SQL has no parameter
+// placeholder for an identifier -- carries no injection risk here.
+export async function buildDatabaseBackup(db) {
+  const { results: tableRows } = await db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name != 'd1_migrations'
+    ORDER BY name
+  `).all();
+  const tables = {};
+  for (const { name } of tableRows) {
+    const { results } = await db.prepare(`SELECT * FROM "${name}"`).all();
+    tables[name] = results;
+  }
+  return { generatedAt: new Date().toISOString(), tables };
+}
+
+export async function backupDatabaseToR2(env) {
+  if (!env.DB_BACKUPS || !env.DB) return;
+  const dump = await buildDatabaseBackup(env.DB);
+  const key = `${DB_BACKUP_KEY_PREFIX}${dump.generatedAt.replace(/[:.]/g, '-')}.json`;
+  await env.DB_BACKUPS.put(key, JSON.stringify(dump), { httpMetadata: { contentType: 'application/json' } });
+  await pruneOldDatabaseBackups(env.DB_BACKUPS);
+}
+
+// Keeps only the DB_BACKUP_RETENTION_COUNT most recent backups. R2 key
+// names here sort lexicographically in the same order as the ISO-derived
+// timestamps they're built from, so an explicit string sort is enough to
+// find the oldest ones -- unlike #848's own cleanupUnreferencedModels
+// (whose cleanup is best-effort either way), retention correctness here
+// depends on that ordering, so it's sorted explicitly rather than trusted
+// to list()'s own (unspecified) return order.
+export async function pruneOldDatabaseBackups(bucket) {
+  const keys = [];
+  let cursor;
+  do {
+    const listing = await bucket.list({ prefix: DB_BACKUP_KEY_PREFIX, cursor, limit: 1000 });
+    for (const object of listing.objects) keys.push(object.key);
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+  keys.sort();
+  const toDelete = keys.slice(0, Math.max(0, keys.length - DB_BACKUP_RETENTION_COUNT));
+  if (toDelete.length > 0) await bucket.delete(toDelete);
 }
 
 function bytesToHex(bytes) {
