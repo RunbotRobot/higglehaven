@@ -7645,6 +7645,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
     return handleDeleteAccount(request, db, url);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'change-password') {
+    return handleChangePassword(request, db);
+  }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
@@ -8217,6 +8220,48 @@ async function handleDeleteAccount(request, db, url) {
   ]);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// #1181 (sub-issue of #1126, owner decision via its own GitHub comment):
+// a real in-session change-password form, separate from the existing
+// forgot-password email-link flow (which stays as-is for the logged-out
+// case, per the owner's own direction). Requires re-entering the current
+// password -- same "prove it's still you" bar handleDeleteAccount already
+// uses -- and is rate-limited per-account for the same reason.
+//
+// Unlike handleResetPassword (which signs out every session, including
+// whichever one is making the request, since that flow proves identity
+// out-of-band via an emailed link with no "current" session to preserve),
+// this signs out every OTHER session but keeps the one making this
+// request alive: the caller just re-typed their current password a
+// moment ago, so immediately logging them out of their own in-progress
+// action would be pure friction, not a real security improvement -- the
+// actual risk this closes (an old password still working on some other
+// device/session) is the same either way.
+const CHANGE_PASSWORD_RATE_LIMIT_MAX = 5;
+
+async function handleChangePassword(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
+  if (!(await verifyPassword(currentPassword, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+  const newPassword = passwordValue(input.newPassword);
+  const passwordHash = await hashPassword(newPassword);
+  const cookies = parseCookies(request.headers.get('cookie'));
+  const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
+
+  await db.batch([
+    db.prepare(`
+      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ?
+    `).bind(passwordHash, user.user_id),
+    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
+  ]);
+  return json({ changed: true });
 }
 
 // Deliberately always 200, even with no session — a 401 here would be more

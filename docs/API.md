@@ -512,6 +512,33 @@ deliberately — deletes every existing session for that account, signing
 out every device. If the reset was prompted by a compromised password, an
 attacker riding an existing session loses it too.
 
+### `POST /api/auth/change-password`
+
+```json
+{ "currentPassword": "correct horse battery staple", "newPassword": "a brand new password" }
+```
+
+Issue #1181 (sub-issue of #1126, owner decision via its own GitHub comment
+on 2026-10-01): a real in-session change-password form, distinct from
+`request-password-reset`/`reset-password` above, which stay exactly as-is
+for the logged-out case. Session-gated (`401` without one). Requires
+re-entering the current password — same "prove it's really you" bar
+`delete-account` above uses — `401 "Incorrect password"` on a mismatch,
+with no other change. Rate-limited per account (5 attempts per 15
+minutes, same bucket shape as `delete-account`/`resend-verification`).
+`newPassword` follows the same 8–200 character rule as signup.
+
+On success: updates `password_hash`, clears any lockout, and deletes
+every *other* session for the account — deliberately **not** the one
+making this request, unlike `reset-password` above (which signs out
+every session including the caller's own, since that flow proves
+identity out-of-band via an emailed link with no "current" session to
+preserve). Here the caller just re-typed their current password a moment
+ago, so signing them out of their own in-progress action would be pure
+friction, not a real security improvement — the actual risk being closed
+(an old password still working on some other device/session) is the same
+either way. Returns `{ "changed": true }`.
+
 ### `POST /api/auth/resend-verification`
 
 No body — requires a valid session cookie (`401` without one). `400` if
@@ -538,6 +565,15 @@ dev-mode fallback (no `RESEND_API_KEY` in the test environment) — the
 actual Resend network call itself is the one part of this that can't be
 exercised by the automated suite, since that would require a real API key
 and would depend on an external service being reachable during `npm test`.
+
+`worker/change-password.test.js` (#1181) separately covers
+`change-password`: requires a session, rejects an incorrect current
+password with the account untouched, rejects a too-short new password,
+rate-limits (6th attempt is `429`), and the full happy path — the
+session making the change stays logged in while a second session for the
+same account is signed out, the old password stops working, and the new
+one logs in. `worker/account-deletion.test.js` (#1146) is the equivalent
+file for `delete-account`.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-

@@ -10,6 +10,7 @@ import {
   logIn,
   logOut,
   deleteAccount,
+  changePassword,
   fetchCurrentUser,
   requestPasswordReset,
   resetPassword,
@@ -9951,6 +9952,56 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   // panel back to the logged-out login/signup view underneath it.
   refreshAccountAuthUI();
   setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
+});
+
+const authChangePasswordBtn = document.getElementById('auth-change-password-btn');
+const authChangePasswordForm = document.getElementById('auth-change-password-form');
+const authChangePasswordCurrentInput = document.getElementById('auth-change-password-current');
+const authChangePasswordCurrentToggleBtn = document.getElementById('auth-change-password-current-toggle');
+const authChangePasswordNewInput = document.getElementById('auth-change-password-new');
+const authChangePasswordNewToggleBtn = document.getElementById('auth-change-password-new-toggle');
+const authChangePasswordCancelBtn = document.getElementById('auth-change-password-cancel-btn');
+bindPasswordToggle(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn);
+bindPasswordToggle(authChangePasswordNewInput, authChangePasswordNewToggleBtn);
+
+function closeChangePasswordForm() {
+  authChangePasswordForm.hidden = true;
+  authChangePasswordBtn.hidden = false;
+  authChangePasswordForm.reset();
+  setPasswordToggleState(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn, false);
+  setPasswordToggleState(authChangePasswordNewInput, authChangePasswordNewToggleBtn, false);
+}
+
+// Same collapsed-behind-its-own-trigger shape as Delete Account above.
+authChangePasswordBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangePasswordBtn.hidden = true;
+  authChangePasswordForm.hidden = false;
+  authChangePasswordCurrentInput.focus();
+});
+authChangePasswordCancelBtn.addEventListener('click', () => {
+  closeChangePasswordForm();
+  setAuthStatus('');
+});
+
+authChangePasswordForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangePasswordForm);
+  const currentPassword = authChangePasswordCurrentInput.value;
+  const newPassword = authChangePasswordNewInput.value;
+  const submitBtn = authChangePasswordForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your password…');
+  try {
+    await changePassword(currentPassword, newPassword);
+  } catch (err) {
+    submitBtn.disabled = false;
+    setAuthStatus(err.message || 'Could not change your password.', 'error');
+    return;
+  }
+  submitBtn.disabled = false;
+  closeChangePasswordForm();
+  setAuthStatus('Your password has been changed. You have been signed out of your other devices.', 'success');
 });
 
 // A verify-email or reset-password link (see issueEmailVerification/
