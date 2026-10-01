@@ -971,21 +971,59 @@
          #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
          right), the same "always in the DOM, hidden from Shop mode only
          via SHOP_HIDDEN_BUILDER_UI_IDS" convention as every other
-         Build-only panel here (see main.js). */
+         Build-only panel here (see main.js).
+         #1153: the nav/build/dig/remove/status row used to all sit open on
+         screen at once, dominating the build view — collapsed into one
+         small toggle (showing just the current level, e.g. "Ground") that
+         expands into a dropdown panel on tap, the same
+         one-pill-instead-of-a-whole-cluster idiom #account-menu already
+         uses elsewhere in this file for the same reason
+         (docs/SPEC.md §1's "clean, minimalist... expanding menus... leave
+         plenty of screen space open"). Unlike #account-menu, the panel here
+         opens *upward* (bottom: 100%, not top) since this whole control
+         sits at the bottom of the screen — opening downward would run it
+         off-screen. It also doesn't auto-close on every inner button
+         click: Up/Down/Build/Dig are meant to be used repeatedly while
+         reviewing #level-status's result, and that status renders inside
+         this same panel, so auto-closing on click would hide the very
+         message a Build/Dig failure needs to show. */
       #level-controls {
         position: fixed;
         bottom: 44px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 10;
-        display: flex;
+      }
+      #level-menu-toggle {
+        padding: 6px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        min-width: 7em;
+      }
+      #level-menu-toggle.active {
+        background: rgb(var(--pill-rgb) / 0.9);
+      }
+      #level-menu-panel {
+        display: none;
         flex-direction: column;
-        align-items: center;
+        align-items: stretch;
         gap: 6px;
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        min-width: 220px;
+      }
+      #level-menu-panel.expanded {
+        display: flex;
       }
       #level-nav {
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 8px;
         padding: 6px 14px;
         border-radius: 999px;
@@ -1002,10 +1040,6 @@
       }
       #level-nav button:disabled {
         opacity: 0.35;
-      }
-      #level-label {
-        min-width: 5.5em;
-        text-align: center;
       }
       #level-build-btn, #level-dig-btn, #level-remove-btn {
         padding: 8px 16px;
@@ -1025,6 +1059,7 @@
         background: rgb(var(--pill-rgb) / 0.65);
         padding: 6px 14px;
         border-radius: 999px;
+        text-align: center;
       }
       #level-status.error {
         color: #fff;
@@ -3398,15 +3433,17 @@
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="level-controls">
-      <div id="level-nav">
-        <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
-        <span id="level-label">Ground</span>
-        <button id="level-up-btn" type="button" aria-label="Level up">&#9650;</button>
+      <button id="level-menu-toggle" type="button"><span id="level-label">Ground</span></button>
+      <div id="level-menu-panel">
+        <div id="level-nav">
+          <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
+          <button id="level-up-btn" type="button" aria-label="Level up">&#9650;</button>
+        </div>
+        <button id="level-build-btn" type="button">Build Level Above</button>
+        <button id="level-dig-btn" type="button">Dig Level Below</button>
+        <button id="level-remove-btn" type="button" hidden>Remove This Level</button>
+        <div id="level-status"></div>
       </div>
-      <button id="level-build-btn" type="button">Build Level Above</button>
-      <button id="level-dig-btn" type="button">Dig Level Below</button>
-      <button id="level-remove-btn" type="button" hidden>Remove This Level</button>
-      <div id="level-status"></div>
     </div>
     <div id="add-item-panel">
       <button id="add-item-btn" type="button">+ Add Item</button>

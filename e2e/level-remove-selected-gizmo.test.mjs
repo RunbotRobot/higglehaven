@@ -6,7 +6,7 @@
 // longer in the scene graph and logs a console error on its next internal
 // update. Confirmed via e2e/vertical-levels.test.mjs's own console-error
 // check, which reproduces this exact shape.
-import { launchPage, chooseIdentity, claimLandlet, grantLandCapHeadroomAsAdmin, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, grantLandCapHeadroomAsAdmin, openLevelMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Level Remove Selected Gizmo Tester';
 
@@ -18,6 +18,9 @@ await page.waitForTimeout(500);
 
 const builderId = await page.evaluate(() => fetch('/api/builders/me').then((r) => r.json()).then((body) => body.builder.builderId));
 await grantLandCapHeadroomAsAdmin(builderId);
+
+// #1153: Build/Remove now live behind #level-menu-toggle, collapsed by default.
+await openLevelMenu(page);
 
 await page.click('#level-build-btn');
 await page.waitForTimeout(800);
@@ -35,6 +38,11 @@ await page.waitForTimeout(800);
 
 const modeControlsVisibleBeforeRemove = await page.locator('#gizmo-mode-controls').evaluate((el) => el.classList.contains('visible'));
 console.log('gizmo mode controls visible after placing (should be true — item is selected):', modeControlsVisibleBeforeRemove);
+
+// The add-item/placement taps above landed outside the level menu's own
+// toggle/panel, closing it per its own outside-click handler — reopen
+// before driving it again.
+await openLevelMenu(page);
 
 // Remove the level the selected item is on — this is what swept-instance
 // pruning used to leave the gizmo attached to a removed mesh for.

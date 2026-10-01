@@ -342,6 +342,16 @@ export async function openAccountMenu(page) {
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
 }
 
+// #1153: the level nav/build/dig/remove controls are now tucked behind
+// #level-menu-toggle, collapsed by default — any test driving them needs
+// this opened first. Unlike openAccountMenu's panel, this one doesn't
+// auto-close on an inner button click (see its own comment in main.js), so
+// callers only need this once per page load, not before every click.
+export async function openLevelMenu(page) {
+  await page.click('#level-menu-toggle');
+  await page.waitForSelector('#level-menu-panel.expanded', { timeout: 5000 });
+}
+
 // Clicks down a vertical strip of screen points around (x, yStart..yEnd)
 // until #product-info's text includes `expectedText`, returning whatever
 // text was showing when it stopped (a match, or the last attempt's text if
