@@ -287,16 +287,37 @@ isn't configured on this deployment (`STRIPE_SECRET_KEY` unset), returns
 instead of `503` — see below.
 
 ```json
-{ "paymentMethodId": "pm_..." }
+{ "setupIntentId": "seti_..." }
 ```
 
-`POST /api/auth/confirm-card` reads back the PaymentMethod the frontend
-just confirmed and checks its `card.funding`: `"credit"` raises the
-account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"` is
-rejected with `400` (SPEC §6's own reasoning: those are too accessible to
-minors to serve as an age signal). `cardFunding` is recorded on the
-account either way, so a rejected attempt is still visible on the
-account rather than a silent no-op.
+`POST /api/auth/confirm-card` takes the SetupIntent's own id (never a
+PaymentMethod id directly — #1072: a client-supplied PaymentMethod id
+can't be trusted, since a `GET` on any PaymentMethod id that exists
+anywhere in this platform's own connected Stripe account succeeds
+regardless of who it belongs to). It fetches the SetupIntent, `403`s with
+`"This card verification session does not belong to you."` unless its
+`metadata.userId` matches the caller, and `400`s with `"Card verification
+is not complete yet."` unless `status === "succeeded"` — then reads the
+PaymentMethod id **off the SetupIntent itself**, never off anything the
+client sent. It checks that PaymentMethod's `card.funding`: `"credit"`
+raises the account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"`
+is rejected with `400` (SPEC §6's own reasoning: those are too accessible
+to minors to serve as an age signal). `cardFunding` is recorded on the
+account either way, so a rejected attempt is still visible on the account
+rather than a silent no-op.
+
+**One real card backs at most one account, permanently** (owner decision,
+Control Room 2026-10-01 — no household/shared-card exception). Stripe's
+own `card.fingerprint` is stable for a given physical card across every
+PaymentMethod/SetupIntent object it's ever attached to, unlike the
+PaymentMethod id itself (a caller can always mint a fresh SetupIntent from
+the same card). The fingerprint is recorded in `card_fingerprints`
+(migrations/0104) against whichever account's confirm-card call claims it
+first; a *different* account later confirming a card with the same
+fingerprint gets `409` with `"This card has already been used to verify a
+different account."` and is not granted the tier. The same account
+re-confirming its own already-claimed card is unaffected (idempotent, not
+a reuse).
 
 **Simulated fallback when Stripe isn't configured:** every builder/seller
 action now requires `trustTier != "none"` (see "Builders"/"Sellers"
@@ -308,9 +329,10 @@ otherwise have no way to ever clear that gate. Same silent
 simulated-fallback convention this app already uses for real-money
 purchases and seller-payout onboarding when Stripe isn't configured:
 `card-setup-intent` returns `simulated: true` with nothing to collect, and
-`confirm-card` (called with no `paymentMethodId`, or any body at all) sets
-`trustTier` to `"credit_card"` directly, no real card ever checked. A real
-deployment with `STRIPE_SECRET_KEY` set never sees this path.
+`confirm-card` (called with no `setupIntentId`, or any body at all) sets
+`trustTier` to `"credit_card"` directly, no real card ever checked (and no
+fingerprint ever recorded). A real deployment with `STRIPE_SECRET_KEY` set
+never sees this path.
 
 ### Age/credit-card verification gates builder and seller actions
 
