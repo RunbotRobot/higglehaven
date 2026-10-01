@@ -10600,24 +10600,29 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   const sellerId = meta.sellerId || null;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
 
-  // #680: same existence check as the seller's builderId just above — the
-  // buyer locked into this PaymentIntent's metadata may have since
-  // self-deleted too, and owned_avatars.builder_id is a real foreign key
-  // that would otherwise fail this whole batch (losing the purchase
-  // record itself) rather than just silently skipping the grant.
+  // #680/#1112: same existence check as the seller's builderId just above —
+  // the buyer locked into this PaymentIntent's metadata may have since
+  // self-deleted too, and owned_avatars.builder_id/purchases.buyer_builder_id
+  // are both real foreign keys that would otherwise fail this whole batch
+  // (losing the purchase record itself) rather than just silently skipping
+  // the grant. Originally gated on isAvatarCategory alone (it only fed
+  // ownedAvatarStatements below); #1112 also stores buyer_builder_id on
+  // every purchase now, so this runs whenever meta.buyerBuilderId is
+  // present at all.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
-  const buyerBuilderStillExists = isAvatarCategory && meta.buyerBuilderId
+  const buyerBuilderStillExists = meta.buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.buyerBuilderId).first()
     : null;
 
   const statements = [
     db.prepare(`
       INSERT INTO purchases
-        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
+      buyerBuilderStillExists ? meta.buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
@@ -10631,7 +10636,7 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
         `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
     );
   }
-  if (buyerBuilderStillExists) {
+  if (isAvatarCategory && buyerBuilderStillExists) {
     statements.push(...ownedAvatarStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
@@ -10668,30 +10673,36 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   const purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   const builderId = landlet.owner_builder_id;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
-  // #680: same defensive existence check as writeOrphanedPurchaseRow's own
-  // (buyerBuilderId can arrive here from Stripe metadata set at checkout
+  // #680/#1112: same defensive existence check as writeOrphanedPurchaseRow's
+  // own (buyerBuilderId can arrive here from Stripe metadata set at checkout
   // time, same staleness risk as that path — the simulated caller's own
   // buyerBuilderId is always fresh, but this guards both the same way).
-  // #888: isAvatarCategory is an explicit parameter, not re-derived from
-  // template.category here — see this function's own callers for why.
-  const buyerBuilderStillExists = isAvatarCategory && buyerBuilderId
+  // Originally gated on isAvatarCategory alone (it only fed
+  // ownedAvatarStatements below); #1112 also stores buyer_builder_id on
+  // every purchase now, so this runs whenever buyerBuilderId is present at
+  // all, not just for avatar-category purchases — a stale id must never
+  // reach the INSERT below, since purchases.buyer_builder_id is a real FK
+  // (ON DELETE SET NULL only governs a *later* delete of a row that existed
+  // at insert time, not an insert against an id that was already gone).
+  const buyerBuilderStillExists = buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(buyerBuilderId).first()
     : null;
   await db.batch([
     db.prepare(`
       INSERT INTO purchases
-        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label,
+        (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
          payment_intent_id, is_digital_good, delivery_confirm_token_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
+      buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
     db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(builderShareCents, builderId),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
-    ...(buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
+    ...(isAvatarCategory && buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
@@ -11197,6 +11208,12 @@ function purchaseFromRow(row) {
     builderId: row.builder_id,
     sellerId: row.seller_id,
     buyerLabel: row.buyer_label,
+    // #1112: the buyer's own builder_id, captured at purchase time now that
+    // every real purchase requires a verified session (N44) — unlike
+    // builder_id above (the host who earns commission), this identifies who
+    // bought it. Null for a pre-#1112 purchase or one whose buyer has since
+    // self-deleted (ON DELETE SET NULL).
+    buyerBuilderId: row.buyer_builder_id,
     unitPriceCents: row.unit_price_cents,
     quantity: row.quantity,
     totalCents: row.total_cents,

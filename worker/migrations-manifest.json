@@ -95,5 +95,6 @@
   "0095_didit_verification_sessions_one_pending_per_user.sql",
   "0096_control_room_note_author.sql",
   "0097_remove_pioneer_rank.sql",
-  "0098_seller_feedback.sql"
+  "0098_seller_feedback.sql",
+  "0099_purchases_buyer_builder_id.sql"
 ]

@@ -1,0 +1,20 @@
+-- #1112 (part of #893's design: product reviews should tie 1:1 to a real
+-- purchase, not a spoofable free-text label match). purchases.builder_id is
+-- the *host* builder who earns commission (landlet.owner_builder_id, set in
+-- writePurchaseRow) -- not the buyer. The only trace of the buyer on a
+-- purchase row today is buyer_label (free text). migrations/0085's own
+-- comment noted that retrofitting a real buyer-account column onto
+-- purchases "would have been a bigger, riskier change than that feature
+-- needed" at the time (#680) -- but every real purchase now requires
+-- requireVerifiedSession (N44), and writePurchaseRow already receives the
+-- buyer's own builder_id as a parameter (buyerBuilderId, currently used
+-- only to credit owned_avatar_purchases, then discarded), so the value is
+-- already available at write time; this just persists it.
+--
+-- Nullable and SET NULL on delete, same pattern purchases.builder_id itself
+-- already uses (migrations/0062, 0093): a pre-existing purchase (made
+-- before this migration) simply can't back a new-style review, and a buyer
+-- who later deletes their account leaves existing purchases intact with
+-- this column cleared, same as any other "keep the record, drop the live
+-- reference" column in this file.
+ALTER TABLE purchases ADD COLUMN buyer_builder_id TEXT REFERENCES builders(builder_id) ON DELETE SET NULL;
