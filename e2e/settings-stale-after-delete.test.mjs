@@ -35,9 +35,12 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 const beforeText = await waitForText(page, '#settings-section', 'Available to redeem: $50.00', { timeout: 8000 });
 console.log('Redeem Higgles text before delete (should show the granted $50.00):', beforeText.includes('$50.00'));
 
-// --- Delete Account (launchPage's own dialog handler auto-accepts confirm()) ---
-await page.click('#settings-section button:has-text("Delete Account")');
-await waitForText(page, '#settings-section', 'Deleted', { timeout: 8000 });
+// --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
+// #1149 renamed this button from "Delete Account" (never true -- it only
+// ever reset this profile, not the login) to "Reset Profile"; the
+// underlying deleteBuilder behavior this test exercises is unchanged.
+await page.click('#settings-section button:has-text("Reset Profile")');
+await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });
 
 // No tab switch, no modal reopen -- straight read of whatever's on screen
 // right now, which is exactly what #1124's bug left stale.
@@ -52,4 +55,4 @@ const pass = beforeText.includes('$50.00') &&
   afterShowsFreshZero &&
   !afterStillShowsStaleBalance &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Settings > Build fields refresh after Delete Account, not just the identity field (#1124)', errors });
+await finish(browser, { pass, label: 'Settings > Build fields refresh after Reset Profile, not just the identity field (#1124)', errors });

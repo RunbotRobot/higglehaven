@@ -9,6 +9,7 @@ import {
   signUp,
   logIn,
   logOut,
+  deleteAccount,
   fetchCurrentUser,
   requestPasswordReset,
   resetPassword,
@@ -5182,7 +5183,13 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
   if (deleteProfile) {
     deleteBtn.type = 'button';
     deleteBtn.className = 'version-action-btn';
-    deleteBtn.textContent = 'Delete Account';
+    // #1149: this used to say "Delete Account," which was never true — it
+    // only ever reset this one profile (land/build/balance released, a
+    // fresh profile auto-created), while the real login account kept
+    // working the whole time. Real account deletion now lives in the
+    // Account panel (see auth-delete-account-btn); this stays what it
+    // always actually was, just honestly labeled.
+    deleteBtn.textContent = 'Reset Profile';
     actions.appendChild(deleteBtn);
   }
 
@@ -5191,13 +5198,13 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
   }
   renderName();
   // #1124: this render may be the one renderSettingsSection() triggered
-  // right after a Delete Account click redrew the whole tab — if so, show
+  // right after a Reset Profile click redrew the whole tab — if so, show
   // the same confirmation the old, identity-field-only refresh used to,
   // rather than a blank status now that a fresh profile (not the deleted
   // one) is what fetchProfile() above actually returned.
   if (justDeletedIdentityKind === kind) {
     justDeletedIdentityKind = null;
-    status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
+    status.textContent = `Reset — a fresh ${kind.toLowerCase()} identity was created.`;
   } else {
     status.textContent = '';
   }
@@ -5455,7 +5462,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Delete your builder account? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote}`;
+      return `Reset your builder profile? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
     },
     onDeleted: () => { builderId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
@@ -5477,7 +5484,7 @@ function renderSellerIdentityField() {
     // of deleting while a real purchase's proceeds are still unpaid, so
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
-    deleteWarning: 'Delete your seller account? This cannot be undone.',
+    deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete Account under Account above to delete that too.',
     onDeleted: () => { sellerId = null; },
   });
 }
@@ -9648,6 +9655,40 @@ authVerifyIdBtn.addEventListener('click', async () => {
   }
 });
 
+// #432: shared by logout and delete-account below — both end this
+// browser's session identically (no more currentAuthUser, no more cached
+// builder/seller identity), and both need the exact same reset or the
+// *next* login in this tab can inherit a previous account's cached
+// sellerId (see #432's own history: ensureSellerIdentity's own
+// `if (sellerId) return sellerId` short-circuit would otherwise hand the
+// next logged-in account's Sell tab the previous account's private "My
+// Products" listing).
+function resetLocalSessionState() {
+  currentAuthUser = null;
+  builderId = null;
+  sellerId = null;
+  builderIdentityFlowPromise = null;
+  sellerIdentityFlowPromise = null;
+}
+
+// Build and Sell both require a real, logged-in account
+// (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
+// on either once that account is gone would just immediately reprompt the
+// login modal over whatever was on screen (or, for Sell, strand the
+// now-stale showcase/modal with no identity behind it). A reload into Shop
+// instead is the same clean-slate escape hatch #mode-nav's own mode
+// switching already uses (see its own comment), and Shop needs no account
+// at all, so it's always a safe place to land. Returns whether it reloaded
+// (the caller's own post-logout/-deletion UI update is moot if so).
+function leaveAccountScopedModeIfNeeded() {
+  if (currentMode === 'build' || currentMode === 'sell') {
+    sessionStorage.setItem(START_MODE_KEY, 'shop');
+    location.reload();
+    return true;
+  }
+  return false;
+}
+
 authLogoutBtn.addEventListener('click', async () => {
   stopDiditPoll();
   // The button gave zero feedback while the request was in flight —
@@ -9669,36 +9710,64 @@ authLogoutBtn.addEventListener('click', async () => {
     // itself failed.
   }
   authLogoutBtn.disabled = false;
-  currentAuthUser = null;
-  // #432: these are only ever reset via a full page reload otherwise, but
-  // the reload below is conditional on currentMode === 'build' — logging
-  // out while still in Shop mode (where Sell is just an overlay modal, not
-  // a currentMode change) previously left the old account's sellerId
-  // cached, so ensureSellerIdentity's own `if (sellerId) return sellerId`
-  // short-circuit would hand the *next* logged-in account's Sell tab the
-  // previous account's seller identity — and with it, their private
-  // "My Products" listing — until something else happened to reload the
-  // page. Reset unconditionally, before the mode check, so both the
-  // reload path and the stay-on-Shop path start clean.
-  builderId = null;
-  sellerId = null;
-  builderIdentityFlowPromise = null;
-  sellerIdentityFlowPromise = null;
-  // Build and Sell both require a real, logged-in account
-  // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) —
-  // staying on either post-logout would just immediately reprompt the
-  // login modal over whatever was on screen (or, for Sell, strand the
-  // now-stale showcase/modal with no identity behind it). A reload into
-  // Shop instead is the same clean-slate escape hatch #mode-nav's own
-  // mode switching already uses (see its own comment), and Shop needs no
-  // account at all, so it's always a safe place to land after logging out.
-  if (currentMode === 'build' || currentMode === 'sell') {
-    sessionStorage.setItem(START_MODE_KEY, 'shop');
-    location.reload();
-    return;
-  }
+  resetLocalSessionState();
+  if (leaveAccountScopedModeIfNeeded()) return;
   refreshAccountAuthUI();
   closeAuthModal();
+});
+
+const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');
+const authDeleteAccountForm = document.getElementById('auth-delete-account-form');
+const authDeleteAccountPasswordInput = document.getElementById('auth-delete-account-password');
+const authDeleteAccountPasswordToggleBtn = document.getElementById('auth-delete-account-password-toggle');
+const authDeleteAccountCancelBtn = document.getElementById('auth-delete-account-cancel-btn');
+bindPasswordToggle(authDeleteAccountPasswordInput, authDeleteAccountPasswordToggleBtn);
+
+function closeDeleteAccountForm() {
+  authDeleteAccountForm.hidden = true;
+  authDeleteAccountBtn.hidden = false;
+  authDeleteAccountForm.reset();
+  setPasswordToggleState(authDeleteAccountPasswordInput, authDeleteAccountPasswordToggleBtn, false);
+}
+
+// Collapsed behind its own trigger rather than a single click straight
+// into the confirmation — this is the one action in this whole panel that
+// really can't be undone.
+authDeleteAccountBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authDeleteAccountBtn.hidden = true;
+  authDeleteAccountForm.hidden = false;
+  authDeleteAccountPasswordInput.focus();
+});
+authDeleteAccountCancelBtn.addEventListener('click', () => {
+  closeDeleteAccountForm();
+  setAuthStatus('');
+});
+
+authDeleteAccountForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authDeleteAccountForm);
+  const password = authDeleteAccountPasswordInput.value;
+  const submitBtn = authDeleteAccountForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Deleting your account…');
+  try {
+    await deleteAccount(password);
+  } catch (err) {
+    submitBtn.disabled = false;
+    setAuthStatus(err.message || 'Could not delete your account.', 'error');
+    return;
+  }
+  submitBtn.disabled = false;
+  stopDiditPoll();
+  closeDeleteAccountForm();
+  resetLocalSessionState();
+  if (leaveAccountScopedModeIfNeeded()) return;
+  // Deliberately left open (unlike logout's own closeAuthModal()) so this
+  // confirmation is actually seen — refreshAccountAuthUI already flips the
+  // panel back to the logged-out login/signup view underneath it.
+  refreshAccountAuthUI();
+  setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
 });
 
 // A verify-email or reset-password link (see issueEmailVerification/

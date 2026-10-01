@@ -41,6 +41,18 @@ export async function logOut() {
   await requestJson('/auth/logout', { method: 'POST' });
 }
 
+// #1146/#1149: real account deletion — revokes login on the `users` row
+// (see worker/index.js's handleDeleteAccount for exactly what that does
+// and doesn't touch). Distinct from deleteBuilder/deleteSeller below, which
+// only ever reset a builder/seller profile, not the login itself.
+export async function deleteAccount(password) {
+  await requestJson('/auth/delete-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+}
+
 // GET /auth/me always returns 200 with `user: null` when nobody's logged
 // in (see handleMe's own comment on why) — called unconditionally on every
 // page load, so a 4xx here for the common "nobody's logged in" case would

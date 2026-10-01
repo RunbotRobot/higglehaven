@@ -34,7 +34,11 @@ page.on('dialog', (dialog) => {
 await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await page.click('#settings-section button:has-text("Delete Account")');
+// #1149 renamed this button from "Delete Account" to "Reset Profile" --
+// the confirm() dialog text this test checks (via dialogMessage below) is
+// unaffected since the balance-forfeit note is appended after the
+// (now-updated) opening sentence either way.
+await page.click('#settings-section button:has-text("Reset Profile")');
 // launchPage's own dialog handler (registered before ours, in helpers.mjs)
 // auto-accepts the confirm() this click triggers -- give both listeners
 // time to run and the delete's own async follow-up (fetchProfile/renderName)
