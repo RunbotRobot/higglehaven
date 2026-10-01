@@ -9276,6 +9276,12 @@ accountMenuToggle.addEventListener('click', () => {
   if (expanding) {
     refreshAccountMenuLandCap();
     refreshAccountMenuTaxNotice();
+    // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
+    // the Build tab, not Shop or Sell — it shipped visible in every mode
+    // since nothing here ever gated it on currentMode. Recomputed on open
+    // rather than at mode-switch time, same timing refreshAccountMenuLandCap
+    // just above already uses for this same panel.
+    myLandsBtn.hidden = currentMode !== 'build';
   }
 });
 for (const row of accountMenuPanel.querySelectorAll('button')) {
