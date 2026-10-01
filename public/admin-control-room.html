@@ -58,6 +58,8 @@
   .msg { background: #f7f9f3; border-radius: 8px; padding: 8px 10px; }
   .msg-head { font-size: 12px; font-weight: 700; color: #4a5941; margin-bottom: 3px; }
   .msg-text { white-space: pre-wrap; }
+  .msg-img { display: block; max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 6px; }
+  .card-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
   .actions button { font-size: 12px; padding: 5px 9px; }
   .reply-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -287,7 +289,7 @@
     if (task.note) {
       entries.push({ from: task.noteAuthor || task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.updatedAt });
     }
-    (replies || []).forEach((r) => entries.push({ from: r.from, text: r.text, at: r.createdAt }));
+    (replies || []).forEach((r) => entries.push({ from: r.from, text: r.text, at: r.createdAt, imageUrl: r.imageUrl }));
     return entries.sort((a, b) => new Date(a.at) - new Date(b.at));
   }
 
@@ -304,7 +306,9 @@
       const threadHtml = entries.length
         ? entries.map((e) => (
             '<div class="msg"><div class="msg-head">' + escapeHtml(e.from || '(unknown)') +
-            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + linkifyMentions(escapeHtml(e.text)) + '</div></div>'
+            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + linkifyMentions(escapeHtml(e.text)) + '</div>' +
+            (e.imageUrl ? '<img class="msg-img" src="' + escapeHtml(e.imageUrl) + '" alt="" />' : '') +
+            '</div>'
           )).join('')
         : '<div class="meta">No messages yet.</div>';
 
@@ -336,6 +340,7 @@
       '<div class="card-head" data-toggle="' + task.id + '">' +
         (taskNumberLabel(task) ? '<span class="chip">' + escapeHtml(taskNumberLabel(task)) + '</span>' : '') +
         (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
+        (task.imageUrl ? '<img class="card-thumb" src="' + escapeHtml(task.imageUrl) + '" alt="" />' : '') +
         '<span class="title">' + linkTitle + '</span>' +
         '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
         (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
