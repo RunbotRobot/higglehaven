@@ -462,6 +462,115 @@ describe('Landlet updates', () => {
   });
 });
 
+// #1177: owner-requested admin tool for reassigning an already-claimed
+// landlet's owner by hand -- the only other paths that ever change
+// owner_builder_id are self-claim, an auction win, or a builder-deletion
+// release, and the generic PUT/PATCH above deliberately can never touch it.
+describe('Admin landlet ownership reassignment (#1177)', () => {
+  it('reassigns an already-claimed landlet to a different builder, logging the action', async () => {
+    const original = await signupBuilder('reassign-original-owner');
+    const target = await signupBuilder('reassign-target-owner');
+    await createGreenbeltLandlet('reassign-happy-path-landlet');
+    await api('/landlets/reassign-happy-path-landlet/claim', original.session({ method: 'POST' }));
+
+    const reassigned = await api('/landlets/reassign-happy-path-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(reassigned.response.status).toBe(200);
+    expect(reassigned.body.landlet).toMatchObject({
+      landletId: 'reassign-happy-path-landlet', status: 'claimed', ownerBuilderId: target.builderId,
+    });
+
+    const log = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('reassign_landlet_owner', 'reassign-happy-path-landlet').first();
+    expect(JSON.parse(log.detail_json)).toEqual({
+      fromBuilderId: original.builderId, toBuilderId: target.builderId,
+    });
+
+    // The original owner can no longer self-claim another landlet using
+    // this one's now-vacated slot's worth of "already owns a claimed
+    // landlet" state -- i.e. they're genuinely divested, not still counted.
+    await createGreenbeltLandlet('reassign-original-can-claim-again-landlet');
+    const reclaim = await api('/landlets/reassign-original-can-claim-again-landlet/claim', original.session({ method: 'POST' }));
+    expect(reclaim.response.status).toBe(200);
+  });
+
+  it('requires a real admin session', async () => {
+    const owner = await signupBuilder('reassign-auth-owner');
+    const target = await signupBuilder('reassign-auth-target');
+    await createGreenbeltLandlet('reassign-auth-landlet');
+    await api('/landlets/reassign-auth-landlet/claim', owner.session({ method: 'POST' }));
+
+    const asOwner = await api('/landlets/reassign-auth-landlet/reassign-owner', owner.session({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(asOwner.response.status).toBe(403);
+  });
+
+  it('rejects a landlet that is not currently claimed', async () => {
+    const target = await signupBuilder('reassign-unclaimed-target');
+    await createGreenbeltLandlet('reassign-unclaimed-landlet');
+
+    const result = await api('/landlets/reassign-unclaimed-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+  });
+
+  it('404s on a landlet that does not exist', async () => {
+    const target = await signupBuilder('reassign-missing-target');
+    const result = await api('/landlets/does-not-exist/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(404);
+  });
+
+  it('404s on a target builder that does not exist', async () => {
+    const owner = await signupBuilder('reassign-missing-builder-owner');
+    await createGreenbeltLandlet('reassign-missing-builder-landlet');
+    await api('/landlets/reassign-missing-builder-landlet/claim', owner.session({ method: 'POST' }));
+
+    const result = await api('/landlets/reassign-missing-builder-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: 'does-not-exist' }),
+    }));
+    expect(result.response.status).toBe(404);
+  });
+
+  it('rejects reassigning to the current owner', async () => {
+    const owner = await signupBuilder('reassign-same-owner');
+    await createGreenbeltLandlet('reassign-same-owner-landlet');
+    await api('/landlets/reassign-same-owner-landlet/claim', owner.session({ method: 'POST' }));
+
+    const result = await api('/landlets/reassign-same-owner-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: owner.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+  });
+
+  // Same one-claimed-landlet-per-builder invariant POST .../claim enforces
+  // -- an admin can move ownership around, but not past this, since
+  // nothing else in this file is built to handle a builder legitimately
+  // owning two claimed landlets at once (see this endpoint's own comment).
+  it('rejects reassigning to a builder who already owns a claimed landlet', async () => {
+    const owner = await signupBuilder('reassign-invariant-owner');
+    const alreadyOwning = await signupBuilder('reassign-invariant-already-owning');
+    await createGreenbeltLandlet('reassign-invariant-source-landlet');
+    await api('/landlets/reassign-invariant-source-landlet/claim', owner.session({ method: 'POST' }));
+    await createGreenbeltLandlet('reassign-invariant-other-landlet');
+    await api('/landlets/reassign-invariant-other-landlet/claim', alreadyOwning.session({ method: 'POST' }));
+
+    const result = await api('/landlets/reassign-invariant-source-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: alreadyOwning.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+
+    // Nothing actually changed on a rejected attempt.
+    const stillOwner = await api('/landlets/reassign-invariant-source-landlet');
+    expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
+  });
+});
+
 describe('Community signs', () => {
   // A single claimed landlet, shared by every test below, to host the
   // instances they place — placing/toggling/deleting an instance now

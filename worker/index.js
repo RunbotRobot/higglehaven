@@ -8464,6 +8464,70 @@ async function handleLandlets(request, db, route, url) {
     return json({ landlet: landletFromRow(row) });
   }
 
+  // #1177: owner-requested admin tool for handling land-ownership
+  // situations by hand -- the generic PUT/PATCH above deliberately can
+  // never touch ownerBuilderId (see its own comment on why), and the only
+  // other paths that ever change it are a builder's own self-claim, an
+  // auction win, or a builder-deletion release. This is the one
+  // admin-only, directly-invariant-checked way to move an *already*-
+  // claimed landlet to a different builder by hand.
+  //
+  // Judgment calls flagged in the issue, decided here rather than left
+  // unresolved: (1) kept behind the same one-claimed-landlet-per-builder
+  // invariant POST .../claim enforces, rather than letting an admin
+  // override it -- nothing else in this file (recomputeLandCap,
+  // explainClaimConflict, the self-claim/create paths) is built to handle
+  // a builder legitimately owning two claimed landlets at once, so
+  // bypassing it here would risk a silently inconsistent state elsewhere,
+  // not just a one-off exception; (2) API-only, no new admin-page UI --
+  // every other admin mutation in this file (land-cap grants, higgles
+  // grants, land-candidate CRUD, ...) is API-only too, and a landlet id
+  // typed into a request is no heavier an operation than those.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'reassign-owner') {
+    const admin = await requireAdmin(request, db);
+    const existing = await requireLandlet(db, route[1]);
+    if (existing.status !== 'claimed' || existing.owner_builder_id === null) {
+      throw new HttpError('Landlet is not currently claimed -- use POST .../claim instead', 409);
+    }
+    const input = await readJson(request);
+    const newOwnerBuilderId = stringValue(input.ownerBuilderId, 'ownerBuilderId');
+    await requireBuilder(db, newOwnerBuilderId);
+    if (newOwnerBuilderId === existing.owner_builder_id) {
+      throw new HttpError('Landlet is already owned by this builder', 409);
+    }
+
+    // Same atomic guard+write idiom as POST .../claim just above: the
+    // concurrency check (both the still-matches-what-was-just-read guard
+    // and the one-claimed-landlet-per-builder invariant) lives inside the
+    // UPDATE's own WHERE, not a separate pre-check, so a concurrent claim/
+    // auction/reassignment landing in between can't be silently clobbered
+    // or bypassed.
+    const result = await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET owner_builder_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM landlets AS owned
+            WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+              AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+          )
+      `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId),
+      adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
+        fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
+      }),
+    ]);
+    if (result[0].meta.changes === 0) {
+      const current = await requireLandlet(db, route[1]);
+      if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      }
+      throw new HttpError('Target builder already owns a claimed landlet', 409);
+    }
+    const updated = await requireLandlet(db, route[1]);
+    return json({ landlet: landletFromRow(updated) });
+  }
+
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const landlet = validateLandlet(input, crypto.randomUUID());
