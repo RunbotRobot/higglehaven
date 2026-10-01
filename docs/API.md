@@ -287,16 +287,37 @@ isn't configured on this deployment (`STRIPE_SECRET_KEY` unset), returns
 instead of `503` — see below.
 
 ```json
-{ "paymentMethodId": "pm_..." }
+{ "setupIntentId": "seti_..." }
 ```
 
-`POST /api/auth/confirm-card` reads back the PaymentMethod the frontend
-just confirmed and checks its `card.funding`: `"credit"` raises the
-account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"` is
-rejected with `400` (SPEC §6's own reasoning: those are too accessible to
-minors to serve as an age signal). `cardFunding` is recorded on the
-account either way, so a rejected attempt is still visible on the
-account rather than a silent no-op.
+`POST /api/auth/confirm-card` takes the SetupIntent's own id (never a
+PaymentMethod id directly — #1072: a client-supplied PaymentMethod id
+can't be trusted, since a `GET` on any PaymentMethod id that exists
+anywhere in this platform's own connected Stripe account succeeds
+regardless of who it belongs to). It fetches the SetupIntent, `403`s with
+`"This card verification session does not belong to you."` unless its
+`metadata.userId` matches the caller, and `400`s with `"Card verification
+is not complete yet."` unless `status === "succeeded"` — then reads the
+PaymentMethod id **off the SetupIntent itself**, never off anything the
+client sent. It checks that PaymentMethod's `card.funding`: `"credit"`
+raises the account's `trustTier` to `"credit_card"`; `"debit"`/`"prepaid"`
+is rejected with `400` (SPEC §6's own reasoning: those are too accessible
+to minors to serve as an age signal). `cardFunding` is recorded on the
+account either way, so a rejected attempt is still visible on the account
+rather than a silent no-op.
+
+**One real card backs at most one account, permanently** (owner decision,
+Control Room 2026-10-01 — no household/shared-card exception). Stripe's
+own `card.fingerprint` is stable for a given physical card across every
+PaymentMethod/SetupIntent object it's ever attached to, unlike the
+PaymentMethod id itself (a caller can always mint a fresh SetupIntent from
+the same card). The fingerprint is recorded in `card_fingerprints`
+(migrations/0104) against whichever account's confirm-card call claims it
+first; a *different* account later confirming a card with the same
+fingerprint gets `409` with `"This card has already been used to verify a
+different account."` and is not granted the tier. The same account
+re-confirming its own already-claimed card is unaffected (idempotent, not
+a reuse).
 
 **Simulated fallback when Stripe isn't configured:** every builder/seller
 action now requires `trustTier != "none"` (see "Builders"/"Sellers"
@@ -308,9 +329,10 @@ otherwise have no way to ever clear that gate. Same silent
 simulated-fallback convention this app already uses for real-money
 purchases and seller-payout onboarding when Stripe isn't configured:
 `card-setup-intent` returns `simulated: true` with nothing to collect, and
-`confirm-card` (called with no `paymentMethodId`, or any body at all) sets
-`trustTier` to `"credit_card"` directly, no real card ever checked. A real
-deployment with `STRIPE_SECRET_KEY` set never sees this path.
+`confirm-card` (called with no `setupIntentId`, or any body at all) sets
+`trustTier` to `"credit_card"` directly, no real card ever checked (and no
+fingerprint ever recorded). A real deployment with `STRIPE_SECRET_KEY` set
+never sees this path.
 
 ### Age/credit-card verification gates builder and seller actions
 
@@ -810,8 +832,11 @@ Unknown IDs are silently omitted rather than erroring; an empty/all-blank
 catalog-batch handlers use to cap `templateIds`.
 
 `?label=` (#716) filters to an exact, case-insensitive label match instead
-— still every matching row, not just the first, since labels have no
-uniqueness constraint (migrations/0054's own comment). Used by the "Add
+— still every matching row, not just the first: #1187 enforces uniqueness
+going forward on create/rename, but doesn't retroactively guarantee it
+against whatever already existed before that (or the handful of write
+paths #1187 deliberately leaves unchecked — see `POST /api/builders`
+above), so this still can't assume at most one match. Used by the "Add
 friend" flow to resolve a typed name without pulling the whole roster
 client-side; unmatched or ambiguous still surfaces as a status message
 the same way it always has, just resolved server-side now. `ids` and
@@ -848,7 +873,10 @@ Request body:
 
 `label` is required, capped at 100 characters like every other short
 free-text field in this API. Returns `409` if `builderId` is already
-taken. Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
+taken, or if `label` collides case-insensitively with an existing
+builder's (#1187 — "all accounts should be unique even when ignoring
+case"; `builders.label` had no uniqueness constraint at all before this).
+Rate-limited per client IP (`BUILDER_CREATE_RATE_LIMIT_MAX`, 20 per
 window) — unauthenticated and repeatable, the same abuse-cost reasoning as
 sign posts/purchases (#362, mirroring #337).
 
@@ -857,7 +885,20 @@ sign posts/purchases (#362, mirroring #337).
 
 Renames a builder. `label` is required. Returns `404` if the builder
 doesn't exist, `403` if it isn't your own (see "Authorization model"
-above) — requires a session logged in as this builder.
+above) — requires a session logged in as this builder. `409` if `label`
+collides case-insensitively with a *different* builder's (#1187) — a
+case-only change to your own existing label (e.g. "Ada" → "ADA") is fine,
+only another builder already holding it is rejected.
+
+Deliberately an app-level check (an atomic `NOT EXISTS` folded into the
+`INSERT`/`UPDATE`'s own `WHERE`, same idiom `PUT /api/landlets/:landletId`'s
+own name-uniqueness guard above uses), not a schema-level `COLLATE NOCASE`
+unique index on `builders.label` — a real index would also apply to
+`getOrCreateBuilderForUser`'s own auto-provisioning `INSERT OR IGNORE`
+(label = the signing-up user's already-unique username), where a collision
+against some unrelated orphaned/test-created builder label would silently
+break signup for an unrelated, legitimate account instead of rejecting the
+create/rename this is actually about.
 
 ### `DELETE /api/builders/:builderId`
 
@@ -3252,9 +3293,9 @@ can be added without their own table or endpoints — current sources are:
   leave this silent too, matching the unfriend decision rather than
   treating account deletion as a separate case worth notifying on.
 
-There's no pagination cursor — one builder's outstanding count is expected
-to stay small — and no `DELETE`, since a read notification is still useful
-history ("wait, when did that change?").
+It's cursor-paginated (#320, see `GET /api/notifications` below), but has
+no `DELETE`, since a read notification is still useful history ("wait,
+when did that change?").
 
 ### Notification object
 

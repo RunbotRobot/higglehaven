@@ -29,7 +29,12 @@ beforeAll(async () => {
 // purchase with no buyer identity at all), mirroring reviews-auth.test.js's
 // own createPurchase shape.
 async function createPurchase(buyer, { sellerId = 'seller-no-real-row', refunded = false } = {}) {
-  const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host for ${sellerId}` }) })).body.builder;
+  // #1187: label is now unique case-insensitively, and most tests below
+  // call this with the same default sellerId — a random suffix keeps each
+  // throwaway host builder's own label from colliding with an earlier
+  // call's, the same way its builder_id already does via
+  // crypto.randomUUID() below.
+  const host = (await api('/builders', { method: 'POST', body: JSON.stringify({ label: `Host for ${sellerId} ${crypto.randomUUID()}` }) })).body.builder;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
   await env.DB.prepare(`
     INSERT INTO purchases
