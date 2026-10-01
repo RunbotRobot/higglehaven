@@ -1110,3 +1110,23 @@ export async function fetchSavedLayout(savedLayoutId) {
 export async function deleteSavedLayout(savedLayoutId) {
   await requestJson(`/saved-layouts/${encodeURIComponent(savedLayoutId)}`, { method: 'DELETE' });
 }
+
+// #1098 (sub-issue of #1095, multiplayer presence): upserts the caller's
+// own live position. Server-side rate-limited — #1100's own client loop is
+// what keeps calls to this infrequent in practice, this is just the plain
+// request.
+export async function reportPresence({ x, y, z, heading, landletId }) {
+  const { presence } = await requestJson('/presence', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ x, y, z, heading, landletId }),
+  });
+  return presence;
+}
+
+// #1099: other builders' last-reported positions, scoped to one landlet at
+// a time (never the caller's own row — the backend excludes it).
+export async function fetchNearbyPresence(landletId) {
+  const { avatars } = await requestJson(`/presence?landletId=${encodeURIComponent(landletId)}`);
+  return avatars;
+}
