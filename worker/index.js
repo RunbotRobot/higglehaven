@@ -514,6 +514,10 @@ async function handleApi(request, env, url, ctx) {
     return handleNotifications(request, env.DB, route, url);
   }
 
+  if (route[0] === 'presence') {
+    return handlePresence(request, env.DB, route, url);
+  }
+
   if (route[0] === 'friendships') {
     return handleFriendships(request, env.DB, route, url);
   }
@@ -3234,6 +3238,50 @@ function notificationFromRow(row) {
     templateId: row.template_id,
     createdAt: row.created_at,
     readAt: row.read_at,
+  };
+}
+
+// #1099 (sub-issue of #1095, the multiplayer-presence tracking issue):
+// returns other builders' last-reported avatar_presence rows, scoped to a
+// single landlet/region at a time -- never the whole world's positions in
+// one response, both for payload size and so a shopper elsewhere isn't
+// visibly tracking someone's live position for no reason. Pairs with
+// #1098's POST endpoint, which is the only writer of this table.
+//
+// A row older than this is treated as "not actually present" rather than
+// a genuinely live position -- #1098's own POST endpoint rate-limits a
+// given builder to roughly one write per 1-2s, so a few missed reports
+// (a dropped request, brief network hiccup) shouldn't make them flicker
+// out, but a builder who closed the tab or lost connectivity entirely
+// should disappear within a handful of seconds, not linger indefinitely.
+// The fuller version of this (actually deleting long-stale rows, not just
+// filtering them at read time) is #1101's own scope.
+const PRESENCE_STALE_AFTER_MS = 10_000;
+
+async function handlePresence(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
+    const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+    const { results } = await db.prepare(`
+      SELECT * FROM avatar_presence
+      WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
+    `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
+    return json({ avatars: results.map(avatarPresenceFromRow) });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function avatarPresenceFromRow(row) {
+  return {
+    builderId: row.builder_id,
+    landletId: row.landlet_id,
+    x: row.x,
+    y: row.y,
+    z: row.z,
+    heading: row.heading,
+    updatedAt: row.updated_at,
   };
 }
 
