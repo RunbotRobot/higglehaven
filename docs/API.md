@@ -1002,9 +1002,20 @@ same login-wall/fallback-to-Shop behavior "Builders" above describes for
 
 Lists sellers, oldest first. Cursor-paginated the same way
 `GET /api/builders` is (#715) — `?limit=`/`?cursor=`, ascending on
-`(createdAt, sellerId)`. No frontend caller of this endpoint exists
+`(createdAt, sellerId)`. No frontend caller of the unfiltered list exists
 today, so unlike `GET /api/builders` there was no unbounded-response
 assumption to fix first.
+
+An optional `ids` query param (comma-separated seller IDs) and an optional
+`?label=` (exact, case-insensitive match) filter work exactly like
+`GET /api/builders`'s own `ids`/`label` filters above (#1213) — same
+200-ID cap, same silent-omission-of-unknown-IDs behavior, same
+independent-filters-with-`ids`-checked-first precedence, same
+every-matching-row return since `sellers.label` has no uniqueness
+constraint either (0037_sellers.sql). Added so a shopper/builder can look
+up a specific seller's shop by name — until now the only discovery paths
+were browsing catalog items by a `sellerId` already known, or stumbling
+on products in-world.
 
 ### `POST /api/sellers`
 

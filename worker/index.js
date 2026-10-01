@@ -3041,6 +3041,33 @@ async function handleSellers(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    // #1213: same bounded-lookup shape as GET /api/builders's ids/label
+    // filters above (#717/#716) — added once a real caller (seller-lookup
+    // by name) existed, mirroring that endpoint's own reasoning exactly.
+    const idsParam = url.searchParams.get('ids');
+    if (idsParam !== null) {
+      const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
+      if (ids.length === 0) return json({ sellers: [] });
+      if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
+      const placeholders = ids.map(() => '?').join(', ');
+      const { results } = await db.prepare(
+        `SELECT * FROM sellers WHERE seller_id IN (${placeholders}) ORDER BY created_at, seller_id`,
+      ).bind(...ids).all();
+      return json({ sellers: results.map(sellerFromRow) });
+    }
+
+    // Exact (case-insensitive) label lookup, same as GET /api/builders's
+    // own — sellers.label has no uniqueness constraint either
+    // (0037_sellers.sql), so this returns every matching row, not just
+    // the first.
+    const label = url.searchParams.get('label');
+    if (label) {
+      const { results } = await db.prepare(
+        'SELECT * FROM sellers WHERE LOWER(label) = LOWER(?) ORDER BY created_at, seller_id',
+      ).bind(label).all();
+      return json({ sellers: results.map(sellerFromRow) });
+    }
+
     // #715 (sub-issue of #711): same cursor-pagination shape as
     // GET /api/builders just above — see that endpoint's own comment.
     // No frontend caller of GET /api/sellers exists today, so there's no
