@@ -12,6 +12,7 @@
 // defeating the point.
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 // A locally patched copy, not the stock addon — see its own doc comment.
 // The stock SimplifyModifier silently drops any geometry attribute outside
 // position/uv/normal/tangent/color, including a secondary UV set some
@@ -38,11 +39,42 @@ const LARGE_MESH_VERTEX_WARNING_THRESHOLD = 150000;
 
 const gltfLoader = new GLTFLoader();
 const gltfExporter = new GLTFExporter();
+const fbxLoader = new FBXLoader();
 const simplifier = new SimplifyModifier();
 
 function countTriangles(geometry) {
   const count = geometry.index ? geometry.index.count : geometry.attributes.position.count;
   return Math.round(count / 3);
+}
+
+// #1166: lets a seller pick a plain .fbx (e.g. a Mixamo character) in the
+// upload wizard with no Blender step required. Runs entirely in the
+// uploading seller's own browser -- only the resulting .glb ever reaches
+// the server, matching optimizeModelFile's own "the Worker's free-tier
+// ~10ms CPU budget can't do this" reasoning above, and keeping storage
+// format exactly as it already is (.glb only, never .fbx).
+//
+// FBXLoader.parse() is synchronous and can throw outright on a variant it
+// doesn't handle -- unlike optimizeModelFile's optimization step, a failure
+// here leaves nothing usable to fall back to (there's no original .glb
+// underneath an .fbx pick), so the caller must treat a thrown error as
+// fatal to this upload attempt, not a degrade-gracefully case.
+export async function convertFbxToGlb(file, onProgress) {
+  onProgress?.('Reading file…');
+  const arrayBuffer = await file.arrayBuffer();
+
+  onProgress?.('Converting from FBX…');
+  // Empty path (second arg): matches gltfLoader.parseAsync's own use below
+  // -- there's no server URL for FBXLoader to resolve a relative external
+  // texture reference against here, so an .fbx whose textures aren't
+  // embedded in the file itself may convert without them. Geometry,
+  // skeleton, and animation data (none of which depend on that path) carry
+  // over regardless.
+  const group = fbxLoader.parse(arrayBuffer, '');
+
+  onProgress?.('Re-encoding as glTF…');
+  const resultBuffer = await gltfExporter.parseAsync(group, { binary: true });
+  return new Blob([resultBuffer], { type: 'model/gltf-binary' });
 }
 
 // onProgress(status) is called with short human-readable status strings as
