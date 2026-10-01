@@ -329,6 +329,56 @@ await trackingCard.locator('.pill-waiting-subtasks').waitFor({ timeout: 10000 })
 const waitingSubtasksPillText = (await trackingCard.locator('.pill-waiting-subtasks').textContent()).trim();
 console.log('tracking task shows the "Waiting on: Subtasks" pill after clicking its button (actual):', waitingSubtasksPillText);
 
+// #916: imageUrl round-trips fully through the API (task create, reply
+// create) but the admin page never rendered it anywhere — a screenshot
+// attached via imageUrl was silently invisible on the board. Seeded
+// through the same validating API as everything else above: one task
+// created with its own imageUrl (rendered as a small thumbnail in the
+// collapsed card-head), then one reply posted with its own separate
+// imageUrl (rendered inline in the thread entry).
+const imageTaskTitle = `E2E image task ${Date.now()}`;
+const taskImageUrl = '/uploads/e2e-task-thumb.png';
+const replyImageUrl = '/uploads/e2e-reply-attachment.png';
+await page.evaluate(async ({ title, imageUrl }) => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'e2e-owner', kind: 'feedback', title, imageUrl }),
+  });
+}, { title: imageTaskTitle, imageUrl: taskImageUrl });
+
+await page.reload({ waitUntil: 'networkidle' });
+const imageTaskCard = page.locator('.card', { has: page.locator('.title', { hasText: imageTaskTitle }) });
+await imageTaskCard.waitFor({ timeout: 10000 });
+const cardThumbSrc = await imageTaskCard.locator('.card-head .card-thumb').getAttribute('src');
+console.log('task card-head shows a thumbnail for its own imageUrl (actual):', cardThumbSrc);
+
+await imageTaskCard.locator('.card-head').click();
+const imageTaskId = await page.evaluate(async (title) => {
+  const res = await fetch('/api/control-room/tasks');
+  const body = await res.json();
+  return body.tasks.find((t) => t.title === title)?.id;
+}, imageTaskTitle);
+await page.evaluate(async ({ id, imageUrl }) => {
+  await fetch('/api/control-room/tasks/' + encodeURIComponent(id) + '/replies', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'e2e-owner', text: 'A reply with its own attachment.', imageUrl }),
+  });
+}, { id: imageTaskId, imageUrl: replyImageUrl });
+
+await imageTaskCard.locator('.msg-text', { hasText: 'A reply with its own attachment.' }).waitFor({ timeout: 20000 });
+const replyImgSrc = await imageTaskCard.locator('.msg .msg-img').getAttribute('src');
+console.log('reply thread entry shows an image for its own imageUrl (actual):', replyImgSrc);
+
+// Neither imageUrl above points at a real R2 object (no upload flow was run
+// to create one) -- rendering a real <img src> for it is exactly the thing
+// under test, and Chromium logs a "Failed to load resource: 404" console
+// error for that fetch as a result. That's an expected side effect of this
+// fixture, not a product bug, so it's dropped here rather than tripping
+// this suite's catch-all zero-console-errors bar below.
+errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -348,5 +398,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   subChipVisible &&
   subTaskCardIsOpen &&
   waitingSubtasksPillText === 'Waiting on: Subtasks' &&
+  cardThumbSrc === taskImageUrl &&
+  replyImgSrc === replyImageUrl &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
