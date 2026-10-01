@@ -2646,6 +2646,27 @@
         font: 14px/1.4 sans-serif;
         align-self: flex-start;
       }
+      /* #1149: the real "delete your login" action, distinct from the
+         builder/seller "reset" actions in Settings — outlined in --danger
+         rather than filled, so the account panel doesn't read as alarming
+         until someone actually opens this flow. */
+      #auth-delete-account-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(226 105 79 / 0.5);
+        background: none;
+        color: var(--danger);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #auth-delete-account-form {
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        padding-top: 10px;
+      }
+      .auth-form > button[type='submit'].danger {
+        background: var(--danger);
+        color: #fff;
+      }
       /* Same modal shell as #settings-modal. */
       #notifications-modal {
         position: fixed;
@@ -3734,6 +3755,27 @@
           <button id="auth-verify-id-btn" type="button" hidden>Verify with Government ID</button>
           <button id="auth-resend-verify-btn" type="button" hidden>Resend verification email</button>
           <button id="auth-logout-btn" type="button">Log Out</button>
+
+          <!-- #1146/#1149: real account deletion, distinct from the
+               builder/seller "reset" actions under Settings → Build/Sell
+               (those only ever clear an in-world profile; the login here
+               stays active through them). Starts collapsed behind its own
+               trigger button rather than a single click, since this one
+               really is irreversible. -->
+          <button id="auth-delete-account-btn" type="button">Delete Account</button>
+          <form id="auth-delete-account-form" class="auth-form" hidden>
+            <div class="auth-hint">
+              Permanently deletes your login — you'll be signed out everywhere, and this email and username become available for a new signup. Your builder/seller profile and any land you own are not affected (reset those separately in Settings if you want a fresh start there too). Financial and tax records are retained for as long as the law requires, disconnected from your identity. This cannot be undone.
+            </div>
+            <label>Confirm your password
+              <div class="auth-password-field">
+                <input type="password" id="auth-delete-account-password" required autocomplete="current-password" />
+                <button type="button" id="auth-delete-account-password-toggle" class="auth-password-toggle-btn"></button>
+              </div>
+            </label>
+            <button type="submit" class="danger">Permanently Delete Account</button>
+            <button type="button" id="auth-delete-account-cancel-btn" class="auth-link-btn">Cancel</button>
+          </form>
         </div>
 
         <div id="auth-status"></div>
