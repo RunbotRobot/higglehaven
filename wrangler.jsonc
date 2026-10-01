@@ -21,6 +21,10 @@
     {
       "binding": "MODELS",
       "bucket_name": "higglehaven-models"
+    },
+    {
+      "binding": "DB_BACKUPS",
+      "bucket_name": "higglehaven-db-backups"
     }
   ],
   "routes": [
@@ -34,7 +38,13 @@
   // rare and short-lived, without running so often it's ever meaningfully
   // racing itself (a full growth cycle is a handful of D1 round trips, not
   // a long-running job).
+  // #1135: a once-daily full D1 data backup to the DB_BACKUPS R2 bucket
+  // (backupDatabaseToR2, worker/index.js) -- separate from the */10 tick
+  // above since a full-table dump is comparatively expensive and has no
+  // reason to run more than once a day. scheduled() distinguishes the two
+  // via event.cron (DB_BACKUP_CRON_EXPRESSION), so keep that constant in
+  // sync with this literal if it ever changes.
   "triggers": {
-    "crons": ["*/10 * * * *"]
+    "crons": ["*/10 * * * *", "0 3 * * *"]
   }
 }

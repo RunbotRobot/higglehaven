@@ -7206,6 +7206,52 @@ the one source of truth for what an unchecked listing's category is. The
 buyer-facing "browse owned avatars and equip one" half is #713's own
 separate scope, not this one's.
 
+## Database backups (#1135)
+
+Owner-raised account-continuity risk: production D1 (users, builders,
+purchases, balances, and everything else) had no backup anywhere outside
+Cloudflare's own copy — if the Cloudflare account were ever suspended or
+lost, that data would be gone with no recovery path. The repo's own
+GitLab mirror covers code and migration files (schema), never live data.
+
+**What this covers**: a once-daily (`0 3 * * *`, `wrangler.jsonc`'s
+second cron entry) full-table JSON dump of every real D1 table —
+`buildDatabaseBackup`/`backupDatabaseToR2` (`worker/index.js`), run from
+the existing `scheduled()` Worker export, which `wrangler.jsonc`'s own
+cron comment points back to for keeping the two in sync. Each table is
+read via `sqlite_master` (excluding `sqlite_%`/`_cf_%`/`d1_migrations`
+bookkeeping) and written as one JSON object (`{ generatedAt, tables }`)
+to a dedicated `DB_BACKUPS` R2 bucket (`higglehaven-db-backups`), at a
+timestamped key (`backups/<ISO timestamp>.json`). Only the 14 most
+recent backups are kept (`pruneOldDatabaseBackups`, run in the same
+job) — two weeks of daily history, bounded so the bucket's own (small)
+storage footprint never grows unbounded.
+
+**Restoring**: download a backup object, `JSON.parse` it, and re-insert
+each table's rows (e.g. via a one-off script using the same D1 binding/
+`wrangler d1 execute`) — there's no one-command restore path today,
+since this dump is a safety net for "the data would otherwise be gone
+forever," not a point-in-time replica meant for routine restores.
+
+**What this does not cover**: the backup lives in the same Cloudflare
+account as the primary data. It protects against an accidental mutation,
+a code bug, or a deleted table — recoverable by just reading an earlier
+dump — but not against the specific "the Cloudflare account itself is
+suspended or lost" scenario the owner originally raised, since both the
+primary data and this backup would be unreachable together in that
+case. Closing that residual risk needs a destination genuinely external
+to Cloudflare, which needs its own owner-provisioned credentials (a new
+Worker secret) — flagged as a real, distinct follow-up rather than
+silently treated as solved here, since no session can provision an
+external account's credentials on its own.
+
+Also distinct from `wrangler d1 export`: that command (and the
+Cloudflare D1 management API it calls) isn't reachable from inside a
+Worker's own runtime without the account-level API token Workers don't
+have by default — this backup instead reads every row through the same
+`DB` binding every other endpoint in this file already uses, and
+reconstructs the equivalent as JSON rather than a SQL dump.
+
 ## Automated tests
 
 Run the Worker integration suite with:
