@@ -1,0 +1,13 @@
+# Copy to backend.hcl (gitignored) and fill in the real account id, then run:
+#   terraform init -backend-config=backend.hcl
+#
+# R2 access-key credentials go in environment variables instead, not here:
+#   export AWS_ACCESS_KEY_ID=<R2 access key id>
+#   export AWS_SECRET_ACCESS_KEY=<R2 secret access key>
+# (generated via the Cloudflare dashboard's R2 > Manage API tokens, a
+# different credential type from the cloudflare_api_token variable used by
+# the provider itself)
+
+endpoints = {
+  s3 = "https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com"
+}
