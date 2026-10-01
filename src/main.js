@@ -4288,6 +4288,12 @@ function renderSellerList() {
         return;
       }
       if (myLoadToken !== reviewLoadToken) return; // superseded — a newer call owns the list now
+      // #1128: reset back to the friendly default on every successful load —
+      // the catch branch above is the only other place this gets written,
+      // and without this a single past fetch failure would leave this
+      // element showing that stale error message forever, even once a
+      // later load succeeds with zero reviews.
+      reviewEmptyEl.textContent = 'No reviews yet.';
       reviewEmptyEl.hidden = reviews.length > 0;
       if (reviews.length > 0) {
         const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
@@ -4393,6 +4399,10 @@ function renderSellerList() {
         return;
       }
       if (myLoadToken !== salesLoadToken) return; // superseded — a newer call owns the list now
+      // #1128: same reset-on-success fix as reviewEmptyEl above — without
+      // it a past fetch failure leaves this stuck on its error message
+      // forever, even once a later load succeeds with zero sales.
+      salesEmptyEl.textContent = 'No sales yet.';
       salesEmptyEl.hidden = totalCount > 0;
       if (totalCount > 0) {
         salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
@@ -7560,6 +7570,10 @@ async function renderSignPosts() {
     return;
   }
   if (myLoadToken !== signPostsLoadToken) return; // superseded — a newer call owns the list now
+  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
+  // modal — without it a past fetch failure leaves this stuck on its
+  // error message forever, even once a later load succeeds with zero posts.
+  signPostsEmptyEl.textContent = 'No posts on this sign yet.';
   signPostsEmptyEl.hidden = posts.length > 0;
   for (const post of posts) {
     const row = document.createElement('div');
@@ -7668,6 +7682,10 @@ async function renderCalendarEvents() {
     return;
   }
   if (myLoadToken !== calendarEventsLoadToken) return; // superseded — a newer call owns the list now
+  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
+  // modal — without it a past fetch failure leaves this stuck on its
+  // error message forever, even once a later load succeeds with zero events.
+  calendarEventsEmptyEl.textContent = 'No events on this calendar yet.';
   calendarEventsEmptyEl.hidden = events.length > 0;
   for (const event of events) {
     const row = document.createElement('div');
@@ -8888,6 +8906,11 @@ async function renderNotifications() {
     return;
   }
   if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
+  // modal — without it a past fetch failure leaves this stuck on its
+  // error message forever, even once a later load succeeds with zero
+  // notifications.
+  notificationsEmptyEl.textContent = 'Nothing here yet.';
   notificationsEmptyEl.hidden = page.notifications.length > 0;
   for (const notification of page.notifications) appendNotificationRow(notification);
   notificationsNextCursor = page.nextCursor;
