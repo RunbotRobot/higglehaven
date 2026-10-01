@@ -7152,6 +7152,49 @@ the one source of truth for what an unchecked listing's category is. The
 buyer-facing "browse owned avatars and equip one" half is #713's own
 separate scope, not this one's.
 
+## Multiplayer presence (#1095)
+
+Core multiplayer presence — seeing other avatars live in the shared
+world — is tracked via `avatar_presence`
+(`migrations/0100_avatar_presence.sql`, #1097): one row per currently
+online builder's live `x`/`y`/`z`/`heading`, independent of whichever
+real-time transport the feature eventually settles on (#1102).
+
+### `POST /api/presence` — report your own position (#1098)
+
+Requires a real, verified session (`requireSessionBuilder`). Upserts the
+caller's own row — there is exactly one `avatar_presence` row per
+`builder_id` at any time, never a growing log.
+
+Request body:
+
+```json
+{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
+```
+
+- `x`/`y`/`z` are required finite numbers.
+- `heading` is optional (omit or pass `null` for "unknown"); when given,
+  must be a finite number.
+- `landletId` is optional free-form scoping (no foreign key — a builder
+  can be anywhere in the shared world, not just on a landlet a `landlets`
+  row models). When given, it must name a landlet that actually exists —
+  this is a deliberately cheap spoof guard, not a claim that the caller
+  is actually near it; an unrecognized id 404s rather than being stored,
+  since #1099's own `GET` scopes its query by this column and would
+  otherwise be silently poisoned by a bogus value.
+
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
+"updatedAt" } }` — the row as stored, after the upsert.
+
+Rate-limited server-side (`presence-report:<builderId>`, 600 per the
+shared 15-minute rate-limit window — enough headroom for roughly one
+report every 1-2 seconds sustained, with some burst tolerance) — this is
+the only thing bounding write frequency; client-side throttling (only
+reporting on meaningful movement) is the client-integration sub-issue's
+own scope (#1100), not this endpoint's. Never trust a client to self-
+throttle: this endpoint stays safe to call as often as any client
+actually does.
+
 ## Automated tests
 
 Run the Worker integration suite with:
