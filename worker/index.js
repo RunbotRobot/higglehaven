@@ -8753,6 +8753,99 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
   if (conflict) throw new HttpError(message, 409);
 }
 
+// Split out from the generate-mosaic handler below so #1085's automatic
+// path (generateAutoMosaicIfFreshWorld) can reuse the exact same
+// generation/validation/overlap-guard logic without an admin session —
+// same split generateLandletRingCandidates already uses for generate-ring,
+// including the optional adminUserId (action log entry only written when
+// a real admin is the one calling it).
+async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
+  const generated = generateOrganicMosaic({ prefix, count }).map((candidate) =>
+    validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
+
+  // The mosaic template always covers the world origin as part of its
+  // 16-cell disc (organicLandGenerator.js only rotates it, never
+  // translates it) — the same point 'starter-landlet' sits on. Rather than
+  // inserting a competing candidate there, the cell containing the origin
+  // becomes starter-landlet's own shape directly, so there's exactly one
+  // polygon at the center instead of two independently-placed ones.
+  const centralIndex = generated.findIndex((candidate) => pointInPolygon(
+    { x: 0, y: 0 },
+    candidate.polygon.map((point) => ({ x: point.x + candidate.center.x, y: point.y + candidate.center.y })),
+  ));
+  if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500);
+  const central = generated[centralIndex];
+  const landlets = generated.filter((_candidate, index) => index !== centralIndex);
+
+  const rows = landlets.map(candidateRowFromLandlet);
+  const centralRow = candidateRowFromLandlet(central);
+  const duplicate = await db.prepare(`
+    SELECT landlet_id FROM landlet_candidates
+    WHERE landlet_id >= ? AND landlet_id <= ? LIMIT 1
+  `).bind(`${prefix}-001`, `${prefix}-999`).first();
+  if (duplicate) throw new HttpError('Land candidate already exists', 409);
+
+  // Safety net beyond the origin cell handled above: two mosaic calls (or
+  // a mosaic call landing near existing ring-generated land) would
+  // otherwise silently overlap, since this generator has no radial
+  // structure for a band-based check like generate-ring's to work with.
+  await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
+
+  // Every other cell in the mosaic reaches greenbelt/claimable the normal
+  // way: materialize as 'generating' (candidateMaterializationStatements,
+  // above), then a later generation-complete/world-expand call promotes
+  // it once it's enclosed. starter-landlet already exists as a landlet
+  // row rather than a fresh candidate, so it skips that pipeline
+  // entirely — this mirrors the same "enclosed -> greenbelt, claimable
+  // now" transition directly, rather than leaving it stuck at whatever
+  // status it already had (historically 'claimed' with no owner, from
+  // the seed row in 0001_initial.sql — permanently unclaimable and
+  // invisible to the builder-delete release logic, which matches by
+  // owner_builder_id). Guarded on owner_builder_id IS NULL so a
+  // genuinely-claimed center plot is never clobbered.
+  //
+  // #1055: the enclosure decision itself is a live SQL subquery against
+  // world_settings (not a JS comparison against a pre-batch settings
+  // read, which could go stale against a concurrent expandWorldOnce) --
+  // same fix shape as the two generation-complete endpoints. The radius
+  // being compared still has to come from JS, though: centralRow's
+  // polygon/center are being freshly set in this very statement, so
+  // there's no already-stored max_world_radius_m column value that
+  // reflects it yet.
+  const centralMaxWorldRadius = landletMaxWorldRadius(centralRow);
+  await db.batch([
+    db.prepare(`
+      UPDATE landlets
+      SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
+          generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+          status = CASE WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
+          claimable_at = CASE
+            WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ELSE claimable_at
+          END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = 'starter-landlet'
+    `).bind(
+      central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json,
+      centralMaxWorldRadius, centralMaxWorldRadius,
+    ),
+    ...rows.map((row) => candidateInsertStatement(db, row)),
+    ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
+    ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_mosaic', 'landlet_candidate_prefix', prefix, { count: rows.length + 1 })] : []),
+  ]);
+  const stored = await db.prepare(`
+    SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
+  `).bind(`${prefix}-001`, `${prefix}-999`).all();
+  const materializedLandletIds = stored.results
+    .filter((row) => row.materialized_at)
+    .map((row) => row.landlet_id);
+  return {
+    candidates: stored.results.map(candidateFromRow),
+    materializedLandletIds,
+    starterLandletId: 'starter-landlet',
+  };
+}
+
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
     const admin = await requireAdmin(request, db);
@@ -8763,90 +8856,8 @@ async function handleLandCandidates(request, db, route, url) {
     }
     const count = positiveInteger(input.count, 'count');
     if (count !== 16) throw new HttpError('count must be 16', 400);
-    const generated = generateOrganicMosaic({ prefix, count }).map((candidate) =>
-      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
-
-    // The mosaic template always covers the world origin as part of its
-    // 16-cell disc (organicLandGenerator.js only rotates it, never
-    // translates it) — the same point 'starter-landlet' sits on. Rather than
-    // inserting a competing candidate there, the cell containing the origin
-    // becomes starter-landlet's own shape directly, so there's exactly one
-    // polygon at the center instead of two independently-placed ones.
-    const centralIndex = generated.findIndex((candidate) => pointInPolygon(
-      { x: 0, y: 0 },
-      candidate.polygon.map((point) => ({ x: point.x + candidate.center.x, y: point.y + candidate.center.y })),
-    ));
-    if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500);
-    const central = generated[centralIndex];
-    const landlets = generated.filter((_candidate, index) => index !== centralIndex);
-
-    const rows = landlets.map(candidateRowFromLandlet);
-    const centralRow = candidateRowFromLandlet(central);
-    const duplicate = await db.prepare(`
-      SELECT landlet_id FROM landlet_candidates
-      WHERE landlet_id >= ? AND landlet_id <= ? LIMIT 1
-    `).bind(`${prefix}-001`, `${prefix}-999`).first();
-    if (duplicate) throw new HttpError('Land candidate already exists', 409);
-
-    // Safety net beyond the origin cell handled above: two mosaic calls (or
-    // a mosaic call landing near existing ring-generated land) would
-    // otherwise silently overlap, since this generator has no radial
-    // structure for a band-based check like generate-ring's to work with.
-    await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
-
-    // Every other cell in the mosaic reaches greenbelt/claimable the normal
-    // way: materialize as 'generating' (candidateMaterializationStatements,
-    // above), then a later generation-complete/world-expand call promotes
-    // it once it's enclosed. starter-landlet already exists as a landlet
-    // row rather than a fresh candidate, so it skips that pipeline
-    // entirely — this mirrors the same "enclosed -> greenbelt, claimable
-    // now" transition directly, rather than leaving it stuck at whatever
-    // status it already had (historically 'claimed' with no owner, from
-    // the seed row in 0001_initial.sql — permanently unclaimable and
-    // invisible to the builder-delete release logic, which matches by
-    // owner_builder_id). Guarded on owner_builder_id IS NULL so a
-    // genuinely-claimed center plot is never clobbered.
-    //
-    // #1055: the enclosure decision itself is a live SQL subquery against
-    // world_settings (not a JS comparison against a pre-batch settings
-    // read, which could go stale against a concurrent expandWorldOnce) --
-    // same fix shape as the two generation-complete endpoints. The radius
-    // being compared still has to come from JS, though: centralRow's
-    // polygon/center are being freshly set in this very statement, so
-    // there's no already-stored max_world_radius_m column value that
-    // reflects it yet.
-    const centralMaxWorldRadius = landletMaxWorldRadius(centralRow);
-    await db.batch([
-      db.prepare(`
-        UPDATE landlets
-        SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
-            generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            status = CASE WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
-            claimable_at = CASE
-              WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-              ELSE claimable_at
-            END,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = 'starter-landlet'
-      `).bind(
-        central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json,
-        centralMaxWorldRadius, centralMaxWorldRadius,
-      ),
-      ...rows.map((row) => candidateInsertStatement(db, row)),
-      ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
-      adminActionLogStatement(db, admin.user_id, 'generate_mosaic', 'landlet_candidate_prefix', prefix, { count: rows.length + 1 }),
-    ]);
-    const stored = await db.prepare(`
-      SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
-    `).bind(`${prefix}-001`, `${prefix}-999`).all();
-    const materializedLandletIds = stored.results
-      .filter((row) => row.materialized_at)
-      .map((row) => row.landlet_id);
-    return json({
-      candidates: stored.results.map(candidateFromRow),
-      materializedLandletIds,
-      starterLandletId: 'starter-landlet',
-    }, 201);
+    const result = await generateLandletMosaicCandidates(db, { prefix, count }, admin.user_id);
+    return json(result, 201);
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
@@ -9569,11 +9580,41 @@ async function autoGrowWorldIfNeeded(db) {
   // anywhere -- true almost all the time, since the threshold is a
   // percentage, not "run out completely". That defeated the entire feature
   // in its realistic steady state.
+  //
+  // #1085: owner's decision, 2026-10-01 -- prefer the organic mosaic
+  // generator over the legacy ring generator first, falling back to the
+  // ring generator only once mosaic is unavailable (it's a deliberately
+  // one-time operation; see generateAutoMosaicIfFreshWorld's own comment).
   if (await worldNeedsGrowth(db)) {
-    await generateRingAtWorldBoundary(db);
+    const mosaicGenerated = await generateAutoMosaicIfFreshWorld(db);
+    if (!mosaicGenerated) {
+      await generateRingAtWorldBoundary(db);
+    }
   }
 
   return { grew: true };
+}
+
+// #1085: generate-mosaic's own disc always covers the same origin-centered
+// area (organicLandGenerator.js only rotates the template, never
+// translates it), so it is inherently a one-time operation across the
+// world's whole lifetime -- once it has succeeded once (here, or via a
+// prior manual admin call with any prefix), every later attempt hits its
+// own duplicate/overlap guards and throws. That makes "is the world still
+// fresh enough for mosaic" self-limiting to detect: just attempt it and
+// let those guards decide, rather than adding new world_settings state to
+// track "has an organic seed been attempted here" independently. A rare,
+// genuinely-unexpected failure (not one of this function's own guards)
+// still propagates, instead of silently masking a real bug as "mosaic
+// unavailable, fall back to ring."
+async function generateAutoMosaicIfFreshWorld(db) {
+  try {
+    await generateLandletMosaicCandidates(db, { prefix: 'auto-mosaic', count: 16 });
+    return true;
+  } catch (err) {
+    if (err instanceof HttpError) return false;
+    throw err;
+  }
 }
 
 // docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation mechanic
