@@ -4728,6 +4728,15 @@ const trimUnitLabelEls = [...document.querySelectorAll('.trim-unit-label')];
 
 let activeSettingsTab = 'general';
 
+// #1124: set right before renderSettingsSection() redraws the tab a
+// Delete Account click just fired from, so the freshly re-rendered
+// identity field (renderIdentityField below) can still show its own
+// "Deleted" confirmation even though the DOM node that would have shown
+// it got torn down along with everything else in the tab. Consumed
+// (cleared) by the one renderIdentityField call whose kind matches, so a
+// later, unrelated render never picks it up.
+let justDeletedIdentityKind = null;
+
 // #905: renderLandCapField/renderRedeemHigglesField/renderAuctionSection
 // each await ensureBuilderIdentity() (a real network round-trip whenever
 // Settings was opened from Shop mode before Build mode ever established
@@ -5171,7 +5180,17 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
     nameRow.textContent = profile.label;
   }
   renderName();
-  status.textContent = '';
+  // #1124: this render may be the one renderSettingsSection() triggered
+  // right after a Delete Account click redrew the whole tab — if so, show
+  // the same confirmation the old, identity-field-only refresh used to,
+  // rather than a blank status now that a fresh profile (not the deleted
+  // one) is what fetchProfile() above actually returned.
+  if (justDeletedIdentityKind === kind) {
+    justDeletedIdentityKind = null;
+    status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
+  } else {
+    status.textContent = '';
+  }
 
   renameBtn.addEventListener('click', async () => {
     const next = prompt(`Rename your ${kind.toLowerCase()} identity`, profile.label);
@@ -5215,9 +5234,18 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
         // keep every later action (claim, bid, build) pinned to the
         // just-deleted, now-nonexistent id until a full page reload.
         onDeleted?.();
-        profile = await fetchProfile();
-        renderName();
-        status.textContent = `Deleted — a fresh ${kind.toLowerCase()} identity was created.`;
+        // #1124: Land Cap/Redeem Higgles/Active Auctions (Build tab) and
+        // Payout Account (Sell tab) each fetch their own data once at
+        // tab-render time and never re-fetch on their own — patching only
+        // this field's own nameRow/status (the old behavior) left them
+        // showing the just-deleted identity's stale figures. A full
+        // renderSettingsSection() redraw — the same thing a manual tab
+        // switch already triggers — is what actually refreshes every
+        // sibling field against the fresh, auto-provisioned identity, not
+        // just this one.
+        justDeletedIdentityKind = kind;
+        renderSettingsSection();
+        return;
       } catch (err) {
         status.textContent = err.message || 'Could not delete.';
         status.classList.add('error');
