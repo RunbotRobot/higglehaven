@@ -1188,8 +1188,14 @@ async function handleModelCleanup(request, env) {
   }
   const dryRun = input.dryRun || false;
   const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
+  // #1202: targetCount/reclaimedBytes alone can't say which objects a given
+  // run actually (or would) remove -- targetModelUrls is already computed by
+  // cleanupUnreferencedModels (and already returned in this endpoint's own
+  // HTTP response below), so carry it into the logged detail too, the same
+  // "who did what" bar #829 already held delete_uploaded_asset to.
   await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
     maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+    targetModelUrls: result.targetModelUrls,
   }).run();
   return json({ ...result, dryRun });
 }
@@ -1221,8 +1227,13 @@ export async function scheduledModelCleanup(env) {
   // storage-budget-reservation side of this identical upload flow.
   const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
   if (result.targetCount > 0) {
+    // #1202: same "record which objects, not just how many" fix as
+    // handleModelCleanup's own call site above -- matters even more here
+    // since this unattended sweep's admin_action_log row is the only record
+    // this run ever produces at all (no HTTP response for anyone to see).
     await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
       maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+      targetModelUrls: result.targetModelUrls,
       trigger: 'scheduled',
     }).run();
   }
