@@ -111,7 +111,7 @@ import {
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
-import { takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
+import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
@@ -11074,13 +11074,20 @@ function updateShopFlight(dt) {
     if (shopFlightTransitionElapsedS >= SHOP_FLIGHT_TAKEOFF_DURATION_S) shopFlightState = 'flying';
   } else if (shopFlightState === 'landing') {
     shopFlightTransitionElapsedS += dt;
-    shopFlightAltitudeM = landingAltitudeM(
-      shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM,
+    // #1090: minAltitudeM is 0 (bare ground) unless there's a placed item
+    // directly under the avatar's current (x, y), in which case it's that
+    // item's own top surface (converted from world z into this frame's
+    // altitude terms, same as shopAvatarPosition.z's own formula below) —
+    // the floor this descent should stop at instead of passing through.
+    const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
+    const minAltitudeM = obstructionTopZ === null
+      ? 0
+      : obstructionTopZ + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    const { altitudeM, landed } = clampedLandingAltitudeM(
+      shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
     );
-    if (shopFlightTransitionElapsedS >= SHOP_FLIGHT_LANDING_DURATION_S) {
-      shopFlightState = 'grounded';
-      shopFlightAltitudeM = 0;
-    }
+    shopFlightAltitudeM = altitudeM;
+    if (landed) shopFlightState = 'grounded';
   } else if (shopFlightState === 'flying') {
     if (shopVerticalInput !== 0) {
       shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
@@ -11150,6 +11157,34 @@ function shopPositionBlocked(x, y, z) {
     }
   }
   return false;
+}
+
+// #1090: shopPositionBlocked above only ever gets consulted for horizontal
+// moves (moveShopAvatarWithCollision below) — a straight-down landing never
+// checks it at all, so descending onto a placed item carries the avatar
+// through its solid geometry instead of stopping on top of it the way
+// ordinary walking already would. Finds the highest top surface of any
+// (non-flooring) object under the avatar's own footprint at world (x, y),
+// deliberately ignoring the avatar's current z entirely (unlike
+// shopPositionBlocked, which also gates on vertical overlap with a specific
+// z) — that's exactly the floor a straight-down descent needs to stop at,
+// regardless of how high above it the avatar currently is.
+function shopLandingObstructionTopZ(x, y) {
+  const avatarCorners = shopAvatarFootprintCorners(x, y);
+  let topZ = null;
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const mesh of entry.objects) {
+      if (isFlooringTemplate(mesh.userData.template)) continue;
+      const worldX = entry.group.position.x + mesh.position.x;
+      const worldY = entry.group.position.y + mesh.position.y;
+      if (!footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) continue;
+      const { height } = meshDimensions(mesh);
+      const itemZMax = mesh.position.z + height / 2;
+      if (topZ === null || itemZMax > topZ) topZ = itemZMax;
+    }
+  }
+  return topZ;
 }
 
 // Tries the full requested move first; if that's blocked, slides along

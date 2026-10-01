@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smoothstep, takeoffAltitudeM, landingAltitudeM, flightSpeedMultiplier } from './flight.js';
+import { smoothstep, takeoffAltitudeM, landingAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
 
 describe('smoothstep', () => {
   it('returns 0 at x=0 and 1 at x=1', () => {
@@ -49,6 +49,39 @@ describe('landingAltitudeM', () => {
 
   it('descends from whatever altitude landing actually started at, not a fixed height', () => {
     expect(landingAltitudeM(1, 2, 100)).toBeCloseTo((1 - smoothstep(0.5)) * 100, 10);
+  });
+});
+
+describe('clampedLandingAltitudeM (#1090)', () => {
+  it('matches the unclamped ramp and reports landed only at durationS when the ground below is clear', () => {
+    expect(clampedLandingAltitudeM(0, 2, 12, 0)).toEqual({ altitudeM: 12, landed: false });
+    expect(clampedLandingAltitudeM(1, 2, 12, 0)).toEqual({ altitudeM: landingAltitudeM(1, 2, 12), landed: false });
+    expect(clampedLandingAltitudeM(2, 2, 12, 0)).toEqual({ altitudeM: 0, landed: true });
+  });
+
+  it('stops the descent at minAltitudeM and reports landed as soon as the ramp reaches it, before durationS', () => {
+    // The unclamped ramp is only 6m by the midpoint (landingAltitudeM(1, 2,
+    // 12) === 12 * (1 - smoothstep(0.5)) === 6) — a placed item whose top
+    // sits at 8m should have already stopped the avatar there before the
+    // ramp ever gets this low, not let it keep easing down through the
+    // item toward 0.
+    expect(landingAltitudeM(1, 2, 12)).toBe(6);
+    const result = clampedLandingAltitudeM(1, 2, 12, 8);
+    expect(result.altitudeM).toBe(8);
+    expect(result.landed).toBe(true);
+  });
+
+  it('never carries altitude below minAltitudeM even once durationS has fully elapsed', () => {
+    expect(clampedLandingAltitudeM(2, 2, 12, 8)).toEqual({ altitudeM: 8, landed: true });
+    expect(clampedLandingAltitudeM(10, 2, 12, 8)).toEqual({ altitudeM: 8, landed: true });
+  });
+
+  it('lands immediately, right where landing started, when already sitting on top of an obstruction', () => {
+    // startAltitudeM itself is at or below minAltitudeM (landing began
+    // directly above an item tall enough to already be at/above that
+    // height) — there's no room to descend at all.
+    expect(clampedLandingAltitudeM(0, 2, 12, 12)).toEqual({ altitudeM: 12, landed: true });
+    expect(clampedLandingAltitudeM(0, 2, 10, 12)).toEqual({ altitudeM: 12, landed: true });
   });
 });
 
