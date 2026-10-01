@@ -7741,6 +7741,31 @@ async function handleCardSetupIntent(request, env, db) {
   return json({ clientSecret: setupIntent.client_secret, publishableKey: env.STRIPE_PUBLISHABLE_KEY });
 }
 
+// #1072 (owner direction, Control Room 2026-10-01): "one card, one
+// account, permanently" -- a PaymentMethod/SetupIntent id alone isn't a
+// stable per-card identity (a caller can mint a fresh SetupIntent/
+// PaymentMethod from the exact same physical card), but Stripe's own
+// card.fingerprint is stable across all of them. migrations/0104's
+// card_fingerprints is a dedicated claim table (not a column on users) for
+// the same reason owned_avatar_purchases is its own table rather than a
+// column (see that migration's own comment) -- INSERT OR IGNORE + an
+// unconditional re-read is the same atomic claim idiom this file already
+// uses for builders/sellers (see getOrCreateBuilderForUser's own comment)
+// -- whichever caller's INSERT actually lands first wins the claim, and
+// every later caller (this same account retrying, or a different account
+// entirely) re-reads the same row rather than racing a separate
+// SELECT-then-INSERT against card_fingerprints' own PRIMARY KEY. Returns
+// whether this fingerprint is owned by a *different* account than
+// `userId` -- false both for a brand-new fingerprint and for this same
+// account re-confirming a card it already claimed.
+export async function claimCardFingerprint(db, fingerprint, userId) {
+  await db.prepare('INSERT OR IGNORE INTO card_fingerprints (fingerprint, user_id) VALUES (?, ?)')
+    .bind(fingerprint, userId).run();
+  const claim = await db.prepare('SELECT user_id FROM card_fingerprints WHERE fingerprint = ?')
+    .bind(fingerprint).first();
+  return claim.user_id !== userId;
+}
+
 // Reads back the card the frontend just collected/confirmed against the
 // SetupIntent above and checks Stripe's own card.funding field — "credit"
 // (not "debit"/"prepaid", per SPEC §6's own reasoning that those are too
@@ -7798,13 +7823,24 @@ async function handleConfirmCard(request, env, db) {
   }
   const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(setupIntent.payment_method)}`);
   const funding = paymentMethod.card?.funding || null;
-  const accepted = funding === 'credit';
+  const fundingAccepted = funding === 'credit';
+  // Only claimed for an otherwise-accepted (real credit) card -- a rejected
+  // debit/prepaid attempt never grants the tier in the first place, so
+  // there's nothing worth permanently locking the fingerprint against.
+  const fingerprint = paymentMethod.card?.fingerprint || null;
+  const fingerprintOwnedByAnotherAccount = fundingAccepted && fingerprint
+    ? await claimCardFingerprint(db, fingerprint, user.user_id)
+    : false;
+  const accepted = fundingAccepted && !fingerprintOwnedByAnotherAccount;
   await db.prepare(`
     UPDATE users SET card_funding = ?,
       trust_tier = CASE WHEN trust_tier = 'id_verified' THEN trust_tier WHEN ? THEN 'credit_card' ELSE trust_tier END,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE user_id = ?
   `).bind(funding, accepted ? 1 : 0, user.user_id).run();
+  if (fingerprintOwnedByAnotherAccount) {
+    throw new HttpError('This card has already been used to verify a different account.', 409);
+  }
   if (!accepted) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
