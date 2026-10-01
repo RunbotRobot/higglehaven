@@ -13729,6 +13729,22 @@ for (const btn of modeNavButtons) {
   btn.addEventListener('click', () => {
     const target = btn.dataset.mode;
     if (target === currentMode) return;
+    // #1152: show the press instantly rather than waiting for the reload's
+    // own bootstrap() to get far enough to call updateModeNavUI() — that
+    // can be a real, perceptible delay (Build mode's own chain in
+    // particular, see enterBuildMode's callers). location.reload() still
+    // fires synchronously, same tick as before this fix — every e2e call
+    // site that clicks a mode-nav button relies on that to line up its own
+    // waitForLoadState/waitForSelector right after (deferring the reload a
+    // frame or two, e.g. via requestAnimationFrame, raced those callers:
+    // the click's own promise resolves before the deferred reload actually
+    // starts, so a wait begun only after the click can see an idle page and
+    // return immediately, long before the real navigation). A real reload
+    // (unlike an instant same-document change) always takes measurably
+    // longer than a frame — network + document parsing — so the browser
+    // still gets a chance to paint this highlight on the outgoing page
+    // first.
+    for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === target);
     sessionStorage.setItem(START_MODE_KEY, target);
     location.reload();
   });
