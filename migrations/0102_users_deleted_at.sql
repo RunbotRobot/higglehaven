@@ -1,0 +1,19 @@
+-- #1146 (sub-issue of #1145, the owner's real-full-account-deletion
+-- tracking issue): the actual deletion endpoint revokes a `users` row's
+-- login credentials rather than hard-deleting the row outright, because
+-- other tables (builders.user_id, tax_id_encrypted/tax forms on this same
+-- row, future retained-financial-record FKs per #1147) still need a live
+-- user_id to anchor against for the legally-required retention period
+-- #1145's own body describes -- the same "keep the record, drop the live
+-- reference" shape this schema already uses elsewhere (0062/0086/0091/0093),
+-- just applied to the users row itself instead of a row that references it.
+--
+-- `deleted_at` is a plain marker other code can check; it isn't what
+-- actually blocks login. Revocation itself happens by rewriting email/
+-- username to a unique, no-longer-contactable placeholder (freeing the
+-- real ones for a future signup) and the password hash to one nothing can
+-- ever match -- once that lands, a login attempt with the original email
+-- simply finds no row at all, the same generic "Invalid email or password"
+-- path an email that was never registered already gets. See
+-- handleDeleteAccount in worker/index.js.
+ALTER TABLE users ADD COLUMN deleted_at TEXT;

@@ -393,6 +393,55 @@ No body. Deletes the current session (if any) and clears the cookie.
 Always `200 { "loggedOut": true }`, even with no session present —
 idempotent by design.
 
+### `POST /api/auth/delete-account`
+
+```json
+{ "password": "correct horse battery staple" }
+```
+
+Issue #1146 (sub-issue of #1145's "real full account deletion" tracking
+issue, an owner decision via a live Control Room conversation on
+2026-10-01). This is the `users`-row half of real account deletion — not
+the pre-existing `DELETE /api/builders/:builderId` /
+`DELETE /api/sellers/:sellerId` ("Delete Account" under Builder/Seller
+Identity today), which only ever resets the in-world profile: land,
+balance, and build get released/wiped, but the real login account stays
+active and a fresh builder/seller is auto-created the next time that
+account visits. This endpoint is the other half — it revokes the login
+itself — and deliberately does nothing to the builder/seller profile,
+financial/tax records, or a connected Stripe account; see #1147
+(disconnecting retained financial/tax records from the deleted identity)
+and #1148 (the Stripe Connect account's own fate) for those, and #1149 for
+whether the old reset-only button keeps a separate place in Settings once
+this exists. Work leaves of #1145, not the trunk — none of this closes
+#1145 itself.
+
+Session-gated (`401` without one). Requires re-entering the account's
+current password in the body — a stolen/XSS'd session cookie alone must
+not be enough to irreversibly kill an account, the same "prove it's really
+you" bar a destructive action like this needs. `401 "Incorrect password"`
+on a mismatch, with no other change to the account. Rate-limited per
+account (5 attempts per 15 minutes, same bucket shape as
+`resend-verification` above) so the password check here can't be used to
+brute-force the real password via this endpoint instead of `/auth/login`.
+
+On success: the `email` and `username` are rewritten to a placeholder
+unique to that account (`deleted-<last 8 chars of userId>@deleted.invalid`
+/ `deleted-<same suffix>`) — freed rather than retained, so the real
+address/handle are available again for a brand-new signup immediately,
+and `email_canonical` is cleared outright. `password_hash` is replaced
+with the hash of a freshly generated, immediately-discarded random value,
+so nothing (including this server) ever again holds a plaintext that
+could satisfy it. `deleted_at` is stamped for any other code that needs to
+recognize a deleted row (e.g. #1147's disconnection pass) — note this is
+just a marker, not itself what blocks login: once the real email is gone
+from the row, a login attempt against it already gets the same generic
+"Invalid email or password" response issued for any other email that was
+never registered. Every session for the account is deleted in the same
+atomic batch (`db.batch`, mirroring `reset-password`'s own "sign out every
+device" reasoning above), and the response clears the request's own
+session cookie too. Returns `{ "accountDeleted": true }`.
+
 ### `GET /api/auth/me`
 
 Deliberately always `200`, never a `401` — even with no cookie or an
