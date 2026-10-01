@@ -13573,6 +13573,15 @@ function disposeClaimFlyover() {
   if (!claimFlyover) return;
   cancelAnimationFrame(claimFlyover.animationHandle);
   window.removeEventListener('resize', claimFlyover.onResize);
+  // #1131: this used to be the one listener loadLandletMap attaches that
+  // never got removed here — every completed load (not just a raced-out
+  // in-flight one, which claimMapLoadToken already guards against) left
+  // its own 'click' listener on claimMapCanvas permanently, each closing
+  // over this exact scene/plotMeshes/etc. Every ordinary Refresh click or
+  // failed-claim retry (claimSelectedLandlet's own catch calls
+  // loadLandletMap again) leaked one more, forever. Removed the same way
+  // onResize already is just above.
+  claimMapCanvas.removeEventListener('click', claimFlyover.onCanvasClick);
   claimFlyover.controls.dispose();
   claimFlyover.renderer.dispose();
   for (const mesh of claimFlyover.plotMeshes) {
@@ -13945,7 +13954,10 @@ async function loadLandletMap(resolve) {
 
   const raycaster = new THREE.Raycaster();
   const pointerNdcClaim = new THREE.Vector2();
-  claimMapCanvas.addEventListener('click', (event) => {
+  // Named (rather than an inline arrow passed straight to addEventListener)
+  // so disposeClaimFlyover above can remove this exact function later —
+  // see its own comment on why that matters (#1131).
+  function onCanvasClick(event) {
     const rect = claimMapCanvas.getBoundingClientRect();
     pointerNdcClaim.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     pointerNdcClaim.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -13981,7 +13993,8 @@ async function loadLandletMap(resolve) {
     claimSelectionNameEl.textContent = `${landlet.name} (${formatArea(landlet.areaM2)}) — ${statusLabel}`;
     claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
     claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
-  });
+  }
+  claimMapCanvas.addEventListener('click', onCanvasClick);
 
   function animate() {
     claimFlyover.animationHandle = requestAnimationFrame(animate);
@@ -13989,7 +14002,7 @@ async function loadLandletMap(resolve) {
     renderer.render(scene, camera);
   }
   claimFlyover = {
-    scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, animationHandle: 0,
+    scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, onCanvasClick, animationHandle: 0,
     selectionOutline: null, selectionOutlineMaterial,
   };
   animate();
