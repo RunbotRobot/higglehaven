@@ -7654,6 +7654,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'resend-verification') {
     return handleResendVerification(request, env, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'change-email') {
+    return handleChangeEmail(request, env, db);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'admin-bootstrap') {
     return handleAdminBootstrap(request, env, db);
   }
@@ -8014,6 +8017,53 @@ async function handleResendVerification(request, env, db) {
   await checkRateLimit(db, `resend-verification:${user.user_id}`, 5);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
   return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
+}
+
+// #1182 (sub-issue of #1126, owner direction via Control Room 2026-10-01):
+// an in-session way to change your account email. Same current-password
+// bar as handleDeleteAccount, and the same atomic email/email_canonical
+// uniqueness idiom handleSignup's own INSERT ... WHERE NOT EXISTS uses
+// (a separate SELECT-then-UPDATE here would let two concurrent requests
+// both pass a pre-check before either write commits).
+//
+// Re-verification: the owner flagged "should changing email reset the
+// email-verification status" as its own open call rather than deciding it
+// up front. Resolved here by reading what email_verified_at actually does
+// in this codebase rather than guessing: userFromRow/docs/API.md's own
+// description of it is purely an informational "✓ Email verified" badge
+// (src/main.js's authAccountVerifiedEl) — unlike trust_tier/age_attested_at,
+// nothing gates real functionality on it (see assertVerified above, which
+// checks those two, never email_verified_at). So resetting it to NULL and
+// re-sending the verification email here is the direct, low-risk
+// application of the exact mechanism issueEmailVerification already uses
+// at signup to this same "new address, not yet confirmed" situation — not
+// a new policy, just the existing one applied consistently. Worth a glance
+// from the owner given they flagged it, but not blocking on it: nothing is
+// lost either way (no privilege revoked), and the alternative (leaving a
+// stale verified badge on an address that was never actually confirmed)
+// is the one that reads as clearly wrong.
+const CHANGE_EMAIL_RATE_LIMIT_MAX = 5;
+async function handleChangeEmail(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `change-email:${user.user_id}`, CHANGE_EMAIL_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!(await verifyPassword(password, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+  const email = emailValue(input.email);
+  if (email === user.email) throw new HttpError('That is already your current email', 400);
+  const emailCanonical = canonicalizeEmail(email);
+  const result = await db.prepare(`
+    UPDATE users SET email = ?, email_canonical = ?, email_verified_at = NULL,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ?
+      AND NOT EXISTS (SELECT 1 FROM users WHERE (email = ? OR email_canonical = ?) AND user_id != ?)
+  `).bind(email, emailCanonical, user.user_id, email, emailCanonical, user.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
+  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
+  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
 // #833: every sibling auth endpoint in this file rate-limits by IP

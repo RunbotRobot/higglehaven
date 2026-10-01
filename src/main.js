@@ -15,6 +15,7 @@ import {
   resetPassword,
   verifyEmail,
   resendVerificationEmail,
+  changeEmail,
   ageAttest,
   cardSetupIntent,
   confirmCard,
@@ -9838,6 +9839,64 @@ authLogoutBtn.addEventListener('click', async () => {
   if (leaveAccountScopedModeIfNeeded()) return;
   refreshAccountAuthUI();
   closeAuthModal();
+});
+
+// #1182 (sub-issue of #1126): in-session change-email form, collapsed
+// behind its own trigger the same way delete-account is below — not
+// because it's irreversible, but to keep the logged-in panel's default
+// view uncluttered, matching the existing pattern for any action beyond
+// the always-visible ones.
+const authChangeEmailBtn = document.getElementById('auth-change-email-btn');
+const authChangeEmailForm = document.getElementById('auth-change-email-form');
+const authChangeEmailNewInput = document.getElementById('auth-change-email-new');
+const authChangeEmailPasswordInput = document.getElementById('auth-change-email-password');
+const authChangeEmailPasswordToggleBtn = document.getElementById('auth-change-email-password-toggle');
+const authChangeEmailCancelBtn = document.getElementById('auth-change-email-cancel-btn');
+bindPasswordToggle(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn);
+
+function closeChangeEmailForm() {
+  authChangeEmailForm.hidden = true;
+  authChangeEmailBtn.hidden = false;
+  authChangeEmailForm.reset();
+  setPasswordToggleState(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn, false);
+}
+
+authChangeEmailBtn.addEventListener('click', () => {
+  setAuthStatus('');
+  authChangeEmailBtn.hidden = true;
+  authChangeEmailForm.hidden = false;
+  authChangeEmailNewInput.focus();
+});
+authChangeEmailCancelBtn.addEventListener('click', () => {
+  closeChangeEmailForm();
+  setAuthStatus('');
+});
+
+authChangeEmailForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  flashSubmitPressed(authChangeEmailForm);
+  const newEmail = authChangeEmailNewInput.value;
+  const password = authChangeEmailPasswordInput.value;
+  const submitBtn = authChangeEmailForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  setAuthStatus('Changing your email…');
+  try {
+    const result = await changeEmail(password, newEmail);
+    currentAuthUser = result.user;
+    refreshAccountAuthUI();
+    closeChangeEmailForm();
+    // devVerifyUrl mirrors the signup handler's own dev-mode fallback
+    // above — only present when no real email provider is configured.
+    if (result.devVerifyUrl) {
+      setAuthStatus(`Email changed! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else {
+      setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
+    }
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not change your email.', 'error');
+  } finally {
+    submitBtn.disabled = false;
+  }
 });
 
 const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');

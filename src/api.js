@@ -96,6 +96,18 @@ export async function resendVerificationEmail() {
   return requestJson('/auth/resend-verification', { method: 'POST' });
 }
 
+// #1182: resets email verification and re-sends the verification email for
+// the new address (see worker/index.js's handleChangeEmail for why) —
+// callers should refresh currentAuthUser from the returned `user` rather
+// than assuming the old emailVerified value still applies.
+export async function changeEmail(password, email) {
+  return requestJson('/auth/change-email', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, email }),
+  });
+}
+
 // #556 (docs/SPEC.md §6): lets an existing session attest age after the
 // fact — for accounts created before this requirement existed, since
 // signup's own ageAttested checkbox only covers brand-new ones.
