@@ -110,6 +110,8 @@ import {
   fetchSavedLayouts,
   fetchSavedLayout,
   deleteSavedLayout,
+  reportPresence,
+  fetchNearbyPresence,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -10031,6 +10033,28 @@ const SHOP_UNLOAD_RADIUS_M = 90;
 // gives this a banding scheme to reuse a vertical distance metric in,
 // rather than inventing one from scratch here.
 const SHOP_PROXIMITY_INTERVAL_MS = 400;
+// #1100 (sub-issue of #1095, multiplayer presence): report/poll cadence
+// for seeing other avatars live in Shop mode. Report stays comfortably
+// under #1098's own server-side rate limit (600 per the shared 15-minute
+// window, ~1 write per 1.5s sustained) even at this interval's floor;
+// poll is independent of the report interval -- it only bounds how often
+// this client re-renders other avatars, not how often it writes its own.
+const SHOP_PRESENCE_REPORT_INTERVAL_MS = 1500;
+const SHOP_PRESENCE_POLL_INTERVAL_MS = 1000;
+// Below this, a report would just be re-sending the same position/heading
+// the server already has -- skip it entirely (client-side throttling,
+// #1098's own POST endpoint explicitly left to this sub-issue) rather than
+// spending part of the per-builder rate-limit budget on a no-op write.
+const SHOP_PRESENCE_MOVE_THRESHOLD_M = 0.1;
+const SHOP_PRESENCE_HEADING_THRESHOLD_RAD = 0.05;
+// A player who stops moving entirely (reading a sign, browsing a shop
+// item) shouldn't silently vanish from everyone else's screen once
+// #1099's own PRESENCE_STALE_AFTER_MS (10s) passes with no fresh write —
+// that's exactly the "flicker out" migrations/0100 says a few merely-
+// missed reports shouldn't cause. This keeps a motionless player's row
+// fresh regardless of movement, with 3x margin under that 10s cutoff so
+// even one dropped heartbeat doesn't go stale.
+const SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS = 3000;
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
 // shopper-authored posts fade in as the camera approaches a sign and back
 // out past it, rather than a hard show/hide cutoff, the same
@@ -10337,6 +10361,19 @@ let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, loadToken, objects }
 let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode, patched on an in-session rename (#741) — see updateShopLandletInfo
 let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
+// #1100: the own-position report loop's own throttle state — see
+// reportOwnPresenceIfNeeded.
+let shopLastPresenceReportAt = 0;
+let shopLastReportedPosition = null; // { x, y, z }, whatever was last actually sent
+let shopLastReportedHeading = null;
+let shopLastReportedLandletId; // undefined until the first report ever goes out — see reportOwnPresenceIfNeeded
+// #1100: the other-avatars poll loop's own throttle state and live set —
+// see pollNearbyPresenceIfNeeded/updateOtherShopAvatars. builderId -> {
+// group, fromX/Y/Z/Heading (previous poll's position, lerp start),
+// toX/Y/Z/Heading (latest poll's position, lerp target), receivedAt (when
+// the latest poll landed, for timing the lerp against) }.
+const shopOtherAvatars = new Map();
+let shopLastPresencePollAt = 0;
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
 // posts, sprites }. Populated/torn down alongside its landlet's own
@@ -11399,6 +11436,13 @@ function updateShopMovement(now) {
     updateShopProximity();
     updateShopLandletInfo();
   }
+  // #1100: updateShopLandletInfo just above has already refreshed
+  // shopCurrentLandletEntry for this frame, so both the report (which
+  // landlet to tag this position with) and the poll (which landlet's other
+  // avatars to ask for) below see the current one.
+  reportOwnPresenceIfNeeded(now);
+  pollNearbyPresenceIfNeeded(now);
+  updateOtherShopAvatars(now);
   updateSignFade();
   updateCalendarFade();
   updateReviewFade();
@@ -11544,6 +11588,148 @@ function updateShopLandletInfo() {
   const ownerLabel = shopBuilderLabels.get(found.record.ownerBuilderId) || 'an unknown builder';
   accountMenuLandletInfoEl.textContent = `${found.record.name} — built by ${ownerLabel}`;
   accountMenuLandletInfoEl.hidden = false;
+}
+
+// #1100: the client-side half of #1098's own throttling split — the POST
+// endpoint stays safe to call often, so this is what actually keeps calls
+// infrequent: a minimum interval AND a minimum movement/turn delta, same
+// "both gates, not either" shape #1098's own issue body asked for. Never
+// awaited by its caller (updateShopMovement) — a slow or failed report
+// should never stall the render loop; errors are swallowed the same way
+// updateShopLandletInfo's own best-effort neighbors in this file are.
+function reportOwnPresenceIfNeeded(now) {
+  const sinceLastReport = now - shopLastPresenceReportAt;
+  if (sinceLastReport < SHOP_PRESENCE_REPORT_INTERVAL_MS) return;
+  const { x, y, z } = shopAvatarPosition;
+  const heading = shopAvatarFacing;
+  const landletId = shopCurrentLandletEntry?.record.landletId ?? null;
+  const moved = !shopLastReportedPosition || Math.hypot(
+    x - shopLastReportedPosition.x, y - shopLastReportedPosition.y, z - shopLastReportedPosition.z,
+  ) >= SHOP_PRESENCE_MOVE_THRESHOLD_M;
+  const turned = shopLastReportedHeading === null
+    || Math.abs(shortestAngleDelta(shopLastReportedHeading, heading)) >= SHOP_PRESENCE_HEADING_THRESHOLD_RAD;
+  // shopLandlets is only populated once enterShopMode's own fetchAllLandlets
+  // resolves, which races against this function's very first eligible
+  // tick -- a player standing perfectly still (the common case right after
+  // spawning, before taking a first step) could otherwise have its first-
+  // ever report go out with landletId still null (shopCurrentLandletEntry
+  // not resolved yet) and then never get corrected, since moved/turned both
+  // stay false forever with no further movement. shopLastReportedLandletId
+  // starts undefined (distinct from the real, legitimate null of "not on
+  // any landlet") specifically so this always fires at least once more
+  // once the real landlet resolves, even with zero movement in between.
+  const landletChanged = shopLastReportedLandletId === undefined || landletId !== shopLastReportedLandletId;
+  const heartbeatDue = sinceLastReport >= SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS;
+  if (!moved && !turned && !landletChanged && !heartbeatDue) return;
+  shopLastPresenceReportAt = now;
+  shopLastReportedPosition = { x, y, z };
+  shopLastReportedHeading = heading;
+  shopLastReportedLandletId = landletId;
+  reportPresence({ x, y, z, heading, landletId }).catch(() => {});
+}
+
+// Shared by the report-throttle turn-check above and the other-avatars
+// heading lerp below — the signed angular delta via the shortest direction,
+// same idiom updateShopMovement's own facing-turn logic already uses.
+function shortestAngleDelta(from, to) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+// #1100: the read side — other builders' last-reported positions in
+// whichever landlet this shopper currently stands on. Nothing to scope the
+// query by off a landlet (#1099's own GET requires one), so this despawns
+// whoever was being tracked rather than keep showing stale others from
+// wherever the shopper stood before. Never awaited by its caller
+// (updateShopMovement) for the same reason as the report side above.
+async function pollNearbyPresenceIfNeeded(now) {
+  if (now - shopLastPresencePollAt < SHOP_PRESENCE_POLL_INTERVAL_MS) return;
+  shopLastPresencePollAt = now;
+  const landletId = shopCurrentLandletEntry?.record.landletId;
+  if (!landletId) {
+    despawnOtherShopAvatars();
+    return;
+  }
+  let avatars;
+  try {
+    avatars = await fetchNearbyPresence(landletId);
+  } catch {
+    return; // best-effort -- try again next poll tick, same as a dropped report
+  }
+  const seenBuilderIds = new Set();
+  for (const avatar of avatars) {
+    seenBuilderIds.add(avatar.builderId);
+    let entry = shopOtherAvatars.get(avatar.builderId);
+    if (!entry) {
+      // Renders every other avatar as the default procedural body
+      // (createShopAvatar) regardless of what they actually have equipped —
+      // fetching and loading each nearby builder's own custom model is
+      // real scope beyond "report-loop, poll-loop, and smoothing," left for
+      // a follow-up rather than silently bundled in here. Limb/arm pose
+      // isn't driven for these either, same reasoning — only root position/
+      // heading, which is all #1098's presence row actually carries.
+      const { group } = createShopAvatar();
+      scene.add(group);
+      entry = {
+        group,
+        fromX: avatar.x, fromY: avatar.y, fromZ: avatar.z, fromHeading: avatar.heading ?? 0,
+      };
+      shopOtherAvatars.set(avatar.builderId, entry);
+    } else {
+      entry.fromX = entry.toX;
+      entry.fromY = entry.toY;
+      entry.fromZ = entry.toZ;
+      entry.fromHeading = entry.toHeading;
+    }
+    entry.toX = avatar.x;
+    entry.toY = avatar.y;
+    entry.toZ = avatar.z;
+    entry.toHeading = avatar.heading ?? entry.fromHeading;
+    entry.receivedAt = now;
+  }
+  for (const [builderId, entry] of shopOtherAvatars) {
+    if (seenBuilderIds.has(builderId)) continue;
+    scene.remove(entry.group);
+    disposeObject3D(entry.group);
+    shopOtherAvatars.delete(builderId);
+  }
+  refreshOtherShopAvatarsDiagnostic();
+}
+
+function despawnOtherShopAvatars() {
+  for (const entry of shopOtherAvatars.values()) {
+    scene.remove(entry.group);
+    disposeObject3D(entry.group);
+  }
+  shopOtherAvatars.clear();
+  refreshOtherShopAvatarsDiagnostic();
+}
+
+// Read-only diagnostic exposed for e2e tests, same pattern as the existing
+// window.__shopAvatarMetrics (#1091) — a real multiplayer scenario needs
+// two separate browser sessions in the same landlet, so a test can't just
+// read local in-memory state the way a single-session feature would; this
+// is what lets it confirm the *other* session's reported position actually
+// made it through the full report -> GET -> poll round trip.
+function refreshOtherShopAvatarsDiagnostic() {
+  window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
+    builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+  }));
+}
+
+// #1100: lerps every tracked other-avatar from its previous poll snapshot
+// toward its latest one over the poll interval, every frame — what makes a
+// once-a-second polling transport read as continuous motion rather than a
+// visible snap/teleport on each poll tick (the issue's own "smoothing").
+function updateOtherShopAvatars(now) {
+  for (const entry of shopOtherAvatars.values()) {
+    const t = Math.min(1, (now - entry.receivedAt) / SHOP_PRESENCE_POLL_INTERVAL_MS);
+    entry.group.position.set(
+      THREE.MathUtils.lerp(entry.fromX, entry.toX, t),
+      THREE.MathUtils.lerp(entry.fromY, entry.toY, t),
+      THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
+    );
+    entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
+  }
 }
 
 // myToken pins this call to the specific load that started it (see the
