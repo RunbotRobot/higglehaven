@@ -10728,7 +10728,22 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // boundary rather than a soft wisp. Widening it spreads the transition
     // across much more of the noise field's own range.
     float cloudMask = smoothstep(0.25, 0.95, clouds);
-    float visibility = heightFrac * cloudMask * 0.5; // kept subtle — an overlay, not a repaint
+    // #1190: the fbm() octave fade above suppresses each octave once its
+    // own period aliases (confirmed via direct visual debugging this
+    // *is* firing, aggressively, for the higher octaves near the apex) —
+    // but the lowest surviving octave can still alias on its own right at
+    // the literal pole, where even a single noise-space cycle collapses
+    // into a handful of screen pixels. Fading the whole cloud overlay out
+    // by proximity to true zenith (not a further per-octave tweak, which
+    // #1190's own investigation already tried and found didn't track the
+    // actual aliasing) sidesteps that degenerate case entirely: right at
+    // the pole, the overlay converges to 0 and only vColor's own smooth,
+    // noise-free gradient remains — nothing left there to alias.
+    // length(normalizedXY) is the pole-distance in sin(angle-from-zenith)
+    // terms, independent of the current world radius (see normalizedXY's
+    // own comment) — 0 at the apex, growing toward the horizon.
+    float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
+    float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
     gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
   }
