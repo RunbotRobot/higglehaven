@@ -3673,6 +3673,14 @@ function bundleFromRow(row) {
 // (a landlet-scoped nested route, called from handleLandlets — the same
 // pattern /versions and /draft already use), and handleAuctions handles
 // everything under the top-level /api/auctions collection itself.
+// #886: approved as a safety net against a compromised session or a runaway
+// script, not to restrict deliberate admin/owner action — same reasoning
+// and limit as this file's other per-builder mutation rate limits (e.g.
+// FRIENDSHIP_MUTATE_RATE_LIMIT_MAX) rather than a stricter bound, since the
+// endpoint's own natural throttles (one active auction per landlet, a
+// 1-hour-minimum duration) already made outright spam impractical.
+const AUCTION_START_RATE_LIMIT_MAX = 20;
+
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
   const landlet = await requireLandlet(db, landletId);
@@ -3681,6 +3689,7 @@ async function handleStartAuction(request, db, landletId) {
   // starting an auction "as" someone else isn't a feature.
   const sessionBuilder = await requireSessionBuilder(request, db);
   const builderId = sessionBuilder.builder_id;
+  await checkRateLimit(db, `auction-start:${builderId}`, AUCTION_START_RATE_LIMIT_MAX);
   if (landlet.status !== 'claimed' || landlet.owner_builder_id !== builderId) {
     throw new HttpError('Only the current owner of a claimed landlet can start an auction on it', 400);
   }
