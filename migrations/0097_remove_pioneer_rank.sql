@@ -1,0 +1,13 @@
+-- #1094: removes the Founding/pioneer recognition feature entirely, per
+-- direct owner decision (via Control Room): the cutoff between "pioneer"
+-- and "normal user" was arbitrary (whichever action a builder happened to
+-- take first), and the platform treats all users equally rather than
+-- rewarding early adopters with a badge. Can be revisited later if wanted.
+--
+-- builders.pioneer_rank (migrations/0044, superseding 0043's original
+-- is_pioneer boolean) has no index or foreign key referencing it (confirmed
+-- via `SELECT sql FROM sqlite_master` against production), so a plain
+-- ALTER TABLE ... DROP COLUMN is safe here -- same technique 0044's own
+-- comment already used to drop the preceding is_pioneer column, and
+-- confirmed generally safe against D1 by that migration's own testing.
+ALTER TABLE builders DROP COLUMN pioneer_rank;
