@@ -702,6 +702,39 @@ describe('Authentication', () => {
     expect(meStillSignedUp.response.status).toBe(200);
   });
 
+  // #1283: a network-level fetch rejection (DNS failure, connection reset,
+  // timeout — distinct from the !response.ok path the "RESEND_API_KEY
+  // never configured" tests above exercise) used to propagate straight out
+  // of handleSignup uncaught, even though the users/builders rows had
+  // already committed, leaving the account stuck with no session issued
+  // and a future signup retry 409ing on the same email. Temporarily
+  // configuring RESEND_API_KEY here (restored in `finally`, scoped to this
+  // test only) is what makes sendEmail actually reach its fetch call
+  // instead of short-circuiting the way every other test in this file
+  // relies on.
+  it('still returns a session when the verification email\'s fetch rejects outright', async () => {
+    const originalFetch = globalThis.fetch;
+    env.RESEND_API_KEY = 'test-resend-api-key';
+    globalThis.fetch = async (input, ...rest) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.resend.com/emails') throw new TypeError('network error');
+      return originalFetch(input, ...rest);
+    };
+    try {
+      const email = `auth-email-fetch-reject-${crypto.randomUUID()}@example.com`;
+      const signedUp = await signup(email, 'correct horse battery staple');
+      expect(signedUp.response.status).toBe(201);
+      expect(signedUp.body.verificationEmailSent).toBe(false);
+      // RESEND_API_KEY is configured here, so devVerifyUrl stays withheld
+      // (#811's own reasoning) even though the send failed.
+      expect(signedUp.body.devVerifyUrl).toBeUndefined();
+      expect(extractSessionCookie(signedUp.response)).toBeTruthy();
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.RESEND_API_KEY = undefined;
+    }
+  });
+
   it('/auth/me without a session cookie is 200 with a null user, not a 401', async () => {
     const response = await api('/auth/me');
     expect(response.response.status).toBe(200);
