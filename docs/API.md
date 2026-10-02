@@ -1029,12 +1029,14 @@ An optional `ids` query param (comma-separated seller IDs) and an optional
 `?label=` (exact, case-insensitive match) filter work exactly like
 `GET /api/builders`'s own `ids`/`label` filters above (#1213) — same
 200-ID cap, same silent-omission-of-unknown-IDs behavior, same
-independent-filters-with-`ids`-checked-first precedence, same
-every-matching-row return since `sellers.label` has no uniqueness
-constraint either (0037_sellers.sql). Added so a shopper/builder can look
-up a specific seller's shop by name — until now the only discovery paths
-were browsing catalog items by a `sellerId` already known, or stumbling
-on products in-world.
+independent-filters-with-`ids`-checked-first precedence. `?label=` still
+returns every matching row, not just the first: #1219 enforces uniqueness
+going forward on create/rename (see `POST /api/sellers` below), but
+doesn't retroactively guarantee it against whatever already existed
+before that, same caveat #1187 left for builders. Added so a
+shopper/builder can look up a specific seller's shop by name — until now
+the only discovery paths were browsing catalog items by a `sellerId`
+already known, or stumbling on products in-world.
 
 ### `POST /api/sellers`
 
@@ -1052,7 +1054,10 @@ Request body:
 ```
 
 `label` is required, capped at 100 characters. Returns `409` if a
-caller-supplied `sellerId` is already taken. Rate-limited per client IP
+caller-supplied `sellerId` is already taken, or if `label` collides
+case-insensitively with an existing seller's (#1219, same reasoning as
+`POST /api/builders`'s own #1187 guard — `sellers.label` had no
+uniqueness constraint at all before this). Rate-limited per client IP
 (`SELLER_CREATE_RATE_LIMIT_MAX`, 20 per window) — same reasoning as
 `POST /api/builders` (#362).
 
@@ -1061,7 +1066,9 @@ caller-supplied `sellerId` is already taken. Rate-limited per client IP
 
 Renames a seller. `label` is required. Returns `404` if the seller
 doesn't exist, `403` if it isn't your own — requires a session logged in
-as this seller.
+as this seller. `409` if `label` collides case-insensitively with a
+*different* seller's (#1219) — a case-only change to your own existing
+label is fine, only another seller already holding it is rejected.
 
 ### `DELETE /api/sellers/:sellerId`
 
