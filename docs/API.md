@@ -7427,6 +7427,49 @@ runtime pieces that act on it, are #1163/#1164/#1165's own scope, not
 built yet — this piece only computes and persists the signature so they
 have something to compare against.
 
+### Standalone animation category + ownership (#1163, sub-issue of #1161)
+
+The second piece of #1161. A seller can now list a catalog template
+under a new `animation` category (upload wizard: "List as a standalone
+animation", right alongside the existing "List as an equippable avatar"
+checkbox from #712 above — the two are mutually exclusive, checking one
+clears the other, since a listing is "avatar" or "animation" or neither,
+never both). It's sold and placed exactly like any other product
+(including an avatar-category one) — a seller places a representative
+model in their shop, a buyer purchases that placed instance — the
+`animation` category label only changes what the purchase additionally
+grants. The existing idle/walk/fly named-clip detection (#682, surfaced
+in the upload wizard's dimension-preview step) and the skeleton
+signature above are both reused completely unchanged: either already
+runs for every upload regardless of category.
+
+Ownership works identically to `owned_avatars` (#680 above): migration
+0106 adds `owned_animations(builder_id, template_id, purchased_at,
+purchase_id)` plus an `owned_animation_purchases(purchase_id,
+builder_id, template_id)` per-granting-purchase side table — both
+pieces owned_avatars only grew into after separate bugs (#754, #1033)
+found the gaps, included here from the start instead. Granted
+(`INSERT OR IGNORE`, idempotent across repeat purchases) at the exact
+same point `writePurchaseRow`/`writeOrphanedPurchaseRow` already grant
+owned_avatars, gated on a new `isAnimationCategory` flag that mirrors
+`isAvatarCategory` exactly — snapshotted into the real-money checkout
+path's own Stripe metadata at checkout time (`createPurchaseCheckout`),
+so a template's live, mutable category can't retroactively change what
+a purchase already in flight grants, the same #888 reasoning
+`isAvatarCategory` already follows. Refunding an animation purchase
+revokes the grant the same purchase-time-locked way #754/#801/#1033
+established for avatars — looked up via `owned_animation_purchases` by
+`purchase_id`, immune to a later category edit, and correct for a buyer
+holding more than one unrefunded purchase of the same template.
+
+Deliberately not built here: a `GET /api/builders/me/animations`
+listing endpoint (mirroring `GET /api/builders/me/avatars`) and any
+equip/apply mechanism (mirroring `equipped_avatar_template_id` and its
+GET/PUT endpoint) — both read this exact ownership table, but belong to
+#1164 (the shop/equip UI that would call a listing endpoint) and #1165
+(runtime application, the actual "equip" analog for an animation) as
+their own scope, not this piece's.
+
 ### The upload flow itself (#712, sub-issue of #710)
 
 #680's own scope note above ("the upload flow itself" is separate scope)

@@ -2619,6 +2619,18 @@ const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-c
 const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
 const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
 const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
+const uploadAnimationCategoryCheckbox = document.getElementById('upload-animation-category-checkbox');
+
+// #1163 (sub-issue of #1161): a listing is "avatar" or "animation" or
+// neither, never both — checking one clears the other rather than
+// letting handleUploadDimensionsStep's own category pick silently favor
+// whichever it happens to check first.
+uploadAvatarCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
+});
+uploadAnimationCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
+});
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
@@ -2716,6 +2728,7 @@ function resetUploadModalToFileStep() {
   uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
+  uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
@@ -3118,7 +3131,12 @@ async function handleUploadDimensionsStep() {
       // 'placeholder' explicitly, so the server's own default (worker/
       // index.js's createCatalogTemplate) stays the one source of truth
       // for what an unchecked listing's category actually is.
-      category: uploadAvatarCategoryCheckbox.checked ? 'avatar' : undefined,
+      // #1163: same reasoning, for the sibling "standalone animation"
+      // category — the two checkboxes are mutually exclusive (see their
+      // own change listeners above), so at most one of these ever applies.
+      category: uploadAvatarCategoryCheckbox.checked
+        ? 'avatar'
+        : uploadAnimationCategoryCheckbox.checked ? 'animation' : undefined,
       priceCents,
       metadata,
     });

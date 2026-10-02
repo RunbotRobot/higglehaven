@@ -10989,6 +10989,9 @@ async function handleInstancePurchase(request, env, instanceId) {
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
     purchaseIdempotencyKey(instance.instance_id, buyerBuilder.builder_id, input.idempotencyKey),
+    // #1163: same "derive directly, no time gap" reasoning as
+    // isAvatarCategory just above, for isAnimationCategory.
+    template.category === 'animation',
   );
 }
 
@@ -11094,6 +11097,9 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
   // avatar is decided by category AS OF CHECKOUT, not re-derived from a
   // template row that might change/vanish by the time finalize runs.
   const isAvatarCategory = template.category === 'avatar';
+  // #1163: same "snapshot now" reasoning as isAvatarCategory just above,
+  // for a standalone-animation purchase instead.
+  const isAnimationCategory = template.category === 'animation';
 
   // Everything handlePurchaseFinalize needs to actually write the purchase
   // travels here, in Stripe's own metadata — set once, server-side, at
@@ -11122,6 +11128,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       isDigitalGood: String(isDigitalGood),
       buyerBuilderId: buyerBuilderId || '',
       isAvatarCategory: String(isAvatarCategory),
+      isAnimationCategory: String(isAnimationCategory),
     },
   }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey));
 
@@ -11223,10 +11230,13 @@ async function handlePurchaseFinalize(request, env) {
   // template.category that may have changed underneath this purchase by
   // the time finalize runs.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
+  // #1163: same checkout-time-locked reasoning as isAvatarCategory above,
+  // for isAnimationCategory.
+  const isAnimationCategory = meta.isAnimationCategory === 'true';
   const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
   if (instance && template && checkoutBuilderId) {
-    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory);
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -11294,6 +11304,23 @@ function ownedAvatarStatements(db, buyerBuilderId, templateId, purchaseId) {
   ];
 }
 
+// #1163 (sub-issue of #1161): same grant shape as ownedAvatarStatements
+// just above, for a standalone "animation"-category purchase instead —
+// owned_animations mirrors owned_avatars (migration 0106 includes the
+// purchase_id link and the per-purchase owned_animation_purchases side
+// table from the start, the same two owned_avatars only grew into after
+// #754/#1033 found the gaps the hard way).
+function ownedAnimationStatements(db, buyerBuilderId, templateId, purchaseId) {
+  return [
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_animations (builder_id, template_id, purchase_id) VALUES (?, ?, ?)',
+    ).bind(buyerBuilderId, templateId, purchaseId),
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_animation_purchases (purchase_id, builder_id, template_id) VALUES (?, ?, ?)',
+    ).bind(purchaseId, buyerBuilderId, templateId),
+  ];
+}
+
 async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
@@ -11321,6 +11348,9 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   // every purchase now, so this runs whenever meta.buyerBuilderId is
   // present at all.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
+  // #1163: same checkout-time-locked snapshot as isAvatarCategory above,
+  // for a standalone-animation purchase instead.
+  const isAnimationCategory = meta.isAnimationCategory === 'true';
   const buyerBuilderStillExists = meta.buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.buyerBuilderId).first()
     : null;
@@ -11350,6 +11380,9 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   if (isAvatarCategory && buyerBuilderStillExists) {
     statements.push(...ownedAvatarStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
+  if (isAnimationCategory && buyerBuilderStillExists) {
+    statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
+  }
   await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -11365,7 +11398,15 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
 // which this test suite deliberately never configures (see
 // worker/commerce.test.js's "Stripe is never configured in this test
 // suite" comment).
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null) {
+//
+// isAnimationCategory (#1163) is appended as a new trailing parameter,
+// after idempotencyKey, rather than inserted alongside isAvatarCategory —
+// this function's only two in-source callers that pass that far
+// positionally (handleInstancePurchase, handlePurchaseFinalize) both
+// needed updating regardless (see their own call sites), and appending
+// at the end leaves every shorter positional call (every direct test in
+// worker/avatar-ownership.test.js included) completely unaffected.
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -11414,6 +11455,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
     ...(isAvatarCategory && buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
+    ...(isAnimationCategory && buyerBuilderStillExists ? ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
@@ -11769,6 +11811,25 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
           'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
         ).bind(grant.builder_id, grant.template_id),
       ]);
+    }
+  }
+
+  // #1163: same purchase_id-keyed, purchase-time-locked revocation as the
+  // owned_avatars block just above, for owned_animations instead — no
+  // equivalent "equipped" column to clear yet (applying a purchased
+  // animation at runtime is #1165's own scope, not built), so this only
+  // ever needs to revoke the ownership grant itself.
+  const animationGrant = await db.prepare(
+    'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
+  ).bind(purchase.purchase_id).first();
+  if (animationGrant) {
+    await db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+    const stillOwnedViaOtherAnimationPurchase = await db.prepare(
+      'SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?',
+    ).bind(animationGrant.builder_id, animationGrant.template_id).first();
+    if (!stillOwnedViaOtherAnimationPurchase) {
+      await db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
+        .bind(animationGrant.builder_id, animationGrant.template_id).run();
     }
   }
 }
