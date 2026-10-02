@@ -1041,9 +1041,13 @@ export async function fetchAuction(auctionId) {
   return auction;
 }
 
+// The list is capped at 200 rows server-side (no pagination) — totalCount
+// comes from a dedicated, uncapped COUNT so callers can tell when the cap
+// actually truncates something (same fix already applied to purchases'
+// fetchPurchases above).
 export async function fetchAuctionBids(auctionId) {
-  const { bids } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`);
-  return bids;
+  const { bids, totalCount } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`);
+  return { bids, totalCount };
 }
 
 // builderId is never sent — the server derives "who's bidding" from the

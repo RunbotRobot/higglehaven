@@ -6624,7 +6624,7 @@ async function renderAuctionSection() {
         bidHistoryList.hidden = false;
         bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
         try {
-          const bids = await fetchAuctionBids(auction.auctionId);
+          const { bids, totalCount } = await fetchAuctionBids(auction.auctionId);
           // Bidder labels resolved via the batch-by-ids lookup (#717/
           // #720), scoped to just the distinct bidders on this one
           // auction rather than the whole roster.
@@ -6642,6 +6642,16 @@ async function renderAuctionSection() {
             const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
             bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
             bidHistoryList.appendChild(bidRow);
+          }
+          // #1275: the server caps this list at 200 rows — flag it when
+          // that cap actually bites, instead of silently showing a
+          // partial list under a "Hide Bids (N)" label that implies it's
+          // everything.
+          if (totalCount > bids.length) {
+            const truncationNote = document.createElement('div');
+            truncationNote.className = 'settings-empty-note';
+            truncationNote.textContent = `Showing top ${bids.length} of ${totalCount} bids.`;
+            bidHistoryList.appendChild(truncationNote);
           }
           bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
         } catch (err) {
