@@ -103,5 +103,6 @@
   "0103_tax_1099_forms_user_id_set_null.sql",
   "0104_card_fingerprints.sql",
   "0105_catalog_template_skeleton_signature.sql",
-  "0106_owned_animations.sql"
+  "0106_owned_animations.sql",
+  "0107_equipped_animation.sql"
 ]

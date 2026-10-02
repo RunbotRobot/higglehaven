@@ -7533,13 +7533,81 @@ established for avatars — looked up via `owned_animation_purchases` by
 `purchase_id`, immune to a later category edit, and correct for a buyer
 holding more than one unrefunded purchase of the same template.
 
-Deliberately not built here: a `GET /api/builders/me/animations`
-listing endpoint (mirroring `GET /api/builders/me/avatars`) and any
-equip/apply mechanism (mirroring `equipped_avatar_template_id` and its
-GET/PUT endpoint) — both read this exact ownership table, but belong to
-#1164 (the shop/equip UI that would call a listing endpoint) and #1165
-(runtime application, the actual "equip" analog for an animation) as
-their own scope, not this piece's.
+Deliberately not built in #1163 itself: a `GET /api/builders/me/animations`
+listing endpoint and any apply mechanism — both landed in #1164 just
+below instead, once there was a real UI to put them behind. Actually
+making an applied animation *play* at runtime remains #1165's own scope.
+
+### Shop/equip UI + compatibility (#1164, sub-issue of #1161)
+
+The third piece of #1161. Builds the listing/apply endpoints #1163
+deliberately deferred, plus the two places a shopper actually sees
+compatibility: the Shop-mode buy hint (browsing) and a new "My
+Animations" settings panel (applying).
+
+`GET /api/builders/me/animations` lists every `owned_animations` row
+for the session builder, mirroring `GET /api/builders/me/avatars`
+exactly (same shape: each entry is the full template, plus
+`purchasedAt`).
+
+```json
+{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }] }
+```
+
+### `GET /api/builders/me/animation`
+### `PUT /api/builders/me/animation`
+
+Reads or sets which owned animation (if any) the builder currently has
+*applied* — mirroring `GET`/`PUT /api/builders/me/avatar` exactly,
+against a new `builders.equipped_animation_template_id` column
+(migration 0107) and `owned_animations` instead of
+`equipped_avatar_template_id`/`owned_avatars`. Same bars: `requireCurrentUser`
+only (not the full verification gate), `403` on `PUT` for a template the
+caller doesn't own via `owned_animations`, same 20-per-window rate limit
+on `PUT` (`ANIMATION_EQUIP_RATE_LIMIT_MAX`), same atomic
+check-folded-into-the-`UPDATE`'s-own-`WHERE` race guard, same fallback to
+`null` if the applied template is later deleted out from under it.
+
+```json
+{ "animation": { "equippedTemplateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12..." } }
+```
+
+One deliberate difference from the avatar equip endpoint: **`PUT` never
+rejects an incompatible animation.** Compatibility (exact-match
+skeleton-signature equality, #1162's own contract) is a UI-level concern
+here, not an ownership/equip-time restriction — the issue's own scope
+note asks for incompatible options to be "clearly distinguishable," not
+blocked outright, and #1165's own "sane fallback behavior if the
+shopper later switches to a different, incompatible avatar while an
+animation is applied" only makes sense if that combination can exist in
+the first place. `skeletonSignature` is included on both this endpoint
+and `GET`/`PUT /api/builders/me/avatar`'s own response (the latter
+extended by this same change) specifically so the frontend can compare
+the two without a second round trip.
+
+**Compatibility in the UI** (`src/main.js`): `animationCompatibility(
+animationSignature, avatarSignature)` returns one of four states —
+`'compatible'`/`'incompatible'` (both signatures present, compared by
+exact string equality), `'no-avatar'` (the shopper has no custom avatar
+equipped at all — the default procedural body has no skeleton, so
+nothing can ever match it), or `'unknown'` (the animation itself has no
+skeleton signature, which shouldn't normally happen for a real upload).
+`animationCompatibilityLabel` turns that into the shopper-facing text.
+Surfaced in two places:
+
+- **Browsing**: `productInfoText`, the same tap-to-inspect disclosure
+  line that already shows a digital-good disclaimer/no-returns note,
+  appends the compatibility label for an `animation`-category product
+  against `shopEquippedAvatarSkeletonSignature` — fetched once in
+  `enterShopMode` alongside the equipped avatar's `modelUrl`, and kept
+  live if the shopper re-equips a different avatar from Settings while
+  already in Shop mode (the same spot `refreshEquippedShopAvatar`
+  already runs from).
+- **Applying**: the new "My Animations" settings field (Settings > Shop,
+  alongside "My Avatars") lists every owned animation plus a "None
+  applied" row, each with its own compatibility label against the
+  currently-equipped avatar, and an Apply/Clear button that calls the
+  endpoint above.
 
 ### The upload flow itself (#712, sub-issue of #710)
 
