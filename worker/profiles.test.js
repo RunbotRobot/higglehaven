@@ -980,17 +980,58 @@ describe('Sellers', () => {
     expect(found.response.status).toBe(200);
     expect(found.body.sellers.map((s) => s.sellerId)).toEqual([onlyMatch.body.seller.sellerId]);
 
+    // #1219 now rejects creating a second seller with a colliding label
+    // through POST /sellers itself (see its own describe block below) —
+    // but doesn't retroactively guarantee uniqueness against whatever
+    // duplicate rows already exist, same caveat #1187 left for builders.
+    // Seeded directly via env.DB instead of POST /sellers, since that's
+    // realistically the only way such a duplicate pair can still come to
+    // exist going forward.
     const second = await api('/sellers', {
       method: 'POST', body: JSON.stringify({ label: 'Shared Seller Filter Label' }),
     });
-    const third = await api('/sellers', {
-      method: 'POST', body: JSON.stringify({ label: 'Shared Seller Filter Label' }),
-    });
+    const thirdId = `seller-${crypto.randomUUID()}`;
+    await env.DB.prepare('INSERT INTO sellers (seller_id, label) VALUES (?, ?)')
+      .bind(thirdId, 'Shared Seller Filter Label').run();
     const ambiguous = await api(`/sellers?${new URLSearchParams({ label: 'Shared Seller Filter Label' })}`);
     expect(ambiguous.body.sellers.map((s) => s.sellerId)).toEqual(
-      expect.arrayContaining([second.body.seller.sellerId, third.body.seller.sellerId]),
+      expect.arrayContaining([second.body.seller.sellerId, thirdId]),
     );
     expect(ambiguous.body.sellers).toHaveLength(2);
+  });
+
+  // #1219: "all accounts should be unique even when ignoring case" — same
+  // fix shape as #1187 gave builders.
+  describe('label uniqueness, case-insensitive (#1219)', () => {
+    it('rejects POST /sellers with a label that collides case-insensitively with an existing one', async () => {
+      await api('/sellers', { method: 'POST', body: JSON.stringify({ label: 'Unique Seller Label Tester' }) });
+      const collided = await api('/sellers', {
+        method: 'POST', body: JSON.stringify({ label: 'UNIQUE seller label tester' }),
+      });
+      expect(collided.response.status).toBe(409);
+    });
+
+    it('rejects renaming to a label another seller already holds, case-insensitively', async () => {
+      await api('/sellers', { method: 'POST', body: JSON.stringify({ label: 'Existing Seller Holder' }) });
+      const renamer = await signupSeller('seller-label-collision-renamer');
+      const collided = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: 'existing SELLER holder' }),
+      }));
+      expect(collided.response.status).toBe(409);
+      // The rejected attempt must not have partially applied.
+      const me = await api('/sellers/me', renamer.session());
+      expect(me.body.seller.label).not.toBe('existing SELLER holder');
+    });
+
+    it('allows a case-only rename of a seller\'s own existing label', async () => {
+      const renamer = await signupSeller('seller-label-self-case-rename');
+      const original = renamer.seller.label;
+      const renamed = await api(`/sellers/${renamer.sellerId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: original.toUpperCase() }),
+      }));
+      expect(renamed.response.status).toBe(200);
+      expect(renamed.body.seller.label).toBe(original.toUpperCase());
+    });
   });
 });
 

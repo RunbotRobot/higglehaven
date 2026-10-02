@@ -3099,9 +3099,11 @@ async function handleSellers(request, env, db, route, url) {
     }
 
     // Exact (case-insensitive) label lookup, same as GET /api/builders's
-    // own — sellers.label has no uniqueness constraint either
-    // (0037_sellers.sql), so this returns every matching row, not just
-    // the first.
+    // own. Still returns every matching row, not just the first — #1219
+    // enforces uniqueness going forward on create/rename (see those
+    // handlers below), but doesn't retroactively guarantee it against
+    // whatever already existed before that, same caveat as #1187 left for
+    // builders.
     const label = url.searchParams.get('label');
     if (label) {
       const { results } = await db.prepare(
@@ -3145,7 +3147,23 @@ async function handleSellers(request, env, db, route, url) {
     const sellerId = input.sellerId !== undefined
       ? stringValue(input.sellerId, 'sellerId')
       : `seller-${crypto.randomUUID()}`;
-    await db.prepare('INSERT INTO sellers (seller_id, label) VALUES (?, ?)').bind(sellerId, label).run();
+    // #1219: same case-insensitive uniqueness guard #1187 gave builders —
+    // see that issue's own PR comment on POST /api/builders above for why
+    // this is an app-level NOT EXISTS rather than a schema-level UNIQUE
+    // index.
+    const inserted = await db.prepare(`
+      INSERT INTO sellers (seller_id, label)
+      SELECT ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ? OR label = ? COLLATE NOCASE)
+    `).bind(sellerId, label, sellerId, label).run();
+    if (inserted.meta.changes === 0) {
+      // Same disambiguation idiom as POST /api/builders above — the
+      // atomic guard already refused to happen, this only decides which
+      // friendly message to show.
+      const sellerIdTaken = await db.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+      if (sellerIdTaken) throw new HttpError('sellerId is already taken', 409);
+      throw new HttpError('That seller name is already taken — names must be unique, ignoring case', 409);
+    }
     const row = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sellerId).first();
     return json({ seller: sellerFromRow(row) }, 201);
   }
@@ -3160,9 +3178,21 @@ async function handleSellers(request, env, db, route, url) {
     // plain stringValue (no upper bound), unlike POST /api/sellers' own
     // create path (already labelValue). Same fix shape as #337/#358.
     const label = labelValue(input.label, 'label');
-    await db.prepare(`
-      UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE seller_id = ?
-    `).bind(label, route[1]).run();
+    // #1219: same case-insensitive uniqueness guard as the create path
+    // above (and the same shape #1187 gave builders' own rename path) —
+    // excludes this seller's own current row so a case-only rename of
+    // your own label isn't rejected as colliding with itself.
+    const result = await db.prepare(`
+      UPDATE sellers SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE seller_id = ? AND NOT EXISTS (SELECT 1 FROM sellers WHERE label = ? COLLATE NOCASE AND seller_id != ?)
+    `).bind(label, route[1], label, route[1]).run();
+    if (result.meta.changes === 0) {
+      // requireSeller/assertOwner above already confirmed this seller_id
+      // exists and belongs to the caller, so the only way the atomic guard
+      // just above could have refused this update is the NOT EXISTS
+      // failing — another seller already holds this label.
+      throw new HttpError('That seller name is already taken — names must be unique, ignoring case', 409);
+    }
     const updated = await requireSeller(db, route[1]);
     return json({ seller: sellerFromRow(updated) });
   }
