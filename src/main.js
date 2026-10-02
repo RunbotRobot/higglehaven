@@ -1528,6 +1528,7 @@ async function replaceMeshWithCrop(mesh, crop) {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    label: mesh.userData.label ?? null,
     crop: nextCrop,
     scale: mesh.userData.scale ?? 1,
   };
@@ -1750,6 +1751,7 @@ async function createMeshForInstance(instance) {
     object.userData.template = template;
     object.userData.crop = {};
     object.userData.scale = 1;
+    object.userData.label = instance.label ?? null;
     return object;
   }
   const width = effectiveLength(template, instance, 'x', 'width');
@@ -1795,6 +1797,12 @@ async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
+  // Not editable anywhere in Build mode yet (#1294) — carried through
+  // purely so a value already on the row (set directly via the API)
+  // survives being rebuilt into a mesh and round-tripped back out again,
+  // the same reasoning as crop/scale/isCommunitySign/isCommunityCalendar
+  // just above.
+  object.userData.label = instance.label ?? null;
   // #1254: exposes the real rendered bounding-box size of whichever
   // instance's mesh this function last built — e2e-only, same "expose a
   // minimal hook purely for test verification" precedent as
@@ -1836,6 +1844,7 @@ function persistLayout() {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    label: mesh.userData.label ?? null,
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
@@ -1860,6 +1869,7 @@ function instanceFromMesh(mesh) {
     rotationX: mesh.rotation.x,
     rotationY: mesh.rotation.y,
     rotationZ: mesh.rotation.z,
+    label: mesh.userData.label ?? null,
     crop: mesh.userData.crop,
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
