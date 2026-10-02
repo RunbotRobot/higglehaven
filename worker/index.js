@@ -11138,6 +11138,10 @@ const PURCHASE_RATE_LIMIT_MAX = 30;
 // every other unauthenticated repeatable write in this file is, rather than
 // by builder_id like PURCHASE_RATE_LIMIT_MAX above.
 const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
+// Same unauthenticated-by-design reasoning as PURCHASE_FINALIZE_RATE_LIMIT_MAX
+// above — handlePurchaseConfirmDelivery has no buyer account to authenticate
+// against either, so it's keyed by client IP rather than a builder/seller id.
+const CONFIRM_DELIVERY_RATE_LIMIT_MAX = 20;
 
 async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
@@ -11939,6 +11943,7 @@ async function handleSellerFeedbackList(db, sellerId) {
 
 async function handlePurchaseConfirmDelivery(request, env) {
   const db = env.DB;
+  await checkRateLimit(db, `confirm-delivery:${clientIp(request)}`, CONFIRM_DELIVERY_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const tokenHash = await sha256Hex(token);
@@ -12047,11 +12052,11 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
     ]);
   }
 
-  // #1163: same purchase_id-keyed, purchase-time-locked revocation as the
-  // owned_avatars block just above, for owned_animations instead — no
-  // equivalent "equipped" column to clear yet (applying a purchased
-  // animation at runtime is #1165's own scope, not built), so this only
-  // ever needs to revoke the ownership grant itself.
+  // #1163/#1251: same purchase_id-keyed, purchase-time-locked revocation as
+  // the owned_avatars block just above, for owned_animations instead —
+  // #1164 later added an "equipped" column (builders.equipped_animation_
+  // template_id) that this block never got updated to clear, the same gap
+  // #754 fixed for avatars.
   // #1261: same atomicity fix as the owned_avatars block above, same reason.
   const animationGrant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
@@ -12061,6 +12066,11 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
       db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id),
       db.prepare(`
         DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(animationGrant.builder_id, animationGrant.template_id, animationGrant.builder_id, animationGrant.template_id),
+      db.prepare(`
+        UPDATE builders SET equipped_animation_template_id = NULL
+        WHERE builder_id = ? AND equipped_animation_template_id = ?
         AND NOT EXISTS (SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?)
       `).bind(animationGrant.builder_id, animationGrant.template_id, animationGrant.builder_id, animationGrant.template_id),
     ]);

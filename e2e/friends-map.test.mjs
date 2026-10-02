@@ -75,6 +75,39 @@ await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 const mapHiddenAfterClose = !(await alicePage.locator('#friends-map-modal.visible').count());
 console.log('map modal hidden, friends list reshown after closing the map (should be true):', mapHiddenAfterClose);
 
+// #1252: removing the one located friend takes Alice from "has located
+// friends" back to zero -- reopening the map after that must clear the
+// previous render (stale dots/points), not leave it showing underneath
+// the now-shown "no friends located" message.
+const { friendships: aliceFriendships } = (await fetchJson(alicePage, '/api/friendships')).body;
+const friendshipWithBob = aliceFriendships.find((f) => f.otherBuilderId === bobBuilder.builderId);
+const removed = await fetchJson(alicePage, `/api/friendships/${friendshipWithBob.friendshipId}`, { method: 'DELETE' });
+console.log('removed the Alice/Bob friendship (status should be 200/204):', removed.status);
+
+await alicePage.click('#friends-close-btn');
+await openAccountMenu(alicePage);
+await alicePage.click('#friends-btn');
+await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
+await alicePage.click('#friends-map-btn');
+await alicePage.waitForSelector('#friends-map-modal.visible', { timeout: 5000 });
+await alicePage.waitForFunction(() => Array.isArray(window.__friendsMapPoints) && window.__friendsMapPoints.length === 0, { timeout: 5000 });
+const pointsAfterRemoval = await alicePage.evaluate(() => window.__friendsMapPoints);
+console.log('points after going back to zero located friends (should be empty):', pointsAfterRemoval);
+const emptyMessageShownAfterRemoval = await alicePage.locator('#friends-map-empty').isVisible();
+console.log('"no friends located" message shown again (should be true):', emptyMessageShownAfterRemoval);
+
+// Directly confirms the canvas pixel at Bob's old plotted position is
+// actually cleared (transparent), not just that the diagnostic array
+// happens to be empty -- the bug was specifically that clearRect never
+// ran on this path.
+const bobOldPixelCleared = await alicePage.evaluate(({ x, y }) => {
+  const canvas = document.getElementById('friends-map-canvas');
+  const ctx = canvas.getContext('2d');
+  const [, , , alpha] = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data;
+  return alpha === 0;
+}, { x: bobPoints[0].x, y: bobPoints[0].y });
+console.log('Bob\'s old plotted pixel is actually cleared (should be true):', bobOldPixelCleared);
+
 const pass =
   friendsModalHiddenWhileMapOpen &&
   points.length === 1 &&
@@ -83,6 +116,10 @@ const pass =
   typeof bobPoints[0].x === 'number' && typeof bobPoints[0].y === 'number' &&
   emptyMessageHidden &&
   mapHiddenAfterClose &&
+  (removed.status === 200 || removed.status === 204) &&
+  pointsAfterRemoval.length === 0 &&
+  emptyMessageShownAfterRemoval &&
+  bobOldPixelCleared &&
   errors.length === 0;
 await bobSession.browser.close();
-await finish(aliceSession.browser, { pass, label: 'Friends map: plots every accepted friend\'s lándlet at once (#1205)', errors });
+await finish(aliceSession.browser, { pass, label: 'Friends map: plots every accepted friend\'s lándlet at once (#1205), clears stale render on going back to zero (#1252)', errors });

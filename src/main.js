@@ -9647,6 +9647,14 @@ async function drawFriendsMap() {
   }
   const located = friendships.filter((f) => f.status === 'accepted' && f.otherLandlet);
   friendsMapEmptyEl.hidden = located.length > 0;
+  // #1252: clear any stale canvas content/points from a previous render
+  // before the early return below -- otherwise reopening the map after
+  // going from "has located friends" back to zero left the last drawn
+  // dots/labels on screen underneath the (now-shown) empty-state message,
+  // and window.__friendsMapPoints kept pointing at friends who are no
+  // longer located.
+  friendsMapCanvas.getContext('2d').clearRect(0, 0, friendsMapCanvas.width, friendsMapCanvas.height);
+  window.__friendsMapPoints = [];
   if (located.length === 0) return;
 
   // Matches the canvas's own CSS size (width: 100%, aspect-ratio: 1) in
