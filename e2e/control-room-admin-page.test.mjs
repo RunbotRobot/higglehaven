@@ -329,6 +329,32 @@ await trackingCard.locator('.pill-waiting-subtasks').waitFor({ timeout: 10000 })
 const waitingSubtasksPillText = (await trackingCard.locator('.pill-waiting-subtasks').textContent()).trim();
 console.log('tracking task shows the "Waiting on: Subtasks" pill after clicking its button (actual):', waitingSubtasksPillText);
 
+// #1269: AGENTS.md documents an unanswered question (kind: 'question',
+// status still 'queued') rendering an inline "Needs your answer" badge,
+// but that behavior only ever existed on the old, decommissioned
+// Claude-Artifact board -- it was never ported to this real page.
+// Seeded through the same validating API as everything else above.
+const questionTitle = `E2E unanswered question ${Date.now()}`;
+await page.evaluate(async (title) => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'e2e-owner', kind: 'question', title }),
+  });
+}, questionTitle);
+
+await page.reload({ waitUntil: 'networkidle' });
+const questionCard = page.locator('.card', { has: page.locator('.title', { hasText: questionTitle }) });
+await questionCard.waitFor({ timeout: 10000 });
+const needsAnswerPillVisible = await questionCard.locator('.card-head .pill-needs-answer').isVisible();
+console.log('unanswered question task shows a "Needs your answer" badge (should be true):', needsAnswerPillVisible);
+
+await questionCard.locator('.card-head').click();
+await questionCard.locator('button[data-action="status"][data-value="done"]').click();
+await questionCard.locator('.pill-done').waitFor({ timeout: 10000 });
+const needsAnswerPillGoneOnceDone = await questionCard.locator('.card-head .pill-needs-answer').isVisible();
+console.log('badge disappears once the question is marked done (should be false):', needsAnswerPillGoneOnceDone);
+
 // #916: imageUrl round-trips fully through the API (task create, reply
 // create) but the admin page never rendered it anywhere — a screenshot
 // attached via imageUrl was silently invisible on the board. Seeded
@@ -398,6 +424,8 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   subChipVisible &&
   subTaskCardIsOpen &&
   waitingSubtasksPillText === 'Waiting on: Subtasks' &&
+  needsAnswerPillVisible &&
+  !needsAnswerPillGoneOnceDone &&
   cardThumbSrc === taskImageUrl &&
   replyImgSrc === replyImageUrl &&
   errors.length === 0;
