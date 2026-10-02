@@ -4271,7 +4271,7 @@ describe('Simulated purchases', () => {
         expect(nonAdmin.response.status).toBe(403);
       });
 
-      it('generates a 1099-NEC draft once a builder\'s daller-commission income crosses $600, not before', async () => {
+      it('generates a 1099-NEC draft once a builder\'s higgle-commission income crosses $600, not before', async () => {
         const builder = await signupBuilder('tax-1099-nec-builder');
         const builderMe = await api('/builders/me', builder.session());
 

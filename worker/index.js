@@ -7416,7 +7416,7 @@ async function upsertTax1099Draft(db, { userId, taxYear, formType, grossIncomeCe
 // dollar leg -- the 200-transaction leg and any lower state thresholds
 // are NOT modeled here, a known gap flagged in #645's own GitHub issue
 // rather than silently guessed at), and a 1099-NEC only concerns the
-// daller-commission side, compared against its own, much lower, standard
+// higgle-commission side, compared against its own, much lower, standard
 // nonemployee-compensation threshold.
 async function generateTax1099Drafts(db, year) {
   const yearStart = `${year}-01-01T00:00:00.000Z`;
