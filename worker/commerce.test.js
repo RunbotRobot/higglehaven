@@ -215,6 +215,7 @@ describe('Auctions', () => {
 
     const bids = await api(`/auctions/${auctionId}/bids`);
     expect(bids.body.bids.map((b) => b.amountCents)).toEqual([1500, 1000]);
+    expect(bids.body.totalCount).toBe(2);
   });
 
   it('accepts only one of two concurrent bids for the same amount, not both', async () => {
@@ -247,6 +248,37 @@ describe('Auctions', () => {
     const bids = await api(`/auctions/${auctionId}/bids`);
     expect(bids.body.bids).toHaveLength(1);
     expect(bids.body.bids[0].amountCents).toBe(1000);
+  });
+
+  // #1275: GET .../bids used to return only the capped `bids` array with no
+  // way to tell it had been truncated at all -- same count-vs-length shape
+  // already fixed for sign posts/calendar events (#356). Seeds 205 bids
+  // directly via the DB (bypassing the increasing-bid rule, which isn't
+  // what this test is about) so the cap actually bites.
+  it('reports the true bid count past the list\'s own 200-row cap', async () => {
+    const owner = await signupBuilder('bid-past-cap-owner');
+    const bidder = await signupBuilder('bid-past-cap-bidder');
+    await createGreenbeltLandlet('auction-bid-past-cap-landlet');
+    await claim('auction-bid-past-cap-landlet', owner);
+    const started = await api('/landlets/auction-bid-past-cap-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const statements = Array.from({ length: 205 }, (_, i) =>
+      env.DB.prepare(`
+        INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, ?)
+      `).bind(`bid-past-cap-${i}`, auctionId, bidder.builderId, i + 1));
+    await env.DB.batch(statements);
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.bids).toHaveLength(200);
+    expect(bids.body.totalCount).toBe(205);
+    // Highest-amount-first (ORDER BY amount_cents DESC) was already correct
+    // pre-#1275 -- this fix is only about exposing totalCount, not about
+    // which 200 rows survive the cap.
+    expect(bids.body.bids[0].amountCents).toBe(205);
+    expect(bids.body.bids[199].amountCents).toBe(6);
   });
 
   it('resolves a winning auction: ownership transfers, build clears, seller is paid in higgles', async () => {
