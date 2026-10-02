@@ -5988,11 +5988,22 @@ async function requireAdmin(request, db) {
 // without a real email provider.
 async function sendEmail(env, { to, subject, html, text }) {
   if (!env.RESEND_API_KEY) return false;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ from: env.EMAIL_FROM || 'higglehaven <no-reply@higglehaven.com>', to: [to], subject, html, text }),
-  });
+  // #1283: fetch itself can reject (DNS failure, connection reset, TLS
+  // error, timeout) rather than merely resolving with a non-2xx response —
+  // every caller treats this function as best-effort and never wraps it in
+  // its own try/catch, so that has to be true here too, not just for the
+  // HTTP-level failure the !response.ok branch below already handles.
+  let response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: env.EMAIL_FROM || 'higglehaven <no-reply@higglehaven.com>', to: [to], subject, html, text }),
+    });
+  } catch (error) {
+    console.error('Resend send failed', error);
+    return false;
+  }
   if (!response.ok) {
     console.error('Resend send failed', response.status, await response.text().catch(() => ''));
     return false;
