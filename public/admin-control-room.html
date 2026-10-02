@@ -48,6 +48,7 @@
   .pill-waiting-subtasks { background: #dce8f6; color: #1a4a7a; font-weight: 800; }
   .pill-blocked-on { background: #f6d4cb; color: #8a2a12; cursor: pointer; text-decoration: underline; }
   .pill-unviewed { background: #f6d4cb; color: #8a2a12; }
+  .pill-needs-answer { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
   .meta { color: #6a7a60; font-size: 12px; }
   .chip { display: inline-block; border: 1px solid #cdd8c0; border-radius: 999px; padding: 1px 7px; font-size: 11px; margin-right: 4px; color: #445; text-decoration: none; }
   .chip-jump { cursor: pointer; text-decoration: underline; }
@@ -277,6 +278,19 @@
     return '<span class="pill pill-waiting-claude">Ready for Claude</span>';
   }
 
+  // #1269: AGENTS.md's own Control Room section documents this exact
+  // badge ("a kind: 'question' task still showing status: 'queued' is
+  // unanswered; the board itself renders it with an inline 'Needs your
+  // answer' tag") but it was never actually built into this real,
+  // N31-era page -- it only ever existed on the old, decommissioned
+  // Claude-Artifact board this page replaced. Restoring it rather than
+  // inventing new behavior, since the owner already approved this exact
+  // condition once.
+  function needsAnswerBadge(task) {
+    if (task.kind !== 'question' || task.status !== 'queued') return '';
+    return '<span class="pill pill-needs-answer">Needs your answer</span>';
+  }
+
   function matchesSearch(task) {
     if (!searchTerm) return true;
     const haystack = [task.title, task.note, task.session, task.tag, task.from]
@@ -344,6 +358,7 @@
         '<span class="title">' + linkTitle + '</span>' +
         '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
         (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
+        needsAnswerBadge(task) +
         waitingBadge(task) +
         (task.session ? '<span class="meta">' + escapeHtml(task.session) + '</span>' : '') +
         '<span class="meta">' + relativeTime(task.createdAt) + '</span>' +
