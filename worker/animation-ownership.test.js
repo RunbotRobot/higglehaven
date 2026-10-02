@@ -200,7 +200,10 @@ describe('writePurchaseRow honors an explicit isAnimationCategory over template.
 });
 
 describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () => {
-  it('deletes the owned_animations grant when its purchase is refunded', async () => {
+  // #1251: #1164 added builders.equipped_animation_template_id after #1163
+  // first wrote this refund path, and the refund path was never updated to
+  // clear it -- the exact gap #754 already closed for owned_avatars.
+  it('deletes the owned_animations grant and clears an applied animation when its purchase is refunded', async () => {
     const seller = await signupBuilder('animation-refund-seller');
     const buyer = await signupBuilder('animation-refund-buyer');
     await createGreenbeltLandlet('animation-refund-landlet');
@@ -213,6 +216,11 @@ describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () =>
     const { purchaseId } = purchased.body.purchase;
     expect(await ownedAnimationRows(buyer.builderId, 'animation-refund-template')).toHaveLength(1);
 
+    const applied = await api('/builders/me/animation', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-refund-template' }),
+    }));
+    expect(applied.response.status).toBe(200);
+
     // This template has no sellerId (createAnimationTemplate's own
     // default), so the refund falls to the admin fallback — same pattern
     // as worker/avatar-ownership.test.js's own refund tests.
@@ -220,6 +228,16 @@ describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () =>
     expect(refunded.response.status).toBe(200);
 
     expect(await ownedAnimationRows(buyer.builderId, 'animation-refund-template')).toHaveLength(0);
+
+    const got = await api('/builders/me/animation', buyer.session());
+    expect(got.body.animation).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+
+    // Re-applying is rejected — the grant is genuinely gone, not just the
+    // apply state cleared out from under it.
+    const reApply = await api('/builders/me/animation', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-refund-template' }),
+    }));
+    expect(reApply.response.status).toBe(403);
   });
 
   // #1033's own shape: a buyer can legitimately hold TWO separate,

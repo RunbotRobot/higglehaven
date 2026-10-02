@@ -12028,11 +12028,11 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
     }
   }
 
-  // #1163: same purchase_id-keyed, purchase-time-locked revocation as the
-  // owned_avatars block just above, for owned_animations instead — no
-  // equivalent "equipped" column to clear yet (applying a purchased
-  // animation at runtime is #1165's own scope, not built), so this only
-  // ever needs to revoke the ownership grant itself.
+  // #1163/#1251: same purchase_id-keyed, purchase-time-locked revocation as
+  // the owned_avatars block just above, for owned_animations instead —
+  // #1164 later added an "equipped" column (builders.equipped_animation_
+  // template_id) that this block never got updated to clear, the same gap
+  // #754 fixed for avatars.
   const animationGrant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
   ).bind(purchase.purchase_id).first();
@@ -12042,8 +12042,13 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
       'SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?',
     ).bind(animationGrant.builder_id, animationGrant.template_id).first();
     if (!stillOwnedViaOtherAnimationPurchase) {
-      await db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
-        .bind(animationGrant.builder_id, animationGrant.template_id).run();
+      await db.batch([
+        db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
+          .bind(animationGrant.builder_id, animationGrant.template_id),
+        db.prepare(
+          'UPDATE builders SET equipped_animation_template_id = NULL WHERE builder_id = ? AND equipped_animation_template_id = ?',
+        ).bind(animationGrant.builder_id, animationGrant.template_id),
+      ]);
     }
   }
 }
