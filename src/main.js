@@ -5140,6 +5140,11 @@ function renderMyAnimationsField() {
         equipBtn.disabled = true;
         try {
           await equipAnimation(templateId);
+          // #1165: live-swap the Shop-mode avatar's actual playing clips
+          // the same way re-equipping an avatar already does — the avatar
+          // itself (shopAvatar.modelUrl) doesn't change here, only which
+          // animation createCustomShopAvatar binds against it.
+          await refreshEquippedShopAvatar(shopAvatar?.modelUrl);
           renderMyAnimationsList();
         } catch (err) {
           alert(err.message || 'Could not apply this animation.');
@@ -11732,7 +11737,7 @@ function createShopAvatar() {
 // matches this issue's own scope: a custom avatar moves correctly as a
 // rigid whole (root position/rotation on `group`), but per-bone limb
 // animation on its own skeleton is #682's job, not this one's.
-async function createCustomShopAvatar(modelUrl) {
+async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
   // #982: lets an e2e test simulate a slow model load (a real network fetch
   // + GLTF parse can take a while) deterministically, without depending on
   // how long an actual fetch takes or on Playwright's own route-
@@ -11783,7 +11788,28 @@ async function createCustomShopAvatar(modelUrl) {
   // it just never plays anything. Bound to container.userData.model (the
   // actual loaded node), not container itself, which is only a wrapper
   // this function added and was never part of the clip-authored hierarchy.
-  const animations = await loadModelAnimations(modelUrl);
+  //
+  // #1165 (sub-issue of #1161, last piece): a purchased standalone
+  // animation (#1163/#1164) *replaces* this set when one is applied and
+  // compatible — appliedAnimation's own idle/walk/fly clips (loaded from
+  // its own, separately-uploaded file) bind against this exact same
+  // mixer/root, which works precisely because #1162's compatibility
+  // signature guarantees the two files share the exact same bone names/
+  // hierarchy: THREE.AnimationMixer resolves a clip's tracks by bone name
+  // against whatever root it was constructed with, never by which file
+  // originally parsed the clip. Falls back to this avatar's own clips —
+  // the exact behavior above, unchanged — for an incompatible or absent
+  // applied animation, which is this issue's own "sane fallback, don't
+  // just break silently" requirement: switching to an avatar the
+  // currently-applied animation no longer matches just quietly reverts to
+  // that avatar's own clips (or none) rather than erroring, leaving the
+  // animation's own `owned_animations`/equipped-choice untouched for next
+  // time a compatible avatar is equipped again.
+  const avatarSignature = await computeSkeletonSignature(modelUrl);
+  const animationIsCompatible = !!appliedAnimation && !!avatarSignature && appliedAnimation.skeletonSignature === avatarSignature;
+  const animations = animationIsCompatible
+    ? await loadModelAnimations(appliedAnimation.modelUrl)
+    : await loadModelAnimations(modelUrl);
   let mixer = null;
   let actions = null;
   if (animations.length > 0) {
@@ -11799,6 +11825,11 @@ async function createCustomShopAvatar(modelUrl) {
   return {
     group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl,
     measuredHeightM: height, measuredCollisionHalfM: horizontalHalfM,
+    // #1165: which file `actions` above was actually bound from, for the
+    // same "nothing in the DOM reflects this" e2e-diagnostic reasoning
+    // __shopAvatarModelUrl/__shopAvatarMetrics already use — null when
+    // `actions` itself is null (no clips from either source).
+    animationSource: !actions ? null : (animationIsCompatible ? 'applied' : 'own'),
   };
 }
 
@@ -11840,13 +11871,26 @@ function shopCameraAnchorHeightM() {
 // already resolved and swapped shopAvatar. Without this guard, the earlier
 // call would resume and silently overwrite the newer, correct equip.
 let shopAvatarEquipToken = 0;
+// #1165: called both when the "My Avatars" picker equips a different
+// avatar (modelUrl changes, the applied animation doesn't) and when the
+// new "My Animations" picker applies/clears an animation (modelUrl stays
+// the same, re-fetched fresh here either way) — either trigger needs the
+// exact same rebuild, since compatibility depends on both together.
 async function refreshEquippedShopAvatar(modelUrl) {
   if (currentMode !== 'shop' || !shopAvatar) return;
   const myToken = ++shopAvatarEquipToken;
+  let appliedAnimation = null;
+  try {
+    const animation = await fetchMyEquippedAnimation();
+    if (animation.equippedTemplateId) appliedAnimation = animation;
+  } catch (err) {
+    console.warn('Could not fetch applied animation, falling back to this avatar\'s own clips:', err);
+  }
+  if (myToken !== shopAvatarEquipToken) return; // a newer equip superseded this one while fetching
   let nextAvatar;
   if (modelUrl) {
     try {
-      nextAvatar = await createCustomShopAvatar(modelUrl);
+      nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation);
     } catch (err) {
       console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
       nextAvatar = createShopAvatar();
@@ -11868,6 +11912,9 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // model's real measured size got threaded through instead of the default
   // body's fixed constants.
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() };
+  // #1165: same reasoning again — see createCustomShopAvatar's own
+  // animationSource comment.
+  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -13865,6 +13912,12 @@ async function enterShopMode() {
   // check).
   let equippedAvatarModelUrl = null;
   shopEquippedAvatarSkeletonSignature = null;
+  // #1165: the applied animation (if any and still owned), fetched
+  // alongside the equipped avatar — createCustomShopAvatar needs both
+  // together to decide whether this animation's own clips actually apply
+  // here (#1162's compatibility check) or this avatar falls back to its
+  // own.
+  let equippedAnimation = null;
   if (currentAuthUser) {
     try {
       const avatar = await fetchMyEquippedAvatar();
@@ -13872,6 +13925,12 @@ async function enterShopMode() {
       shopEquippedAvatarSkeletonSignature = avatar.skeletonSignature;
     } catch (err) {
       console.warn('Could not fetch equipped avatar, using the default avatar:', err);
+    }
+    try {
+      const animation = await fetchMyEquippedAnimation();
+      if (animation.equippedTemplateId) equippedAnimation = animation;
+    } catch (err) {
+      console.warn('Could not fetch applied animation, falling back to the equipped avatar\'s own clips:', err);
     }
   }
 
@@ -14042,7 +14101,7 @@ async function enterShopMode() {
   shopAvatar = null;
   if (equippedAvatarModelUrl) {
     try {
-      shopAvatar = await createCustomShopAvatar(equippedAvatarModelUrl);
+      shopAvatar = await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation);
     } catch (err) {
       console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
     }
@@ -14051,6 +14110,7 @@ async function enterShopMode() {
   scene.add(shopAvatar.group);
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
+  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
