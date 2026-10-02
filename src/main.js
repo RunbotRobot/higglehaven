@@ -2620,6 +2620,18 @@ const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-c
 const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
 const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
 const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
+const uploadAnimationCategoryCheckbox = document.getElementById('upload-animation-category-checkbox');
+
+// #1163 (sub-issue of #1161): a listing is "avatar" or "animation" or
+// neither, never both — checking one clears the other rather than
+// letting handleUploadDimensionsStep's own category pick silently favor
+// whichever it happens to check first.
+uploadAvatarCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
+});
+uploadAnimationCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
+});
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
@@ -2717,6 +2729,7 @@ function resetUploadModalToFileStep() {
   uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
+  uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
@@ -3119,7 +3132,12 @@ async function handleUploadDimensionsStep() {
       // 'placeholder' explicitly, so the server's own default (worker/
       // index.js's createCatalogTemplate) stays the one source of truth
       // for what an unchecked listing's category actually is.
-      category: uploadAvatarCategoryCheckbox.checked ? 'avatar' : undefined,
+      // #1163: same reasoning, for the sibling "standalone animation"
+      // category — the two checkboxes are mutually exclusive (see their
+      // own change listeners above), so at most one of these ever applies.
+      category: uploadAvatarCategoryCheckbox.checked
+        ? 'avatar'
+        : uploadAnimationCategoryCheckbox.checked ? 'animation' : undefined,
       priceCents,
       metadata,
     });
@@ -5653,15 +5671,76 @@ function renderBuildSettingsSection() {
   const savedLayoutsList = document.createElement('div');
   savedLayoutsList.className = 'version-list';
   savedLayoutsField.appendChild(savedLayoutsList);
+  const savedLayoutsLoadMoreBtn = document.createElement('button');
+  savedLayoutsLoadMoreBtn.type = 'button';
+  savedLayoutsLoadMoreBtn.id = 'saved-layouts-load-more-btn';
+  savedLayoutsLoadMoreBtn.textContent = 'Load more';
+  savedLayoutsLoadMoreBtn.hidden = true;
+  savedLayoutsField.appendChild(savedLayoutsLoadMoreBtn);
   settingsSectionEl.appendChild(savedLayoutsField);
 
   let savedLayoutsLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load. Same shape as
+  // notificationsNextCursor (src/main.js ~8974) — #1215 found this panel's
+  // own `fetchSavedLayouts({ limit: 20 })` never read the API's own
+  // already-supported `nextCursor` at all, silently hiding anything past
+  // the first 20 saved layouts.
+  let savedLayoutsNextCursor = null;
+
+  function appendSavedLayoutRow(savedLayout) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
+    info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'version-action-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', () => {
+      sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
+      sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
+      location.reload();
+    });
+    actions.appendChild(previewBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'version-action-btn';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
+      deleteBtn.disabled = true;
+      try {
+        await deleteSavedLayout(savedLayout.savedLayoutId);
+        renderSavedLayoutsList();
+      } catch (err) {
+        alert(err.message || 'Could not delete this saved layout.');
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+
+    row.appendChild(actions);
+    savedLayoutsList.appendChild(row);
+  }
+
   async function renderSavedLayoutsList() {
     const myLoadToken = ++savedLayoutsLoadToken;
     savedLayoutsList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
-    let savedLayouts;
+    savedLayoutsLoadMoreBtn.hidden = true;
+    savedLayoutsNextCursor = null;
+    let page;
     try {
-      ({ savedLayouts } = await fetchSavedLayouts({ limit: 20 }));
+      page = await fetchSavedLayouts({ limit: 20 });
     } catch (err) {
       if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
       savedLayoutsList.innerHTML = '';
@@ -5673,56 +5752,31 @@ function renderBuildSettingsSection() {
     }
     if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
     savedLayoutsList.innerHTML = '';
-    if (savedLayouts.length === 0) {
+    if (page.savedLayouts.length === 0) {
       savedLayoutsList.innerHTML = '<div class="settings-empty-note">Nothing saved yet — removing a level with instances on it saves them here first.</div>';
       return;
     }
-    for (const savedLayout of savedLayouts) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
-      info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const previewBtn = document.createElement('button');
-      previewBtn.type = 'button';
-      previewBtn.className = 'version-action-btn';
-      previewBtn.textContent = 'Preview';
-      previewBtn.addEventListener('click', () => {
-        sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
-        sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
-        location.reload();
-      });
-      actions.appendChild(previewBtn);
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'version-action-btn';
-      deleteBtn.textContent = 'Delete';
-      deleteBtn.addEventListener('click', async () => {
-        if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
-        deleteBtn.disabled = true;
-        try {
-          await deleteSavedLayout(savedLayout.savedLayoutId);
-          renderSavedLayoutsList();
-        } catch (err) {
-          alert(err.message || 'Could not delete this saved layout.');
-          deleteBtn.disabled = false;
-        }
-      });
-      actions.appendChild(deleteBtn);
-
-      row.appendChild(actions);
-      savedLayoutsList.appendChild(row);
-    }
+    for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+    savedLayoutsNextCursor = page.nextCursor;
+    savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
   }
   renderSavedLayoutsList();
+
+  savedLayoutsLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = savedLayoutsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    savedLayoutsLoadMoreBtn.disabled = true;
+    try {
+      const page = await fetchSavedLayouts({ limit: 20, cursor: savedLayoutsNextCursor });
+      if (myLoadToken !== savedLayoutsLoadToken) return; // panel was reset while this page was loading
+      for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+      savedLayoutsNextCursor = page.nextCursor;
+      savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
+    } catch (err) {
+      console.warn('Could not load more saved layouts:', err);
+    } finally {
+      savedLayoutsLoadMoreBtn.disabled = false;
+    }
+  });
 
   // renderVersionHistory() is called from several places in quick
   // succession — the initial render, and again after Publish or after
