@@ -12019,23 +12019,32 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
   // purchase, so this can now correctly check whether any OTHER unrefunded
   // purchase still exists before revoking — only clearing owned_avatars/
   // equip state once the count actually reaches zero.
+  // #1261: the count-check used to be a separate SELECT, read after the
+  // purchase_id row's own DELETE but before the owned_avatars DELETE/equip
+  // clear below -- a non-atomic gap a concurrent grant of a NEW, unrefunded
+  // purchase of the exact same (builder_id, template_id) could land in,
+  // between the stale "nothing else backs this" read and the unconditional
+  // delete that read justified. Folding the check directly into each
+  // statement's own WHERE NOT EXISTS, inside the same db.batch as the
+  // purchase_id row's own DELETE, makes the whole decrement-and-maybe-
+  // revoke one atomic transaction -- no separate read for another
+  // concurrent request's write to land in the middle of.
   const grant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_avatar_purchases WHERE purchase_id = ?',
   ).bind(purchase.purchase_id).first();
   if (grant) {
-    await db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
-    const stillOwnedViaOtherPurchase = await db.prepare(
-      'SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?',
-    ).bind(grant.builder_id, grant.template_id).first();
-    if (!stillOwnedViaOtherPurchase) {
-      await db.batch([
-        db.prepare('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')
-          .bind(grant.builder_id, grant.template_id),
-        db.prepare(
-          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
-        ).bind(grant.builder_id, grant.template_id),
-      ]);
-    }
+    await db.batch([
+      db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchase.purchase_id),
+      db.prepare(`
+        DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(grant.builder_id, grant.template_id, grant.builder_id, grant.template_id),
+      db.prepare(`
+        UPDATE builders SET equipped_avatar_template_id = NULL
+        WHERE builder_id = ? AND equipped_avatar_template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(grant.builder_id, grant.template_id, grant.builder_id, grant.template_id),
+    ]);
   }
 
   // #1163: same purchase_id-keyed, purchase-time-locked revocation as the
@@ -12043,18 +12052,18 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
   // equivalent "equipped" column to clear yet (applying a purchased
   // animation at runtime is #1165's own scope, not built), so this only
   // ever needs to revoke the ownership grant itself.
+  // #1261: same atomicity fix as the owned_avatars block above, same reason.
   const animationGrant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
   ).bind(purchase.purchase_id).first();
   if (animationGrant) {
-    await db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
-    const stillOwnedViaOtherAnimationPurchase = await db.prepare(
-      'SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?',
-    ).bind(animationGrant.builder_id, animationGrant.template_id).first();
-    if (!stillOwnedViaOtherAnimationPurchase) {
-      await db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
-        .bind(animationGrant.builder_id, animationGrant.template_id).run();
-    }
+    await db.batch([
+      db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id),
+      db.prepare(`
+        DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(animationGrant.builder_id, animationGrant.template_id, animationGrant.builder_id, animationGrant.template_id),
+    ]);
   }
 }
 

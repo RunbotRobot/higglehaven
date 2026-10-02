@@ -415,6 +415,94 @@ describe('Refund revokes avatar ownership (#754)', () => {
     expect(finallyUnequipped.body.avatar).toMatchObject({ equippedTemplateId: null, modelUrl: null });
   });
 
+  // #1261: clawBackPurchaseCommission's revocation used to be a separate
+  // "is this still backed by another purchase" SELECT, read after the
+  // refunded purchase's own owned_avatar_purchases row was deleted but
+  // before the owned_avatars DELETE/equip-clear that read's result
+  // justified — a non-atomic gap a concurrent grant of a brand-new,
+  // unrefunded purchase of the exact same template could land in, between
+  // the stale "nothing else backs this" read and the unconditional delete
+  // it justified. Hooks env.DB.batch (the same binding object the worker's
+  // own fetch handler sees, per vitest-pool-workers) to grant a second,
+  // independent purchase of the same template for the same builder at the
+  // exact moment the revocation's own cleanup batch runs — simulating a
+  // real concurrent purchase landing in that gap — same technique
+  // worker/worker-api.test.js's own #932 test uses for a different handler.
+  it('does not revoke ownership (or clear equip) when a second purchase of the same template is granted concurrently with a refund of the first', async () => {
+    const seller = await signupBuilder('avatar-refund-concurrent-grant-seller');
+    const buyer = await signupBuilder('avatar-refund-concurrent-grant-buyer');
+    await createGreenbeltLandlet('avatar-refund-concurrent-grant-landlet');
+    await claim('avatar-refund-concurrent-grant-landlet', seller);
+    await createAvatarTemplate('avatar-refund-concurrent-grant-template');
+    await placeInstance('avatar-refund-concurrent-grant-instance-1', 'avatar-refund-concurrent-grant-landlet', 'avatar-refund-concurrent-grant-template', seller);
+    await placeInstance('avatar-refund-concurrent-grant-instance-2', 'avatar-refund-concurrent-grant-landlet', 'avatar-refund-concurrent-grant-template', seller);
+
+    const firstPurchase = await purchase('avatar-refund-concurrent-grant-instance-1', buyer);
+    expect(firstPurchase.response.status).toBe(201);
+
+    const equipped = await api('/builders/me/avatar', buyer.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'avatar-refund-concurrent-grant-template' }),
+    }));
+    expect(equipped.response.status).toBe(200);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    const taggedBound = new WeakSet();
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')) {
+        const originalBind = stmt.bind.bind(stmt);
+        return {
+          bind: (...bindArgs) => {
+            const bound = originalBind(...bindArgs);
+            taggedBound.add(bound);
+            return bound;
+          },
+        };
+      }
+      return stmt;
+    };
+    let secondPurchase;
+    env.DB.batch = async (statements) => {
+      if (armed && statements.some((s) => taggedBound.has(s))) {
+        armed = false;
+        // The concurrent purchase must actually commit before the
+        // revocation batch runs, not just be fired -- awaiting it first
+        // here (rather than firing it unawaited alongside the real batch)
+        // is what makes this deterministic instead of a coin flip on which
+        // write lands first, same reasoning #932's own test gives for its
+        // own await. A real purchase through the ordinary endpoint (not a
+        // hand-built row) so it goes through the exact same grant path
+        // (ownedAvatarStatements) any other buyer's concurrent purchase
+        // would.
+        secondPurchase = await purchase('avatar-refund-concurrent-grant-instance-2', buyer);
+      }
+      return originalBatch(statements);
+    };
+    let refunded;
+    try {
+      refunded = await api(`/purchases/${firstPurchase.body.purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+      env.DB.batch = originalBatch;
+    }
+    expect(refunded.response.status).toBe(200);
+    expect(secondPurchase?.response.status).toBe(201);
+
+    // The second purchase is unrefunded and genuinely backs the same
+    // ownership -- it must survive the first purchase's refund regardless
+    // of the race, not get silently wiped by the first purchase's own
+    // now-stale "nothing else backs this" conclusion.
+    const stillOwned = await env.DB.prepare(
+      'SELECT * FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
+    ).bind(buyer.builderId, 'avatar-refund-concurrent-grant-template').all();
+    expect(stillOwned.results).toHaveLength(1);
+
+    const stillEquipped = await api('/builders/me/avatar', buyer.session());
+    expect(stillEquipped.body.avatar.equippedTemplateId).toBe('avatar-refund-concurrent-grant-template');
+  });
+
   // #801: revocation used to be gated on the template's *live* category
   // instead of the purchase-time-locked owned_avatars row — a seller
   // changing category away from 'avatar' between purchase and refund
