@@ -940,6 +940,58 @@ describe('Sellers', () => {
       .bind(userId).all();
     expect(results).toHaveLength(1);
   });
+
+  // #1213: GET /sellers?ids=... narrows the roster to exactly the
+  // requested (and existing) sellers — same bounded-lookup shape as
+  // GET /builders?ids=... above (#717).
+  it('filters GET /sellers by a comma-separated ids param', async () => {
+    const first = await signupSeller('sellers-ids-filter-first');
+    const second = await signupSeller('sellers-ids-filter-second');
+    await signupSeller('sellers-ids-filter-third');
+
+    const filtered = await api(`/sellers?ids=${first.sellerId},${second.sellerId},seller-does-not-exist`);
+    expect(filtered.response.status).toBe(200);
+    expect(filtered.body.sellers.map((s) => s.sellerId).sort()).toEqual(
+      [first.sellerId, second.sellerId].sort(),
+    );
+
+    const empty = await api('/sellers?ids=');
+    expect(empty.response.status).toBe(200);
+    expect(empty.body.sellers).toEqual([]);
+
+    const tooMany = await api(`/sellers?ids=${Array.from({ length: 201 }, (_, i) => `seller-${i}`).join(',')}`);
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body).toEqual({ error: 'ids must contain at most 200 items' });
+  });
+
+  // #1213: a real server-side label lookup for a seller's shop, same shape
+  // as GET /builders?label=... above (#716) — no uniqueness constraint on
+  // sellers.label either (0037_sellers.sql), so every matching row comes
+  // back, not just the first.
+  it('filters GET /sellers by an exact, case-insensitive label match, still returning every match', async () => {
+    const noMatch = await api(`/sellers?${new URLSearchParams({ label: 'Nobody Named This Shop' })}`);
+    expect(noMatch.response.status).toBe(200);
+    expect(noMatch.body.sellers).toEqual([]);
+
+    const onlyMatch = await api('/sellers', {
+      method: 'POST', body: JSON.stringify({ label: 'UniqueLabelForSellerFilterTest' }),
+    });
+    const found = await api(`/sellers?${new URLSearchParams({ label: 'uniquelabelforsellerfiltertest' })}`);
+    expect(found.response.status).toBe(200);
+    expect(found.body.sellers.map((s) => s.sellerId)).toEqual([onlyMatch.body.seller.sellerId]);
+
+    const second = await api('/sellers', {
+      method: 'POST', body: JSON.stringify({ label: 'Shared Seller Filter Label' }),
+    });
+    const third = await api('/sellers', {
+      method: 'POST', body: JSON.stringify({ label: 'Shared Seller Filter Label' }),
+    });
+    const ambiguous = await api(`/sellers?${new URLSearchParams({ label: 'Shared Seller Filter Label' })}`);
+    expect(ambiguous.body.sellers.map((s) => s.sellerId)).toEqual(
+      expect.arrayContaining([second.body.seller.sellerId, third.body.seller.sellerId]),
+    );
+    expect(ambiguous.body.sellers).toHaveLength(2);
+  });
 });
 
 describe('Catalog creation limits', () => {
