@@ -1,0 +1,11 @@
+-- #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
+-- signature of a model's skeleton (bone names + parent/child hierarchy,
+-- see computeSkeletonSignature in src/main.js), computed at avatar upload
+-- time and, later, at standalone-animation upload time (#1163), so two
+-- files' skeletons can be compared for compatibility by simple string
+-- equality rather than re-fetching and re-parsing both models every time.
+-- NULL for a model with no skeleton at all (an ordinary rigid prop) or one
+-- uploaded before this column existed — same "retroactively unknown,
+-- callers treat NULL as no-signal" shape model_size_bytes (migration 0073)
+-- already uses for exactly this reason.
+ALTER TABLE catalog_templates ADD COLUMN skeleton_signature TEXT;
