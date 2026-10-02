@@ -1,11 +1,11 @@
 // #1163 (sub-issue of #1161): purchasing a standalone "animation"-category
 // catalog template grants the buyer ownership (owned_animations, migration
 // 0106) — the exact same mechanism #680 already built for "avatar"
-// (worker/avatar-ownership.test.js), minus the equip endpoint, since
-// applying a purchased animation at runtime is #1165's own scope, not this
-// one's. No GET /api/builders/me/animations listing endpoint exists yet
-// either (that's #1164's scope, the shop/equip UI that would consume it),
-// so ownership here is checked directly against the DB table.
+// (worker/avatar-ownership.test.js). #1164 then added the listing
+// (GET /api/builders/me/animations) and apply (GET/PUT
+// /api/builders/me/animation) endpoints below, mirroring the avatar
+// equivalents — still minus any actual runtime application, which is
+// #1165's own scope, not this file's.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { writePurchaseRow } from './index.js';
@@ -320,5 +320,182 @@ describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () =>
   it('indexes owned_animations.purchase_id', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(owned_animations)').all()).results;
     expect(indexes.some((idx) => idx.name === 'idx_owned_animations_purchase_id')).toBe(true);
+  });
+});
+
+// #1164 (sub-issue of #1161): GET /api/builders/me/animations — mirrors
+// worker/avatar-ownership.test.js's own "grants the buyer equippable
+// ownership" test shape, just asserting against the real listing endpoint
+// now that it exists, instead of only the raw owned_animations table.
+describe('GET /api/builders/me/animations (#1164)', () => {
+  it('requires a session', async () => {
+    const got = await api('/builders/me/animations');
+    expect(got.response.status).toBe(401);
+  });
+
+  it('lists an owned animation template, newest-purchase first', async () => {
+    const seller = await signupBuilder('animation-list-seller');
+    const buyer = await signupBuilder('animation-list-buyer');
+    await createGreenbeltLandlet('animation-list-landlet');
+    await claim('animation-list-landlet', seller);
+    await createAnimationTemplate('animation-list-template-a');
+    await createAnimationTemplate('animation-list-template-b');
+    await placeInstance('animation-list-instance-a', 'animation-list-landlet', 'animation-list-template-a', seller);
+    await placeInstance('animation-list-instance-b', 'animation-list-landlet', 'animation-list-template-b', seller);
+
+    await purchase('animation-list-instance-a', buyer);
+    await purchase('animation-list-instance-b', buyer);
+
+    const listed = await api('/builders/me/animations', buyer.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.animations.map((a) => a.templateId)).toEqual([
+      'animation-list-template-b', 'animation-list-template-a',
+    ]);
+  });
+
+  it('does not list a different builder\'s own owned animation', async () => {
+    const seller = await signupBuilder('animation-list-scope-seller');
+    const buyer = await signupBuilder('animation-list-scope-buyer');
+    await createGreenbeltLandlet('animation-list-scope-landlet');
+    await claim('animation-list-scope-landlet', seller);
+    await createAnimationTemplate('animation-list-scope-template');
+    await placeInstance('animation-list-scope-instance', 'animation-list-scope-landlet', 'animation-list-scope-template', seller);
+    await purchase('animation-list-scope-instance', buyer);
+
+    const sellerListed = await api('/builders/me/animations', seller.session());
+    expect(sellerListed.body.animations.map((a) => a.templateId)).not.toContain('animation-list-scope-template');
+  });
+});
+
+// #1164: GET/PUT /api/builders/me/animation — mirrors worker/
+// avatar-ownership.test.js's own "Equip endpoint" describe block exactly,
+// against owned_animations/equipped_animation_template_id (migration 0107)
+// instead. Equipping an incompatible animation is never rejected here —
+// compatibility is a UI-level concern (src/main.js's animationCompatibility),
+// not an ownership/equip-time restriction, since #1165's own "sane fallback
+// behavior if the shopper later switches to a different, incompatible
+// avatar" only makes sense if that combination can exist in the first place.
+describe('GET/PUT /api/builders/me/animation (#1164)', () => {
+  it('requires a session for both GET and PUT', async () => {
+    const got = await api('/builders/me/animation');
+    expect(got.response.status).toBe(401);
+    const put = await api('/builders/me/animation', { method: 'PUT', body: JSON.stringify({ templateId: 'x' }) });
+    expect(put.response.status).toBe(401);
+  });
+
+  it('defaults to no animation applied for a fresh account', async () => {
+    const account = await signupBuilder('animation-apply-fresh');
+    const got = await api('/builders/me/animation', account.session());
+    expect(got.response.status).toBe(200);
+    expect(got.body.animation).toMatchObject({ equippedTemplateId: null, modelUrl: null, skeletonSignature: null });
+  });
+
+  it('rejects applying a template the account does not own', async () => {
+    const seller = await signupBuilder('animation-apply-unowned-seller');
+    await createGreenbeltLandlet('animation-apply-unowned-landlet');
+    await claim('animation-apply-unowned-landlet', seller);
+    await createAnimationTemplate('animation-apply-unowned-template');
+
+    const account = await signupBuilder('animation-apply-unowned-account');
+    const rejected = await api('/builders/me/animation', account.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-apply-unowned-template' }),
+    }));
+    expect(rejected.response.status).toBe(403);
+  });
+
+  it('applies an owned animation, returning its modelUrl and skeletonSignature', async () => {
+    const seller = await signupBuilder('animation-apply-owned-seller');
+    await createGreenbeltLandlet('animation-apply-owned-landlet');
+    await claim('animation-apply-owned-landlet', seller);
+    await createAnimationTemplate('animation-apply-owned-template');
+    await placeInstance('animation-apply-owned-instance', 'animation-apply-owned-landlet', 'animation-apply-owned-template', seller);
+    await purchase('animation-apply-owned-instance', seller);
+
+    await env.DB.prepare('UPDATE catalog_templates SET model_url = ?, skeleton_signature = ? WHERE template_id = ?')
+      .bind('/uploads/animation-apply-owned-template.glb', 'a'.repeat(64), 'animation-apply-owned-template').run();
+
+    const applied = await api('/builders/me/animation', seller.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-apply-owned-template' }),
+    }));
+    expect(applied.response.status).toBe(200);
+    expect(applied.body.animation).toMatchObject({
+      equippedTemplateId: 'animation-apply-owned-template',
+      modelUrl: '/uploads/animation-apply-owned-template.glb',
+      skeletonSignature: 'a'.repeat(64),
+    });
+
+    const got = await api('/builders/me/animation', seller.session());
+    expect(got.body.animation).toMatchObject({ equippedTemplateId: 'animation-apply-owned-template' });
+  });
+
+  it('clears to no animation applied when applied with a null templateId', async () => {
+    const seller = await signupBuilder('animation-apply-clear-seller');
+    await createGreenbeltLandlet('animation-apply-clear-landlet');
+    await claim('animation-apply-clear-landlet', seller);
+    await createAnimationTemplate('animation-apply-clear-template');
+    await placeInstance('animation-apply-clear-instance', 'animation-apply-clear-landlet', 'animation-apply-clear-template', seller);
+    await purchase('animation-apply-clear-instance', seller);
+    await api('/builders/me/animation', seller.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-apply-clear-template' }),
+    }));
+
+    const cleared = await api('/builders/me/animation', seller.session({
+      method: 'PUT', body: JSON.stringify({ templateId: null }),
+    }));
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.animation).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+  });
+
+  it('falls back to no animation applied if the applied template is later deleted', async () => {
+    const seller = await signupBuilder('animation-apply-deleted-seller');
+    await createGreenbeltLandlet('animation-apply-deleted-landlet');
+    await claim('animation-apply-deleted-landlet', seller);
+    await createAnimationTemplate('animation-apply-deleted-template');
+    await placeInstance('animation-apply-deleted-instance', 'animation-apply-deleted-landlet', 'animation-apply-deleted-template', seller);
+    await purchase('animation-apply-deleted-instance', seller);
+    await api('/builders/me/animation', seller.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-apply-deleted-template' }),
+    }));
+
+    await env.DB.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind('animation-apply-deleted-instance').run();
+    await env.DB.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind('animation-apply-deleted-template').run();
+
+    const got = await api('/builders/me/animation', seller.session());
+    expect(got.response.status).toBe(200);
+    expect(got.body.animation).toMatchObject({ equippedTemplateId: null, modelUrl: null });
+  });
+
+  it('allows applying an incompatible animation -- compatibility is a UI concern, not an ownership restriction', async () => {
+    const seller = await signupBuilder('animation-apply-incompat-seller');
+    await createGreenbeltLandlet('animation-apply-incompat-landlet');
+    await claim('animation-apply-incompat-landlet', seller);
+    await createAnimationTemplate('animation-apply-incompat-template');
+    await placeInstance('animation-apply-incompat-instance', 'animation-apply-incompat-landlet', 'animation-apply-incompat-template', seller);
+    await purchase('animation-apply-incompat-instance', seller);
+    await env.DB.prepare('UPDATE catalog_templates SET skeleton_signature = ? WHERE template_id = ?')
+      .bind('b'.repeat(64), 'animation-apply-incompat-template').run();
+
+    // No avatar equipped at all (the default procedural body — no skeleton,
+    // so nothing can ever be "compatible" with it) is the least compatible
+    // case there is, yet applying still succeeds.
+    const applied = await api('/builders/me/animation', seller.session({
+      method: 'PUT', body: JSON.stringify({ templateId: 'animation-apply-incompat-template' }),
+    }));
+    expect(applied.response.status).toBe(200);
+    expect(applied.body.animation.equippedTemplateId).toBe('animation-apply-incompat-template');
+  });
+
+  it('rate-limits repeated apply attempts from the same account', async () => {
+    const account = await signupBuilder('animation-apply-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/animation', account.session({
+        method: 'PUT', body: JSON.stringify({ templateId: null }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders/me/animation', account.session({
+      method: 'PUT', body: JSON.stringify({ templateId: null }),
+    }));
+    expect(limited.response.status).toBe(429);
   });
 });

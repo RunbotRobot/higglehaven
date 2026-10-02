@@ -252,6 +252,28 @@ export async function fetchMyOwnedAvatars() {
   return avatars;
 }
 
+// #1164 (sub-issue of #1161): mirrors the three avatar helpers just above
+// exactly, for standalone purchasable animations instead — see docs/API.md's
+// own "Standalone animation category + ownership" section.
+export async function fetchMyEquippedAnimation() {
+  const { animation } = await requestJson('/builders/me/animation');
+  return animation;
+}
+
+export async function equipAnimation(templateId) {
+  const { animation } = await requestJson('/builders/me/animation', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ templateId }),
+  });
+  return animation;
+}
+
+export async function fetchMyOwnedAnimations() {
+  const { animations } = await requestJson('/builders/me/animations');
+  return animations;
+}
+
 // Stripe Connect (Custom account) payout onboarding for a builder's own
 // higgles-to-cash redemption (#624, sub-issue of #349/#324) — same shape
 // as fetchSellerStripeAccount/submitSellerStripeAccount below, against

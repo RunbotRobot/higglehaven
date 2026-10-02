@@ -1,0 +1,15 @@
+-- #1164 (sub-issue of #1161): which owned animation (if any) a builder
+-- currently has selected to apply to their equipped avatar. Mirrors
+-- builders.equipped_avatar_template_id (migration 0083) exactly -- NULL
+-- means "no animation applied," not an error. Deliberately not a foreign
+-- key into owned_animations' own composite key, same "not every
+-- reference needs FK enforcement" reasoning equipped_avatar_template_id's
+-- own comment gives -- validated in the handler instead
+-- (GET/PUT /api/builders/me/animation).
+--
+-- Actually making this selection play against the equipped avatar at
+-- runtime (loading the clip, binding it to the current AnimationMixer,
+-- falling back sanely if the shopper switches to an incompatible avatar
+-- while one is applied) is #1165's own scope, not this one's -- this
+-- migration only adds somewhere to record the choice.
+ALTER TABLE builders ADD COLUMN equipped_animation_template_id TEXT;

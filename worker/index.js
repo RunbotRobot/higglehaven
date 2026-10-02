@@ -2442,6 +2442,17 @@ async function handleBuilders(request, env, db, route, url) {
     return handleMyAvatar(request, db);
   }
 
+  // #1164 (sub-issue of #1161): every "animation"-category template this
+  // account has purchased, mirroring the avatars listing just above.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'animations') {
+    return handleMyOwnedAnimations(request, db);
+  }
+
+  // #1164: set/get which owned animation (if any) is currently applied.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'animation') {
+    return handleMyAnimation(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const idsParam = url.searchParams.get('ids');
     // #717 (sub-issue of #711): a bounded batch-by-ids lookup, for a
@@ -3016,17 +3027,101 @@ async function handleMyAvatar(request, db) {
 
 async function myAvatarJson(db, builder) {
   if (!builder.equipped_avatar_template_id) {
-    return { equippedTemplateId: null, modelUrl: null };
+    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
   }
   // A template can vanish after being equipped (its seller later deletes
   // it) — falls back to the default the same way a dangling seller_id/
   // templateId elsewhere in this app already does, rather than erroring.
   const template = await db.prepare(
-    'SELECT model_url FROM catalog_templates WHERE template_id = ?',
+    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
   ).bind(builder.equipped_avatar_template_id).first();
   return {
     equippedTemplateId: template ? builder.equipped_avatar_template_id : null,
     modelUrl: template?.model_url || null,
+    // #1164 (sub-issue of #1161): the equipped avatar's own skeleton
+    // signature (#1162), so the shop/equip UI can compare it against a
+    // purchasable/owned animation's own signature for compatibility
+    // without a second round trip. null for the default procedural avatar
+    // (no equipped template at all) or a custom avatar with no skeleton —
+    // either way, nothing for an animation to ever compare equal to.
+    skeletonSignature: template?.skeleton_signature || null,
+  };
+}
+
+// #1164 (sub-issue of #1161): every "animation"-category template this
+// account currently owns (owned_animations, migration 0106), mirroring
+// handleMyOwnedAvatars above exactly.
+async function handleMyOwnedAnimations(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  const { results } = await db.prepare(`
+    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
+    FROM owned_animations
+    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
+    WHERE owned_animations.builder_id = ?
+    ORDER BY owned_animations.purchased_at DESC
+  `).bind(builder.builder_id).all();
+  return json({
+    animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+  });
+}
+
+// #1057's own fix, mirrored for the new PUT below from day one rather than
+// shipping without it the way #680's own avatar-equip endpoint originally
+// did.
+const ANIMATION_EQUIP_RATE_LIMIT_MAX = 20;
+
+// #1164: which owned animation (if any) this account currently has
+// applied — mirrors handleMyAvatar above exactly, validated against
+// owned_animations instead. GET returns the current choice (null means
+// no animation applied, root motion plays as normal). PUT changes it,
+// rejecting anything not already present in owned_animations. Actually
+// making the applied choice play at runtime is #1165's own scope.
+async function handleMyAnimation(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json({ animation: await myAnimationJson(db, builder) });
+  }
+
+  if (request.method === 'PUT') {
+    await checkRateLimit(db, `animation-equip:${builder.builder_id}`, ANIMATION_EQUIP_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let templateId = null;
+    if (input.templateId !== null && input.templateId !== undefined) {
+      templateId = labelValue(input.templateId, 'templateId');
+      const owned = await db.prepare(
+        'SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?',
+      ).bind(builder.builder_id, templateId).first();
+      if (!owned) throw new HttpError('You do not own this animation', 403);
+    }
+    const result = await db.prepare(`
+      UPDATE builders SET equipped_animation_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ?
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?))
+    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('You do not own this animation', 403);
+    }
+    const updated = await requireBuilder(db, builder.builder_id);
+    return json({ animation: await myAnimationJson(db, updated) });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function myAnimationJson(db, builder) {
+  if (!builder.equipped_animation_template_id) {
+    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
+  }
+  const template = await db.prepare(
+    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
+  ).bind(builder.equipped_animation_template_id).first();
+  return {
+    equippedTemplateId: template ? builder.equipped_animation_template_id : null,
+    modelUrl: template?.model_url || null,
+    skeletonSignature: template?.skeleton_signature || null,
   };
 }
 
