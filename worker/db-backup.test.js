@@ -2,9 +2,11 @@
 // copy. Covers buildDatabaseBackup (the pure dump-shape half),
 // backupDatabaseToR2 (the R2 put + retention side), and
 // pruneOldDatabaseBackups directly.
-import { applyD1Migrations, env } from 'cloudflare:test';
+import {
+  applyD1Migrations, env, createExecutionContext, createScheduledController, waitOnExecutionContext,
+} from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { backupDatabaseToR2, buildDatabaseBackup, pruneOldDatabaseBackups } from './index.js';
+import worker, { backupDatabaseToR2, buildDatabaseBackup, pruneOldDatabaseBackups } from './index.js';
 import { signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -65,5 +67,43 @@ describe('pruneOldDatabaseBackups (#1135)', () => {
     // The 14 most recent of the 20 seeded (day 07 through day 20) survive.
     expect(keys[0]).toBe('backups/2026-01-07T00-00-00-000Z.json');
     expect(keys[13]).toBe('backups/2026-01-20T00-00-00-000Z.json');
+  });
+});
+
+// #1230: every other job in worker.scheduled() runs on every tick, but the
+// backup above only runs when event.cron matches wrangler.jsonc's own daily
+// '0 3 * * *' entry (worker/index.js's own comment on this `if`) -- the
+// three sibling test files already calling worker.scheduled() all use
+// createScheduledController()'s default (cron: ''), so nothing anywhere
+// actually exercises this gate through the real entry point, in either
+// direction.
+describe('scheduled()\'s daily-backup cron gate (#1230)', () => {
+  it('runs the backup through the real scheduled() entry point when event.cron matches the daily backup schedule', async () => {
+    const before = await env.DB_BACKUPS.list({ prefix: 'backups/' });
+    const beforeKeys = new Set(before.objects.map((object) => object.key));
+
+    const controller = createScheduledController({ cron: '0 3 * * *' });
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    const after = await env.DB_BACKUPS.list({ prefix: 'backups/' });
+    const newKeys = after.objects.map((object) => object.key).filter((key) => !beforeKeys.has(key));
+    expect(newKeys.length).toBeGreaterThan(0);
+  });
+
+  it('does not run the backup on an ordinary, non-daily-backup cron tick', async () => {
+    const before = await env.DB_BACKUPS.list({ prefix: 'backups/' });
+    const beforeCount = before.objects.length;
+
+    // The shared '*/10 * * * *' tick every other scheduled() job already
+    // runs on -- wrangler.jsonc's own first cron entry.
+    const controller = createScheduledController({ cron: '*/10 * * * *' });
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    const after = await env.DB_BACKUPS.list({ prefix: 'backups/' });
+    expect(after.objects.length).toBe(beforeCount);
   });
 });
