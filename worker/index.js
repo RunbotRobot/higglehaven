@@ -1188,8 +1188,14 @@ async function handleModelCleanup(request, env) {
   }
   const dryRun = input.dryRun || false;
   const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
+  // #1202: targetCount/reclaimedBytes alone can't say which objects a given
+  // run actually (or would) remove -- targetModelUrls is already computed by
+  // cleanupUnreferencedModels (and already returned in this endpoint's own
+  // HTTP response below), so carry it into the logged detail too, the same
+  // "who did what" bar #829 already held delete_uploaded_asset to.
   await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
     maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+    targetModelUrls: result.targetModelUrls,
   }).run();
   return json({ ...result, dryRun });
 }
@@ -1221,8 +1227,13 @@ export async function scheduledModelCleanup(env) {
   // storage-budget-reservation side of this identical upload flow.
   const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
   if (result.targetCount > 0) {
+    // #1202: same "record which objects, not just how many" fix as
+    // handleModelCleanup's own call site above -- matters even more here
+    // since this unattended sweep's admin_action_log row is the only record
+    // this run ever produces at all (no HTTP response for anyone to see).
     await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
       maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+      targetModelUrls: result.targetModelUrls,
       trigger: 'scheduled',
     }).run();
   }
@@ -3350,6 +3361,18 @@ const PRESENCE_STALE_AFTER_MS = 10_000;
 const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 
 async function handlePresence(request, db, route, url) {
+  // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
+  // the caller's own last-reported row, unfiltered by staleness or
+  // landletId — unlike the GET below, this is "wherever I was last,"
+  // however long ago, not "who's nearby right now." null when the caller
+  // has never reported a position at all.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    return json({ presence: row ? avatarPresenceFromRow(row) : null });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');

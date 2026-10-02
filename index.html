@@ -399,6 +399,36 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #1176: shown during the spawn-flow rotating orbit (see enterShopMode
+         in src/main.js) when the shopper has a last-known position to offer.
+         Deliberately not a plain .shop-ui (that base class's .visible just
+         flips `display`, which can't transition) — the owner specifically
+         asked for the auto-hide five seconds after the shopper starts
+         navigating on their own to be "a non-jarring fade transition, not
+         an instant hide," so this button fades via opacity both in and out
+         instead. Centered at the same top offset as #shop-status (left: 12
+         there, centered here, so the two never collide). */
+      #shop-last-location-btn {
+        position: fixed;
+        z-index: 16;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 10px 18px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.4s;
+      }
+      #shop-last-location-btn.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
          overlapping sign+calendar without colliding. */
@@ -3498,6 +3528,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
+    <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
