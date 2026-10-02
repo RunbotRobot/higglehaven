@@ -29,11 +29,14 @@ const GLB_JSON_CHUNK = 0x4e4f534a;
 // src/main.js, a fixed 128x128 canvas) — nowhere near this cap in
 // practice, but bounded independently of MAX_MODEL_BYTES since this is a
 // completely different upload shape (a JSON data URL, not a multipart
-// file) with its own validation path. Deliberately skips the heavier
-// reservation dance handleModelUpload uses for MAX_TOTAL_STORAGE_BYTES —
-// a thumbnail this small, content-addressed and deduplicated the same
-// way, gated behind a real owning seller, can't meaningfully move that
-// aggregate budget the way concurrent large model uploads could race it.
+// file) with its own validation path.
+//
+// #775: despite being this small, a thumbnail upload DOES go through the
+// same reservation dance handleModelUpload uses for
+// MAX_TOTAL_STORAGE_BYTES (see POST /api/catalog/:templateId/thumbnail's
+// own reserveStorageBudget call) — a re-rendered thumbnail hashes
+// differently each time, defeating the content-addressed dedup this
+// comment used to lean on to argue the reservation was unnecessary.
 const MAX_THUMBNAIL_BYTES = 300 * 1024;
 const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 // #823: the 8-byte PNG signature (89 50 4E 47 0D 0A 1A 0A) — same idea as
