@@ -569,6 +569,56 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     const stillOwner = await api('/landlets/reassign-invariant-source-landlet');
     expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
   });
+
+  // #1280: every other ownership-change path (builder deletion,
+  // resolveAuction's winner-transfer and $0/no-bid-release branches) clears
+  // placed_instances/landlet_versions/landlet_levels so a new owner never
+  // inherits the previous owner's build content -- reassign-owner never did.
+  it('clears placed instances, version history, and levels when reassigning a built-on landlet', async () => {
+    const original = await signupBuilder('reassign-cleanup-original-owner');
+    const target = await signupBuilder('reassign-cleanup-target-owner');
+    await createGreenbeltLandlet('reassign-cleanup-landlet');
+    await api('/landlets/reassign-cleanup-landlet/claim', original.session({ method: 'POST' }));
+
+    await api('/instances', original.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'reassign-cleanup-instance', landletId: 'reassign-cleanup-landlet', templateId: 'placeholder-tree', x: 1, y: 1,
+      }),
+    }));
+    // Seeded directly rather than via POST .../levels -- this test isn't
+    // exercising the land-cap gate, same reasoning the "Landlet levels"
+    // describe block's own seedLevelDirectly helper gives.
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('reassign-cleanup-level', 'reassign-cleanup-landlet', 1, 1000).run();
+    await env.DB.prepare(`
+      INSERT INTO landlet_versions (version_id, landlet_id, version_number, name) VALUES (?, ?, ?, ?)
+    `).bind('reassign-cleanup-version', 'reassign-cleanup-landlet', 1, 'Version 1').run();
+
+    const reassigned = await api('/landlets/reassign-cleanup-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(reassigned.response.status).toBe(200);
+    expect(reassigned.body.landlet.ownerBuilderId).toBe(target.builderId);
+
+    const instances = await env.DB.prepare('SELECT * FROM placed_instances WHERE landlet_id = ?')
+      .bind('reassign-cleanup-landlet').all();
+    const levels = await env.DB.prepare('SELECT * FROM landlet_levels WHERE landlet_id = ?')
+      .bind('reassign-cleanup-landlet').all();
+    const versions = await env.DB.prepare('SELECT * FROM landlet_versions WHERE landlet_id = ?')
+      .bind('reassign-cleanup-landlet').all();
+    expect(instances.results).toEqual([]);
+    expect(levels.results).toEqual([]);
+    expect(versions.results).toEqual([]);
+
+    // The level's cap_consumed_m2 no longer counts toward the new owner's
+    // land cap, now that it's been cleared as part of the same reassignment
+    // -- recomputeLandCap(db, newOwnerBuilderId) ran as part of handling
+    // the reassignment itself, not just lazily on this later read.
+    const newOwner = await api(`/builders?ids=${target.builderId}`);
+    expect(newOwner.body.builders[0].ownedAreaM2).toBe(1000);
+  });
 });
 
 describe('Community signs', () => {

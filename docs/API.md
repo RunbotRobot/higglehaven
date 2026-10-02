@@ -2841,6 +2841,40 @@ Returns the newly claimed landlet. Errors are:
 - `409` when the landlet is unavailable or the builder already owns a claimed
   landlet.
 
+### `POST /api/landlets/:landletId/reassign-owner`
+
+Admin-only (`403` without an admin session — see "Admin role" under
+"Authorization model" above). Moves a **currently claimed** landlet
+directly to a different builder, bypassing the normal claim/auction flow
+(#1177) — e.g. to correct a mistaken claim or handle a support request.
+Request body: `{ "ownerBuilderId": "<target builder id>" }`.
+
+The transfer is the same conditional-update idiom `POST .../claim` uses:
+it only lands if the landlet is still `status: "claimed"` and still owned
+by the builder this request read, and the target builder doesn't already
+own a claimed landlet (the same one-claimed-landlet-per-builder invariant
+`POST .../claim` enforces — an admin can move ownership around, but not
+past this).
+
+Same as every other ownership-change path (see "Ownership-change cleanup"
+below), this clears the landlet's `placed_instances`, `landlet_versions`,
+and `landlet_levels` as part of the same write, so the new owner starts
+with an empty landlet rather than inheriting the previous owner's build —
+and recomputes the new owner's land cap/owned-area immediately afterward
+(non-blocking — this never rejects the transfer itself, it only keeps
+`GET /api/builders`'s own displayed numbers accurate right away). Whether
+the transfer should instead be *blocked* when the inherited landlet would
+put the new owner over their own land cap — the way a winning auction bid
+atomically is — is an open design question, not yet decided.
+
+Errors are:
+
+- `403` without an admin session.
+- `404` when the landlet or the target builder does not exist.
+- `409` when the landlet isn't currently claimed, the target already owns
+  it, the target already owns a different claimed landlet, or the landlet
+  changed concurrently since this request's own read of it.
+
 ### `POST /api/landlets/:landletId/generation-complete`
 
 Admin-only (`401`/`403` otherwise) — same as its ring-level sibling,
@@ -5206,11 +5240,12 @@ list/manage, #635 preview/select, #636 paste) are now all shipped.
 
 A lándlet's levels are reset (`DELETE FROM landlet_levels`) everywhere
 its build already gets cleared on an ownership change — the builder-
-deletion release-to-greenbelt path and both `resolveAuction` branches
+deletion release-to-greenbelt path, both `resolveAuction` branches
 (transfer to a winning bidder, release to greenbelt on an unsold `$0`
-auction) — matching the existing "a new owner gets the land, not the
-previous owner's stuff on it" reasoning already applied to
-`placed_instances`/`landlet_versions` there.
+auction), and admin `POST .../reassign-owner` (#1280) — matching the
+existing "a new owner gets the land, not the previous owner's stuff on
+it" reasoning already applied to `placed_instances`/`landlet_versions`
+there.
 
 ### Instance placement is bounded by purchased levels (#394)
 

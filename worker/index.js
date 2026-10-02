@@ -8956,6 +8956,13 @@ async function handleLandlets(request, db, route, url) {
     // UPDATE's own WHERE, not a separate pre-check, so a concurrent claim/
     // auction/reassignment landing in between can't be silently clobbered
     // or bypassed.
+    //
+    // #1280: the three deletes below match the ones builder-deletion
+    // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
+    // branches already run, closing the one ownership-change path that
+    // left a new owner inheriting the previous owner's build content and
+    // levels (docs/API.md's "Ownership-change cleanup" section states this
+    // as a blanket invariant, not something scoped to just those paths).
     const result = await db.batch([
       db.prepare(`
         UPDATE landlets
@@ -8967,6 +8974,9 @@ async function handleLandlets(request, db, route, url) {
               AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
           )
       `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId),
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(route[1]),
+      db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(route[1]),
+      db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
       adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
       }),
@@ -8978,6 +8988,14 @@ async function handleLandlets(request, db, route, url) {
       }
       throw new HttpError('Target builder already owns a claimed landlet', 409);
     }
+    // Non-blocking, like handleLandletLevels' own post-write calls: this
+    // only corrects the new owner's displayed land cap/owned area right
+    // away, instead of leaving it stale until some unrelated later action
+    // happens to trigger a recompute. Whether the transfer itself should be
+    // *blocked* when the inherited landlet would put the new owner over
+    // their own cap is a separate design question (#1281), deliberately
+    // left out of this admin-override path.
+    await recomputeLandCap(db, newOwnerBuilderId);
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });
   }
