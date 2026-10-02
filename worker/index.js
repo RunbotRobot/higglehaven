@@ -12712,7 +12712,13 @@ function validateThumbnailEmbedding(embedding) {
 // still just correctly reads as "no meaningful direction to compare");
 // returns 0 rather than NaN if it ever does, so a degenerate row sorts
 // last instead of corrupting the whole ranking.
-function cosineSimilarity(a, b) {
+// #1244: guards against silent NaN corruption for a future caller that
+// doesn't pre-filter by length the way similarity-search's own call site
+// already does — looping only over a.length while b is shorter would
+// otherwise read b[i] as undefined for the tail of the loop, silently
+// producing NaN instead of failing loudly at the point of misuse.
+export function cosineSimilarity(a, b) {
+  if (a.length !== b.length) throw new Error('cosineSimilarity: vector length mismatch');
   let dot = 0;
   let normA = 0;
   let normB = 0;

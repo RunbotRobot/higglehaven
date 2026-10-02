@@ -4,7 +4,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker, {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
-  auctionSettlementEventId, resolveFinalizeBuilderId,
+  auctionSettlementEventId, resolveFinalizeBuilderId, cosineSimilarity,
 } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
@@ -2226,6 +2226,13 @@ describe('Embedding similarity search (#329)', () => {
       body: JSON.stringify({ embedding: [1, 0, 0] }),
     });
     expect(limited.response.status).toBe(429);
+  });
+
+  // #1244: cosineSimilarity's own length guard, exercised directly since
+  // the one live call site above already pre-filters to matching lengths
+  // and so can never reach it.
+  it('cosineSimilarity throws on mismatched vector lengths', () => {
+    expect(() => cosineSimilarity([1, 0, 0], [1, 0])).toThrow('vector length mismatch');
   });
 });
 
