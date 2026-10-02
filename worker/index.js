@@ -11780,6 +11780,8 @@ async function handlePurchases(request, env, route, url) {
 // do this automatically) — starts the 7-day fallback clock for a physical
 // real-money purchase's payout hold (see PHYSICAL_GOOD_HOLD_DAYS). A
 // digital good or a simulated (higgles) purchase has nothing to ship.
+const MARK_SHIPPED_RATE_LIMIT_MAX = 20;
+
 async function handleMarkShipped(request, env, purchaseId) {
   const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -11797,6 +11799,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   } else {
     admin = await requireAdmin(request, db);
   }
+  await checkRateLimit(db, `mark-shipped:${admin ? admin.user_id : purchase.seller_id}`, MARK_SHIPPED_RATE_LIMIT_MAX);
   if (!purchase.payment_intent_id) {
     throw new HttpError('Only real-money purchases can be marked shipped', 400);
   }

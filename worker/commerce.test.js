@@ -3600,6 +3600,31 @@ describe('Simulated purchases', () => {
       expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
     });
 
+    // #1249: unlike other owner-gated repeatable mutations in this file
+    // (saved-layout deletes, product-review deletes, etc.), mark-shipped had
+    // no checkRateLimit call at all. Direct-inserts 21 already-real-money,
+    // not-yet-shipped purchase rows for one seller (same technique as
+    // worker/land.test.js's own saved-layout-delete rate-limit test) rather
+    // than calling the much more expensive makeRealMoneyPurchase 21 times.
+    it('rate-limits repeated mark-shipped calls from the same seller', async () => {
+      const builder = await signupBuilder('mark-shipped-rate-limit-builder');
+      const seller = await createConnectedSeller('mark-shipped-rate-limit-seller');
+      const purchaseIds = Array.from({ length: 21 }, (_, i) => `mark-shipped-rate-limit-purchase-${i}`);
+      await env.DB.batch(purchaseIds.map((purchaseId) => env.DB.prepare(`
+        INSERT INTO purchases (
+          purchase_id, instance_id, template_id, builder_id, seller_id, unit_price_cents, quantity,
+          total_cents, commission_cents, builder_share_cents, platform_share_cents, payment_intent_id
+        ) VALUES (?, ?, ?, ?, ?, 5000, 1, 5000, 100, 4900, 100, ?)
+      `).bind(purchaseId, `${purchaseId}-instance`, `${purchaseId}-template`, builder.builderId, seller.sellerId, `pi_${purchaseId}`)));
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/purchases/${purchaseIds[i]}/mark-shipped`, seller.session({ method: 'POST' }));
+        expect(attempt.response.status).toBe(200);
+      }
+      const limited = await api(`/purchases/${purchaseIds[20]}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(limited.response.status).toBe(429);
+    });
+
     // #937: seller_id can be non-null yet dangling once DELETE /api/sellers/:id
     // removes the seller row it points at. Before this fix, the plain
     // `if (purchase.seller_id)` truthiness check treated that dangling id as
