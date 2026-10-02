@@ -4733,6 +4733,13 @@ A reserved (`> $0` starting bid) auction's first accepted bid also frees
 the seller's claim-eligibility lock immediately — see "Claim-lock release
 timing" below (#199).
 
+Rate-limited per builder (`429` past `AUCTION_BID_RATE_LIMIT_MAX`, 20 per
+window — #1290: this endpoint fires a notification to the seller, and to
+the previous high bidder on an outbid, on every successful call, the same
+"notification fan-out on an unthrottled write" shape this file's other
+per-builder mutation rate limits — e.g. `FRIENDSHIP_MUTATE_RATE_LIMIT_MAX`,
+`AUCTION_START_RATE_LIMIT_MAX` above — already guard against).
+
 ### `POST /api/auctions/:auctionId/resolve`
 
 Resolves this auction if it's currently due (`ends_at` has passed);

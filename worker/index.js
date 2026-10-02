@@ -4093,6 +4093,12 @@ function bundleFromRow(row) {
 // endpoint's own natural throttles (one active auction per landlet, a
 // 1-hour-minimum duration) already made outright spam impractical.
 const AUCTION_START_RATE_LIMIT_MAX = 20;
+// #1290: handleAuctionBids' POST branch fires notifyOfNewBid on every
+// successful bid (the seller, plus the previous high bidder on an outbid) —
+// the same "notification fan-out on an unthrottled write" shape
+// FRIENDSHIP_MUTATE_RATE_LIMIT_MAX/BUNDLE_MUTATE_RATE_LIMIT_MAX/
+// CATALOG_PATCH_RATE_LIMIT_MAX were each already added to guard against.
+const AUCTION_BID_RATE_LIMIT_MAX = 20;
 
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
@@ -4728,6 +4734,7 @@ async function handleAuctionBids(request, db, route) {
     // bidding "as" someone else isn't a feature.
     const sessionBuilder = await requireSessionBuilder(request, db);
     const builderId = sessionBuilder.builder_id;
+    await checkRateLimit(db, `auction-bid:${builderId}`, AUCTION_BID_RATE_LIMIT_MAX);
     if (builderId === resolved.seller_builder_id) {
       throw new HttpError('The seller cannot bid on their own auction', 400);
     }
