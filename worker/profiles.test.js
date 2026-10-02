@@ -1327,7 +1327,7 @@ describe('Friendships', () => {
     expect(aliceNoticesAfterAccept.body.notifications.some(
       (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
 
-    // From Alice's side, the "approximate location" is Bob's claimed lándlet.
+    // From Alice's side, the reported location is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
     expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
     expect(aliceListAfter.body.friendships[0].otherLandlet).toMatchObject({
@@ -1523,6 +1523,49 @@ describe('Friendships', () => {
       (n) => n.message === 'friendship-decline-race-b declined your friend request.',
     );
     expect(declineNotices).toHaveLength(1);
+  });
+
+  // #1197: the DELETE (decline) branch's response used to be unconditional
+  // `{ deleted: true }`, never checking whether its own conditional DELETE
+  // actually removed a row -- so a decline that lost a race to a
+  // concurrent PATCH/accept from the same recipient (two tabs/devices)
+  // still reported `deleted: true` even though the friendship survived,
+  // now 'accepted'. Fired together (not awaited one at a time), same race
+  // shape as the DELETE-vs-DELETE test above, but PATCH-vs-DELETE this
+  // time. More than two orderings are actually possible here (unlike that
+  // simpler test) -- `isDecline` is decided by each request's own
+  // `existing.status` read, so a DELETE whose own read happens to land
+  // after the PATCH's UPDATE already committed sees 'accepted' and takes
+  // the plain unconditional-unfriend path instead, which legitimately
+  // succeeds even though accept also won. The one invariant that has to
+  // hold regardless of which interleaving occurs -- and the one the bug
+  // broke -- is that DELETE's response is never `200` unless the row is
+  // actually gone afterward.
+  it('never reports a decline as successful when it actually lost a race to a concurrent accept', async () => {
+    const a = await signupBuilder('friendship-accept-decline-race-a');
+    const b = await signupBuilder('friendship-accept-decline-race-b');
+    const sent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
+    const friendshipId = sent.body.friendship.friendshipId;
+
+    const [acceptResult, declineResult] = await Promise.all([
+      api(`/friendships/${friendshipId}`, b.session({ method: 'PATCH', body: JSON.stringify({ status: 'accepted' }) })),
+      api(`/friendships/${friendshipId}`, b.session({ method: 'DELETE' })),
+    ]);
+
+    const row = await env.DB.prepare('SELECT status FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+
+    expect([200, 404]).toContain(acceptResult.response.status);
+    if (declineResult.response.status === 200) {
+      expect(row).toBeNull();
+    } else {
+      // The only other legitimate outcome: the conditional delete lost the
+      // race (row still 'accepted'), correctly reported as 409 rather than
+      // a false `deleted: true`.
+      expect(declineResult.response.status).toBe(409);
+      expect(row?.status).toBe('accepted');
+    }
   });
 
   it('rejects an invalid status transition', async () => {

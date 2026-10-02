@@ -9206,8 +9206,8 @@ async function refreshAccountMenuTaxNotice() {
   }
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location.") Same plain
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
 // pending incoming requests rather than unread notices.
 const friendsBtn = document.getElementById('friends-btn');
@@ -9235,13 +9235,13 @@ async function refreshFriendsBadge() {
   }
 }
 
-// "Social map ... approximate location" (see worker/index.js's own comment
-// on handleFriendships for why this is simplified to a friend's claimed
-// lándlet rather than a live position) — rendered here as plain text, not
-// an actual map widget. A real map would need its own renderer/camera the
-// way the claim flyover does (a full WebGL scene, not something to spin up
-// just for a small modal list) — this ships the underlying "where do my
-// friends live" data first.
+// "Social map" (see worker/index.js's own comment on handleFriendships for
+// why this is simplified to a friend's claimed lándlet rather than a live
+// position — exact coordinates, not fuzzed, per #1195's owner decision) —
+// rendered here as plain text, not an actual map widget. A real map would
+// need its own renderer/camera the way the claim flyover does (a full
+// WebGL scene, not something to spin up just for a small modal list) —
+// this ships the underlying "where do my friends live" data first.
 function friendLocationText(friendship) {
   if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
   const { name, center } = friendship.otherLandlet;
