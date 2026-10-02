@@ -1327,7 +1327,7 @@ describe('Friendships', () => {
     expect(aliceNoticesAfterAccept.body.notifications.some(
       (n) => n.message === 'friendship-bob accepted your friend request.')).toBe(true);
 
-    // From Alice's side, the "approximate location" is Bob's claimed lándlet.
+    // From Alice's side, the reported location is Bob's claimed lándlet.
     const aliceListAfter = await api('/friendships', alice.session());
     expect(aliceListAfter.body.friendships[0].status).toBe('accepted');
     expect(aliceListAfter.body.friendships[0].otherLandlet).toMatchObject({

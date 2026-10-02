@@ -3422,19 +3422,21 @@ function avatarPresenceFromRow(row) {
   };
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location."). One row per
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
 // pending -> accepted in place. PATCH is gated to the recipient (only they
 // can accept) and DELETE to either side (either can end/decline it) — both
 // enforced below via requireSessionBuilder + assertOwner, not left to the
 // frontend to police.
 //
-// "Social map ... approximate location" is deliberately simplified to each
-// accepted friend's owned lándlet center — this app has no live avatar
-// position tracking at all (Shop-mode camera position is never persisted),
-// so there is no real "current location" to report regardless of how this
-// endpoint is built. A builder's claimed lándlet is the one stable,
+// "Social map" is deliberately simplified to each accepted friend's owned
+// lándlet center — exact coordinates, not fuzzed (owner decision, #1195: a
+// mutual accept is a real consent step, so there's no reason to withhold
+// precision once it's happened). This predates #1095's own avatar_presence
+// table (live position tracking) — upgrading to a friend's actual current
+// position is #1044's own remit (friend "follow"/"stay with"), not a
+// change made here. A builder's claimed lándlet is the one stable,
 // already-known location the backend actually has for them.
 // See the POST branch's own comment below (issue #369) — an authenticated
 // builder id, not an IP, since this gates a real account's own request
@@ -3653,8 +3655,9 @@ async function ownedLandletsByBuilderId(db, builderIds) {
   const byOwner = new Map();
   for (const row of results) {
     // A builder can own more than one lándlet (auctions can transfer extra
-    // ones in) — the first one found is good enough for "approximate
-    // location," not a definitive "their one true home."
+    // ones in) — the first one found is good enough for this feature's
+    // "where do my friends live" purpose, not a definitive "their one true
+    // home."
     if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
   }
   return byOwner;

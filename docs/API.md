@@ -3378,8 +3378,8 @@ change does.
 
 ## Friend requests
 
-docs/SPEC.md §2: "Friend/group systems: standard friend requests; social
-map shows friends' approximate location." One `friendships` row (see
+docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
+map shows an accepted friend's location." One `friendships` row (see
 `migrations/0049_friendships.sql`) per relationship, shared by both
 builders — direction preserved (`requesterBuilderId`/`recipientBuilderId`)
 so the frontend can tell "I sent this" from "I received this" without a
@@ -3388,14 +3388,17 @@ rather than deleting and recreating the row on accept. `PATCH` (accept) is
 gated to the recipient's own session, and `DELETE` to either party's — see
 each endpoint's own note below.
 
-**"Social map ... approximate location" is deliberately simplified** to
-each accepted friend's own claimed lándlet center, not a live position.
-This predates #1095's own `avatar_presence` table ("Avatar presence"
-below) — now that live position tracking exists, this section's own
-"approximate location" could in principle be upgraded to a friend's actual
-current position, but that's #1044's own remit (friend "follow"/"stay
-with"), not a change made here. A builder's claimed lándlet remains the
-one stable, already-known location the backend reports for this feature.
+**"Social map" is deliberately simplified** to each accepted friend's own
+claimed lándlet center — exact coordinates, not fuzzed (owner decision,
+#1195: a mutual accept is a real consent step, so there's no reason to
+withhold precision once it's happened; a still-*pending* request shows no
+location at all, see `otherLandlet`'s own note below) — and not a live
+position either. This predates #1095's own `avatar_presence` table
+("Avatar presence" below) — now that live position tracking exists, this
+could in principle be upgraded to a friend's actual current position, but
+that's #1044's own remit (friend "follow"/"stay with"), not a change made
+here. A builder's claimed lándlet remains the one stable, already-known
+location the backend reports for this feature.
 The frontend renders this as plain text in the Friends modal, not an
 actual graphical map widget — a real map would need its own renderer/
 camera the way the claim flyover does (a full WebGL scene), which isn't
@@ -3425,8 +3428,9 @@ The last four fields (`otherBuilderId`/`otherLabel`/`direction`/
 was made as — the same row looks different depending on who's asking (see
 `GET` below). `otherLandlet` is `null` if that builder hasn't claimed a
 lándlet yet, and picks the first one found if they somehow own more than
-one (auctions can transfer extra ones in) — good enough for "approximate
-location," not a claim about which one is their "real" home.
+one (auctions can transfer extra ones in) — good enough for this feature's
+"where do my friends live" purpose, not a claim about which one is their
+"real" home.
 
 **`otherLandlet` is also `null` while `status` is still `pending`**
 (owner, #610): a lándlet's owner is discoverable in-world just by walking
@@ -3508,7 +3512,7 @@ and `#mode-nav` on a narrow viewport — not room for a fourth pill there),
 badged with the pending-incoming count exactly like `#notifications-btn`.
 `#friends-modal` has three sections — Requests (incoming pending, Accept/
 Decline), Sent (outgoing pending, Cancel), and Friends (accepted, with the
-approximate-location text and a Remove button) — all sharing one
+exact-location text and a Remove button) — all sharing one
 `.friend-row` look with different actions per section. "+ Add Friend"
 `prompt()`s for the other builder's exact label, resolves it against the
 full builder roster (`fetchBuilders()`, case-insensitive exact match), and
