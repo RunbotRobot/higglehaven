@@ -5000,15 +5000,20 @@ function renderMyAvatarsField() {
     // even with zero owned avatars — it's a real, equippable choice (the
     // revert target from PUT .../avatar's own { templateId: null } shape),
     // not just a placeholder for an empty list.
-    const rowSpecs = [{ templateId: null, name: 'Default avatar' }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name }))];
-    for (const { templateId, name } of rowSpecs) {
+    const rowSpecs = [{ templateId: null, name: 'Default avatar', purchasedAt: null }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name, purchasedAt: avatar.purchasedAt }))];
+    for (const { templateId, name, purchasedAt } of rowSpecs) {
       const row = document.createElement('div');
       row.className = 'version-row';
 
       const info = document.createElement('div');
       info.className = 'version-row-info';
       const isEquipped = equipped.equippedTemplateId === templateId;
-      info.textContent = isEquipped ? `${name} — equipped` : name;
+      const parts = [isEquipped ? `${name} — equipped` : name];
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
+      }
+      info.textContent = parts.join(' — ');
       row.appendChild(info);
 
       const actions = document.createElement('div');
@@ -5127,8 +5132,8 @@ function renderMyAnimationsField() {
     // you own at least one animation — an empty list above already covers
     // "nothing to apply" on its own, so this row only appears alongside
     // real owned animations.
-    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null }, ...animations];
-    for (const { templateId, name, skeletonSignature } of rowSpecs) {
+    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null, purchasedAt: null }, ...animations];
+    for (const { templateId, name, skeletonSignature, purchasedAt } of rowSpecs) {
       const row = document.createElement('div');
       row.className = 'version-row';
 
@@ -5138,6 +5143,10 @@ function renderMyAnimationsField() {
       const parts = [isEquipped ? `${name} — applied` : name];
       if (templateId !== null) {
         parts.push(animationCompatibilityLabel(animationCompatibility(skeletonSignature, equippedAvatar.skeletonSignature)));
+      }
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
       }
       info.textContent = parts.join(' — ');
       row.appendChild(info);

@@ -112,6 +112,13 @@ const compatibilityNoteShown = /Compatible with your equipped avatar|Incompatibl
 );
 console.log('purchased animation row shows some compatibility note (should be true):', compatibilityNoteShown, '-', purchasedRowBefore);
 
+// #1276: the purchased row should show its own purchasedAt (the API already
+// sends it, renderMyAnimationsList just never rendered it) -- the synthetic
+// "None applied" row has no purchasedAt at all, so it should show no such
+// text.
+console.log('purchased animation row shows a "purchased <date>" note (should be true):', purchasedRowBefore?.includes('purchased '));
+console.log('None applied row shows no purchase date (should be true):', !noneRowBefore?.includes('purchased '));
+
 // --- Apply the purchased animation through the real picker UI ---
 const purchasedRow = myAnimationsField.locator('.version-row', { hasText: PRODUCT_NAME });
 await purchasedRow.locator('button', { hasText: 'Apply' }).click();
@@ -146,6 +153,8 @@ const pass =
   !!noneRowBefore?.includes('— applied') &&
   !purchasedRowBefore?.includes('— applied') &&
   compatibilityNoteShown &&
+  !!purchasedRowBefore?.includes('purchased ') &&
+  !noneRowBefore?.includes('purchased ') &&
   !!purchasedRowAfter?.includes('— applied') &&
   !noneRowAfter?.includes('— applied') &&
   !!noneRowAfterClear?.includes('— applied') &&

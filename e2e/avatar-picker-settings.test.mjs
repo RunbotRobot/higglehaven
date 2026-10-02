@@ -118,6 +118,12 @@ console.log('My Avatars rows before equipping (should list Default avatar as equ
 const defaultRowBefore = rowTextsBeforeEquip.find((t) => t.includes('Default avatar'));
 const purchasedRowBefore = rowTextsBeforeEquip.find((t) => t.includes(PRODUCT_NAME));
 
+// #1276: the purchased row should show its own purchasedAt (the API already
+// sends it, src/main.js just never rendered it) -- the synthetic "Default
+// avatar" row has no purchasedAt at all, so it should show no such text.
+console.log('purchased avatar row shows a "purchased <date>" note (should be true):', purchasedRowBefore?.includes('purchased '));
+console.log('Default avatar row shows no purchase date (should be true):', !defaultRowBefore?.includes('purchased '));
+
 // --- Equip the purchased avatar through the real picker UI, still standing
 // in Shop mode — this is the live-swap path (refreshEquippedShopAvatar), not
 // a fresh Shop-mode entry ---
@@ -156,6 +162,8 @@ const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 const pass = purchased.status === 201 &&
   !!defaultRowBefore?.includes('equipped') &&
   !purchasedRowBefore?.includes('equipped') &&
+  !!purchasedRowBefore?.includes('purchased ') &&
+  !defaultRowBefore?.includes('purchased ') &&
   !!purchasedRowAfter?.includes('equipped') &&
   !defaultRowAfter?.includes('equipped') &&
   noFallbackWarningAfterEquip &&
