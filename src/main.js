@@ -125,6 +125,7 @@ import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
+import { skeletonSignatureFromBones } from './skeletonSignature.js';
 import {
   curvatureDropM,
   curvedPosition,
@@ -1361,6 +1362,13 @@ function loadModelAnimations(url) {
 // Returns null for a model with no skeleton at all (an ordinary rigid
 // prop) — same "nothing to report" shape loadModelAnimations already
 // uses for a model with zero animation clips.
+//
+// #1233: the actual root/edge-sorting-and-hashing logic lives in the pure,
+// dependency-free skeletonSignatureFromBones (src/skeletonSignature.js),
+// extracted out of this function so it's directly unit-testable in the
+// workerd test pool (see vitest.config.js's own note on why code importing
+// three.js can't live there) — this function keeps only the three.js-
+// dependent part (loading the GLTF, finding the SkinnedMesh).
 async function computeSkeletonSignature(url) {
   const gltf = await loadModelGltf(url);
   let skinnedMesh = null;
@@ -1368,12 +1376,7 @@ async function computeSkeletonSignature(url) {
     if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
   });
   if (!skinnedMesh) return null;
-  const bones = skinnedMesh.skeleton.bones;
-  const roots = bones.filter((bone) => !bone.parent?.isBone).map((bone) => bone.name).sort();
-  const edges = bones.filter((bone) => bone.parent?.isBone).map((bone) => `${bone.parent.name}>${bone.name}`).sort();
-  const canonical = JSON.stringify({ roots, edges });
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return skeletonSignatureFromBones(skinnedMesh.skeleton.bones);
 }
 
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
