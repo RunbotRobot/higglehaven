@@ -294,11 +294,19 @@ describe('Worker API', () => {
     ).bind('model_cleanup').all();
     expect(cleanupLogRows).toHaveLength(2);
     expect(cleanupLogRows.every((row) => row.admin_user_id === adminMe.body.user.userId)).toBe(true);
+    // #1202: the log entry used to record only targetCount/reclaimedBytes —
+    // an aggregate with no way to tell which R2 objects a given run actually
+    // removed. targetModelUrls (already computed by cleanupUnreferencedModels,
+    // and already returned in the HTTP response asserted on above) must be
+    // carried into the logged detail too, on both the dry-run preview and
+    // the real delete.
     expect(JSON.parse(cleanupLogRows[0].detail_json)).toEqual({
       maxDeletes: 1, dryRun: true, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect(JSON.parse(cleanupLogRows[1].detail_json)).toEqual({
       maxDeletes: 1, dryRun: false, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
@@ -564,6 +572,87 @@ describe('Worker API', () => {
     });
     expect(batchCreated.response.status).toBe(201);
     expect(batchCreated.body.templates[0].modelSizeBytes).toBe(batchUploaded.sizeBytes);
+  });
+
+  // #1162 (sub-issue of #1161, sellable avatar animations): the skeleton
+  // signature a model carries, mirroring modelSizeBytes' own test shape
+  // directly above — computed client-side, this server only persists and
+  // shape-validates it.
+  it('persists skeletonSignature on catalog templates and validates it', async () => {
+    const signature = 'a'.repeat(64);
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'skeleton-signature-test',
+        name: 'Skeleton signature test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        skeletonSignature: signature,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.skeletonSignature).toBe(signature);
+    expect((await api('/catalog/skeleton-signature-test')).body.template.skeletonSignature).toBe(signature);
+
+    // A patch that doesn't touch skeletonSignature must not silently wipe
+    // it — same merge-against-existing-row reasoning as modelSizeBytes.
+    const renamed = await api('/catalog/skeleton-signature-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.template.skeletonSignature).toBe(signature);
+
+    // A rigid prop with no skeleton at all — NULL, not a validation
+    // failure (every template uploaded before this field existed, or any
+    // ordinary non-avatar product, looks like this).
+    const withoutSignature = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'skeleton-signature-omitted-test',
+        name: 'No skeleton',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(withoutSignature.response.status).toBe(201);
+    expect(withoutSignature.body.template.skeletonSignature).toBeNull();
+
+    // Shape-validated (64-char lowercase hex) rather than trusted as an
+    // opaque string — this server never re-derives it from the model file
+    // itself, but a malformed value is rejected rather than silently
+    // stored as something that could never match a real signature anyway.
+    for (const badSignature of ['too-short', 'A'.repeat(64), 123, `${'a'.repeat(63)}g`]) {
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `skeleton-signature-bad-${badSignature}`,
+          name: 'Bad signature',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          skeletonSignature: badSignature,
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+    }
+
+    // The batch create/update path stores it too, not just the single-item
+    // route above.
+    const batchSignature = 'b'.repeat(64);
+    const batchCreated = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [{
+          templateId: 'skeleton-signature-batch-test',
+          name: 'Batch skeleton signature test',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          skeletonSignature: batchSignature,
+        }],
+      }),
+    });
+    expect(batchCreated.response.status).toBe(201);
+    expect(batchCreated.body.templates[0].skeletonSignature).toBe(batchSignature);
   });
 
   // #417: completeScan used to be derived purely from R2's listing.truncated

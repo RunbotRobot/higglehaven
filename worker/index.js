@@ -1188,8 +1188,14 @@ async function handleModelCleanup(request, env) {
   }
   const dryRun = input.dryRun || false;
   const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
+  // #1202: targetCount/reclaimedBytes alone can't say which objects a given
+  // run actually (or would) remove -- targetModelUrls is already computed by
+  // cleanupUnreferencedModels (and already returned in this endpoint's own
+  // HTTP response below), so carry it into the logged detail too, the same
+  // "who did what" bar #829 already held delete_uploaded_asset to.
   await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
     maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+    targetModelUrls: result.targetModelUrls,
   }).run();
   return json({ ...result, dryRun });
 }
@@ -1221,8 +1227,13 @@ export async function scheduledModelCleanup(env) {
   // storage-budget-reservation side of this identical upload flow.
   const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
   if (result.targetCount > 0) {
+    // #1202: same "record which objects, not just how many" fix as
+    // handleModelCleanup's own call site above -- matters even more here
+    // since this unattended sweep's admin_action_log row is the only record
+    // this run ever produces at all (no HTTP response for anyone to see).
     await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
       maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+      targetModelUrls: result.targetModelUrls,
       trigger: 'scheduled',
     }).run();
   }
@@ -1485,6 +1496,7 @@ async function handleCatalog(request, db, route, url, models, env) {
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
         model_size_bytes = excluded.model_size_bytes,
+        skeleton_signature = excluded.skeleton_signature,
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
@@ -1499,8 +1511,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1821,8 +1833,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
@@ -1866,9 +1878,9 @@ async function handleCatalog(request, db, route, url, models, env) {
     const result = await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, skeleton_signature = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), route[1]).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships
     // PATCH), this one never checked whether its own UPDATE actually
@@ -3083,6 +3095,33 @@ async function handleSellers(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    // #1213: same bounded-lookup shape as GET /api/builders's ids/label
+    // filters above (#717/#716) — added once a real caller (seller-lookup
+    // by name) existed, mirroring that endpoint's own reasoning exactly.
+    const idsParam = url.searchParams.get('ids');
+    if (idsParam !== null) {
+      const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
+      if (ids.length === 0) return json({ sellers: [] });
+      if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
+      const placeholders = ids.map(() => '?').join(', ');
+      const { results } = await db.prepare(
+        `SELECT * FROM sellers WHERE seller_id IN (${placeholders}) ORDER BY created_at, seller_id`,
+      ).bind(...ids).all();
+      return json({ sellers: results.map(sellerFromRow) });
+    }
+
+    // Exact (case-insensitive) label lookup, same as GET /api/builders's
+    // own — sellers.label has no uniqueness constraint either
+    // (0037_sellers.sql), so this returns every matching row, not just
+    // the first.
+    const label = url.searchParams.get('label');
+    if (label) {
+      const { results } = await db.prepare(
+        'SELECT * FROM sellers WHERE LOWER(label) = LOWER(?) ORDER BY created_at, seller_id',
+      ).bind(label).all();
+      return json({ sellers: results.map(sellerFromRow) });
+    }
+
     // #715 (sub-issue of #711): same cursor-pagination shape as
     // GET /api/builders just above — see that endpoint's own comment.
     // No frontend caller of GET /api/sellers exists today, so there's no
@@ -3394,19 +3433,21 @@ function avatarPresenceFromRow(row) {
   };
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location."). One row per
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
 // pending -> accepted in place. PATCH is gated to the recipient (only they
 // can accept) and DELETE to either side (either can end/decline it) — both
 // enforced below via requireSessionBuilder + assertOwner, not left to the
 // frontend to police.
 //
-// "Social map ... approximate location" is deliberately simplified to each
-// accepted friend's owned lándlet center — this app has no live avatar
-// position tracking at all (Shop-mode camera position is never persisted),
-// so there is no real "current location" to report regardless of how this
-// endpoint is built. A builder's claimed lándlet is the one stable,
+// "Social map" is deliberately simplified to each accepted friend's owned
+// lándlet center — exact coordinates, not fuzzed (owner decision, #1195: a
+// mutual accept is a real consent step, so there's no reason to withhold
+// precision once it's happened). This predates #1095's own avatar_presence
+// table (live position tracking) — upgrading to a friend's actual current
+// position is #1044's own remit (friend "follow"/"stay with"), not a
+// change made here. A builder's claimed lándlet is the one stable,
 // already-known location the backend actually has for them.
 // See the POST branch's own comment below (issue #369) — an authenticated
 // builder id, not an IP, since this gates a real account's own request
@@ -3582,6 +3623,22 @@ async function handleFriendships(request, db, route, url) {
     if (isDecline && result.meta.changes === 1) {
       await notificationStatement(db, existing.requester_builder_id,
         `${sessionBuilder.label} declined your friend request.`).run();
+    } else if (isDecline && result.meta.changes === 0) {
+      // #1197: the response below used to be unconditional, so a decline
+      // that lost a race to a concurrent PATCH/accept (same recipient, two
+      // tabs/devices) reported `deleted: true` even though the row
+      // survived, now 'accepted' — this re-fetch disambiguates the same
+      // `meta.changes === 0` ambiguity the PATCH/accept branch above
+      // already comments on (already-gone vs. still there under a
+      // different status), rather than trusting the count alone. A missing
+      // row here means some concurrent delete/cancel/unfriend already
+      // reached the same end state this call wanted — `deleted: true`
+      // below is still accurate for that case, so only a row that's still
+      // there (no longer pending) needs its own response.
+      const stillThere = await db.prepare('SELECT friendship_id FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+      if (stillThere) {
+        throw new HttpError('Friendship was accepted before this decline could take effect', 409);
+      }
     }
     return json({ deleted: true });
   }
@@ -3609,8 +3666,9 @@ async function ownedLandletsByBuilderId(db, builderIds) {
   const byOwner = new Map();
   for (const row of results) {
     // A builder can own more than one lándlet (auctions can transfer extra
-    // ones in) — the first one found is good enough for "approximate
-    // location," not a definitive "their one true home."
+    // ones in) — the first one found is good enough for this feature's
+    // "where do my friends live" purpose, not a definitive "their one true
+    // home."
     if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
   }
   return byOwner;
@@ -12436,6 +12494,10 @@ function validateTemplate(input, fallbackId) {
     // model just to plan pages. NULL for a template with no model, or one
     // uploaded before this field existed.
     modelSizeBytes: optionalModelSizeBytes(input.modelSizeBytes),
+    // #1162: computed client-side (computeSkeletonSignature) alongside
+    // modelSizeBytes, same "measured once at upload time, persisted so
+    // nothing needs to re-fetch the model later" reasoning.
+    skeletonSignature: optionalSkeletonSignature(input.skeletonSignature),
     metadata: input.metadata || {},
   };
   // Found via backlog audit (#375): modelUrl went straight through with no
@@ -12582,7 +12644,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
 }
 
 function instanceParams(instance) {
@@ -12608,6 +12670,7 @@ function templateFromRow(row) {
     sellerId: row.seller_id,
     modelUrl: row.model_url,
     modelSizeBytes: row.model_size_bytes,
+    skeletonSignature: row.skeleton_signature,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
@@ -12900,6 +12963,22 @@ function optionalModelSizeBytes(value) {
     throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
   }
   return number;
+}
+
+// #1162: a SHA-256 hex digest (computeSkeletonSignature, src/main.js) of a
+// model's skeleton bone names/hierarchy, or null for a model with no
+// skeleton at all. Only the shape is validated here, not the content —
+// this server never re-derives it from the actual model file (that would
+// mean re-fetching and parsing GLTF server-side for no real benefit), so
+// it's trusted the same way modelSizeBytes already is, just shape-checked
+// against being tampered into something that isn't a real digest at all.
+const SKELETON_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/;
+function optionalSkeletonSignature(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !SKELETON_SIGNATURE_PATTERN.test(value)) {
+    throw new HttpError('skeletonSignature must be a 64-character lowercase hex SHA-256 digest, or omitted', 400);
+  }
+  return value;
 }
 
 function queryLimit(value, defaultValue) {

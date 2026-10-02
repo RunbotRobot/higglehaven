@@ -1335,6 +1335,46 @@ function loadModelAnimations(url) {
   return loadModelGltf(url).then((gltf) => gltf.animations);
 }
 
+// #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
+// signature of a model's skeleton — its bone names and parent/child
+// hierarchy — computed at upload time (showUploadDimensionPreview) and
+// persisted on the catalog template (skeletonSignature) alongside
+// modelSizeBytes, so a future standalone animation upload (#1163) and the
+// shop/equip UI (#1164) can compare two models' signatures for
+// compatibility by simple string equality rather than re-fetching and
+// re-parsing both models every time.
+//
+// Exact equality, not a fuzzy/partial match: Three.js's AnimationMixer
+// binds each keyframe track to a bone by name alone, so an animation
+// plays correctly against a different file's skeleton only when the two
+// skeletons share the exact same bone names in the exact same hierarchy
+// — anything looser risks a silently broken retarget (limbs not moving,
+// or moving through the wrong pivot) with no error to warn the shopper.
+// Root bones (no bone parent — normally just one, a hips/root joint, but
+// not assumed) and the rest (as parent>child edges) are each gathered and
+// sorted independently so the signature doesn't depend on the order bones
+// happen to appear in the file, then hashed to a fixed-length digest —
+// compact for storage, and content-opaque since a rig's bone names aren't
+// meaningful to store verbatim.
+//
+// Returns null for a model with no skeleton at all (an ordinary rigid
+// prop) — same "nothing to report" shape loadModelAnimations already
+// uses for a model with zero animation clips.
+async function computeSkeletonSignature(url) {
+  const gltf = await loadModelGltf(url);
+  let skinnedMesh = null;
+  gltf.scene.traverse((child) => {
+    if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
+  });
+  if (!skinnedMesh) return null;
+  const bones = skinnedMesh.skeleton.bones;
+  const roots = bones.filter((bone) => !bone.parent?.isBone).map((bone) => bone.name).sort();
+  const edges = bones.filter((bone) => bone.parent?.isBone).map((bone) => `${bone.parent.name}>${bone.name}`).sort();
+  const canonical = JSON.stringify({ roots, edges });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
 // etc.) — our scene is Z-up (see camera.up.set above), and nothing about
 // loading a glTF file auto-corrects that; the raw vertex data just gets
@@ -2615,6 +2655,10 @@ let uploadModelUrl = null;
 // model-file-size cap — this is what step 'dimensions' passes through to
 // createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
 let uploadModelSizeBytes = null;
+// #1162: computed in showUploadDimensionPreview alongside the animation
+// detection below, passed through to createCatalogTemplate the same way
+// uploadModelSizeBytes already is.
+let uploadSkeletonSignature = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
@@ -2669,6 +2713,7 @@ function resetUploadModalToFileStep() {
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
+  uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
@@ -2811,6 +2856,15 @@ async function showUploadDimensionPreview(modelUrl) {
   const previewObject = await loadModelInstance(modelUrl);
   if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
+
+  // #1162: awaited (unlike the animation detection just below, which is
+  // fire-and-forget since it only drives a hint label) because
+  // uploadSkeletonSignature needs to be settled before the user can reach
+  // handleUploadDimensionsStep's createCatalogTemplate call — loadModelGltf
+  // caches by URL, so this doesn't re-fetch anything loadModelInstance
+  // above didn't already fetch.
+  uploadSkeletonSignature = await computeSkeletonSignature(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while computing — a newer/canceled flow owns things now
 
   // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
   // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
@@ -3055,6 +3109,7 @@ async function handleUploadDimensionsStep() {
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
+      skeletonSignature: uploadSkeletonSignature,
       sellerId: uploaderSellerId,
       // #680/#681's own "upload flow itself" was deliberately deferred as
       // separate scope — until now, category could only ever be set to
@@ -4045,8 +4100,10 @@ function renderSellerList() {
           color: template.color,
           modelUrl: template.modelUrl,
           // modelUrl is copied by reference (see this button's own comment
-          // above) — the underlying file, and so its size, is identical.
+          // above) — the underlying file, and so its size and skeleton, is
+          // identical.
           modelSizeBytes: template.modelSizeBytes,
+          skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only
@@ -5569,6 +5626,12 @@ function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  const historyLoadMoreBtn = document.createElement('button');
+  historyLoadMoreBtn.type = 'button';
+  historyLoadMoreBtn.className = 'version-action-btn';
+  historyLoadMoreBtn.textContent = 'Load more';
+  historyLoadMoreBtn.hidden = true;
+  historyField.appendChild(historyLoadMoreBtn);
   settingsSectionEl.appendChild(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
@@ -5671,14 +5734,100 @@ function renderBuildSettingsSection() {
   // with out-of-date version/activeVersionId data. Same monotonic-token
   // fix as friendsLoadToken (#448).
   let versionHistoryLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load, same shape as
+  // notificationsNextCursor (#320) and savedLayoutsNextCursor (#1215).
+  // Reset to null every time renderVersionHistory starts a fresh first
+  // page; advanced by historyLoadMoreBtn's click handler as later pages
+  // come in.
+  let versionHistoryNextCursor = null;
+  // Set by renderVersionHistory on the initial load; historyLoadMoreBtn's
+  // click handler reuses it for later pages rather than re-fetching
+  // fetchLandlet on every "Load more" click just to learn the same id again.
+  let versionHistoryActiveVersionId = null;
+
+  function appendVersionRow(version, activeVersionId) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+    const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+    info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const setLiveBtn = document.createElement('button');
+    setLiveBtn.type = 'button';
+    setLiveBtn.className = 'version-action-btn';
+    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.disabled = version.versionId === activeVersionId;
+    setLiveBtn.addEventListener('click', async () => {
+      setLiveBtn.disabled = true;
+      try {
+        await activateLandletVersion(landletId, version.versionId);
+        // Feedback goes through the shared publishStatus, not a status
+        // element inside this row — renderVersionHistory() (below) tears
+        // down and rebuilds every row's DOM, including this one, so
+        // anything set on a per-row element here would be wiped before
+        // ever actually being visible.
+        publishStatus.textContent = `Shoppers now see "${version.name}".`;
+        publishStatus.classList.remove('error');
+        renderVersionHistory();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.classList.add('error');
+        setLiveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(setLiveBtn);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'version-action-btn';
+    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+      restoreBtn.disabled = true;
+      publishStatus.textContent = 'Restoring…';
+      publishStatus.classList.remove('error');
+      try {
+        const full = await fetchLandletVersion(landletId, version.versionId);
+        await replaceLandletDraft(landletId, {
+          instances: full.instances,
+          versionName: `Restored from "${version.name}"`,
+        });
+        // Simplest correct way to get the live scene back in sync with
+        // whatever the server now holds — the same "something changed
+        // server-side, reload" pattern claimBackBtn already uses
+        // elsewhere in this file.
+        sessionStorage.setItem(START_MODE_KEY, 'build');
+        location.reload();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not restore.';
+        publishStatus.classList.add('error');
+        restoreBtn.disabled = false;
+      }
+    });
+    actions.appendChild(restoreBtn);
+
+    row.appendChild(actions);
+    historyList.appendChild(row);
+  }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    historyLoadMoreBtn.hidden = true;
+    versionHistoryNextCursor = null;
     let versions;
     let activeVersionId;
+    let nextCursor;
     try {
-      [{ versions }, { activeVersionId }] = await Promise.all([
+      [{ versions, nextCursor }, { activeVersionId }] = await Promise.all([
         fetchLandletVersions(landletId, { limit: 20 }),
         fetchLandlet(landletId),
       ]);
@@ -5697,78 +5846,27 @@ function renderBuildSettingsSection() {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
       return;
     }
-    for (const version of versions) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = version.instanceCount === 1 ? 'item' : 'items';
-      const liveTag = version.versionId === activeVersionId ? ' — live' : '';
-      info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const setLiveBtn = document.createElement('button');
-      setLiveBtn.type = 'button';
-      setLiveBtn.className = 'version-action-btn';
-      setLiveBtn.textContent = 'Set Live';
-      setLiveBtn.disabled = version.versionId === activeVersionId;
-      setLiveBtn.addEventListener('click', async () => {
-        setLiveBtn.disabled = true;
-        try {
-          await activateLandletVersion(landletId, version.versionId);
-          // Feedback goes through the shared publishStatus, not a status
-          // element inside this row — renderVersionHistory() (below) tears
-          // down and rebuilds every row's DOM, including this one, so
-          // anything set on a per-row element here would be wiped before
-          // ever actually being visible.
-          publishStatus.textContent = `Shoppers now see "${version.name}".`;
-          publishStatus.classList.remove('error');
-          renderVersionHistory();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not activate.';
-          publishStatus.classList.add('error');
-          setLiveBtn.disabled = false;
-        }
-      });
-      actions.appendChild(setLiveBtn);
-
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'version-action-btn';
-      restoreBtn.textContent = 'Restore to Editor';
-      restoreBtn.addEventListener('click', async () => {
-        if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-        restoreBtn.disabled = true;
-        publishStatus.textContent = 'Restoring…';
-        publishStatus.classList.remove('error');
-        try {
-          const full = await fetchLandletVersion(landletId, version.versionId);
-          await replaceLandletDraft(landletId, {
-            instances: full.instances,
-            versionName: `Restored from "${version.name}"`,
-          });
-          // Simplest correct way to get the live scene back in sync with
-          // whatever the server now holds — the same "something changed
-          // server-side, reload" pattern claimBackBtn already uses
-          // elsewhere in this file.
-          sessionStorage.setItem(START_MODE_KEY, 'build');
-          location.reload();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not restore.';
-          publishStatus.classList.add('error');
-          restoreBtn.disabled = false;
-        }
-      });
-      actions.appendChild(restoreBtn);
-
-      row.appendChild(actions);
-      historyList.appendChild(row);
-    }
+    for (const version of versions) appendVersionRow(version, activeVersionId);
+    versionHistoryNextCursor = nextCursor;
+    versionHistoryActiveVersionId = activeVersionId;
+    historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
   }
+
+  historyLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = versionHistoryLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    historyLoadMoreBtn.disabled = true;
+    try {
+      const { versions, nextCursor } = await fetchLandletVersions(landletId, { limit: 20, cursor: versionHistoryNextCursor });
+      if (myLoadToken !== versionHistoryLoadToken) return; // panel was reset while this page was loading
+      for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
+      versionHistoryNextCursor = nextCursor;
+      historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    } catch (err) {
+      console.warn('Could not load more versions:', err);
+    } finally {
+      historyLoadMoreBtn.disabled = false;
+    }
+  });
 
   publishBtn.addEventListener('click', async () => {
     publishBtn.disabled = true;
@@ -9131,8 +9229,8 @@ async function refreshAccountMenuTaxNotice() {
   }
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location.") Same plain
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
 // pending incoming requests rather than unread notices.
 const friendsBtn = document.getElementById('friends-btn');
@@ -9160,13 +9258,13 @@ async function refreshFriendsBadge() {
   }
 }
 
-// "Social map ... approximate location" (see worker/index.js's own comment
-// on handleFriendships for why this is simplified to a friend's claimed
-// lándlet rather than a live position) — rendered here as plain text, not
-// an actual map widget. A real map would need its own renderer/camera the
-// way the claim flyover does (a full WebGL scene, not something to spin up
-// just for a small modal list) — this ships the underlying "where do my
-// friends live" data first.
+// "Social map" (see worker/index.js's own comment on handleFriendships for
+// why this is simplified to a friend's claimed lándlet rather than a live
+// position — exact coordinates, not fuzzed, per #1195's owner decision) —
+// rendered here as plain text, not an actual map widget. A real map would
+// need its own renderer/camera the way the claim flyover does (a full
+// WebGL scene, not something to spin up just for a small modal list) —
+// this ships the underlying "where do my friends live" data first.
 function friendLocationText(friendship) {
   if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
   const { name, center } = friendship.otherLandlet;
