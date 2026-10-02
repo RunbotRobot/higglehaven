@@ -3714,3 +3714,39 @@ describe('Worker API', () => {
     expect(noMatch.body.total).toBe(0);
   });
 });
+
+// #1232: the two top-of-fetch() branches that run before any feature
+// handler (worker/index.js's own exported fetch, above the access gate and
+// every route below it) — unlike the thoroughly-tested handlers
+// downstream, neither had ever been exercised directly. Both only behave
+// as expected with env.ACCESS_PASSPHRASE unset (the default this file,
+// unlike access-gate.test.js, already relies on) — the OPTIONS
+// short-circuit sits below the access-gate check in fetch()'s own body, so
+// an OPTIONS request would get gated instead of reaching it if the
+// passphrase gate were active.
+describe('Top-level fetch() routing (#1232)', () => {
+  it('redirects the www hostname to the canonical apex, preserving path/query', async () => {
+    // The check is a literal hostname match against the real production
+    // domain (worker/index.js: url.hostname === 'www.higglehaven.com'),
+    // not derived by stripping a "www." prefix from whatever host the
+    // request came in on — every other test in this suite uses
+    // higglehaven.test, which wouldn't exercise this branch at all.
+    // redirect: 'manual' so this inspects the 301 itself rather than
+    // SELF.fetch transparently following it.
+    const response = await SELF.fetch('https://www.higglehaven.com/api/catalog?limit=5', { redirect: 'manual' });
+    expect(response.status).toBe(301);
+    expect(response.headers.get('location')).toBe('https://higglehaven.com/api/catalog?limit=5');
+  });
+
+  it('short-circuits any OPTIONS request with a bare 204 and the shared CORS headers', async () => {
+    // Arbitrary, otherwise-nonexistent path — the short-circuit sits above
+    // every route (API, uploads, static fallthrough alike), so it should
+    // never fall through to a 404 for a path that doesn't exist either.
+    const response = await SELF.fetch('https://higglehaven.test/api/this-route-does-not-exist', { method: 'OPTIONS' });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET,POST,PATCH,PUT,DELETE,OPTIONS');
+    expect(response.headers.get('access-control-allow-headers')).toBe('content-type');
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
+  });
+});
