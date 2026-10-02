@@ -17,6 +17,7 @@ describe('procedural land generation', () => {
     for (const landlet of first.landlets) {
       expect(area(landlet)).toBeCloseTo(1000, 8);
       expect(landlet.landClass).toBe(1);
+      expect(landlet.landType).toBe('buildable');
     }
     const wrapped = generateLandletRing({ prefix: 'ring', count: 12, innerRadiusM: 50, startAngleRad: Math.PI * 2 });
     expect(wrapped.boundarySignature).toBe(first.boundarySignature);
@@ -36,5 +37,19 @@ describe('procedural land generation', () => {
     ring.landlets.forEach((landlet, index) => expect(area(landlet)).toBeCloseTo(plots[index].areaM2, 7));
     const adjacent = generateLandletRing({ prefix: 'mixed-2', count: 100, innerRadiusM: ring.outerRadiusM, plots });
     expect(adjacent.boundarySignature).toBe(ring.boundarySignature);
+  });
+
+  it('defaults a plot with no explicit landType to buildable, but honors an explicit one', () => {
+    const ring = generateLandletRing({
+      prefix: 'typed',
+      count: 2,
+      innerRadiusM: 50,
+      plots: [
+        { areaM2: 1000, landClass: 1 },
+        { areaM2: 1000, landClass: 1, landType: 'water' },
+      ],
+    });
+    expect(ring.landlets[0].landType).toBe('buildable');
+    expect(ring.landlets[1].landType).toBe('water');
   });
 });
