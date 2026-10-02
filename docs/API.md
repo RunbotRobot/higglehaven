@@ -3489,6 +3489,17 @@ it doesn't exist. If the friendship is still pending and the caller is the
 `recipientBuilderId` (i.e. an actual decline, not a cancel or an unfriend),
 notifies the `requesterBuilderId`.
 
+#1197: a decline (the conditional-on-`status = 'pending'` branch above)
+that loses a race to a concurrent `PATCH` accept from the same recipient
+now gets `409` ("Friendship was accepted before this decline could take
+effect") instead of a false `{ "deleted": true }` — the response used to
+be unconditional, never checking whether the decline's own conditional
+`DELETE` actually removed a row, the same gap #353/#1006 already closed
+for the sibling `PATCH`/accept branch and the notification-firing decision
+right next to this response. A cancel/unfriend (the unconditional branch)
+is unaffected — nothing races it the same way, since it has no `WHERE
+status = ...` guard to lose against.
+
 ### Frontend wiring
 
 `#friends-btn` sits in a second row under Identity/Notices/Settings (a
@@ -3514,7 +3525,12 @@ contract: self-request rejection, unknown-builder rejection, the send/
 list/accept lifecycle with direction and `otherLandlet` verified from both
 sides, duplicate-request rejection in either direction, decline (`DELETE`
 while pending) freeing the pair to request again, removing an accepted
-friendship, and the invalid-status-transition `400`. `e2e/friends.test.mjs`
+friendship, the invalid-status-transition `400`, and (#1197) a concurrent
+`PATCH`-accept-vs-`DELETE`-decline race never reporting the decline as
+successful unless the row is actually gone afterward — more than the two
+outcomes the DELETE-vs-DELETE race test above has to account for, since
+`isDecline` is decided by each request's own read of the row's status, not
+atomically with the other request's write. `e2e/friends.test.mjs`
 drives two real browser sessions (mirroring `e2e/land-auctions.test.mjs`'s
 own two-party pattern) through the actual UI: Alice sends Bob a request via
 the real "+ Add Friend" prompt, Bob sees and accepts it, both sides then

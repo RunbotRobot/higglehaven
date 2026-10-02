@@ -3610,6 +3610,22 @@ async function handleFriendships(request, db, route, url) {
     if (isDecline && result.meta.changes === 1) {
       await notificationStatement(db, existing.requester_builder_id,
         `${sessionBuilder.label} declined your friend request.`).run();
+    } else if (isDecline && result.meta.changes === 0) {
+      // #1197: the response below used to be unconditional, so a decline
+      // that lost a race to a concurrent PATCH/accept (same recipient, two
+      // tabs/devices) reported `deleted: true` even though the row
+      // survived, now 'accepted' — this re-fetch disambiguates the same
+      // `meta.changes === 0` ambiguity the PATCH/accept branch above
+      // already comments on (already-gone vs. still there under a
+      // different status), rather than trusting the count alone. A missing
+      // row here means some concurrent delete/cancel/unfriend already
+      // reached the same end state this call wanted — `deleted: true`
+      // below is still accurate for that case, so only a row that's still
+      // there (no longer pending) needs its own response.
+      const stillThere = await db.prepare('SELECT friendship_id FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+      if (stillThere) {
+        throw new HttpError('Friendship was accepted before this decline could take effect', 409);
+      }
     }
     return json({ deleted: true });
   }
