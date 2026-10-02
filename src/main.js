@@ -1795,6 +1795,19 @@ async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
+  // #1254: exposes the real rendered bounding-box size of whichever
+  // instance's mesh this function last built — e2e-only, same "expose a
+  // minimal hook purely for test verification" precedent as
+  // window.__friendsMapPoints (#1229). Lets a test confirm meshCrop.js's
+  // crop actually shrank the right axis (and left the others untouched)
+  // or that rescaleModelFile's uniform rescale actually took effect on the
+  // real file, rather than only checking a persisted number.
+  const extentBox = new THREE.Box3().setFromObject(object);
+  const extentSize = new THREE.Vector3();
+  extentBox.getSize(extentSize);
+  window.__lastInstanceExtent = {
+    instanceId: object.userData.instanceId, x: extentSize.x, y: extentSize.y, z: extentSize.z,
+  };
   return object;
 }
 
