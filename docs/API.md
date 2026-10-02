@@ -3399,13 +3399,20 @@ could in principle be upgraded to a friend's actual current position, but
 that's #1044's own remit (friend "follow"/"stay with"), not a change made
 here. A builder's claimed lándlet remains the one stable, already-known
 location the backend reports for this feature.
-The frontend renders this as plain text in the Friends modal, not an
-actual graphical map widget — a real map would need its own renderer/
-camera the way the claim flyover does (a full WebGL scene), which isn't
-justified just for a small modal list. Shipping the underlying "where do
-my friends live" data first, with a graphical map as a possible later
-enhancement, follows the same "honest simplest form first" precedent as
-the scheduled-event confetti effect and its own one-shot trigger.
+The frontend renders this as plain text per friend in the Friends modal
+(`friendLocationText`). **#1205** adds a graphical view on top of that —
+a "Show Map" button opens a separate modal plotting every accepted
+friend's lándlet at once (`drawFriendsMap`, `src/main.js`). Deliberately a
+plain 2D `<canvas>`, not the claim flyover's three.js/WebGL scene: that
+renderer draws every landlet's real polygon with click-to-select/confirm
+wiring because claiming genuinely needs that, where this only needs to
+plot a handful of already-known `(x, y)` points with labels — a 2D
+context does that directly, with a linear world-radius-scaled transform
+in place of a 3D camera. A friend with no claimed lándlet (`otherLandlet`
+null) is simply omitted, same as `friendLocationText`'s own "hasn't
+claimed a lándlet yet" case. View-only in this first pass — no
+tap-a-pin-to-jump-there (that implies real in-world navigation, a bigger
+piece on its own).
 
 ### Friendship object
 
