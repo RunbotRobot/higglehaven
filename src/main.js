@@ -1091,7 +1091,12 @@ trimControls.addEventListener('dragging-changed', (event) => {
     const axis = trimControls.axis && trimControls.axis.length === 1 ? trimControls.axis.toLowerCase() : null;
     trimAxis = axis && extensibleAxes(object.userData.template)?.[axis] ? axis : null;
     if (!trimAxis) return;
-    pushUndoSnapshot();
+    // #402's own fix for this exact race (a drag-start pushUndoSnapshot()
+    // capturing productMeshes while another mutation — Undo/Redo, Paste,
+    // tap-to-place — is still mid-flight rebuilding it) only reached
+    // wireDraggingBehavior's Move/Rotate listener; this separate Trim
+    // listener's own drag-start call was missed.
+    if (!sceneMutationBusy) pushUndoSnapshot();
     trimStartLength = effectiveLength(object.userData.template, object.userData, trimAxis, AXIS_DIMENSION_KEY[trimAxis]);
     // TransformControls' scale gizmo starts multiplying from the object's
     // own *current* scale, not from 1 — for the ordinary case (no legacy
