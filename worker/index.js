@@ -4109,11 +4109,13 @@ async function handleStartAuction(request, db, landletId) {
   const startingBidCents = input.startingBidCents === undefined ? 0 : nonnegativeInteger(input.startingBidCents, 'startingBidCents');
   // "Default 24-hour duration for inactivity-triggered listings; builder-
   // initiated voluntary auctions may set custom duration" — every auction
-  // reachable today is builder-initiated (there's no inactivity-detection
-  // job in this dev-mode backend to trigger one automatically), so this
-  // default just applies uniformly. Capped at a year as a sanity bound
-  // against a malformed request producing an absurd ends_at — not itself
-  // a spec requirement.
+  // reachable through this endpoint is still builder-initiated. #325's
+  // autoAuctionInactiveLandlets (the inactivity-detection job this comment
+  // used to say didn't exist) never calls handleStartAuction at all — it
+  // INSERTs its own auction row directly and duplicates this same
+  // 24-hour default independently (see its own comment). Capped at a year
+  // as a sanity bound against a malformed request producing an absurd
+  // ends_at — not itself a spec requirement.
   const durationHours = input.durationHours === undefined ? 24 : positiveInteger(input.durationHours, 'durationHours');
   if (durationHours > 8760) throw new HttpError('durationHours must be 8760 (one year) or fewer', 400);
 
