@@ -3065,7 +3065,12 @@ describe('Landlet levels', () => {
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
     expect(limited.response.status).toBe(429);
-  });
+  }, 45000); // #978: same fixed-20s-timeout-under-CI-load gap as its
+  // sibling rate-limit tests in this block -- 40 iterations x 2 real HTTP
+  // requests each (add, direct-DB-delete) reliably finishes in ~2s in
+  // isolation, but this file's 121 tests share one D1 instance, and
+  // late-file cumulative state occasionally pushes this specific test
+  // past the 20s default under CI load too.
 
   // #907: a level removal with nothing to sweep (the common case for an
   // empty level) fell through with no rate limit at all -- only the sweep
