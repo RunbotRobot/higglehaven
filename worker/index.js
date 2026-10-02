@@ -11098,6 +11098,10 @@ const PURCHASE_RATE_LIMIT_MAX = 30;
 // every other unauthenticated repeatable write in this file is, rather than
 // by builder_id like PURCHASE_RATE_LIMIT_MAX above.
 const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
+// Same unauthenticated-by-design reasoning as PURCHASE_FINALIZE_RATE_LIMIT_MAX
+// above — handlePurchaseConfirmDelivery has no buyer account to authenticate
+// against either, so it's keyed by client IP rather than a builder/seller id.
+const CONFIRM_DELIVERY_RATE_LIMIT_MAX = 20;
 
 async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
@@ -11899,6 +11903,7 @@ async function handleSellerFeedbackList(db, sellerId) {
 
 async function handlePurchaseConfirmDelivery(request, env) {
   const db = env.DB;
+  await checkRateLimit(db, `confirm-delivery:${clientIp(request)}`, CONFIRM_DELIVERY_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const tokenHash = await sha256Hex(token);

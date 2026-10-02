@@ -3717,6 +3717,32 @@ describe('Simulated purchases', () => {
       expect(confirmedAgain.response.status).toBe(200);
     });
 
+    // #1248: this endpoint is unauthenticated by design (no buyer account
+    // exists in this app) and hashes + looks up a token on every call, so
+    // it's keyed by client IP the same way other unauthenticated repeatable
+    // writes are rate-limited (see handlePurchaseFinalize's own #839 test
+    // just above this describe block).
+    it('rate-limits confirm-delivery attempts per client IP', async () => {
+      const ip = `test-confirm-delivery-rate-limit-${crypto.randomUUID()}`;
+      for (let i = 0; i < 20; i++) {
+        const response = await api('/purchases/confirm-delivery', {
+          method: 'POST',
+          body: JSON.stringify({ token: `probe-token-${i}` }),
+          headers: { 'cf-connecting-ip': ip },
+        });
+        // 400 (no matching purchase) either way -- the point is that the
+        // rate limiter itself, not the token lookup, is what eventually
+        // returns 429 below.
+        expect(response.response.status).toBe(400);
+      }
+      const limited = await api('/purchases/confirm-delivery', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'probe-token-final' }),
+        headers: { 'cf-connecting-ip': ip },
+      });
+      expect(limited.response.status).toBe(429);
+    });
+
     it('becomes available via the 7-day-after-shipped fallback even with no delivery confirmation', async () => {
       const builder = await signupBuilder('payout-fallback-builder');
       const seller = await createConnectedSeller('payout-fallback-seller');
