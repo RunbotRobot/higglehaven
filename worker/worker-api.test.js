@@ -3729,6 +3729,22 @@ describe('Worker API', () => {
     expect(filtered.body.entries.every((e) => e.actionType === 'land_cap_grant' && e.targetType === 'builder')).toBe(true);
     expect(filtered.body.entries.some((e) => e.targetId === target.builderId)).toBe(true);
 
+    // #1242: targetId had no filter at all -- the one audit query ("every
+    // action against this one entity") the table exists for. A second
+    // builder's own grant proves this narrows to the right row rather than
+    // just happening to return everything.
+    const otherTarget = await signupBuilder('action-log-other-target');
+    const otherGranted = await api(`/builders/${otherTarget.builderId}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+    expect(otherGranted.response.status).toBe(201);
+
+    const byTargetId = await api(`/admin-action-log?targetId=${target.builderId}`, adminSession());
+    expect(byTargetId.response.status).toBe(200);
+    expect(byTargetId.body.entries.length).toBeGreaterThanOrEqual(1);
+    expect(byTargetId.body.entries.every((e) => e.targetId === target.builderId)).toBe(true);
+    expect(byTargetId.body.entries.some((e) => e.targetId === otherTarget.builderId)).toBe(false);
+
     const noMatch = await api('/admin-action-log?actionType=does-not-exist', adminSession());
     expect(noMatch.response.status).toBe(200);
     expect(noMatch.body.entries).toEqual([]);
