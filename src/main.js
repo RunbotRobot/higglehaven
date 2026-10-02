@@ -1335,6 +1335,46 @@ function loadModelAnimations(url) {
   return loadModelGltf(url).then((gltf) => gltf.animations);
 }
 
+// #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
+// signature of a model's skeleton — its bone names and parent/child
+// hierarchy — computed at upload time (showUploadDimensionPreview) and
+// persisted on the catalog template (skeletonSignature) alongside
+// modelSizeBytes, so a future standalone animation upload (#1163) and the
+// shop/equip UI (#1164) can compare two models' signatures for
+// compatibility by simple string equality rather than re-fetching and
+// re-parsing both models every time.
+//
+// Exact equality, not a fuzzy/partial match: Three.js's AnimationMixer
+// binds each keyframe track to a bone by name alone, so an animation
+// plays correctly against a different file's skeleton only when the two
+// skeletons share the exact same bone names in the exact same hierarchy
+// — anything looser risks a silently broken retarget (limbs not moving,
+// or moving through the wrong pivot) with no error to warn the shopper.
+// Root bones (no bone parent — normally just one, a hips/root joint, but
+// not assumed) and the rest (as parent>child edges) are each gathered and
+// sorted independently so the signature doesn't depend on the order bones
+// happen to appear in the file, then hashed to a fixed-length digest —
+// compact for storage, and content-opaque since a rig's bone names aren't
+// meaningful to store verbatim.
+//
+// Returns null for a model with no skeleton at all (an ordinary rigid
+// prop) — same "nothing to report" shape loadModelAnimations already
+// uses for a model with zero animation clips.
+async function computeSkeletonSignature(url) {
+  const gltf = await loadModelGltf(url);
+  let skinnedMesh = null;
+  gltf.scene.traverse((child) => {
+    if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
+  });
+  if (!skinnedMesh) return null;
+  const bones = skinnedMesh.skeleton.bones;
+  const roots = bones.filter((bone) => !bone.parent?.isBone).map((bone) => bone.name).sort();
+  const edges = bones.filter((bone) => bone.parent?.isBone).map((bone) => `${bone.parent.name}>${bone.name}`).sort();
+  const canonical = JSON.stringify({ roots, edges });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
 // etc.) — our scene is Z-up (see camera.up.set above), and nothing about
 // loading a glTF file auto-corrects that; the raw vertex data just gets
@@ -2615,6 +2655,10 @@ let uploadModelUrl = null;
 // model-file-size cap — this is what step 'dimensions' passes through to
 // createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
 let uploadModelSizeBytes = null;
+// #1162: computed in showUploadDimensionPreview alongside the animation
+// detection below, passed through to createCatalogTemplate the same way
+// uploadModelSizeBytes already is.
+let uploadSkeletonSignature = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
@@ -2669,6 +2713,7 @@ function resetUploadModalToFileStep() {
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
+  uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
@@ -2811,6 +2856,15 @@ async function showUploadDimensionPreview(modelUrl) {
   const previewObject = await loadModelInstance(modelUrl);
   if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
+
+  // #1162: awaited (unlike the animation detection just below, which is
+  // fire-and-forget since it only drives a hint label) because
+  // uploadSkeletonSignature needs to be settled before the user can reach
+  // handleUploadDimensionsStep's createCatalogTemplate call — loadModelGltf
+  // caches by URL, so this doesn't re-fetch anything loadModelInstance
+  // above didn't already fetch.
+  uploadSkeletonSignature = await computeSkeletonSignature(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while computing — a newer/canceled flow owns things now
 
   // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
   // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
@@ -3055,6 +3109,7 @@ async function handleUploadDimensionsStep() {
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
+      skeletonSignature: uploadSkeletonSignature,
       sellerId: uploaderSellerId,
       // #680/#681's own "upload flow itself" was deliberately deferred as
       // separate scope — until now, category could only ever be set to
@@ -4045,8 +4100,10 @@ function renderSellerList() {
           color: template.color,
           modelUrl: template.modelUrl,
           // modelUrl is copied by reference (see this button's own comment
-          // above) — the underlying file, and so its size, is identical.
+          // above) — the underlying file, and so its size and skeleton, is
+          // identical.
           modelSizeBytes: template.modelSizeBytes,
+          skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only

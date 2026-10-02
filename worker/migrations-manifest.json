@@ -101,5 +101,6 @@
   "0101_product_reviews_purchase_id.sql",
   "0102_users_deleted_at.sql",
   "0103_tax_1099_forms_user_id_set_null.sql",
-  "0104_card_fingerprints.sql"
+  "0104_card_fingerprints.sql",
+  "0105_catalog_template_skeleton_signature.sql"
 ]

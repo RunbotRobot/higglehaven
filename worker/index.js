@@ -1485,6 +1485,7 @@ async function handleCatalog(request, db, route, url, models, env) {
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
         model_size_bytes = excluded.model_size_bytes,
+        skeleton_signature = excluded.skeleton_signature,
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
@@ -1499,8 +1500,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1821,8 +1822,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
@@ -1866,9 +1867,9 @@ async function handleCatalog(request, db, route, url, models, env) {
     const result = await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, skeleton_signature = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), route[1]).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships
     // PATCH), this one never checked whether its own UPDATE actually
@@ -12463,6 +12464,10 @@ function validateTemplate(input, fallbackId) {
     // model just to plan pages. NULL for a template with no model, or one
     // uploaded before this field existed.
     modelSizeBytes: optionalModelSizeBytes(input.modelSizeBytes),
+    // #1162: computed client-side (computeSkeletonSignature) alongside
+    // modelSizeBytes, same "measured once at upload time, persisted so
+    // nothing needs to re-fetch the model later" reasoning.
+    skeletonSignature: optionalSkeletonSignature(input.skeletonSignature),
     metadata: input.metadata || {},
   };
   // Found via backlog audit (#375): modelUrl went straight through with no
@@ -12609,7 +12614,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
 }
 
 function instanceParams(instance) {
@@ -12635,6 +12640,7 @@ function templateFromRow(row) {
     sellerId: row.seller_id,
     modelUrl: row.model_url,
     modelSizeBytes: row.model_size_bytes,
+    skeletonSignature: row.skeleton_signature,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
@@ -12927,6 +12933,22 @@ function optionalModelSizeBytes(value) {
     throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
   }
   return number;
+}
+
+// #1162: a SHA-256 hex digest (computeSkeletonSignature, src/main.js) of a
+// model's skeleton bone names/hierarchy, or null for a model with no
+// skeleton at all. Only the shape is validated here, not the content —
+// this server never re-derives it from the actual model file (that would
+// mean re-fetching and parsing GLTF server-side for no real benefit), so
+// it's trusted the same way modelSizeBytes already is, just shape-checked
+// against being tampered into something that isn't a real digest at all.
+const SKELETON_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/;
+function optionalSkeletonSignature(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !SKELETON_SIGNATURE_PATTERN.test(value)) {
+    throw new HttpError('skeletonSignature must be a 64-character lowercase hex SHA-256 digest, or omitted', 400);
+  }
+  return value;
 }
 
 function queryLimit(value, defaultValue) {
