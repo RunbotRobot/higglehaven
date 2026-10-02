@@ -2059,8 +2059,8 @@ async function handleProductReviews(request, db, route) {
         WHERE s.seller_id = ?
       `).bind(template.seller_id).first();
       if (owner) {
-        await notificationStatement(db, owner.builder_id,
-          `"${authorLabel}" left a ${rating}-star review on "${template.name}".`).run();
+        await fireNotification(db, owner.builder_id,
+          `"${authorLabel}" left a ${rating}-star review on "${template.name}".`);
       }
     }
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
@@ -3728,8 +3728,8 @@ async function handleFriendships(request, db, route, url) {
     // re-poll GET /api/friendships. Best-effort, same as every other
     // notification in this file (fired after the write it's about, not
     // batched atomically with it).
-    await notificationStatement(db, recipientBuilderId,
-      `${sessionBuilder.label} sent you a friend request.`).run();
+    await fireNotification(db, recipientBuilderId,
+      `${sessionBuilder.label} sent you a friend request.`);
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
@@ -3761,8 +3761,8 @@ async function handleFriendships(request, db, route, url) {
     // above (#319), for the requester's side of an acceptance — only fired
     // when this call is the one that actually made the transition.
     if (result.meta.changes === 1) {
-      await notificationStatement(db, existing.requester_builder_id,
-        `${sessionBuilder.label} accepted your friend request.`).run();
+      await fireNotification(db, existing.requester_builder_id,
+        `${sessionBuilder.label} accepted your friend request.`);
     }
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     // Not found here means a concurrent DELETE (the requester cancelling,
@@ -3808,8 +3808,8 @@ async function handleFriendships(request, db, route, url) {
       ? await db.prepare(`DELETE FROM friendships WHERE friendship_id = ? AND status = 'pending'`).bind(route[1]).run()
       : await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
     if (isDecline && result.meta.changes === 1) {
-      await notificationStatement(db, existing.requester_builder_id,
-        `${sessionBuilder.label} declined your friend request.`).run();
+      await fireNotification(db, existing.requester_builder_id,
+        `${sessionBuilder.label} declined your friend request.`);
     } else if (isDecline && result.meta.changes === 0) {
       // #1197: the response below used to be unconditional, so a decline
       // that lost a race to a concurrent PATCH/accept (same recipient, two
@@ -5149,10 +5149,21 @@ function buildAuctionWinnerSettlementStatements(db, auction, winner) {
     db.prepare(`
       INSERT OR IGNORE INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind(auctionSettlementEventId(auction.auction_id), auction.seller_builder_id, winner.amount_cents),
-    notificationStatement(db, auction.seller_builder_id,
-      `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.`),
-    notificationStatement(db, winner.bidder_builder_id,
-      `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.`),
+  ];
+}
+
+// #1122: split out of buildAuctionWinnerSettlementStatements above so its
+// two notifications can be fired separately, after the real settlement
+// batch commits, instead of atomically inside it — a self-delete race on
+// either recipient used to roll back the whole settlement (ownership
+// transfer, balance credit, earnings ledger included), not just fail to
+// notify them.
+function auctionWinnerNotifications(auction, winner) {
+  return [
+    { builderId: auction.seller_builder_id,
+      message: `Your auction for ${auction.landlet_id} sold for ${formatCents(winner.amount_cents)} — credited to your higgles balance.` },
+    { builderId: winner.bidder_builder_id,
+      message: `You won the auction for ${auction.landlet_id} at ${formatCents(winner.amount_cents)}! It's yours to build on now.` },
   ];
 }
 
@@ -5169,6 +5180,7 @@ async function resolveAuction(db, auction) {
     if (!alreadySettled) {
       const winner = await db.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(auction.winning_bid_id).first();
       await db.batch(buildAuctionWinnerSettlementStatements(db, auction, winner));
+      await fireNotifications(db, auctionWinnerNotifications(auction, winner));
     }
     return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
   }
@@ -5314,14 +5326,24 @@ async function resolveAuction(db, auction) {
   // auction" and "you won the auction" for the same resolution.
   const skipNotifyBuilderIds = [...new Set(skippedCandidateBuilderIds)]
     .filter((builderId) => builderId !== winner?.bidder_builder_id);
-  const statements = skipNotifyBuilderIds.map((builderId) => notificationStatement(db, builderId,
-    `Your bid on ${auction.landlet_id} could no longer be honored and was skipped — you did not win this auction.`));
+  // #1122: mutation statements and notifications are now collected
+  // separately — statements still batch atomically together, but
+  // notifications fire afterward via fireNotifications, outside that batch
+  // (see notificationStatement's own comment for why: a losing-candidate or
+  // seller/winner self-delete race used to be able to roll back the whole
+  // settlement/cleanup batch, not just fail to notify them).
+  const statements = [];
+  const pendingNotifications = skipNotifyBuilderIds.map((builderId) => ({
+    builderId,
+    message: `Your bid on ${auction.landlet_id} could no longer be honored and was skipped — you did not win this auction.`,
+  }));
   if (winner) {
     // Ownership (and winning_bid_id) were already transferred above,
     // atomically gated on the winner's land cap — only the build-cleanup
-    // and money/notification side effects remain, safe to batch together
-    // now that the transfer is confirmed to have actually landed.
+    // and money side effects remain, safe to batch together now that the
+    // transfer is confirmed to have actually landed.
     statements.push(...buildAuctionWinnerSettlementStatements(db, auction, winner));
+    pendingNotifications.push(...auctionWinnerNotifications(auction, winner));
   } else if (candidates.length === 0 && auction.starting_bid_cents === 0) {
     statements.push(
       // #809: same reasoning as the winner branch above — this release
@@ -5341,21 +5363,24 @@ async function resolveAuction(db, auction) {
             claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE landlet_id = ?
       `).bind(auction.landlet_id),
-      notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`),
     );
+    pendingNotifications.push({
+      builderId: auction.seller_builder_id,
+      message: `Your auction for ${auction.landlet_id} ended with no bids and was released to greenbelt, as you specified with its $0 starting bid.`,
+    });
   } else if (candidates.length > 0) {
-    statements.push(
-      notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the land.`),
-    );
+    pendingNotifications.push({
+      builderId: auction.seller_builder_id,
+      message: `Your auction for ${auction.landlet_id} ended with no bidder able to cover their bid — you keep the land.`,
+    });
   } else {
-    statements.push(
-      notificationStatement(db, auction.seller_builder_id,
-        `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`),
-    );
+    pendingNotifications.push({
+      builderId: auction.seller_builder_id,
+      message: `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`,
+    });
   }
-  await db.batch(statements);
+  if (statements.length > 0) await db.batch(statements);
+  await fireNotifications(db, pendingNotifications);
   return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
 }
 
@@ -5365,21 +5390,60 @@ async function resolveAuction(db, auction) {
 // follows: notifications are informational, never worth failing the
 // actual write over).
 async function notifyOfNewBid(db, auction, amountCents, bidderBuilderId, previousHighest) {
-  const statements = [
-    notificationStatement(db, auction.seller_builder_id,
-      `New bid of ${formatCents(amountCents)} on your auction for ${auction.landlet_id}.`),
+  const notifications = [
+    { builderId: auction.seller_builder_id,
+      message: `New bid of ${formatCents(amountCents)} on your auction for ${auction.landlet_id}.` },
   ];
   if (previousHighest && previousHighest.bidder_builder_id !== bidderBuilderId) {
-    statements.push(notificationStatement(db, previousHighest.bidder_builder_id,
-      `You've been outbid on ${auction.landlet_id} — new high bid ${formatCents(amountCents)}.`));
+    notifications.push({ builderId: previousHighest.bidder_builder_id,
+      message: `You've been outbid on ${auction.landlet_id} — new high bid ${formatCents(amountCents)}.` });
   }
-  await db.batch(statements);
+  await fireNotifications(db, notifications);
 }
 
 function notificationStatement(db, builderId, message) {
   return db.prepare(
     'INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)',
   ).bind(`notification-${crypto.randomUUID()}`, builderId, message);
+}
+
+// #1122: notifications.builder_id is NOT NULL REFERENCES builders ON DELETE
+// CASCADE, so a target builder who self-deletes in the narrow window
+// between a call site reading its id and this INSERT actually running turns
+// an explicitly best-effort notification into a real, hard FK failure —
+// either surfacing a misleading error for a mutation that already committed
+// (when run standalone), or rolling back an otherwise-valid batch entirely,
+// including the mutation it was only meant to report on (when previously
+// batched atomically alongside it). Every call site now fires its
+// notification(s) through fireNotification/fireNotifications below, outside
+// of any batch shared with a real mutation, so this specific, expected race
+// can never affect anything but the notification itself.
+function isForeignKeyConstraintError(err) {
+  // errorMessages (below) walks the error's own .cause chain — same
+  // unwrapping databaseHttpError already relies on to recognize a D1
+  // constraint failure, since the raw message isn't always on the
+  // outermost error object.
+  return errorMessages(err).includes('FOREIGN KEY constraint failed');
+}
+
+// Exported so #1122's own regression test can exercise the swallow-vs-
+// rethrow decision directly, the same way refundIdempotencyKey and
+// auctionSettlementEventId above are exported for their own tests.
+export async function fireNotification(db, builderId, message) {
+  try {
+    await notificationStatement(db, builderId, message).run();
+  } catch (err) {
+    if (!isForeignKeyConstraintError(err)) throw err;
+  }
+}
+
+// Same as fireNotification, for more than one recipient at once — each
+// still run and caught independently, so one recipient's self-delete race
+// never affects another's notification.
+async function fireNotifications(db, notifications) {
+  for (const { builderId, message } of notifications) {
+    await fireNotification(db, builderId, message);
+  }
 }
 
 // #814: accountability record for an admin-gated mutation — who did what,
@@ -5997,11 +6061,22 @@ async function requireAdmin(request, db) {
 // without a real email provider.
 async function sendEmail(env, { to, subject, html, text }) {
   if (!env.RESEND_API_KEY) return false;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ from: env.EMAIL_FROM || 'higglehaven <no-reply@higglehaven.com>', to: [to], subject, html, text }),
-  });
+  // #1283: fetch itself can reject (DNS failure, connection reset, TLS
+  // error, timeout) rather than merely resolving with a non-2xx response —
+  // every caller treats this function as best-effort and never wraps it in
+  // its own try/catch, so that has to be true here too, not just for the
+  // HTTP-level failure the !response.ok branch below already handles.
+  let response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: env.EMAIL_FROM || 'higglehaven <no-reply@higglehaven.com>', to: [to], subject, html, text }),
+    });
+  } catch (error) {
+    console.error('Resend send failed', error);
+    return false;
+  }
   if (!response.ok) {
     console.error('Resend send failed', response.status, await response.text().catch(() => ''));
     return false;
@@ -11630,8 +11705,6 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
         .bind(builderShareCents, builderId),
       db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
         .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
-      notificationStatement(db, builderId,
-        `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
     );
   }
   if (isAvatarCategory && buyerBuilderStillExists) {
@@ -11641,6 +11714,15 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
     statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
+  // #1122: fired after the batch above commits, not inside it — builderId's
+  // existence was already checked earlier in this function, but a self-
+  // delete in the window between that check and this point would otherwise
+  // roll back the purchase row itself (a real-money receipt) along with it,
+  // just to avoid a notification that was never more than best-effort.
+  if (builderId) {
+    await fireNotification(db, builderId,
+      `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
+  }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
@@ -11713,9 +11795,13 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
     ...(isAvatarCategory && buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
     ...(isAnimationCategory && buyerBuilderStillExists ? ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
-    notificationStatement(db, builderId,
-      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
+  // #1122: fired after the batch above commits, not inside it — a landlet
+  // owner who self-deletes between this function reading builderId and the
+  // INSERT running would otherwise fail the notification's own FK and roll
+  // back the purchase row (a real-money receipt) along with it.
+  await fireNotification(db, builderId,
+    `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
@@ -11960,8 +12046,8 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
     WHERE s.seller_id = ?
   `).bind(purchase.seller_id).first();
   if (owner) {
-    await notificationStatement(db, owner.builder_id,
-      `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`).run();
+    await fireNotification(db, owner.builder_id,
+      `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
   const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
@@ -12026,19 +12112,24 @@ export function refundIdempotencyKey(purchaseId) {
 // or dashboard refund) — the side effect is identical either way; only
 // who's authorized to trigger it, and whether the caller also needs to
 // reverse the Stripe charge itself, differ.
-async function clawBackPurchaseCommission(db, purchase, templateName) {
+// Exported so #1122's own regression test can exercise the debit/notify
+// split directly, the same way refundIdempotencyKey above is exported for
+// its own refund-path test.
+export async function clawBackPurchaseCommission(db, purchase, templateName) {
   // builder_id can be null (migrations/0062 — SET NULL on the host
   // builder's account deletion, not CASCADE, so this purchase's own record
   // survives). Nothing to claw a balance back from in that case, and
   // notifications.builder_id is itself NOT NULL, so skip both statements
   // rather than crediting/notifying a builder that no longer exists.
   if (purchase.builder_id) {
-    await db.batch([
-      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
-        .bind(purchase.builder_share_cents, purchase.builder_id),
-      notificationStatement(db, purchase.builder_id,
-        `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`),
-    ]);
+    await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
+      .bind(purchase.builder_share_cents, purchase.builder_id).run();
+    // #1122: fired separately, after the debit above commits — a self-
+    // delete race on purchase.builder_id between this function's caller
+    // reading the purchase row and this point would otherwise fail the
+    // notification's own FK and roll back the clawback debit along with it.
+    await fireNotification(db, purchase.builder_id,
+      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`);
   }
 
   // #754: without this, a refunded avatar purchase left the buyer holding
