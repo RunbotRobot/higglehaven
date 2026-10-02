@@ -3757,9 +3757,10 @@ describe('Simulated purchases', () => {
       expect(summary.body.heldCents).toBe(0);
     });
 
-    it('becomes available once the buyer confirms delivery via their own token link, idempotently', async () => {
+    it('becomes available once the buyer confirms delivery via their own token link, idempotently, and notifies the seller', async () => {
       const builder = await signupBuilder('payout-confirm-builder');
       const seller = await createConnectedSeller('payout-confirm-seller');
+      const sellerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
       const rawToken = `test-delivery-token-${crypto.randomUUID()}`;
       await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
 
@@ -3776,9 +3777,23 @@ describe('Simulated purchases', () => {
       expect(summary.body.availableCents).toBe(4900);
       expect(summary.body.heldCents).toBe(0);
 
-      // Idempotent — a second visit to the same link is a no-op, not an error.
+      // #1289: the seller should passively learn their payout was just
+      // released early, the same way every other transactional event in
+      // this file notifies the other party.
+      const { results: notifications } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(sellerBuilderId).all();
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].message).toContain('delivery was confirmed by the buyer');
+
+      // Idempotent — a second visit to the same link is a no-op, not an
+      // error, and doesn't re-notify the seller.
       const confirmedAgain = await api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) });
       expect(confirmedAgain.response.status).toBe(200);
+      const { results: notificationsAfterSecondConfirm } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(sellerBuilderId).all();
+      expect(notificationsAfterSecondConfirm).toHaveLength(1);
     });
 
     // #1248: this endpoint is unauthenticated by design (no buyer account

@@ -12065,7 +12065,7 @@ async function handlePurchaseConfirmDelivery(request, env) {
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const tokenHash = await sha256Hex(token);
-  const purchase = await db.prepare('SELECT purchase_id, delivery_confirmed_at, refunded_at FROM purchases WHERE delivery_confirm_token_hash = ?')
+  const purchase = await db.prepare('SELECT purchase_id, template_id, seller_id, delivery_confirmed_at, refunded_at FROM purchases WHERE delivery_confirm_token_hash = ?')
     .bind(tokenHash).first();
   if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
   if (purchase.refunded_at) throw new HttpError('This purchase has been refunded.', 400);
@@ -12074,6 +12074,27 @@ async function handlePurchaseConfirmDelivery(request, env) {
   if (!purchase.delivery_confirmed_at) {
     await db.prepare('UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
       .bind(purchase.purchase_id).run();
+    // #1289: per #1043's own convention, every other real "something
+    // happened that the other party should passively learn about" event in
+    // this file fires a notification — this is also what releases the
+    // seller's payout hold early (ahead of the 7-day shipped-at fallback,
+    // see docs/API.md's "Seller payout" section), so the seller has a real
+    // reason to want to know rather than re-poll for it. A seller-less or
+    // dangling seller_id (same guard handleProductReviews' own notification
+    // code uses) simply has nobody to notify.
+    if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
+      const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+        .bind(purchase.template_id).first();
+      const owner = await db.prepare(`
+        SELECT b.builder_id AS builder_id FROM sellers s
+        JOIN builders b ON b.user_id = s.user_id
+        WHERE s.seller_id = ?
+      `).bind(purchase.seller_id).first();
+      if (owner) {
+        await notificationStatement(db, owner.builder_id,
+          `"${template?.name || 'A product'}" delivery was confirmed by the buyer.`).run();
+      }
+    }
   }
   return json({ confirmed: true });
 }
