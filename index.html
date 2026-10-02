@@ -1581,6 +1581,13 @@
         align-items: center;
         gap: 8px !important;
       }
+      /* #1163 (sub-issue of #1161): same row-layout pattern, for the
+         sibling "standalone animation" catalog category. */
+      #upload-animation-category-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
       .upload-dimension-field {
         display: flex;
         flex-direction: row !important;
@@ -3715,6 +3722,10 @@
           <label id="upload-avatar-category-label">
             <input id="upload-avatar-category-checkbox" type="checkbox" />
             List as an equippable avatar (buyers can equip it as their own in-world character)
+          </label>
+          <label id="upload-animation-category-label">
+            <input id="upload-animation-category-checkbox" type="checkbox" />
+            List as a standalone animation (buyers can apply it to whichever avatar they have equipped)
           </label>
           <label class="upload-dimension-field" data-axis="x">
             <span>Width (X)</span>
