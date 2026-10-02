@@ -3151,7 +3151,8 @@
         font-size: 13px;
         line-height: 1;
       }
-      #sign-posts-empty {
+      #sign-posts-empty,
+      #sign-posts-truncated {
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);
       }
@@ -3243,7 +3244,8 @@
         font-size: 13px;
         line-height: 1;
       }
-      #calendar-events-empty {
+      #calendar-events-empty,
+      #calendar-events-truncated {
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);
       }
@@ -3968,6 +3970,7 @@
       <div id="sign-posts-modal-content">
         <button id="sign-posts-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Sign Posts</h2>
+        <div id="sign-posts-truncated" hidden></div>
         <div id="sign-posts-list"></div>
         <div id="sign-posts-empty">No posts on this sign yet.</div>
         <button id="sign-posts-unflag-btn" type="button">Remove Community Sign</button>
@@ -3977,6 +3980,7 @@
       <div id="calendar-events-modal-content">
         <button id="calendar-events-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Calendar Events</h2>
+        <div id="calendar-events-truncated" hidden></div>
         <div id="calendar-events-list"></div>
         <div id="calendar-events-empty">No events on this calendar yet.</div>
         <button id="calendar-events-unflag-btn" type="button">Remove Community Calendar</button>

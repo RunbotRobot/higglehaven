@@ -7918,6 +7918,7 @@ const signPostsModalEl = document.getElementById('sign-posts-modal');
 const signPostsCloseBtn = document.getElementById('sign-posts-close-btn');
 const signPostsListEl = document.getElementById('sign-posts-list');
 const signPostsEmptyEl = document.getElementById('sign-posts-empty');
+const signPostsTruncatedEl = document.getElementById('sign-posts-truncated');
 const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
 let signPostsTargetMesh = null;
 // Guards against reopening this modal on a different mesh before an
@@ -7936,12 +7937,14 @@ function formatSignPostTime(isoString) {
 
 async function renderSignPosts() {
   signPostsListEl.innerHTML = '';
+  signPostsTruncatedEl.hidden = true;
   if (!signPostsTargetMesh) return;
   const myLoadToken = ++signPostsLoadToken;
   const instanceId = signPostsTargetMesh.userData.instanceId;
   let posts;
+  let totalCount;
   try {
-    posts = await fetchSignPosts(instanceId);
+    ({ posts, totalCount } = await fetchSignPosts(instanceId));
   } catch (err) {
     if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
     signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
@@ -7954,6 +7957,11 @@ async function renderSignPosts() {
   // error message forever, even once a later load succeeds with zero posts.
   signPostsEmptyEl.textContent = 'No posts on this sign yet.';
   signPostsEmptyEl.hidden = posts.length > 0;
+  // #1274: posts is windowed to the newest 200 (worker/index.js's
+  // handleSignPosts); totalCount is the real, uncapped count, so this is
+  // the only way to tell a builder older posts exist but aren't shown.
+  signPostsTruncatedEl.hidden = totalCount <= posts.length;
+  signPostsTruncatedEl.textContent = `Showing newest ${posts.length} of ${totalCount} posts.`;
   for (const post of posts) {
     const row = document.createElement('div');
     row.className = 'sign-post-row';
@@ -8035,6 +8043,7 @@ const calendarEventsModalEl = document.getElementById('calendar-events-modal');
 const calendarEventsCloseBtn = document.getElementById('calendar-events-close-btn');
 const calendarEventsListEl = document.getElementById('calendar-events-list');
 const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
+const calendarEventsTruncatedEl = document.getElementById('calendar-events-truncated');
 const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
 let calendarEventsTargetMesh = null;
 // See signPostsLoadToken above — same reopen-on-a-different-mesh race,
@@ -8048,12 +8057,14 @@ function formatCalendarEventTime(isoString) {
 
 async function renderCalendarEvents() {
   calendarEventsListEl.innerHTML = '';
+  calendarEventsTruncatedEl.hidden = true;
   if (!calendarEventsTargetMesh) return;
   const myLoadToken = ++calendarEventsLoadToken;
   const instanceId = calendarEventsTargetMesh.userData.instanceId;
   let events;
+  let totalCount;
   try {
-    events = await fetchCalendarEvents(instanceId);
+    ({ events, totalCount } = await fetchCalendarEvents(instanceId));
   } catch (err) {
     if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
     calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
@@ -8066,6 +8077,10 @@ async function renderCalendarEvents() {
   // error message forever, even once a later load succeeds with zero events.
   calendarEventsEmptyEl.textContent = 'No events on this calendar yet.';
   calendarEventsEmptyEl.hidden = events.length > 0;
+  // #1274: same truncation signal as sign posts above (handleCalendarEvents
+  // windows to the newest 200 but returns the real, uncapped totalCount).
+  calendarEventsTruncatedEl.hidden = totalCount <= events.length;
+  calendarEventsTruncatedEl.textContent = `Showing newest ${events.length} of ${totalCount} events.`;
   for (const event of events) {
     const row = document.createElement('div');
     row.className = 'calendar-event-row';
@@ -13016,7 +13031,7 @@ async function loadShopLandletInstances(entry, myToken) {
 function registerShopSign(mesh, entry) {
   const sign = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, posts: [], sprites: [] };
   shopSigns.push(sign);
-  fetchSignPosts(sign.instanceId).then((posts) => {
+  fetchSignPosts(sign.instanceId).then(({ posts }) => {
     if (!shopSigns.includes(sign)) return;
     sign.posts = posts;
     rebuildSignSprites(sign);
@@ -13089,7 +13104,7 @@ function makeSignPostSprite(text) {
 function registerShopCalendar(mesh, entry) {
   const calendar = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, events: [], sprites: [] };
   shopCalendars.push(calendar);
-  fetchCalendarEvents(calendar.instanceId).then((events) => {
+  fetchCalendarEvents(calendar.instanceId).then(({ events }) => {
     if (!shopCalendars.includes(calendar)) return;
     calendar.events = events;
     rebuildCalendarSprites(calendar);
