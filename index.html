@@ -2936,7 +2936,11 @@
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
-      #friends-add-btn {
+      .friends-toolbar {
+        display: flex;
+        gap: 8px;
+      }
+      #friends-add-btn, #friends-map-btn {
         align-self: flex-start;
         padding: 6px 14px;
         border-radius: 999px;
@@ -2956,6 +2960,53 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+      }
+      /* #1205: a lightweight 2D top-down view of every accepted friend's
+         claimed lándlet — deliberately a plain canvas, not the claim
+         flyover's WebGL scene (see drawFriendsMap's own comment in
+         src/main.js for why). Swaps places with #friends-modal itself
+         (hidden while this is open) rather than stacking as a second
+         modal layer, the simplest way to avoid z-index/backdrop-click
+         ordering questions between the two. */
+      #friends-map-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #friends-map-modal.visible {
+        display: flex;
+      }
+      #friends-map-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #friends-map-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #friends-map-canvas {
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #friends-map-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .friend-row {
         display: flex;
@@ -3853,7 +3904,10 @@
       <div id="friends-modal-content">
         <button id="friends-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Friends</h2>
-        <button id="friends-add-btn" type="button">+ Add Friend</button>
+        <div class="friends-toolbar">
+          <button id="friends-add-btn" type="button">+ Add Friend</button>
+          <button id="friends-map-btn" type="button">Show Map</button>
+        </div>
         <div id="friends-status"></div>
         <h3>Requests</h3>
         <div id="friends-incoming-list"></div>
@@ -3864,6 +3918,14 @@
         <h3>Friends</h3>
         <div id="friends-accepted-list"></div>
         <div id="friends-accepted-empty">No friends yet.</div>
+      </div>
+    </div>
+    <div id="friends-map-modal">
+      <div id="friends-map-modal-content">
+        <button id="friends-map-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Friends Map</h2>
+        <canvas id="friends-map-canvas"></canvas>
+        <div id="friends-map-empty">None of your friends have claimed a lándlet yet.</div>
       </div>
     </div>
     <div id="my-lands-modal">
