@@ -3775,7 +3775,12 @@ describe('Simulated purchases', () => {
       }
       const limited = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
       expect(limited.response.status).toBe(429);
-    });
+    }, 45000); // same pre-existing scheduling-contention flake as the
+    // purchase-rate-limit test above — 20 sequential round trips reliably
+    // finishes in under a second in isolation, but this file's 177+ tests
+    // in one long-running CI worker process can occasionally push it past
+    // the 20s default on nothing but contention, not a real regression.
+    // Hit three times in this session's own full-suite runs today.
 
     // Self-found audit fix, no issue: handleSellerPayouts used to read
     // unpaid purchases, call Stripe, and only afterward mark paid_out_at
