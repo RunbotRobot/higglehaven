@@ -576,18 +576,15 @@
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
-        transition: transform 0.2s ease;
+      }
+      #shop-fly-btn-icon {
+        display: block;
+        width: 24px;
+        height: 24px;
+        object-fit: contain;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
-        /* N45 follow-up (2026-09-12): grounded/flying used to be two
-           different bird glyphs (a dove vs. a standing bird) so the icon
-           itself carried the state change, but the owner flagged that as
-           looking like two different birds (different species/colors).
-           Both states now render the same dove glyph (setShopFlyBtnFlying
-           in src/main.js); this tilt is what carries the "airborne" reading
-           instead, without touching species or color. */
-        transform: translateX(-50%) rotate(-20deg);
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
@@ -3605,15 +3602,17 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <!-- #506 picked the generic bird glyph (U+1F426) over a plane per the
-         owner's own request, but most platforms render it standing/
-         perched rather than airborne. Owner follow-up
-         (j4qrtom5gafp25dasccz): "Please make the bird be in flight." The
-         dove (U+1F54A) is the one bird emoji most sets (Apple, Twemoji)
-         consistently render mid-glide with wings spread -- a far more
-         reliable way to read as "flight" via a native emoji glyph than
-         trying to force a specific pose out of the same generic bird. -->
-    <button id="shop-fly-btn" class="shop-ui" type="button">&#128330;</button>
+    <!-- #506/N45 history (see this button's own CSS comment below for the
+         fuller account): native bird emoji glyphs kept reading as a species/
+         color mismatch between the grounded and flying states across
+         platforms, so N45 settled for one unchanging dove glyph plus a CSS
+         tilt to carry the state instead. Owner-supplied custom artwork
+         (Control Room, 2026-10-01) replaces both emoji with a matching
+         flying/standing pair of the same bird, same style, same colors --
+         the actual problem N45 was working around -- so the glyph can go
+         back to carrying the state itself; see setShopFlyBtnFlying in
+         src/main.js for the swap. -->
+    <button id="shop-fly-btn" class="shop-ui" type="button"><img id="shop-fly-btn-icon" src="/bird-standing.png" alt="" /></button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>

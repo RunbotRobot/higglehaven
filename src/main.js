@@ -10469,6 +10469,7 @@ const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 const shopFlyBtn = document.getElementById('shop-fly-btn');
+const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
 const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 const shopUpBtn = document.getElementById('shop-up-btn');
@@ -11931,19 +11932,18 @@ function shopFlightSpeedMultiplier(altitudeM) {
 // fly." Owner follow-up (2026-09-12): "make the in-flight bird and the
 // standing bird look like the same bird" — 🕊️ and 🐦 render as visibly
 // different species/colors across platforms (white dove vs. a often-blue
-// generic bird), which read as a mismatch rather than a state change. Kept
-// a single glyph (the dove, since it already reads as "in flight") for
-// both states and moved the state distinction entirely onto CSS (the
-// .active background tint plus a takeoff/landing tilt — see
-// #shop-fly-btn.active in index.html) so there's no species/color jump.
-// Still centralized here (rather than duplicated across toggleShopFlight's
-// two branches and enterShopMode's first-visit spawn below) so the classes
-// can never drift out of sync with each other.
-const SHOP_FLY_BTN_ICON = '\u{1F54A}'; // 🕊️ dove — same glyph grounded or flying
+// generic bird), which read as a mismatch rather than a state change. That
+// problem was specific to native emoji glyphs, not to having two icons —
+// owner-supplied custom artwork (Control Room, 2026-10-01, a matching
+// flying/standing pair of the same bird) fixes it at the source, so the
+// icon itself can carry the state again, same as before N45, with no CSS
+// tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
+const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
+const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtn.textContent = SHOP_FLY_BTN_ICON;
+  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_FLYING : SHOP_FLY_BTN_ICON_STANDING;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
