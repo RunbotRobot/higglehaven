@@ -3650,6 +3650,21 @@ describe('Simulated purchases', () => {
       expect(reShipped.response.status).toBe(400);
     });
 
+    // #1288: every other "something happened that the other party should
+    // passively learn about" event already fires a notification -- the
+    // buyer waiting on a physical purchase was the one missing.
+    it('notifies the buyer once their purchase is marked shipped', async () => {
+      const builder = await signupBuilder('mark-shipped-notify-builder');
+      const seller = await createConnectedSeller('mark-shipped-notify-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+
+      const shipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(shipped.response.status).toBe(200);
+
+      const notices = await api('/notifications', builder.session());
+      expect(notices.body.notifications.some((n) => n.message.includes('has shipped!'))).toBe(true);
+    });
+
     // #925: the sequential re-ship test above only proves a repeat call
     // after the first one is already committed gets a 400 — it doesn't
     // exercise the actual race, two requests genuinely concurrent
