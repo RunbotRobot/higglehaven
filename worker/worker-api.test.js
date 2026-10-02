@@ -3601,11 +3601,13 @@ describe('Worker API', () => {
     ).run();
   }, 15000);
 
-  it('scheduled() sweeps expired sessions, verification/reset tokens, and stale rate-limit rows', async () => {
+  it('scheduled() sweeps expired sessions, verification/reset tokens, stale rate-limit rows, and abandoned model-upload reservations', async () => {
     // Two separate accounts so the sweep's selectivity is actually proven —
     // only the expired one's session should disappear, not every session in
     // the table (which would also silently log out the file's shared
-    // adminSession and every other builder created so far).
+    // adminSession and every other builder created so far). Same idea for
+    // model_upload_reservations below: one stale, one fresh, only the stale
+    // one should be gone afterward.
     const expired = await signupBuilder('prune-sweep-expired');
     const stillValid = await signupBuilder('prune-sweep-valid');
 
@@ -3627,6 +3629,12 @@ describe('Worker API', () => {
       env.DB.prepare(
         `INSERT INTO rate_limit_events (bucket_key, created_at) VALUES ('prune-sweep-stale-bucket', 1)`,
       ),
+      env.DB.prepare(
+        `INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES ('prune-sweep-stale-reservation', 1024, 1)`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at) VALUES ('prune-sweep-fresh-reservation', 1024, ?)`,
+      ).bind(Date.now()),
     ]);
 
     const controller = createScheduledController();
@@ -3647,6 +3655,12 @@ describe('Worker API', () => {
     expect((await env.DB.prepare(
       `SELECT COUNT(*) AS count FROM rate_limit_events WHERE bucket_key = 'prune-sweep-stale-bucket'`,
     ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM model_upload_reservations WHERE reservation_id = 'prune-sweep-stale-reservation'`,
+    ).first()).count).toBe(0);
+    expect((await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM model_upload_reservations WHERE reservation_id = 'prune-sweep-fresh-reservation'`,
+    ).first()).count).toBe(1);
   });
 
   it('scheduled() resolves due auctions on its own, without needing a GET /api/auctions call first (#770)', async () => {
