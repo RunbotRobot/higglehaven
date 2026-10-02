@@ -294,11 +294,19 @@ describe('Worker API', () => {
     ).bind('model_cleanup').all();
     expect(cleanupLogRows).toHaveLength(2);
     expect(cleanupLogRows.every((row) => row.admin_user_id === adminMe.body.user.userId)).toBe(true);
+    // #1202: the log entry used to record only targetCount/reclaimedBytes —
+    // an aggregate with no way to tell which R2 objects a given run actually
+    // removed. targetModelUrls (already computed by cleanupUnreferencedModels,
+    // and already returned in the HTTP response asserted on above) must be
+    // carried into the logged detail too, on both the dry-run preview and
+    // the real delete.
     expect(JSON.parse(cleanupLogRows[0].detail_json)).toEqual({
       maxDeletes: 1, dryRun: true, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect(JSON.parse(cleanupLogRows[1].detail_json)).toEqual({
       maxDeletes: 1, dryRun: false, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
