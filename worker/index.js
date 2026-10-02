@@ -9615,6 +9615,7 @@ async function handleLandCandidates(request, db, route, url) {
       plots = adjacentCandidates.results.map((row) => ({
         areaM2: row.area_m2,
         landClass: row.landlet_class,
+        landType: row.landlet_type,
         metadata: distribution ? { sizeDistribution: 'power-law-v1' } : {},
       }));
     } else if (distribution === 'power-law') {
@@ -9705,11 +9706,11 @@ async function handleLandCandidates(request, db, route, url) {
     row.ring_id = existing.ring_id;
     const update = db.prepare(`
       UPDATE landlet_candidates
-      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?,
+      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?,
           polygon_json = ?, metadata_json = ?, min_world_radius_m = ?, max_world_radius_m = ?
       WHERE landlet_id = ? AND materialized_at IS NULL
     `).bind(
-      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass,
+      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass, landlet.landType,
       JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
       landletMinWorldRadius(row), landletMaxWorldRadius(row), route[1],
     );
@@ -9906,6 +9907,7 @@ function candidateRowFromLandlet(landlet) {
     center_x_m: landlet.center.x,
     center_y_m: landlet.center.y,
     landlet_class: landlet.landClass,
+    landlet_type: landlet.landType,
     polygon_json: JSON.stringify(landlet.polygon),
     metadata_json: JSON.stringify(landlet.metadata),
   };
@@ -9914,11 +9916,11 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, polygon_json, metadata_json,
+      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, polygon_json, metadata_json,
        min_world_radius_m, max_world_radius_m, ring_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
+    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class, row.landlet_type,
     row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
 }
@@ -9954,9 +9956,9 @@ function candidateMaterializationSweepStatements(db, landletIds) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+         landlet_type, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
       SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
-             polygon_json, NULL, NULL, metadata_json, max_world_radius_m
+             landlet_type, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
       FROM landlet_candidates
       WHERE landlet_id IN (${placeholders})
         AND materialized_at IS NULL
@@ -13021,6 +13023,7 @@ function candidateFromRow(row) {
     areaM2: row.area_m2,
     center: { x: row.center_x_m, y: row.center_y_m },
     landClass: row.landlet_class,
+    landType: row.landlet_type ?? 'buildable',
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,

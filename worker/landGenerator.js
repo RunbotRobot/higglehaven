@@ -5,7 +5,7 @@ const TAU = Math.PI * 2;
 // queued directly without relying on a grid or post-generation snapping.
 export function generateLandletRing({ prefix, count, innerRadiusM, startAngleRad = 0, areaM2 = 1000, plots }) {
   const arcSegments = 4;
-  const definitions = plots || Array.from({ length: count }, () => ({ areaM2, landClass: 1 }));
+  const definitions = plots || Array.from({ length: count }, () => ({ areaM2, landClass: 1, landType: 'buildable' }));
   const areaScale = ringAreaScale(definitions.map((plot) => plot.areaM2), arcSegments);
   const angles = definitions.map((plot) => arcSegments * Math.asin(plot.areaM2 / (areaScale * arcSegments)));
   const outerRadiusM = Math.sqrt(innerRadiusM ** 2 + 2 * areaScale);
@@ -34,6 +34,7 @@ export function generateLandletRing({ prefix, count, innerRadiusM, startAngleRad
       areaM2: definition.areaM2,
       center,
       landClass: definition.landClass,
+      landType: definition.landType || 'buildable',
       polygon: worldPolygon.map((point) => ({ x: point.x - center.x, y: point.y - center.y })),
       metadata: { generated: true, generator: 'annular-ring-v1', ringIndex: index, ...definition.metadata },
     };

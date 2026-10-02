@@ -2453,6 +2453,68 @@ describe('Worker API', () => {
     expect(createLog.admin_user_id).toBe(adminUserId);
   });
 
+  // #1267 (mirrors migration 0064's own landlet-level landType coverage,
+  // applied at the candidate level): landType defaults to buildable,
+  // rejects an invalid value, carries into the materialized landlet rather
+  // than falling back to the landlets table's own default, and can be
+  // corrected while a candidate is still pending.
+  it('defaults a land candidate landType to buildable, validates it, and carries it into materialization', async () => {
+    const defaulted = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'default-land-type-candidate', name: 'Default land type candidate', areaM2: 4, center: { x: 9000, y: 9000 },
+      }),
+    }));
+    expect(defaulted.response.status).toBe(201);
+    expect(defaulted.body.candidate.landType).toBe('buildable');
+
+    const invalid = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-land-type-candidate', name: 'Invalid land type candidate', areaM2: 4,
+        center: { x: 9000, y: 9100 }, landType: 'lava',
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
+
+    const water = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'water-candidate', name: 'Water candidate', areaM2: 4, center: { x: 9000, y: 9300 }, landType: 'water',
+      }),
+    }));
+    expect(water.response.status).toBe(201);
+    expect(water.body.candidate.landType).toBe('water');
+    expect(water.body.landlet).toBeNull();
+
+    // Same "move a pending candidate's center onto the origin to trigger
+    // materialization" technique the 'updates only pending land candidates'
+    // test above already relies on — confirms the materialization sweep
+    // carries the candidate's own landType into the landlets row rather
+    // than falling back to the landlets table's own default.
+    const started = await api('/land-candidates/water-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+    }));
+    expect(started.response.status).toBe(200);
+    expect(started.body.candidate.materializedAt).not.toBeNull();
+    expect(started.body.landlet).toMatchObject({ landletId: 'water-candidate', landType: 'water' });
+
+    // Same reason the overlap test below frees 'inside-candidate': a real
+    // landlet left sitting on the world origin would otherwise block the
+    // organic-mosaic test's own origin-covering cell later in this file.
+    await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'water-candidate'").run();
+    await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'water-candidate'").run();
+
+    const corrected = await api('/land-candidates/default-land-type-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ landType: 'water' }),
+    }));
+    expect(corrected.response.status).toBe(200);
+    expect(corrected.body.candidate.landType).toBe('water');
+  });
+
   it('rejects manual/batch land candidates that would overlap existing land (#570)', async () => {
     const base = await api('/land-candidates', adminSession({
       method: 'POST',
@@ -2605,6 +2667,12 @@ describe('Worker API', () => {
 
     await expect(env.DB.prepare(`
       UPDATE landlet_candidates SET center_x_m = center_x_m + 1
+      WHERE landlet_id = 'generated-ring-001'
+    `).run()).rejects.toThrow(/generated ring candidates are immutable/);
+    // #1267: landlet_type joined the same immutability list as the other
+    // geometry/classification columns above (migrations/0108).
+    await expect(env.DB.prepare(`
+      UPDATE landlet_candidates SET landlet_type = 'water'
       WHERE landlet_id = 'generated-ring-001'
     `).run()).rejects.toThrow(/generated ring candidates are immutable/);
     const lifecycleUpdate = await env.DB.prepare(`
@@ -2953,7 +3021,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         candidates: [
-          { landletId: 'batch-inside', name: 'Batch inside', areaM2: 4, center: { x: 0, y: 25 } },
+          { landletId: 'batch-inside', name: 'Batch inside', areaM2: 4, center: { x: 0, y: 25 }, landType: 'water' },
           { landletId: 'batch-outside', name: 'Batch outside', areaM2: 4, center: { x: 1000, y: 100 } },
         ],
       }),
@@ -2961,8 +3029,12 @@ describe('Worker API', () => {
 
     expect(created.response.status).toBe(201);
     expect(created.body.candidates.map(({ landletId }) => landletId).sort()).toEqual(['batch-inside', 'batch-outside']);
+    expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-inside').landType).toBe('water');
+    expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-outside').landType).toBe('buildable');
     expect(created.body.landlets).toHaveLength(1);
-    expect(created.body.landlets[0]).toMatchObject({ landletId: 'batch-inside', status: 'generating' });
+    // #1267: the materialization sweep carries the batch candidate's own
+    // landType into the landlets row rather than defaulting it.
+    expect(created.body.landlets[0]).toMatchObject({ landletId: 'batch-inside', status: 'generating', landType: 'water' });
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-inside').materializedAt).not.toBeNull();
     expect(created.body.candidates.find(({ landletId }) => landletId === 'batch-outside').materializedAt).toBeNull();
 

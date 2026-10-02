@@ -2592,10 +2592,11 @@ Response:
 ### `PATCH /api/land-candidates/:landletId`
 
 Corrects a pending candidate's `name`, `areaM2`, `center`, `landClass`,
-`polygon`, or `metadata` before generation begins. The current implementation
-merges request fields with the existing candidate before validation. The route
-ID cannot be changed. Materialized candidates return `409`; their geometry is
-already represented by the corresponding generating landlet.
+`landType`, `polygon`, or `metadata` before generation begins. The current
+implementation merges request fields with the existing candidate before
+validation. The route ID cannot be changed. Materialized candidates return
+`409`; their geometry is already represented by the corresponding generating
+landlet.
 
 As with candidate creation, moving or reshaping a pending candidate so it now
 overlaps the current world circle immediately materializes it. The response
@@ -2604,8 +2605,14 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 ### `POST /api/land-candidates`
 
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
-`polygon`, and `metadata` fields as a landlet. If it already overlaps the
-current world circle, the API immediately creates its generating landlet.
+`landType`, `polygon`, and `metadata` fields as a landlet. `landType`
+defaults to `buildable` and must be `buildable` or `water` (same
+`landletLandType` validation as the landlet endpoint above, and the same
+"nothing produces a `water` candidate yet — this just makes the data model
+capable of representing one" scope cut). If it already overlaps the
+current world circle, the API immediately creates its generating landlet,
+carrying the candidate's own `landType` into it rather than defaulting the
+materialized landlet to `buildable` regardless of the candidate's type.
 Otherwise it remains lightweight until a later expansion first overlaps it.
 
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
