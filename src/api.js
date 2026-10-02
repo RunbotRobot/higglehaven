@@ -1180,3 +1180,14 @@ export async function fetchNearbyPresence(landletId) {
   const { avatars } = await requestJson(`/presence?landletId=${encodeURIComponent(landletId)}`);
   return avatars;
 }
+
+// #1176: the caller's own last-reported position — unlike fetchNearbyPresence
+// above, not scoped by landletId or filtered by staleness, since "wherever I
+// was last" is exactly what the "Go to Last Location" spawn button needs,
+// however long ago that was. null when the caller has never reported a
+// position at all (a brand-new account, or one that's never entered Shop
+// mode before).
+export async function fetchOwnLastPresence() {
+  const { presence } = await requestJson('/presence/me');
+  return presence;
+}
