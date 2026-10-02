@@ -1021,9 +1021,20 @@ same login-wall/fallback-to-Shop behavior "Builders" above describes for
 
 Lists sellers, oldest first. Cursor-paginated the same way
 `GET /api/builders` is (#715) — `?limit=`/`?cursor=`, ascending on
-`(createdAt, sellerId)`. No frontend caller of this endpoint exists
+`(createdAt, sellerId)`. No frontend caller of the unfiltered list exists
 today, so unlike `GET /api/builders` there was no unbounded-response
 assumption to fix first.
+
+An optional `ids` query param (comma-separated seller IDs) and an optional
+`?label=` (exact, case-insensitive match) filter work exactly like
+`GET /api/builders`'s own `ids`/`label` filters above (#1213) — same
+200-ID cap, same silent-omission-of-unknown-IDs behavior, same
+independent-filters-with-`ids`-checked-first precedence, same
+every-matching-row return since `sellers.label` has no uniqueness
+constraint either (0037_sellers.sql). Added so a shopper/builder can look
+up a specific seller's shop by name — until now the only discovery paths
+were browsing catalog items by a `sellerId` already known, or stumbling
+on products in-world.
 
 ### `POST /api/sellers`
 
@@ -3367,8 +3378,8 @@ change does.
 
 ## Friend requests
 
-docs/SPEC.md §2: "Friend/group systems: standard friend requests; social
-map shows friends' approximate location." One `friendships` row (see
+docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
+map shows an accepted friend's location." One `friendships` row (see
 `migrations/0049_friendships.sql`) per relationship, shared by both
 builders — direction preserved (`requesterBuilderId`/`recipientBuilderId`)
 so the frontend can tell "I sent this" from "I received this" without a
@@ -3377,14 +3388,17 @@ rather than deleting and recreating the row on accept. `PATCH` (accept) is
 gated to the recipient's own session, and `DELETE` to either party's — see
 each endpoint's own note below.
 
-**"Social map ... approximate location" is deliberately simplified** to
-each accepted friend's own claimed lándlet center, not a live position.
-This predates #1095's own `avatar_presence` table ("Avatar presence"
-below) — now that live position tracking exists, this section's own
-"approximate location" could in principle be upgraded to a friend's actual
-current position, but that's #1044's own remit (friend "follow"/"stay
-with"), not a change made here. A builder's claimed lándlet remains the
-one stable, already-known location the backend reports for this feature.
+**"Social map" is deliberately simplified** to each accepted friend's own
+claimed lándlet center — exact coordinates, not fuzzed (owner decision,
+#1195: a mutual accept is a real consent step, so there's no reason to
+withhold precision once it's happened; a still-*pending* request shows no
+location at all, see `otherLandlet`'s own note below) — and not a live
+position either. This predates #1095's own `avatar_presence` table
+("Avatar presence" below) — now that live position tracking exists, this
+could in principle be upgraded to a friend's actual current position, but
+that's #1044's own remit (friend "follow"/"stay with"), not a change made
+here. A builder's claimed lándlet remains the one stable, already-known
+location the backend reports for this feature.
 The frontend renders this as plain text in the Friends modal, not an
 actual graphical map widget — a real map would need its own renderer/
 camera the way the claim flyover does (a full WebGL scene), which isn't
@@ -3414,8 +3428,9 @@ The last four fields (`otherBuilderId`/`otherLabel`/`direction`/
 was made as — the same row looks different depending on who's asking (see
 `GET` below). `otherLandlet` is `null` if that builder hasn't claimed a
 lándlet yet, and picks the first one found if they somehow own more than
-one (auctions can transfer extra ones in) — good enough for "approximate
-location," not a claim about which one is their "real" home.
+one (auctions can transfer extra ones in) — good enough for this feature's
+"where do my friends live" purpose, not a claim about which one is their
+"real" home.
 
 **`otherLandlet` is also `null` while `status` is still `pending`**
 (owner, #610): a lándlet's owner is discoverable in-world just by walking
@@ -3478,6 +3493,17 @@ it doesn't exist. If the friendship is still pending and the caller is the
 `recipientBuilderId` (i.e. an actual decline, not a cancel or an unfriend),
 notifies the `requesterBuilderId`.
 
+#1197: a decline (the conditional-on-`status = 'pending'` branch above)
+that loses a race to a concurrent `PATCH` accept from the same recipient
+now gets `409` ("Friendship was accepted before this decline could take
+effect") instead of a false `{ "deleted": true }` — the response used to
+be unconditional, never checking whether the decline's own conditional
+`DELETE` actually removed a row, the same gap #353/#1006 already closed
+for the sibling `PATCH`/accept branch and the notification-firing decision
+right next to this response. A cancel/unfriend (the unconditional branch)
+is unaffected — nothing races it the same way, since it has no `WHERE
+status = ...` guard to lose against.
+
 ### Frontend wiring
 
 `#friends-btn` sits in a second row under Identity/Notices/Settings (a
@@ -3486,7 +3512,7 @@ and `#mode-nav` on a narrow viewport — not room for a fourth pill there),
 badged with the pending-incoming count exactly like `#notifications-btn`.
 `#friends-modal` has three sections — Requests (incoming pending, Accept/
 Decline), Sent (outgoing pending, Cancel), and Friends (accepted, with the
-approximate-location text and a Remove button) — all sharing one
+exact-location text and a Remove button) — all sharing one
 `.friend-row` look with different actions per section. "+ Add Friend"
 `prompt()`s for the other builder's exact label, resolves it against the
 full builder roster (`fetchBuilders()`, case-insensitive exact match), and
@@ -3503,7 +3529,12 @@ contract: self-request rejection, unknown-builder rejection, the send/
 list/accept lifecycle with direction and `otherLandlet` verified from both
 sides, duplicate-request rejection in either direction, decline (`DELETE`
 while pending) freeing the pair to request again, removing an accepted
-friendship, and the invalid-status-transition `400`. `e2e/friends.test.mjs`
+friendship, the invalid-status-transition `400`, and (#1197) a concurrent
+`PATCH`-accept-vs-`DELETE`-decline race never reporting the decline as
+successful unless the row is actually gone afterward — more than the two
+outcomes the DELETE-vs-DELETE race test above has to account for, since
+`isDecline` is decided by each request's own read of the row's status, not
+atomically with the other request's write. `e2e/friends.test.mjs`
 drives two real browser sessions (mirroring `e2e/land-auctions.test.mjs`'s
 own two-party pattern) through the actual UI: Alice sends Bob a request via
 the real "+ Add Friend" prompt, Bob sees and accepts it, both sides then
@@ -3570,6 +3601,17 @@ doesn't grow unbounded) is `pruneStaleAvatarPresence` (#1101, below),
 run from the existing `scheduled()` cron on a longer (5-minute) threshold,
 since its job is table hygiene, not hiding a briefly-stale builder.
 
+### `GET /api/presence/me` — your own last-reported position (#1176)
+
+Requires a session. Unlike `GET /api/presence?landletId=X` above, this
+returns the *caller's own* row — no `landletId` parameter, and no
+staleness filter — since "wherever I was last" is exactly what spawn
+flow's "Go to Last Location" button (below) needs, however long ago that
+report actually was. Response: `{ "presence": null }` when the caller has
+never reported a position at all (a brand-new account, or one that's
+never entered Shop mode before), otherwise `{ "presence": <avatar
+presence object, above> }`.
+
 ### `POST /api/presence` — report your own position (#1098)
 
 Requires a real, verified session (`requireSessionBuilder`). Upserts the
@@ -3613,9 +3655,11 @@ guard, and the rate limit) and `worker/presence.test.js` owns the `GET`
 contract (the anonymous-session `401`, the missing-`landletId` `400`, a
 same-landlet position being returned while the caller's own and a
 different-landlet builder's are excluded, and a stale report being
-excluded). `worker/avatar-presence-cleanup.test.js` covers
-`pruneStaleAvatarPresence` directly, seeding a long-stale and a fresh row
-via `env.DB` rather than through a real write path.
+excluded) along with `GET /api/presence/me`'s own (the anonymous-session
+`401`, `null` with no row at all, a long-stale row still being returned,
+and never leaking another builder's row). `worker/avatar-presence-cleanup.test.js`
+covers `pruneStaleAvatarPresence` directly, seeding a long-stale and a
+fresh row via `env.DB` rather than through a real write path.
 
 ## Bundles
 
@@ -6353,10 +6397,48 @@ camera's own look direction (`shopYaw`) doubles as the orbit's angle
 throughout, since "facing the center" and "the orbit position" are the
 same angle at every point on the circle. The orbit ends the instant the
 shopper gives any navigation input — a joystick deflection, a vertical
-flight button, or a fly-button tap (`stopShopSpawnRotation`, checked every
-frame in `updateShopMovement` and once directly in `toggleShopFlight`) —
-after which normal flight/movement control takes over exactly as if the
-avatar had spawned in place.
+flight button, or a fly-button tap (`stopShopSpawnRotationForNavigation`,
+checked every frame in `updateShopMovement` and once directly in
+`toggleShopFlight`) — after which normal flight/movement control takes
+over exactly as if the avatar had spawned in place.
+
+**"Go to Last Location" button** (#1176, docs/SPEC.md §1: "'Last
+Location' is offered as a choice, not automatic default") — shown
+(`#shop-last-location-btn` in `index.html`) during the rotating spawn
+orbit above, but only when `GET /api/presence/me` (above) returned a real
+last-known position for this shopper; never shown at all otherwise (a
+brand-new account, or one that's never entered Shop mode before, simply
+has nothing to offer — not escalated as a product decision, since there's
+nothing ambiguous about it). Two independent things end it:
+
+- **Clicking it** (`startGoToLastLocation`): stops the spawn orbit (plain
+  `stopShopSpawnRotation`, not the navigation-flavored wrapper below —
+  choosing this button is not "navigating on your own," so it must never
+  start the auto-hide countdown) and hides the button immediately, then
+  runs a fade-out/teleport/fade-in sequence (`updateGoToLastLocation`,
+  `SHOP_LAST_LOCATION_AVATAR_FADE_S` each way) that fades every material
+  in the avatar's own group to invisible (`setShopAvatarOpacity` — skips
+  the AFK sprite, which already drives its own opacity independently),
+  jumps the avatar and camera to the last-known position while fully
+  faded out, fades back in, then automatically hands off to the ordinary
+  `'landing'` flight state — the exact same descent-to-ground/obstruction-
+  top code (`updateShopFlight`) a manual fly-button landing already uses,
+  not a parallel implementation. No further input is needed or honored
+  mid-sequence: real joystick/look input is ignored for its duration
+  (`updateShopMovement`'s own `shopGoToLastLocationPhase` guards) rather
+  than being allowed to fight a predetermined teleport.
+- **The shopper navigating on their own instead** — ignoring the button
+  and giving real navigation input (the same input that ends the orbit
+  itself) starts a `SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S` (5-second)
+  countdown, after which the button fades out — a real CSS opacity
+  transition (`#shop-last-location-btn.visible` in `index.html`), not an
+  instant hide, per the owner's own explicit request. This path goes
+  through `stopShopSpawnRotationForNavigation`, a thin wrapper around
+  `stopShopSpawnRotation` that also starts the countdown (only once, and
+  only when a button is actually showing) — used everywhere a real
+  navigation input stops the orbit, so the click path above (which calls
+  the bare `stopShopSpawnRotation` directly) is the one deliberate
+  exception.
 
 ## Frontend-only avatar idle animation
 
@@ -7365,6 +7447,56 @@ overwhelmingly common case — an ordinary chair or brick has nothing to
 report), and shown unconditionally rather than gated on the checkbox
 below, since the async animation check doesn't wait on (or care about)
 whatever the seller ends up choosing there.
+
+### Skeleton-compatibility signature (#1162, sub-issue of #1161)
+
+The first piece of a new tracking feature (#1161): selling avatar
+animations separately from the avatar model itself. Sellers keep full
+freedom to upload any avatar with any skeleton — no mandatory standard
+rig — so a standalone animation (#1163, not yet built) needs a way to
+tell whether it's actually compatible with a given avatar's specific rig
+before a shopper buys or equips it (#1164/#1165, also not yet built):
+an animation authored for one skeleton generally doesn't play correctly
+on a different one without real retargeting, which this app doesn't do.
+
+`computeSkeletonSignature` (`src/main.js`) computes a deterministic
+signature from a model's skeleton — its `THREE.SkinnedMesh.skeleton`'s
+bone names and parent/child hierarchy — at upload time, inside
+`showUploadDimensionPreview` (awaited, unlike the animation-clip
+detection above, since `createCatalogTemplate` needs the result settled
+before the seller can submit; `loadModelGltf`'s own URL cache means this
+doesn't re-fetch anything the dimension-preview load above didn't
+already fetch). Root bones (no bone parent) and the rest (as
+`parent>child` name pairs) are each gathered and sorted independently so
+the signature doesn't depend on bone order within the file, then hashed
+to a SHA-256 hex digest — compact, and content-opaque since a rig's bone
+names aren't meaningful to store verbatim. `null` for a model with no
+skeleton at all (an ordinary rigid prop), the same "nothing to report"
+shape `loadModelAnimations` already uses for a model with no animation
+clips.
+
+Persisted as `catalog_templates.skeleton_signature` (migration 0105),
+passed through `createCatalogTemplate`/`updateCatalogTemplate` as
+`skeletonSignature` the same way `modelSizeBytes` already flows —
+`PATCH`/`PUT` merges against the existing row when omitted, so an
+unrelated edit never silently wipes it, and the "Duplicate" button
+(Seller modal) copies it by reference alongside `modelUrl` rather than
+recomputing it, since duplicating doesn't touch the underlying file.
+Server-side validation (`optionalSkeletonSignature`) only checks the
+*shape* — 64-character lowercase hex, or omitted — never re-derives it
+from the actual model file; a malformed value is rejected as a defensive
+measure, not because this server can verify it against anything.
+
+Compatibility itself is exact-match equality, not a fuzzy/partial
+comparison: `THREE.AnimationMixer` binds each keyframe track to a bone
+by name alone, so an animation plays correctly against a different
+file's skeleton only when the two skeletons share the exact same bone
+names in the exact same hierarchy — anything looser risks a silently
+broken retarget (a limb not moving, or moving through the wrong pivot)
+with no error to warn the shopper. That comparison itself, and the UI/
+runtime pieces that act on it, are #1163/#1164/#1165's own scope, not
+built yet — this piece only computes and persists the signature so they
+have something to compare against.
 
 ### The upload flow itself (#712, sub-issue of #710)
 

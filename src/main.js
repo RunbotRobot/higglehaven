@@ -116,6 +116,7 @@ import {
   deleteSavedLayout,
   reportPresence,
   fetchNearbyPresence,
+  fetchOwnLastPresence,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -1333,6 +1334,46 @@ function loadModelScene(url) {
 // wizard to surface at upload time (showUploadDimensionPreview).
 function loadModelAnimations(url) {
   return loadModelGltf(url).then((gltf) => gltf.animations);
+}
+
+// #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
+// signature of a model's skeleton — its bone names and parent/child
+// hierarchy — computed at upload time (showUploadDimensionPreview) and
+// persisted on the catalog template (skeletonSignature) alongside
+// modelSizeBytes, so a future standalone animation upload (#1163) and the
+// shop/equip UI (#1164) can compare two models' signatures for
+// compatibility by simple string equality rather than re-fetching and
+// re-parsing both models every time.
+//
+// Exact equality, not a fuzzy/partial match: Three.js's AnimationMixer
+// binds each keyframe track to a bone by name alone, so an animation
+// plays correctly against a different file's skeleton only when the two
+// skeletons share the exact same bone names in the exact same hierarchy
+// — anything looser risks a silently broken retarget (limbs not moving,
+// or moving through the wrong pivot) with no error to warn the shopper.
+// Root bones (no bone parent — normally just one, a hips/root joint, but
+// not assumed) and the rest (as parent>child edges) are each gathered and
+// sorted independently so the signature doesn't depend on the order bones
+// happen to appear in the file, then hashed to a fixed-length digest —
+// compact for storage, and content-opaque since a rig's bone names aren't
+// meaningful to store verbatim.
+//
+// Returns null for a model with no skeleton at all (an ordinary rigid
+// prop) — same "nothing to report" shape loadModelAnimations already
+// uses for a model with zero animation clips.
+async function computeSkeletonSignature(url) {
+  const gltf = await loadModelGltf(url);
+  let skinnedMesh = null;
+  gltf.scene.traverse((child) => {
+    if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
+  });
+  if (!skinnedMesh) return null;
+  const bones = skinnedMesh.skeleton.bones;
+  const roots = bones.filter((bone) => !bone.parent?.isBone).map((bone) => bone.name).sort();
+  const edges = bones.filter((bone) => bone.parent?.isBone).map((bone) => `${bone.parent.name}>${bone.name}`).sort();
+  const canonical = JSON.stringify({ roots, edges });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
@@ -2615,6 +2656,10 @@ let uploadModelUrl = null;
 // model-file-size cap — this is what step 'dimensions' passes through to
 // createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
 let uploadModelSizeBytes = null;
+// #1162: computed in showUploadDimensionPreview alongside the animation
+// detection below, passed through to createCatalogTemplate the same way
+// uploadModelSizeBytes already is.
+let uploadSkeletonSignature = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
@@ -2669,6 +2714,7 @@ function resetUploadModalToFileStep() {
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
+  uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
@@ -2811,6 +2857,15 @@ async function showUploadDimensionPreview(modelUrl) {
   const previewObject = await loadModelInstance(modelUrl);
   if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
+
+  // #1162: awaited (unlike the animation detection just below, which is
+  // fire-and-forget since it only drives a hint label) because
+  // uploadSkeletonSignature needs to be settled before the user can reach
+  // handleUploadDimensionsStep's createCatalogTemplate call — loadModelGltf
+  // caches by URL, so this doesn't re-fetch anything loadModelInstance
+  // above didn't already fetch.
+  uploadSkeletonSignature = await computeSkeletonSignature(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while computing — a newer/canceled flow owns things now
 
   // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
   // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
@@ -3055,6 +3110,7 @@ async function handleUploadDimensionsStep() {
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
+      skeletonSignature: uploadSkeletonSignature,
       sellerId: uploaderSellerId,
       // #680/#681's own "upload flow itself" was deliberately deferred as
       // separate scope — until now, category could only ever be set to
@@ -4045,8 +4101,10 @@ function renderSellerList() {
           color: template.color,
           modelUrl: template.modelUrl,
           // modelUrl is copied by reference (see this button's own comment
-          // above) — the underlying file, and so its size, is identical.
+          // above) — the underlying file, and so its size and skeleton, is
+          // identical.
           modelSizeBytes: template.modelSizeBytes,
+          skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only
@@ -5569,6 +5627,12 @@ function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  const historyLoadMoreBtn = document.createElement('button');
+  historyLoadMoreBtn.type = 'button';
+  historyLoadMoreBtn.className = 'version-action-btn';
+  historyLoadMoreBtn.textContent = 'Load more';
+  historyLoadMoreBtn.hidden = true;
+  historyField.appendChild(historyLoadMoreBtn);
   settingsSectionEl.appendChild(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
@@ -5671,14 +5735,100 @@ function renderBuildSettingsSection() {
   // with out-of-date version/activeVersionId data. Same monotonic-token
   // fix as friendsLoadToken (#448).
   let versionHistoryLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load, same shape as
+  // notificationsNextCursor (#320) and savedLayoutsNextCursor (#1215).
+  // Reset to null every time renderVersionHistory starts a fresh first
+  // page; advanced by historyLoadMoreBtn's click handler as later pages
+  // come in.
+  let versionHistoryNextCursor = null;
+  // Set by renderVersionHistory on the initial load; historyLoadMoreBtn's
+  // click handler reuses it for later pages rather than re-fetching
+  // fetchLandlet on every "Load more" click just to learn the same id again.
+  let versionHistoryActiveVersionId = null;
+
+  function appendVersionRow(version, activeVersionId) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+    const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+    info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const setLiveBtn = document.createElement('button');
+    setLiveBtn.type = 'button';
+    setLiveBtn.className = 'version-action-btn';
+    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.disabled = version.versionId === activeVersionId;
+    setLiveBtn.addEventListener('click', async () => {
+      setLiveBtn.disabled = true;
+      try {
+        await activateLandletVersion(landletId, version.versionId);
+        // Feedback goes through the shared publishStatus, not a status
+        // element inside this row — renderVersionHistory() (below) tears
+        // down and rebuilds every row's DOM, including this one, so
+        // anything set on a per-row element here would be wiped before
+        // ever actually being visible.
+        publishStatus.textContent = `Shoppers now see "${version.name}".`;
+        publishStatus.classList.remove('error');
+        renderVersionHistory();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.classList.add('error');
+        setLiveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(setLiveBtn);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'version-action-btn';
+    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+      restoreBtn.disabled = true;
+      publishStatus.textContent = 'Restoring…';
+      publishStatus.classList.remove('error');
+      try {
+        const full = await fetchLandletVersion(landletId, version.versionId);
+        await replaceLandletDraft(landletId, {
+          instances: full.instances,
+          versionName: `Restored from "${version.name}"`,
+        });
+        // Simplest correct way to get the live scene back in sync with
+        // whatever the server now holds — the same "something changed
+        // server-side, reload" pattern claimBackBtn already uses
+        // elsewhere in this file.
+        sessionStorage.setItem(START_MODE_KEY, 'build');
+        location.reload();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not restore.';
+        publishStatus.classList.add('error');
+        restoreBtn.disabled = false;
+      }
+    });
+    actions.appendChild(restoreBtn);
+
+    row.appendChild(actions);
+    historyList.appendChild(row);
+  }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    historyLoadMoreBtn.hidden = true;
+    versionHistoryNextCursor = null;
     let versions;
     let activeVersionId;
+    let nextCursor;
     try {
-      [{ versions }, { activeVersionId }] = await Promise.all([
+      [{ versions, nextCursor }, { activeVersionId }] = await Promise.all([
         fetchLandletVersions(landletId, { limit: 20 }),
         fetchLandlet(landletId),
       ]);
@@ -5697,78 +5847,27 @@ function renderBuildSettingsSection() {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
       return;
     }
-    for (const version of versions) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = version.instanceCount === 1 ? 'item' : 'items';
-      const liveTag = version.versionId === activeVersionId ? ' — live' : '';
-      info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const setLiveBtn = document.createElement('button');
-      setLiveBtn.type = 'button';
-      setLiveBtn.className = 'version-action-btn';
-      setLiveBtn.textContent = 'Set Live';
-      setLiveBtn.disabled = version.versionId === activeVersionId;
-      setLiveBtn.addEventListener('click', async () => {
-        setLiveBtn.disabled = true;
-        try {
-          await activateLandletVersion(landletId, version.versionId);
-          // Feedback goes through the shared publishStatus, not a status
-          // element inside this row — renderVersionHistory() (below) tears
-          // down and rebuilds every row's DOM, including this one, so
-          // anything set on a per-row element here would be wiped before
-          // ever actually being visible.
-          publishStatus.textContent = `Shoppers now see "${version.name}".`;
-          publishStatus.classList.remove('error');
-          renderVersionHistory();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not activate.';
-          publishStatus.classList.add('error');
-          setLiveBtn.disabled = false;
-        }
-      });
-      actions.appendChild(setLiveBtn);
-
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'version-action-btn';
-      restoreBtn.textContent = 'Restore to Editor';
-      restoreBtn.addEventListener('click', async () => {
-        if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-        restoreBtn.disabled = true;
-        publishStatus.textContent = 'Restoring…';
-        publishStatus.classList.remove('error');
-        try {
-          const full = await fetchLandletVersion(landletId, version.versionId);
-          await replaceLandletDraft(landletId, {
-            instances: full.instances,
-            versionName: `Restored from "${version.name}"`,
-          });
-          // Simplest correct way to get the live scene back in sync with
-          // whatever the server now holds — the same "something changed
-          // server-side, reload" pattern claimBackBtn already uses
-          // elsewhere in this file.
-          sessionStorage.setItem(START_MODE_KEY, 'build');
-          location.reload();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not restore.';
-          publishStatus.classList.add('error');
-          restoreBtn.disabled = false;
-        }
-      });
-      actions.appendChild(restoreBtn);
-
-      row.appendChild(actions);
-      historyList.appendChild(row);
-    }
+    for (const version of versions) appendVersionRow(version, activeVersionId);
+    versionHistoryNextCursor = nextCursor;
+    versionHistoryActiveVersionId = activeVersionId;
+    historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
   }
+
+  historyLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = versionHistoryLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    historyLoadMoreBtn.disabled = true;
+    try {
+      const { versions, nextCursor } = await fetchLandletVersions(landletId, { limit: 20, cursor: versionHistoryNextCursor });
+      if (myLoadToken !== versionHistoryLoadToken) return; // panel was reset while this page was loading
+      for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
+      versionHistoryNextCursor = nextCursor;
+      historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    } catch (err) {
+      console.warn('Could not load more versions:', err);
+    } finally {
+      historyLoadMoreBtn.disabled = false;
+    }
+  });
 
   publishBtn.addEventListener('click', async () => {
     publishBtn.disabled = true;
@@ -9131,8 +9230,8 @@ async function refreshAccountMenuTaxNotice() {
   }
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location.") Same plain
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
 // pending incoming requests rather than unread notices.
 const friendsBtn = document.getElementById('friends-btn');
@@ -9160,13 +9259,13 @@ async function refreshFriendsBadge() {
   }
 }
 
-// "Social map ... approximate location" (see worker/index.js's own comment
-// on handleFriendships for why this is simplified to a friend's claimed
-// lándlet rather than a live position) — rendered here as plain text, not
-// an actual map widget. A real map would need its own renderer/camera the
-// way the claim flyover does (a full WebGL scene, not something to spin up
-// just for a small modal list) — this ships the underlying "where do my
-// friends live" data first.
+// "Social map" (see worker/index.js's own comment on handleFriendships for
+// why this is simplified to a friend's claimed lándlet rather than a live
+// position — exact coordinates, not fuzzed, per #1195's owner decision) —
+// rendered here as plain text, not an actual map widget. A real map would
+// need its own renderer/camera the way the claim flyover does (a full
+// WebGL scene, not something to spin up just for a small modal list) —
+// this ships the underlying "where do my friends live" data first.
 function friendLocationText(friendship) {
   if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
   const { name, center } = friendship.otherLandlet;
@@ -10226,6 +10325,7 @@ const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 const shopFlyBtn = document.getElementById('shop-fly-btn');
 const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
+const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
@@ -10302,6 +10402,20 @@ const SHOP_SPAWN_START_ALTITUDE_M = 80;
 // a full revolution takes a couple of minutes, plenty of time to take in
 // the view before (or without ever) touching a control.
 const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
+// #1176: the "Go to Last Location" button's own fade in/out — same
+// duration both ways, applied via CSS transition (#shop-last-location-btn
+// in index.html), not JS-driven opacity.
+const SHOP_LAST_LOCATION_BUTTON_FADE_S = 0.4;
+// #1176 (owner, live Control Room conversation): the button disappears
+// "automatically five seconds after the shopper begins navigating on their
+// own" — i.e. ignores the rotating spawn view and starts moving/flying
+// themselves instead, as opposed to tapping the button itself (which hides
+// it immediately, no countdown — see startGoToLastLocation).
+const SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S = 5;
+// #1176: how long the avatar takes to fade out before it's teleported
+// above the last location, and again to fade back in once there — two
+// separate fades, each this long, not one round trip of this total length.
+const SHOP_LAST_LOCATION_AVATAR_FADE_S = 0.6;
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
 // governing rule, "each doubling of altitude ≈ 50% more max ground speed."
@@ -10731,10 +10845,29 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // together, resolve to wildly different angles, which reads as sharp
     // rays converging to a point rather than soft cloud cover. Rotating
     // real coordinates has no such singularity: nearby points stay nearby.
-    // Each height band rotates at a slightly different rate (the
-    // sin(heightFrac...) term) so bands shear past each other over time —
-    // that shear is what actually reads as "swirl."
-    float swirlAngle = uTime * (0.02 + 0.015 * sin(heightFrac * 6.2831));
+    // Each height band rotates at a slightly different rate so bands shear
+    // past each other over time — that shear is what actually reads as
+    // "swirl." Split into two terms: a uniform rotation (same for every
+    // height, so it has zero derivative w.r.t. heightFrac and is safe to
+    // keep accumulating forever) plus a height-dependent shear term.
+    //
+    // #1190: the height-dependent term used to be uTime * 0.015 *
+    // sin(heightFrac * 2pi) -- i.e. its own magnitude grew linearly with
+    // elapsed time forever. That means d(swirlAngle)/d(heightFrac), which
+    // directly drives how far apart in noise-space two vertically adjacent
+    // pixels sample, also grew linearly with uTime without bound: after
+    // long enough in Shop mode, adjacent height rows' samples became far
+    // enough apart to alias, visible as a seam/band (confirmed via direct
+    // footprint-heatmap debugging: fwidth(samplePos) spikes in a band near
+    // the horizon after ~20 simulated minutes, exactly where the normal
+    // render shows a washed-out edge, and is flat at t=0). Capping the
+    // term's own magnitude with a slow oscillating envelope instead of
+    // letting it grow linearly keeps that derivative bounded for any
+    // session length, while matching the original's instantaneous rate at
+    // t=0 (so a normal, short session looks identical to before).
+    float shearOmega = 0.0104719755; // 2*pi / 600s -- full envelope cycle every 10 minutes
+    float shearAmplitude = 1.4323944878; // 0.015 / shearOmega, so d/dt at t=0 matches the original 0.015 rad/s
+    float swirlAngle = uTime * 0.02 + shearAmplitude * sin(shearOmega * uTime) * sin(heightFrac * 6.2831);
     float s = sin(swirlAngle);
     float c = cos(swirlAngle);
     // Normalized by the world's own current radius (not a fixed meters
@@ -10753,7 +10886,22 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // boundary rather than a soft wisp. Widening it spreads the transition
     // across much more of the noise field's own range.
     float cloudMask = smoothstep(0.25, 0.95, clouds);
-    float visibility = heightFrac * cloudMask * 0.5; // kept subtle — an overlay, not a repaint
+    // #1190: the fbm() octave fade above suppresses each octave once its
+    // own period aliases (confirmed via direct visual debugging this
+    // *is* firing, aggressively, for the higher octaves near the apex) —
+    // but the lowest surviving octave can still alias on its own right at
+    // the literal pole, where even a single noise-space cycle collapses
+    // into a handful of screen pixels. Fading the whole cloud overlay out
+    // by proximity to true zenith (not a further per-octave tweak, which
+    // #1190's own investigation already tried and found didn't track the
+    // actual aliasing) sidesteps that degenerate case entirely: right at
+    // the pole, the overlay converges to 0 and only vColor's own smooth,
+    // noise-free gradient remains — nothing left there to alias.
+    // length(normalizedXY) is the pole-distance in sin(angle-from-zenith)
+    // terms, independent of the current world radius (see normalizedXY's
+    // own comment) — 0 at the apex, growing toward the horizon.
+    float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
+    float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
     gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
   }
@@ -11077,6 +11225,16 @@ function bindShopFlyToggle(el) {
   });
 }
 bindShopFlyToggle(shopFlyBtn);
+
+// #1176: "Go to Last Location" — see startGoToLastLocation's own comment.
+// A plain click, not pointerdown like the fly button above: this one has
+// no in-air-vs-grounded ambiguity to resolve quickly, and it's only ever
+// shown during the spawn orbit anyway, never competing with another
+// control for the same tap.
+shopLastLocationBtn.addEventListener('click', () => {
+  if (!shopActive) return;
+  startGoToLastLocation();
+});
 
 // A double-tap/double-press, not a single one, so an ordinary spacebar
 // press while, say, a builder is just looking around with keyboard focus
@@ -11460,6 +11618,20 @@ let shopLastSpacePressAt = -Infinity;
 let shopSpawnRotating = false;
 let shopSpawnOrbitRadiusM = 0;
 
+// #1176: the shopper's own last-reported avatar_presence position (fetched
+// once in enterShopMode via fetchOwnLastPresence), or null when there is
+// none (a brand-new account, or one that's never entered Shop mode
+// before) — the "Go to Last Location" button is only ever shown when this
+// is non-null. shopLastLocationHideTimerS counts seconds since the
+// shopper began navigating on their own (null while not counting — see
+// stopShopSpawnRotationForNavigation); shopGoToLastLocationPhase/
+// ElapsedS drive the click-triggered fade-out/teleport/fade-in sequence
+// (see updateGoToLastLocation) — null/0 while no such sequence is running.
+let shopLastLocation = null;
+let shopLastLocationHideTimerS = null;
+let shopGoToLastLocationPhase = null; // null | 'fadingOut' | 'fadingIn'
+let shopGoToLastLocationElapsedS = 0;
+
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
 // mid-stride — and phase only advances while actually moving, so a full
@@ -11635,10 +11807,12 @@ function setShopFlyBtnFlying(flying) {
 // own starting altitude (shopFlightLandingStartAltitudeM) so its descent
 // ramps from wherever the player actually was, not always the same height.
 function toggleShopFlight() {
-  // #1175: a deliberate tap of the fly button is navigation input same as
-  // any joystick deflection — stop the hands-off spawn orbit immediately
-  // rather than leaving it fighting the player's own takeoff/landing.
-  stopShopSpawnRotation();
+  // #1175/#1176: a deliberate tap of the fly button is navigation input
+  // same as any joystick deflection — stop the hands-off spawn orbit
+  // immediately rather than leaving it fighting the player's own
+  // takeoff/landing, and start the "Go to Last Location" button's own
+  // auto-hide countdown the same way (see stopShopSpawnRotationForNavigation).
+  stopShopSpawnRotationForNavigation();
   if (shopFlightState === 'grounded') {
     shopFlightState = 'takingOff';
     shopFlightTransitionElapsedS = 0;
@@ -11665,6 +11839,107 @@ function toggleShopFlight() {
 // itself.
 function stopShopSpawnRotation() {
   shopSpawnRotating = false;
+}
+
+// #1176: the navigation-input-specific wrapper around stopShopSpawnRotation
+// above — also starts the "Go to Last Location" button's own 5-second
+// auto-hide countdown, but only the first time (shopLastLocationHideTimerS
+// stays non-null once started, so a second navigation input while it's
+// already counting down doesn't restart the clock), and only when the
+// orbit was actually still running (a tap/deflection that arrives after the
+// orbit already stopped itself isn't a new "the shopper began navigating"
+// moment) and there's a button showing at all to hide. Every navigation-
+// input path (the joystick/vertical-button checks in updateShopMovement,
+// the fly-button tap in toggleShopFlight) calls this instead of the bare
+// stopShopSpawnRotation — the one exception is startGoToLastLocation
+// below, since clicking that button is not "navigating on their own."
+function stopShopSpawnRotationForNavigation() {
+  const wasRotating = shopSpawnRotating;
+  stopShopSpawnRotation();
+  if (wasRotating && shopLastLocation && shopLastLocationHideTimerS === null) {
+    shopLastLocationHideTimerS = 0;
+  }
+}
+
+// #1176: fades every material in the avatar's own group uniformly — used
+// by the "Go to Last Location" sequence's fade-out/fade-in (see
+// updateGoToLastLocation). Skips the AFK sprite: that one already drives
+// its own opacity every frame from shopAfkBlend (updateShopAvatarIdle),
+// independently of this sequence, and fighting it here would just lose to
+// whichever ran later this same frame.
+function setShopAvatarOpacity(opacity) {
+  shopAvatar.group.traverse((object) => {
+    if (object === shopAvatar.afkSprite || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = opacity;
+    }
+  });
+}
+
+// #1176: click handler for #shop-last-location-btn. Stops the spawn orbit
+// (plain stopShopSpawnRotation — clicking this button is the shopper
+// choosing the rotating view's own offered alternative, not "navigating on
+// their own," so it must never start the auto-hide countdown) and hides
+// the button immediately (no fade, no countdown — it's served its purpose
+// the instant it's tapped), then hands off to updateGoToLastLocation for
+// the actual fade-out/teleport/fade-in/auto-land sequence.
+function startGoToLastLocation() {
+  if (!shopLastLocation || shopGoToLastLocationPhase) return;
+  stopShopSpawnRotation();
+  shopLastLocationHideTimerS = null;
+  shopLastLocationBtn.classList.remove('visible');
+  shopGoToLastLocationPhase = 'fadingOut';
+  shopGoToLastLocationElapsedS = 0;
+}
+
+// #1176: the click-triggered sequence itself — fade the avatar out, jump
+// it (and the camera, via shopYaw/shopAvatarFacing) above the last
+// reported location once fully invisible, fade back in, then hand off to
+// the ordinary 'landing' flight state (updateShopFlight already knows how
+// to fly that down to the real ground/obstruction top — see its own
+// comment) so the rest of the descent is exactly the same code path a
+// manual fly-button landing already uses, not a parallel one. Called every
+// frame from updateShopMovement; a no-op whenever no sequence is running.
+function updateGoToLastLocation(dt) {
+  if (!shopGoToLastLocationPhase) return;
+  shopGoToLastLocationElapsedS += dt;
+  const t = Math.min(1, shopGoToLastLocationElapsedS / SHOP_LAST_LOCATION_AVATAR_FADE_S);
+  if (shopGoToLastLocationPhase === 'fadingOut') {
+    setShopAvatarOpacity(1 - t);
+    if (t < 1) return;
+    shopAvatarPosition.x = shopLastLocation.x;
+    shopAvatarPosition.y = shopLastLocation.y;
+    shopFlightState = 'flying';
+    shopFlightTransitionElapsedS = 0;
+    shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
+    shopAvatarPosition.z =
+      shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    // Face whichever direction the shopper was last facing, if known —
+    // falls back to whatever shopYaw already was (invisible either way at
+    // this exact instant, so it's never a visible jump) rather than
+    // guessing a direction that isn't actually meaningful here.
+    if (shopLastLocation.heading !== null && shopLastLocation.heading !== undefined) {
+      shopYaw = shopLastLocation.heading;
+    }
+    shopAvatarFacing = shopYaw;
+    applyShopCameraOrientation();
+    shopGoToLastLocationPhase = 'fadingIn';
+    shopGoToLastLocationElapsedS = 0;
+    setShopAvatarOpacity(0);
+  } else {
+    setShopAvatarOpacity(t);
+    if (t < 1) return;
+    shopGoToLastLocationPhase = null;
+    // Auto-begin the descent the instant the fade-in finishes — same
+    // landing ramp a manual fly-button tap starts (see toggleShopFlight),
+    // just triggered automatically instead of waiting for one.
+    shopFlightLandingStartAltitudeM = shopFlightAltitudeM;
+    shopFlightState = 'landing';
+    shopFlightTransitionElapsedS = 0;
+    setShopFlyBtnFlying(false);
+  }
 }
 
 // #1175: drives the spawn-time "slow clockwise rotating aerial shot at a
@@ -11852,13 +12127,32 @@ function updateShopMovement(now) {
   // fire, so no extra guard is needed to keep them from fighting the orbit.
   if (shopSpawnRotating) {
     if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 || shopVerticalInput !== 0) {
-      stopShopSpawnRotation();
+      stopShopSpawnRotationForNavigation();
     } else {
       updateShopSpawnRotation(dt);
     }
   }
+  // #1176: counts down to the "Go to Last Location" button's own auto-hide
+  // (started by stopShopSpawnRotationForNavigation above, or by the fly
+  // button's own tap in toggleShopFlight — either way, "the shopper began
+  // navigating on their own") independently of whichever phase the orbit
+  // or the button's own click sequence is in.
+  if (shopLastLocationHideTimerS !== null) {
+    shopLastLocationHideTimerS += dt;
+    if (shopLastLocationHideTimerS >= SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S) {
+      shopLastLocationBtn.classList.remove('visible');
+      shopLastLocationHideTimerS = null;
+    }
+  }
+  updateGoToLastLocation(dt);
 
-  if (shopLookX !== 0 || shopLookY !== 0) {
+  // #1176: the fade-out/teleport/fade-in sequence owns the camera/avatar
+  // completely once it's running (startGoToLastLocation already stopped
+  // the spawn orbit before this point) — "no further input needed
+  // mid-sequence" per the owner's own spec means real joystick/look input
+  // is simply ignored for its duration, rather than fighting a predetermined
+  // teleport the moment it lands.
+  if (!shopGoToLastLocationPhase && (shopLookX !== 0 || shopLookY !== 0)) {
     shopYaw -= shopLookX * SHOP_LOOK_SPEED_RAD_S * dt;
     shopPitch = Math.max(
       -SHOP_MAX_PITCH,
@@ -11871,7 +12165,7 @@ function updateShopMovement(now) {
   const airborne = shopFlightState !== 'grounded';
 
   let moveMagnitude = 0;
-  if (shopMoveX !== 0 || shopMoveY !== 0) {
+  if (!shopGoToLastLocationPhase && (shopMoveX !== 0 || shopMoveY !== 0)) {
     // Movement stays in the horizontal plane (forward/right with their Z
     // dropped) so looking up or down while walking/flying doesn't also
     // steer altitude — that's updateShopFlight's own separate concern.
@@ -13282,6 +13576,32 @@ async function enterShopMode() {
     }
   }
 
+  // #1176: the shopper's own last-reported position, if any — powers the
+  // "Go to Last Location" button shown during the spawn orbit below. Never
+  // blocks Shop mode entry on failure, same as equippedAvatarModelUrl just
+  // above — but unlike that one, this also skips the call entirely during
+  // accountRecoveryFlowActive, not just when logged out: GET /api/presence/me
+  // is gated by requireSessionBuilder (full age/trust-tier verification,
+  // same bar every other presence endpoint already uses), while the
+  // equipped-avatar endpoint above only requires a login. A logged-in-but-
+  // not-yet-verified account reaching Shop mode specifically through the
+  // accountRecoveryFlowActive path (its own comment above: "mid verify-
+  // email/password-reset flow") would otherwise call this anyway and get a
+  // real 403 — caught here same as any other failure, but Chromium still
+  // logs the failed resource load as a console error regardless of the
+  // catch (the exact e2e/auth.test.mjs failure mode equippedAvatarModelUrl's
+  // own comment already describes for a 401; this is that same shape for a
+  // 403 instead, found via that file's own errors.length === 0 check during
+  // its reset-password flow). null (no button shown) either way.
+  shopLastLocation = null;
+  if (currentAuthUser && !accountRecoveryFlowActive) {
+    try {
+      shopLastLocation = await fetchOwnLastPresence();
+    } catch (err) {
+      console.warn('Could not fetch last known location:', err);
+    }
+  }
+
   let world;
   let allLandlets;
   try {
@@ -13472,6 +13792,15 @@ async function enterShopMode() {
   // wait until here, unlike the other Shop HUD elements above).
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
+  // #1176: the "Go to Last Location" button, offered only when there's
+  // actually somewhere to offer — reset alongside the rest of this
+  // function's own re-entrant spawn state (see its opening comment on
+  // Shop mode being re-enterable without a reload) rather than carrying
+  // over a previous round trip's now-stale countdown/sequence state.
+  shopLastLocationHideTimerS = null;
+  shopGoToLastLocationPhase = null;
+  shopGoToLastLocationElapsedS = 0;
+  shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
   shopPitch = -0.12;
   // shopYaw (set above, the orbit's starting angle) already faces the

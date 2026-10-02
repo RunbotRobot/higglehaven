@@ -78,4 +78,52 @@ describe('Avatar presence (#1095)', () => {
       expect(got.body.avatars).toEqual([]);
     });
   });
+
+  // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
+  // unlike GET /presence above, this is the caller's own row, with no
+  // landletId required and no staleness filter — "wherever I was last,"
+  // however long ago that was.
+  describe('GET /presence/me', () => {
+    it('requires a session', async () => {
+      const anon = await api('/presence/me');
+      expect(anon.response.status).toBe(401);
+    });
+
+    it('returns null when the caller has never reported a position', async () => {
+      const builder = await signupBuilder('presence-me-none');
+      const got = await api('/presence/me', builder.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.presence).toBeNull();
+    });
+
+    it('returns the caller\'s own last-reported row, even if long stale', async () => {
+      const builder = await signupBuilder('presence-me-stale-ok');
+      await setPresence(builder.builderId, {
+        landletId: 'presence-me-landlet', x: 7, y: 8, z: 9, heading: 45,
+        updatedAt: new Date(Date.now() - 86_400_000).toISOString(),
+      });
+
+      const got = await api('/presence/me', builder.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.presence).toEqual({
+        builderId: builder.builderId,
+        landletId: 'presence-me-landlet',
+        x: 7,
+        y: 8,
+        z: 9,
+        heading: 45,
+        updatedAt: expect.any(String),
+      });
+    });
+
+    it('never returns another builder\'s row', async () => {
+      const builder = await signupBuilder('presence-me-isolation-self');
+      const other = await signupBuilder('presence-me-isolation-other');
+      await setPresence(other.builderId, { landletId: 'presence-me-landlet-2', x: 1, y: 1, z: 1 });
+
+      const got = await api('/presence/me', builder.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.presence).toBeNull();
+    });
+  });
 });
