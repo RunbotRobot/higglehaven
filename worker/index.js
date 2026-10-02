@@ -1529,10 +1529,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
         [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
-      for (const template of templates) {
-        const oldDimensions = oldDimensionsById.get(template.templateId);
-        if (oldDimensions) await notifyBuildersOfDimensionChange(db, template, oldDimensions);
-      }
+      const dimensionChangeCandidates = templates
+        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId) }))
+        .filter(({ oldDimensions }) => oldDimensions);
+      await notifyBuildersOfDimensionChangeBatch(db, dimensionChangeCandidates);
     }
     const placeholders = templates.map(() => '?').join(', ');
     const stored = await db.prepare(`
@@ -2131,6 +2131,53 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
 
   const fmt = (m) => `${m.toFixed(2)}m`;
   await db.batch(results.map((row) => {
+    const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
+    return db.prepare(
+      'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
+    ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId);
+  }));
+}
+
+// #1220: list-endpoint version of the above, same "N queries -> one grouped
+// query + one batched insert" idiom existingSellerIds/recomputeLandCapsBatch
+// already use elsewhere in this file. PUT /api/catalog/batch's own resize
+// loop used to call notifyBuildersOfDimensionChange once per resized
+// template — up to 100 sequential SELECT+batch round trips for a full
+// batch — instead of this single pair. `candidates` is every batch item
+// that has a pre-existing row at all (a brand-new template via POST, or a
+// PUT id with no matching row, was never a candidate); the actual
+// "did its dimensions really change" filter (mirroring the singular
+// function's own early-return) happens here, in-memory, so the grouped
+// query below only ever asks about templates genuinely worth notifying on.
+async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
+  const changed = candidates.filter(({ template, oldDimensions }) => {
+    const { width, depth, height } = template.dimensions;
+    return Math.abs(width - oldDimensions.width) > 1e-4 ||
+      Math.abs(depth - oldDimensions.depth) > 1e-4 ||
+      Math.abs(height - oldDimensions.height) > 1e-4;
+  });
+  if (changed.length === 0) return;
+
+  const templateIds = changed.map(({ template }) => template.templateId);
+  const placeholders = templateIds.map(() => '?').join(', ');
+  // #920's own grouping reasoning applies per template here too — grouped
+  // by (template_id, builder_id) so a builder with several placed copies
+  // of the same resized template still gets one accurate count, not a
+  // hardcoded singular.
+  const { results } = await db.prepare(`
+    SELECT pi.template_id AS templateId, l.owner_builder_id AS builderId, COUNT(*) AS instanceCount
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    WHERE pi.template_id IN (${placeholders}) AND l.owner_builder_id IS NOT NULL
+    GROUP BY pi.template_id, l.owner_builder_id
+  `).bind(...templateIds).all();
+  if (results.length === 0) return;
+
+  const templateById = new Map(changed.map(({ template }) => [template.templateId, template]));
+  const fmt = (m) => `${m.toFixed(2)}m`;
+  await db.batch(results.map((row) => {
+    const template = templateById.get(row.templateId);
+    const { width, depth, height } = template.dimensions;
     const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
     return db.prepare(
       'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',

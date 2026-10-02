@@ -1099,6 +1099,131 @@ describe('Worker API', () => {
     expect(notices.body.notifications[0].message).toContain('you have 3 placed');
   });
 
+  // #1220: notifyBuildersOfDimensionChangeBatch replaced a per-template loop
+  // (one SELECT+batch-insert round trip per resized template) with a single
+  // grouped query across every resized template in the call, then one
+  // combined insert. The single-resize test above can't catch a mapping bug
+  // in that grouping (e.g. row A's notification text accidentally built from
+  // template B's new dimensions) since it only ever resizes one template at
+  // a time -- this resizes two different templates, each hosted by its own
+  // builder, in the same batch call, and checks each builder's notification
+  // names the right template with the right new size.
+  it('correctly attributes each notification when a batch PUT resizes multiple templates with different hosting builders at once', async () => {
+    const templateA = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'batch-multi-resize-template-a', name: 'Batch multi resize A',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(templateA.response.status).toBe(201);
+    const templateB = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'batch-multi-resize-template-b', name: 'Batch multi resize B',
+        color: '#654321', dimensions: { width: 3, depth: 3, height: 3 },
+      }),
+    });
+    expect(templateB.response.status).toBe(201);
+
+    const builderA = await signupBuilder('batch-multi-resize-builder-a');
+    await api('/landlets', builderA.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'batch-multi-resize-landlet-a', name: 'Batch multi resize landlet A', areaM2: 100,
+        status: 'claimed', ownerBuilderId: builderA.builderId, center: { x: 6400, y: 0 },
+      }),
+    }));
+    expect((await api('/instances', builderA.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'batch-multi-resize-instance-a', landletId: 'batch-multi-resize-landlet-a',
+        templateId: 'batch-multi-resize-template-a', x: 0, y: 0,
+      }),
+    }))).response.status).toBe(201);
+
+    const builderB = await signupBuilder('batch-multi-resize-builder-b');
+    await api('/landlets', builderB.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'batch-multi-resize-landlet-b', name: 'Batch multi resize landlet B', areaM2: 100,
+        status: 'claimed', ownerBuilderId: builderB.builderId, center: { x: 6600, y: 0 },
+      }),
+    }));
+    expect((await api('/instances', builderB.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'batch-multi-resize-instance-b', landletId: 'batch-multi-resize-landlet-b',
+        templateId: 'batch-multi-resize-template-b', x: 0, y: 0,
+      }),
+    }))).response.status).toBe(201);
+
+    const resized = await api('/catalog/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        { templateId: 'batch-multi-resize-template-a', name: 'Batch multi resize A', color: '#123456', dimensions: { width: 2, depth: 2, height: 2 } },
+        { templateId: 'batch-multi-resize-template-b', name: 'Batch multi resize B', color: '#654321', dimensions: { width: 9, depth: 9, height: 9 } },
+      ] }),
+    });
+    expect(resized.response.status).toBe(200);
+
+    const noticesA = await api('/notifications', builderA.session());
+    expect(noticesA.body.notifications).toHaveLength(1);
+    expect(noticesA.body.notifications[0].templateId).toBe('batch-multi-resize-template-a');
+    expect(noticesA.body.notifications[0].message).toContain('Batch multi resize A');
+    expect(noticesA.body.notifications[0].message).toContain('2.00m x 2.00m x 2.00m');
+
+    const noticesB = await api('/notifications', builderB.session());
+    expect(noticesB.body.notifications).toHaveLength(1);
+    expect(noticesB.body.notifications[0].templateId).toBe('batch-multi-resize-template-b');
+    expect(noticesB.body.notifications[0].message).toContain('Batch multi resize B');
+    expect(noticesB.body.notifications[0].message).toContain('9.00m x 9.00m x 9.00m');
+  });
+
+  // #1220: the fix above is purely a performance one (identical observable
+  // notifications either way -- the old per-template loop was never
+  // behaviorally wrong, just N round trips instead of 1), so the real thing
+  // worth regression-testing is the round-trip count itself, not just the
+  // notification content the test above already covers. Hooks env.DB.prepare
+  // (same binding the worker's own fetch handler sees) to count how many
+  // times the placed_instances lookup query actually runs while resizing
+  // several templates in one batch call -- should be exactly 1 (one grouped
+  // query covering every resized template), not one per template.
+  it('looks up hosting builders in a single grouped query, not once per resized template', async () => {
+    for (const id of ['x', 'y', 'z']) {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `batch-resize-query-count-template-${id}`, name: `Batch resize query count ${id}`,
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+    }
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let placedInstancesLookupCount = 0;
+    env.DB.prepare = (sql) => {
+      if (sql.includes('FROM placed_instances')) placedInstancesLookupCount += 1;
+      return originalPrepare(sql);
+    };
+    let resized;
+    try {
+      resized = await api('/catalog/batch', {
+        method: 'PUT',
+        body: JSON.stringify({ templates: ['x', 'y', 'z'].map((id) => ({
+          templateId: `batch-resize-query-count-template-${id}`, name: `Batch resize query count ${id}`,
+          color: '#123456', dimensions: { width: 2, depth: 2, height: 2 },
+        })) }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(resized.response.status).toBe(200);
+    expect(placedInstancesLookupCount).toBe(1);
+  });
+
   // #932: unlike every other single-item update handler on a comparably-
   // shaped resource (builder/seller rename, bundles PATCH, friendships
   // PATCH), this handler never checked whether its own UPDATE actually
