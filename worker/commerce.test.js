@@ -100,6 +100,42 @@ describe('Auctions', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1290: unlike the auction-start POST above (and virtually every other
+  // notification-firing mutation in this file -- friend requests/friendship
+  // mutations, bundle mutations, catalog PATCHes), placing a bid itself had
+  // no rate limit at all, despite notifyOfNewBid unconditionally notifying
+  // the seller (and the previous high bidder, on an outbid) on every call.
+  // Same pre-seeded-table approach as the auction-start test above --
+  // sidesteps looping 20 real bids (each needing a strictly higher amount
+  // than the last) just to prove the limiter itself fires.
+  it('rate-limits repeated bids from the same builder', async () => {
+    const owner = await signupBuilder('auction-bid-rate-limit-owner');
+    const bidder = await signupBuilder('auction-bid-rate-limit-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('auction-bid-rate-limit-landlet');
+    await claim('auction-bid-rate-limit-landlet', owner);
+    const started = await api('/landlets/auction-bid-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const bucketKey = `auction-bid:${bidder.builderId}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 100 }),
+    }));
+    expect(atLimit.response.status).toBe(201);
+
+    const limited = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 200 }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');
@@ -3757,9 +3793,10 @@ describe('Simulated purchases', () => {
       expect(summary.body.heldCents).toBe(0);
     });
 
-    it('becomes available once the buyer confirms delivery via their own token link, idempotently', async () => {
+    it('becomes available once the buyer confirms delivery via their own token link, idempotently, and notifies the seller', async () => {
       const builder = await signupBuilder('payout-confirm-builder');
       const seller = await createConnectedSeller('payout-confirm-seller');
+      const sellerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
       const rawToken = `test-delivery-token-${crypto.randomUUID()}`;
       await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
 
@@ -3776,9 +3813,23 @@ describe('Simulated purchases', () => {
       expect(summary.body.availableCents).toBe(4900);
       expect(summary.body.heldCents).toBe(0);
 
-      // Idempotent — a second visit to the same link is a no-op, not an error.
+      // #1289: the seller should passively learn their payout was just
+      // released early, the same way every other transactional event in
+      // this file notifies the other party.
+      const { results: notifications } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(sellerBuilderId).all();
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].message).toContain('delivery was confirmed by the buyer');
+
+      // Idempotent — a second visit to the same link is a no-op, not an
+      // error, and doesn't re-notify the seller.
       const confirmedAgain = await api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) });
       expect(confirmedAgain.response.status).toBe(200);
+      const { results: notificationsAfterSecondConfirm } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(sellerBuilderId).all();
+      expect(notificationsAfterSecondConfirm).toHaveLength(1);
     });
 
     // #1248: this endpoint is unauthenticated by design (no buyer account
