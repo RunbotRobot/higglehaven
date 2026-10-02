@@ -29,11 +29,14 @@ const GLB_JSON_CHUNK = 0x4e4f534a;
 // src/main.js, a fixed 128x128 canvas) — nowhere near this cap in
 // practice, but bounded independently of MAX_MODEL_BYTES since this is a
 // completely different upload shape (a JSON data URL, not a multipart
-// file) with its own validation path. Deliberately skips the heavier
-// reservation dance handleModelUpload uses for MAX_TOTAL_STORAGE_BYTES —
-// a thumbnail this small, content-addressed and deduplicated the same
-// way, gated behind a real owning seller, can't meaningfully move that
-// aggregate budget the way concurrent large model uploads could race it.
+// file) with its own validation path.
+//
+// #775: despite being this small, a thumbnail upload DOES go through the
+// same reservation dance handleModelUpload uses for
+// MAX_TOTAL_STORAGE_BYTES (see POST /api/catalog/:templateId/thumbnail's
+// own reserveStorageBudget call) — a re-rendered thumbnail hashes
+// differently each time, defeating the content-addressed dedup this
+// comment used to lean on to argue the reservation was unnecessary.
 const MAX_THUMBNAIL_BYTES = 300 * 1024;
 const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 // #823: the 8-byte PNG signature (89 50 4E 47 0D 0A 1A 0A) — same idea as
@@ -4106,11 +4109,13 @@ async function handleStartAuction(request, db, landletId) {
   const startingBidCents = input.startingBidCents === undefined ? 0 : nonnegativeInteger(input.startingBidCents, 'startingBidCents');
   // "Default 24-hour duration for inactivity-triggered listings; builder-
   // initiated voluntary auctions may set custom duration" — every auction
-  // reachable today is builder-initiated (there's no inactivity-detection
-  // job in this dev-mode backend to trigger one automatically), so this
-  // default just applies uniformly. Capped at a year as a sanity bound
-  // against a malformed request producing an absurd ends_at — not itself
-  // a spec requirement.
+  // reachable through this endpoint is still builder-initiated. #325's
+  // autoAuctionInactiveLandlets (the inactivity-detection job this comment
+  // used to say didn't exist) never calls handleStartAuction at all — it
+  // INSERTs its own auction row directly and duplicates this same
+  // 24-hour default independently (see its own comment). Capped at a year
+  // as a sanity bound against a malformed request producing an absurd
+  // ends_at — not itself a spec requirement.
   const durationHours = input.durationHours === undefined ? 24 : positiveInteger(input.durationHours, 'durationHours');
   if (durationHours > 8760) throw new HttpError('durationHours must be 8760 (one year) or fewer', 400);
 
@@ -4705,7 +4710,11 @@ async function handleAuctionBids(request, db, route) {
     const { results } = await db.prepare(`
       SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 200
     `).bind(auctionId).all();
-    return json({ bids: results.map(auctionBidFromRow) });
+    // Same totalCount-alongside-the-cap pattern as handleSignPosts/
+    // handleCalendarEvents (#356) — lets a caller tell the 200-row cap
+    // ever actually truncates something.
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM auction_bids WHERE auction_id = ?').bind(auctionId).first();
+    return json({ bids: results.map(auctionBidFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST') {
@@ -9621,6 +9630,7 @@ async function handleLandCandidates(request, db, route, url) {
       plots = adjacentCandidates.results.map((row) => ({
         areaM2: row.area_m2,
         landClass: row.landlet_class,
+        landType: row.landlet_type,
         metadata: distribution ? { sizeDistribution: 'power-law-v1' } : {},
       }));
     } else if (distribution === 'power-law') {
@@ -9711,11 +9721,11 @@ async function handleLandCandidates(request, db, route, url) {
     row.ring_id = existing.ring_id;
     const update = db.prepare(`
       UPDATE landlet_candidates
-      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?,
+      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?,
           polygon_json = ?, metadata_json = ?, min_world_radius_m = ?, max_world_radius_m = ?
       WHERE landlet_id = ? AND materialized_at IS NULL
     `).bind(
-      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass,
+      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass, landlet.landType,
       JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
       landletMinWorldRadius(row), landletMaxWorldRadius(row), route[1],
     );
@@ -9912,6 +9922,7 @@ function candidateRowFromLandlet(landlet) {
     center_x_m: landlet.center.x,
     center_y_m: landlet.center.y,
     landlet_class: landlet.landClass,
+    landlet_type: landlet.landType,
     polygon_json: JSON.stringify(landlet.polygon),
     metadata_json: JSON.stringify(landlet.metadata),
   };
@@ -9920,11 +9931,11 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, polygon_json, metadata_json,
+      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, polygon_json, metadata_json,
        min_world_radius_m, max_world_radius_m, ring_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
+    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class, row.landlet_type,
     row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
 }
@@ -9960,9 +9971,9 @@ function candidateMaterializationSweepStatements(db, landletIds) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+         landlet_type, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
       SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
-             polygon_json, NULL, NULL, metadata_json, max_world_radius_m
+             landlet_type, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
       FROM landlet_candidates
       WHERE landlet_id IN (${placeholders})
         AND materialized_at IS NULL
@@ -11788,6 +11799,8 @@ async function handlePurchases(request, env, route, url) {
 // do this automatically) — starts the 7-day fallback clock for a physical
 // real-money purchase's payout hold (see PHYSICAL_GOOD_HOLD_DAYS). A
 // digital good or a simulated (higgles) purchase has nothing to ship.
+const MARK_SHIPPED_RATE_LIMIT_MAX = 20;
+
 async function handleMarkShipped(request, env, purchaseId) {
   const db = env.DB;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -11805,6 +11818,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   } else {
     admin = await requireAdmin(request, db);
   }
+  await checkRateLimit(db, `mark-shipped:${admin ? admin.user_id : purchase.seller_id}`, MARK_SHIPPED_RATE_LIMIT_MAX);
   if (!purchase.payment_intent_id) {
     throw new HttpError('Only real-money purchases can be marked shipped', 400);
   }
@@ -12035,23 +12049,32 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
   // purchase, so this can now correctly check whether any OTHER unrefunded
   // purchase still exists before revoking — only clearing owned_avatars/
   // equip state once the count actually reaches zero.
+  // #1261: the count-check used to be a separate SELECT, read after the
+  // purchase_id row's own DELETE but before the owned_avatars DELETE/equip
+  // clear below -- a non-atomic gap a concurrent grant of a NEW, unrefunded
+  // purchase of the exact same (builder_id, template_id) could land in,
+  // between the stale "nothing else backs this" read and the unconditional
+  // delete that read justified. Folding the check directly into each
+  // statement's own WHERE NOT EXISTS, inside the same db.batch as the
+  // purchase_id row's own DELETE, makes the whole decrement-and-maybe-
+  // revoke one atomic transaction -- no separate read for another
+  // concurrent request's write to land in the middle of.
   const grant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_avatar_purchases WHERE purchase_id = ?',
   ).bind(purchase.purchase_id).first();
   if (grant) {
-    await db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
-    const stillOwnedViaOtherPurchase = await db.prepare(
-      'SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?',
-    ).bind(grant.builder_id, grant.template_id).first();
-    if (!stillOwnedViaOtherPurchase) {
-      await db.batch([
-        db.prepare('DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?')
-          .bind(grant.builder_id, grant.template_id),
-        db.prepare(
-          'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
-        ).bind(grant.builder_id, grant.template_id),
-      ]);
-    }
+    await db.batch([
+      db.prepare('DELETE FROM owned_avatar_purchases WHERE purchase_id = ?').bind(purchase.purchase_id),
+      db.prepare(`
+        DELETE FROM owned_avatars WHERE builder_id = ? AND template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(grant.builder_id, grant.template_id, grant.builder_id, grant.template_id),
+      db.prepare(`
+        UPDATE builders SET equipped_avatar_template_id = NULL
+        WHERE builder_id = ? AND equipped_avatar_template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_avatar_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(grant.builder_id, grant.template_id, grant.builder_id, grant.template_id),
+    ]);
   }
 
   // #1163/#1251: same purchase_id-keyed, purchase-time-locked revocation as
@@ -12059,23 +12082,23 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
   // #1164 later added an "equipped" column (builders.equipped_animation_
   // template_id) that this block never got updated to clear, the same gap
   // #754 fixed for avatars.
+  // #1261: same atomicity fix as the owned_avatars block above, same reason.
   const animationGrant = await db.prepare(
     'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
   ).bind(purchase.purchase_id).first();
   if (animationGrant) {
-    await db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
-    const stillOwnedViaOtherAnimationPurchase = await db.prepare(
-      'SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?',
-    ).bind(animationGrant.builder_id, animationGrant.template_id).first();
-    if (!stillOwnedViaOtherAnimationPurchase) {
-      await db.batch([
-        db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
-          .bind(animationGrant.builder_id, animationGrant.template_id),
-        db.prepare(
-          'UPDATE builders SET equipped_animation_template_id = NULL WHERE builder_id = ? AND equipped_animation_template_id = ?',
-        ).bind(animationGrant.builder_id, animationGrant.template_id),
-      ]);
-    }
+    await db.batch([
+      db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id),
+      db.prepare(`
+        DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(animationGrant.builder_id, animationGrant.template_id, animationGrant.builder_id, animationGrant.template_id),
+      db.prepare(`
+        UPDATE builders SET equipped_animation_template_id = NULL
+        WHERE builder_id = ? AND equipped_animation_template_id = ?
+        AND NOT EXISTS (SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?)
+      `).bind(animationGrant.builder_id, animationGrant.template_id, animationGrant.builder_id, animationGrant.template_id),
+    ]);
   }
 }
 
@@ -13015,6 +13038,7 @@ function candidateFromRow(row) {
     areaM2: row.area_m2,
     center: { x: row.center_x_m, y: row.center_y_m },
     landClass: row.landlet_class,
+    landType: row.landlet_type ?? 'buildable',
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,

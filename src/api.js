@@ -898,8 +898,7 @@ export async function deleteBundle(bundleId) {
 // under the sign's own instanceId, not a top-level collection, since a post
 // never exists independent of the sign it's on.
 export async function fetchSignPosts(instanceId) {
-  const { posts } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
-  return posts;
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
 }
 
 export async function createSignPost(instanceId, { authorLabel, text }) {
@@ -919,8 +918,7 @@ export async function deleteSignPost(instanceId, postId) {
 // same nested-under-the-instance shape as sign posts above, for the same
 // reason.
 export async function fetchCalendarEvents(instanceId) {
-  const { events } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`);
-  return events;
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/events`);
 }
 
 // authorLabel is not accepted here — docs/SPEC.md §6 calls calendar events
@@ -1041,9 +1039,13 @@ export async function fetchAuction(auctionId) {
   return auction;
 }
 
+// The list is capped at 200 rows server-side (no pagination) — totalCount
+// comes from a dedicated, uncapped COUNT so callers can tell when the cap
+// actually truncates something (same fix already applied to purchases'
+// fetchPurchases above).
 export async function fetchAuctionBids(auctionId) {
-  const { bids } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`);
-  return bids;
+  const { bids, totalCount } = await requestJson(`/auctions/${encodeURIComponent(auctionId)}/bids`);
+  return { bids, totalCount };
 }
 
 // builderId is never sent — the server derives "who's bidding" from the

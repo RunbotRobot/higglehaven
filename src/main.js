@@ -1795,6 +1795,19 @@ async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
+  // #1254: exposes the real rendered bounding-box size of whichever
+  // instance's mesh this function last built — e2e-only, same "expose a
+  // minimal hook purely for test verification" precedent as
+  // window.__friendsMapPoints (#1229). Lets a test confirm meshCrop.js's
+  // crop actually shrank the right axis (and left the others untouched)
+  // or that rescaleModelFile's uniform rescale actually took effect on the
+  // real file, rather than only checking a persisted number.
+  const extentBox = new THREE.Box3().setFromObject(object);
+  const extentSize = new THREE.Vector3();
+  extentBox.getSize(extentSize);
+  window.__lastInstanceExtent = {
+    instanceId: object.userData.instanceId, x: extentSize.x, y: extentSize.y, z: extentSize.z,
+  };
   return object;
 }
 
@@ -4987,15 +5000,20 @@ function renderMyAvatarsField() {
     // even with zero owned avatars — it's a real, equippable choice (the
     // revert target from PUT .../avatar's own { templateId: null } shape),
     // not just a placeholder for an empty list.
-    const rowSpecs = [{ templateId: null, name: 'Default avatar' }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name }))];
-    for (const { templateId, name } of rowSpecs) {
+    const rowSpecs = [{ templateId: null, name: 'Default avatar', purchasedAt: null }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name, purchasedAt: avatar.purchasedAt }))];
+    for (const { templateId, name, purchasedAt } of rowSpecs) {
       const row = document.createElement('div');
       row.className = 'version-row';
 
       const info = document.createElement('div');
       info.className = 'version-row-info';
       const isEquipped = equipped.equippedTemplateId === templateId;
-      info.textContent = isEquipped ? `${name} — equipped` : name;
+      const parts = [isEquipped ? `${name} — equipped` : name];
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
+      }
+      info.textContent = parts.join(' — ');
       row.appendChild(info);
 
       const actions = document.createElement('div');
@@ -5114,8 +5132,8 @@ function renderMyAnimationsField() {
     // you own at least one animation — an empty list above already covers
     // "nothing to apply" on its own, so this row only appears alongside
     // real owned animations.
-    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null }, ...animations];
-    for (const { templateId, name, skeletonSignature } of rowSpecs) {
+    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null, purchasedAt: null }, ...animations];
+    for (const { templateId, name, skeletonSignature, purchasedAt } of rowSpecs) {
       const row = document.createElement('div');
       row.className = 'version-row';
 
@@ -5125,6 +5143,10 @@ function renderMyAnimationsField() {
       const parts = [isEquipped ? `${name} — applied` : name];
       if (templateId !== null) {
         parts.push(animationCompatibilityLabel(animationCompatibility(skeletonSignature, equippedAvatar.skeletonSignature)));
+      }
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
       }
       info.textContent = parts.join(' — ');
       row.appendChild(info);
@@ -6611,7 +6633,7 @@ async function renderAuctionSection() {
         bidHistoryList.hidden = false;
         bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
         try {
-          const bids = await fetchAuctionBids(auction.auctionId);
+          const { bids, totalCount } = await fetchAuctionBids(auction.auctionId);
           // Bidder labels resolved via the batch-by-ids lookup (#717/
           // #720), scoped to just the distinct bidders on this one
           // auction rather than the whole roster.
@@ -6629,6 +6651,16 @@ async function renderAuctionSection() {
             const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
             bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
             bidHistoryList.appendChild(bidRow);
+          }
+          // #1275: the server caps this list at 200 rows — flag it when
+          // that cap actually bites, instead of silently showing a
+          // partial list under a "Hide Bids (N)" label that implies it's
+          // everything.
+          if (totalCount > bids.length) {
+            const truncationNote = document.createElement('div');
+            truncationNote.className = 'settings-empty-note';
+            truncationNote.textContent = `Showing top ${bids.length} of ${totalCount} bids.`;
+            bidHistoryList.appendChild(truncationNote);
           }
           bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
         } catch (err) {
@@ -7905,6 +7937,7 @@ const signPostsModalEl = document.getElementById('sign-posts-modal');
 const signPostsCloseBtn = document.getElementById('sign-posts-close-btn');
 const signPostsListEl = document.getElementById('sign-posts-list');
 const signPostsEmptyEl = document.getElementById('sign-posts-empty');
+const signPostsTruncatedEl = document.getElementById('sign-posts-truncated');
 const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
 let signPostsTargetMesh = null;
 // Guards against reopening this modal on a different mesh before an
@@ -7923,12 +7956,14 @@ function formatSignPostTime(isoString) {
 
 async function renderSignPosts() {
   signPostsListEl.innerHTML = '';
+  signPostsTruncatedEl.hidden = true;
   if (!signPostsTargetMesh) return;
   const myLoadToken = ++signPostsLoadToken;
   const instanceId = signPostsTargetMesh.userData.instanceId;
   let posts;
+  let totalCount;
   try {
-    posts = await fetchSignPosts(instanceId);
+    ({ posts, totalCount } = await fetchSignPosts(instanceId));
   } catch (err) {
     if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
     signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
@@ -7941,6 +7976,11 @@ async function renderSignPosts() {
   // error message forever, even once a later load succeeds with zero posts.
   signPostsEmptyEl.textContent = 'No posts on this sign yet.';
   signPostsEmptyEl.hidden = posts.length > 0;
+  // #1274: posts is windowed to the newest 200 (worker/index.js's
+  // handleSignPosts); totalCount is the real, uncapped count, so this is
+  // the only way to tell a builder older posts exist but aren't shown.
+  signPostsTruncatedEl.hidden = totalCount <= posts.length;
+  signPostsTruncatedEl.textContent = `Showing newest ${posts.length} of ${totalCount} posts.`;
   for (const post of posts) {
     const row = document.createElement('div');
     row.className = 'sign-post-row';
@@ -8022,6 +8062,7 @@ const calendarEventsModalEl = document.getElementById('calendar-events-modal');
 const calendarEventsCloseBtn = document.getElementById('calendar-events-close-btn');
 const calendarEventsListEl = document.getElementById('calendar-events-list');
 const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
+const calendarEventsTruncatedEl = document.getElementById('calendar-events-truncated');
 const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
 let calendarEventsTargetMesh = null;
 // See signPostsLoadToken above — same reopen-on-a-different-mesh race,
@@ -8035,12 +8076,14 @@ function formatCalendarEventTime(isoString) {
 
 async function renderCalendarEvents() {
   calendarEventsListEl.innerHTML = '';
+  calendarEventsTruncatedEl.hidden = true;
   if (!calendarEventsTargetMesh) return;
   const myLoadToken = ++calendarEventsLoadToken;
   const instanceId = calendarEventsTargetMesh.userData.instanceId;
   let events;
+  let totalCount;
   try {
-    events = await fetchCalendarEvents(instanceId);
+    ({ events, totalCount } = await fetchCalendarEvents(instanceId));
   } catch (err) {
     if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
     calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
@@ -8053,6 +8096,10 @@ async function renderCalendarEvents() {
   // error message forever, even once a later load succeeds with zero events.
   calendarEventsEmptyEl.textContent = 'No events on this calendar yet.';
   calendarEventsEmptyEl.hidden = events.length > 0;
+  // #1274: same truncation signal as sign posts above (handleCalendarEvents
+  // windows to the newest 200 but returns the real, uncapped totalCount).
+  calendarEventsTruncatedEl.hidden = totalCount <= events.length;
+  calendarEventsTruncatedEl.textContent = `Showing newest ${events.length} of ${totalCount} events.`;
   for (const event of events) {
     const row = document.createElement('div');
     row.className = 'calendar-event-row';
@@ -13003,7 +13050,7 @@ async function loadShopLandletInstances(entry, myToken) {
 function registerShopSign(mesh, entry) {
   const sign = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, posts: [], sprites: [] };
   shopSigns.push(sign);
-  fetchSignPosts(sign.instanceId).then((posts) => {
+  fetchSignPosts(sign.instanceId).then(({ posts }) => {
     if (!shopSigns.includes(sign)) return;
     sign.posts = posts;
     rebuildSignSprites(sign);
@@ -13076,7 +13123,7 @@ function makeSignPostSprite(text) {
 function registerShopCalendar(mesh, entry) {
   const calendar = { mesh, group: entry.group, instanceId: mesh.userData.instanceId, events: [], sprites: [] };
   shopCalendars.push(calendar);
-  fetchCalendarEvents(calendar.instanceId).then((events) => {
+  fetchCalendarEvents(calendar.instanceId).then(({ events }) => {
     if (!shopCalendars.includes(calendar)) return;
     calendar.events = events;
     rebuildCalendarSprites(calendar);
