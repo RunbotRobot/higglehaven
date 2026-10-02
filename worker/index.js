@@ -5280,6 +5280,7 @@ async function handleAdminActionLogList(request, db, url) {
   const actionType = url.searchParams.get('actionType');
   const targetType = url.searchParams.get('targetType');
   const adminUserId = url.searchParams.get('adminUserId');
+  const targetId = url.searchParams.get('targetId');
   const conditions = [];
   const bindings = [];
   if (actionType !== null) {
@@ -5293,6 +5294,15 @@ async function handleAdminActionLogList(request, db, url) {
   if (adminUserId !== null) {
     conditions.push('admin_user_id = ?');
     bindings.push(labelValue(adminUserId, 'adminUserId'));
+  }
+  // #1242: target_id was already selected/returned/displayed (below,
+  // public/admin-action-log.html) but had no matching filter, unlike its
+  // three siblings here -- the one audit query ("every action taken
+  // against this one entity") the table exists for had no server-side way
+  // to run it.
+  if (targetId !== null) {
+    conditions.push('target_id = ?');
+    bindings.push(labelValue(targetId, 'targetId'));
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const [{ results }, countRow] = await Promise.all([

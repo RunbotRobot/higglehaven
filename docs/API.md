@@ -7276,9 +7276,11 @@ Lists log entries, newest first, capped at 500 rows — same "capped list +
 separate uncapped total count" shape as `GET /api/control-room/tasks`, not
 real cursor pagination, since a few hundred most-recent entries is what an
 admin actually wants to browse here too. Optional exact-match query-string
-filters: `actionType`, `targetType`, `adminUserId` (any combination; all
-must match when more than one is given). `401`/`403` via `requireAdmin`
-like every other admin-only endpoint.
+filters: `actionType`, `targetType`, `adminUserId`, `targetId` (any
+combination; all must match when more than one is given) — `targetId`
+(#1242) completes the set: every field `adminActionLogEntryFromRow`
+returns and the admin page displays now has a matching filter. `401`/`403`
+via `requireAdmin` like every other admin-only endpoint.
 
 Response: `{ entries: [...], total }`. Each entry: `logId`, `adminUserId`
 (nullable — `ON DELETE SET NULL` if the acting admin's account is later
@@ -7291,7 +7293,7 @@ or `null`), `createdAt`.
 Same shape as `GET /admin/control-room` just above: `requireAdmin`-gated
 (a plain `401`/`403` HTML page otherwise), served from
 `public/admin-action-log.html`, a small dependency-free same-origin page
-with the three filter fields above and a refresh button. No polling —
+with the four filter fields above and a refresh button. No polling —
 this is a browse-on-demand audit trail, not a live-updating board.
 
 ## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
