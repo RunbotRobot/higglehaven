@@ -3065,12 +3065,11 @@ describe('Landlet levels', () => {
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
     expect(limited.response.status).toBe(429);
-  }, 45000); // #978: same fixed-20s-timeout-under-CI-load gap as its
-  // sibling rate-limit tests in this block -- 40 iterations x 2 real HTTP
-  // requests each (add, direct-DB-delete) reliably finishes in ~2s in
-  // isolation, but this file's 121 tests share one D1 instance, and
-  // late-file cumulative state occasionally pushes this specific test
-  // past the 20s default under CI load too.
+  }, 45000); // #978: same cumulative-D1-state-under-CI-load shape as the
+  // sweep-rate-limit test above — 40 real HTTP round trips late in this
+  // file's 121-test run against one shared D1 instance, reliably finishing
+  // in well under 1s in isolation but occasionally pushed past the 20s
+  // default under CI load.
 
   // #907: a level removal with nothing to sweep (the common case for an
   // empty level) fell through with no rate limit at all -- only the sweep
@@ -3098,13 +3097,11 @@ describe('Landlet levels', () => {
     await seedLevelDirectly();
     const limited = await api('/landlets/levels-remove-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(limited.response.status).toBe(429);
-  }, 45000); // #978: same fixed-20s-timeout-under-CI-load gap as the
-  // sweep-specific rate-limit test above -- 40 iterations x 2 real HTTP
-  // requests each (seed, delete) reliably finishes in ~2s in isolation,
-  // but this file's 121 tests share one D1 instance, and late-file
-  // cumulative state occasionally pushes this specific test past the 20s
-  // default under CI load too. Never caught before now because CI load
-  // (and exactly which tests ran before it) varies run to run.
+  }, 45000); // #978: same cumulative-D1-state-under-CI-load shape as the
+  // sweep-rate-limit test above and its own "leaves the level row
+  // untouched" sibling just below (which already carries this same
+  // override) — 40-41 real round trips late in this file's 121-test run,
+  // occasionally pushed past the 20s default under CI load.
 
   // #924: the rate-limit check used to run AFTER the level row was already
   // deleted -- a rate-limited caller still got the real, irreversible

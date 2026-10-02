@@ -1188,8 +1188,14 @@ async function handleModelCleanup(request, env) {
   }
   const dryRun = input.dryRun || false;
   const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
+  // #1202: targetCount/reclaimedBytes alone can't say which objects a given
+  // run actually (or would) remove -- targetModelUrls is already computed by
+  // cleanupUnreferencedModels (and already returned in this endpoint's own
+  // HTTP response below), so carry it into the logged detail too, the same
+  // "who did what" bar #829 already held delete_uploaded_asset to.
   await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
     maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+    targetModelUrls: result.targetModelUrls,
   }).run();
   return json({ ...result, dryRun });
 }
@@ -1221,8 +1227,13 @@ export async function scheduledModelCleanup(env) {
   // storage-budget-reservation side of this identical upload flow.
   const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
   if (result.targetCount > 0) {
+    // #1202: same "record which objects, not just how many" fix as
+    // handleModelCleanup's own call site above -- matters even more here
+    // since this unattended sweep's admin_action_log row is the only record
+    // this run ever produces at all (no HTTP response for anyone to see).
     await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
       maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
+      targetModelUrls: result.targetModelUrls,
       trigger: 'scheduled',
     }).run();
   }
@@ -1485,6 +1496,7 @@ async function handleCatalog(request, db, route, url, models, env) {
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
         model_size_bytes = excluded.model_size_bytes,
+        skeleton_signature = excluded.skeleton_signature,
         metadata_json = excluded.metadata_json,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
@@ -1499,8 +1511,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1517,10 +1529,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
         [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
-      for (const template of templates) {
-        const oldDimensions = oldDimensionsById.get(template.templateId);
-        if (oldDimensions) await notifyBuildersOfDimensionChange(db, template, oldDimensions);
-      }
+      const dimensionChangeCandidates = templates
+        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId) }))
+        .filter(({ oldDimensions }) => oldDimensions);
+      await notifyBuildersOfDimensionChangeBatch(db, dimensionChangeCandidates);
     }
     const placeholders = templates.map(() => '?').join(', ');
     const stored = await db.prepare(`
@@ -1821,8 +1833,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
@@ -1866,9 +1878,9 @@ async function handleCatalog(request, db, route, url, models, env) {
     const result = await db.prepare(`
       UPDATE catalog_templates
       SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, skeleton_signature = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), route[1]).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships
     // PATCH), this one never checked whether its own UPDATE actually
@@ -2119,6 +2131,53 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
 
   const fmt = (m) => `${m.toFixed(2)}m`;
   await db.batch(results.map((row) => {
+    const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
+    return db.prepare(
+      'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
+    ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId);
+  }));
+}
+
+// #1220: list-endpoint version of the above, same "N queries -> one grouped
+// query + one batched insert" idiom existingSellerIds/recomputeLandCapsBatch
+// already use elsewhere in this file. PUT /api/catalog/batch's own resize
+// loop used to call notifyBuildersOfDimensionChange once per resized
+// template — up to 100 sequential SELECT+batch round trips for a full
+// batch — instead of this single pair. `candidates` is every batch item
+// that has a pre-existing row at all (a brand-new template via POST, or a
+// PUT id with no matching row, was never a candidate); the actual
+// "did its dimensions really change" filter (mirroring the singular
+// function's own early-return) happens here, in-memory, so the grouped
+// query below only ever asks about templates genuinely worth notifying on.
+async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
+  const changed = candidates.filter(({ template, oldDimensions }) => {
+    const { width, depth, height } = template.dimensions;
+    return Math.abs(width - oldDimensions.width) > 1e-4 ||
+      Math.abs(depth - oldDimensions.depth) > 1e-4 ||
+      Math.abs(height - oldDimensions.height) > 1e-4;
+  });
+  if (changed.length === 0) return;
+
+  const templateIds = changed.map(({ template }) => template.templateId);
+  const placeholders = templateIds.map(() => '?').join(', ');
+  // #920's own grouping reasoning applies per template here too — grouped
+  // by (template_id, builder_id) so a builder with several placed copies
+  // of the same resized template still gets one accurate count, not a
+  // hardcoded singular.
+  const { results } = await db.prepare(`
+    SELECT pi.template_id AS templateId, l.owner_builder_id AS builderId, COUNT(*) AS instanceCount
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    WHERE pi.template_id IN (${placeholders}) AND l.owner_builder_id IS NOT NULL
+    GROUP BY pi.template_id, l.owner_builder_id
+  `).bind(...templateIds).all();
+  if (results.length === 0) return;
+
+  const templateById = new Map(changed.map(({ template }) => [template.templateId, template]));
+  const fmt = (m) => `${m.toFixed(2)}m`;
+  await db.batch(results.map((row) => {
+    const template = templateById.get(row.templateId);
+    const { width, depth, height } = template.dimensions;
     const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
     return db.prepare(
       'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
@@ -3379,6 +3438,18 @@ const PRESENCE_STALE_AFTER_MS = 10_000;
 const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 
 async function handlePresence(request, db, route, url) {
+  // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
+  // the caller's own last-reported row, unfiltered by staleness or
+  // landletId — unlike the GET below, this is "wherever I was last,"
+  // however long ago, not "who's nearby right now." null when the caller
+  // has never reported a position at all.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    return json({ presence: row ? avatarPresenceFromRow(row) : null });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
@@ -3451,19 +3522,21 @@ function avatarPresenceFromRow(row) {
   };
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location."). One row per
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location."). One row per
 // relationship, direction preserved (requester/recipient), status flips
 // pending -> accepted in place. PATCH is gated to the recipient (only they
 // can accept) and DELETE to either side (either can end/decline it) — both
 // enforced below via requireSessionBuilder + assertOwner, not left to the
 // frontend to police.
 //
-// "Social map ... approximate location" is deliberately simplified to each
-// accepted friend's owned lándlet center — this app has no live avatar
-// position tracking at all (Shop-mode camera position is never persisted),
-// so there is no real "current location" to report regardless of how this
-// endpoint is built. A builder's claimed lándlet is the one stable,
+// "Social map" is deliberately simplified to each accepted friend's owned
+// lándlet center — exact coordinates, not fuzzed (owner decision, #1195: a
+// mutual accept is a real consent step, so there's no reason to withhold
+// precision once it's happened). This predates #1095's own avatar_presence
+// table (live position tracking) — upgrading to a friend's actual current
+// position is #1044's own remit (friend "follow"/"stay with"), not a
+// change made here. A builder's claimed lándlet is the one stable,
 // already-known location the backend actually has for them.
 // See the POST branch's own comment below (issue #369) — an authenticated
 // builder id, not an IP, since this gates a real account's own request
@@ -3639,6 +3712,22 @@ async function handleFriendships(request, db, route, url) {
     if (isDecline && result.meta.changes === 1) {
       await notificationStatement(db, existing.requester_builder_id,
         `${sessionBuilder.label} declined your friend request.`).run();
+    } else if (isDecline && result.meta.changes === 0) {
+      // #1197: the response below used to be unconditional, so a decline
+      // that lost a race to a concurrent PATCH/accept (same recipient, two
+      // tabs/devices) reported `deleted: true` even though the row
+      // survived, now 'accepted' — this re-fetch disambiguates the same
+      // `meta.changes === 0` ambiguity the PATCH/accept branch above
+      // already comments on (already-gone vs. still there under a
+      // different status), rather than trusting the count alone. A missing
+      // row here means some concurrent delete/cancel/unfriend already
+      // reached the same end state this call wanted — `deleted: true`
+      // below is still accurate for that case, so only a row that's still
+      // there (no longer pending) needs its own response.
+      const stillThere = await db.prepare('SELECT friendship_id FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
+      if (stillThere) {
+        throw new HttpError('Friendship was accepted before this decline could take effect', 409);
+      }
     }
     return json({ deleted: true });
   }
@@ -3666,8 +3755,9 @@ async function ownedLandletsByBuilderId(db, builderIds) {
   const byOwner = new Map();
   for (const row of results) {
     // A builder can own more than one lándlet (auctions can transfer extra
-    // ones in) — the first one found is good enough for "approximate
-    // location," not a definitive "their one true home."
+    // ones in) — the first one found is good enough for this feature's
+    // "where do my friends live" purpose, not a definitive "their one true
+    // home."
     if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
   }
   return byOwner;
@@ -7356,7 +7446,7 @@ async function upsertTax1099Draft(db, { userId, taxYear, formType, grossIncomeCe
 // dollar leg -- the 200-transaction leg and any lower state thresholds
 // are NOT modeled here, a known gap flagged in #645's own GitHub issue
 // rather than silently guessed at), and a 1099-NEC only concerns the
-// daller-commission side, compared against its own, much lower, standard
+// higgle-commission side, compared against its own, much lower, standard
 // nonemployee-compensation threshold.
 async function generateTax1099Drafts(db, year) {
   const yearStart = `${year}-01-01T00:00:00.000Z`;
@@ -11018,6 +11108,9 @@ async function handleInstancePurchase(request, env, instanceId) {
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
     purchaseIdempotencyKey(instance.instance_id, buyerBuilder.builder_id, input.idempotencyKey),
+    // #1163: same "derive directly, no time gap" reasoning as
+    // isAvatarCategory just above, for isAnimationCategory.
+    template.category === 'animation',
   );
 }
 
@@ -11123,6 +11216,9 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
   // avatar is decided by category AS OF CHECKOUT, not re-derived from a
   // template row that might change/vanish by the time finalize runs.
   const isAvatarCategory = template.category === 'avatar';
+  // #1163: same "snapshot now" reasoning as isAvatarCategory just above,
+  // for a standalone-animation purchase instead.
+  const isAnimationCategory = template.category === 'animation';
 
   // Everything handlePurchaseFinalize needs to actually write the purchase
   // travels here, in Stripe's own metadata — set once, server-side, at
@@ -11151,6 +11247,7 @@ async function createPurchaseCheckout(env, instance, template, landlet, seller, 
       isDigitalGood: String(isDigitalGood),
       buyerBuilderId: buyerBuilderId || '',
       isAvatarCategory: String(isAvatarCategory),
+      isAnimationCategory: String(isAnimationCategory),
     },
   }, purchaseIdempotencyKey(instance.instance_id, buyerBuilderId, input.idempotencyKey));
 
@@ -11252,10 +11349,13 @@ async function handlePurchaseFinalize(request, env) {
   // template.category that may have changed underneath this purchase by
   // the time finalize runs.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
+  // #1163: same checkout-time-locked reasoning as isAvatarCategory above,
+  // for isAnimationCategory.
+  const isAnimationCategory = meta.isAnimationCategory === 'true';
   const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
   if (instance && template && checkoutBuilderId) {
-    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory);
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -11323,6 +11423,23 @@ function ownedAvatarStatements(db, buyerBuilderId, templateId, purchaseId) {
   ];
 }
 
+// #1163 (sub-issue of #1161): same grant shape as ownedAvatarStatements
+// just above, for a standalone "animation"-category purchase instead —
+// owned_animations mirrors owned_avatars (migration 0106 includes the
+// purchase_id link and the per-purchase owned_animation_purchases side
+// table from the start, the same two owned_avatars only grew into after
+// #754/#1033 found the gaps the hard way).
+function ownedAnimationStatements(db, buyerBuilderId, templateId, purchaseId) {
+  return [
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_animations (builder_id, template_id, purchase_id) VALUES (?, ?, ?)',
+    ).bind(buyerBuilderId, templateId, purchaseId),
+    db.prepare(
+      'INSERT OR IGNORE INTO owned_animation_purchases (purchase_id, builder_id, template_id) VALUES (?, ?, ?)',
+    ).bind(purchaseId, buyerBuilderId, templateId),
+  ];
+}
+
 async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
@@ -11350,6 +11467,9 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   // every purchase now, so this runs whenever meta.buyerBuilderId is
   // present at all.
   const isAvatarCategory = meta.isAvatarCategory === 'true';
+  // #1163: same checkout-time-locked snapshot as isAvatarCategory above,
+  // for a standalone-animation purchase instead.
+  const isAnimationCategory = meta.isAnimationCategory === 'true';
   const buyerBuilderStillExists = meta.buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.buyerBuilderId).first()
     : null;
@@ -11379,6 +11499,9 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
   if (isAvatarCategory && buyerBuilderStillExists) {
     statements.push(...ownedAvatarStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
+  if (isAnimationCategory && buyerBuilderStillExists) {
+    statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
+  }
   await db.batch(statements);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -11394,7 +11517,15 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
 // which this test suite deliberately never configures (see
 // worker/commerce.test.js's "Stripe is never configured in this test
 // suite" comment).
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null) {
+//
+// isAnimationCategory (#1163) is appended as a new trailing parameter,
+// after idempotencyKey, rather than inserted alongside isAvatarCategory —
+// this function's only two in-source callers that pass that far
+// positionally (handleInstancePurchase, handlePurchaseFinalize) both
+// needed updating regardless (see their own call sites), and appending
+// at the end leaves every shorter positional call (every direct test in
+// worker/avatar-ownership.test.js included) completely unaffected.
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -11443,6 +11574,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
       .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
     ...(isAvatarCategory && buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
+    ...(isAnimationCategory && buyerBuilderStillExists ? ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
     notificationStatement(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`),
   ]);
@@ -11798,6 +11930,25 @@ async function clawBackPurchaseCommission(db, purchase, templateName) {
           'UPDATE builders SET equipped_avatar_template_id = NULL WHERE builder_id = ? AND equipped_avatar_template_id = ?',
         ).bind(grant.builder_id, grant.template_id),
       ]);
+    }
+  }
+
+  // #1163: same purchase_id-keyed, purchase-time-locked revocation as the
+  // owned_avatars block just above, for owned_animations instead — no
+  // equivalent "equipped" column to clear yet (applying a purchased
+  // animation at runtime is #1165's own scope, not built), so this only
+  // ever needs to revoke the ownership grant itself.
+  const animationGrant = await db.prepare(
+    'SELECT builder_id, template_id FROM owned_animation_purchases WHERE purchase_id = ?',
+  ).bind(purchase.purchase_id).first();
+  if (animationGrant) {
+    await db.prepare('DELETE FROM owned_animation_purchases WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+    const stillOwnedViaOtherAnimationPurchase = await db.prepare(
+      'SELECT 1 FROM owned_animation_purchases WHERE builder_id = ? AND template_id = ?',
+    ).bind(animationGrant.builder_id, animationGrant.template_id).first();
+    if (!stillOwnedViaOtherAnimationPurchase) {
+      await db.prepare('DELETE FROM owned_animations WHERE builder_id = ? AND template_id = ?')
+        .bind(animationGrant.builder_id, animationGrant.template_id).run();
     }
   }
 }
@@ -12493,6 +12644,10 @@ function validateTemplate(input, fallbackId) {
     // model just to plan pages. NULL for a template with no model, or one
     // uploaded before this field existed.
     modelSizeBytes: optionalModelSizeBytes(input.modelSizeBytes),
+    // #1162: computed client-side (computeSkeletonSignature) alongside
+    // modelSizeBytes, same "measured once at upload time, persisted so
+    // nothing needs to re-fetch the model later" reasoning.
+    skeletonSignature: optionalSkeletonSignature(input.skeletonSignature),
     metadata: input.metadata || {},
   };
   // Found via backlog audit (#375): modelUrl went straight through with no
@@ -12639,7 +12794,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
 }
 
 function instanceParams(instance) {
@@ -12665,6 +12820,7 @@ function templateFromRow(row) {
     sellerId: row.seller_id,
     modelUrl: row.model_url,
     modelSizeBytes: row.model_size_bytes,
+    skeletonSignature: row.skeleton_signature,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
@@ -12957,6 +13113,22 @@ function optionalModelSizeBytes(value) {
     throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
   }
   return number;
+}
+
+// #1162: a SHA-256 hex digest (computeSkeletonSignature, src/main.js) of a
+// model's skeleton bone names/hierarchy, or null for a model with no
+// skeleton at all. Only the shape is validated here, not the content —
+// this server never re-derives it from the actual model file (that would
+// mean re-fetching and parsing GLTF server-side for no real benefit), so
+// it's trusted the same way modelSizeBytes already is, just shape-checked
+// against being tampered into something that isn't a real digest at all.
+const SKELETON_SIGNATURE_PATTERN = /^[0-9a-f]{64}$/;
+function optionalSkeletonSignature(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !SKELETON_SIGNATURE_PATTERN.test(value)) {
+    throw new HttpError('skeletonSignature must be a 64-character lowercase hex SHA-256 digest, or omitted', 400);
+  }
+  return value;
 }
 
 function queryLimit(value, defaultValue) {

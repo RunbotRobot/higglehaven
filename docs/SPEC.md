@@ -223,7 +223,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 
 ## 6. Social Features & Communication
 
-**Friend/group systems:** standard friend requests; social map shows friends' *approximate* location (not exact coordinates). "Follow"/"stay with" toggle for group movement (§2).
+**Friend/group systems:** standard friend requests; social map shows an accepted friend's location — a mutual accept is a real consent step, so no fuzzing (owner decision, #1195; a still-*pending* request shows no location at all, see #610). "Follow"/"stay with" toggle for group movement (§2).
 
 **In-world social feed — physical sign-post system (no flat 2D UI layer, ever):**
 - Builders flag any placed object as a "community sign" — becomes a content-bearing slot.

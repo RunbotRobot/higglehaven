@@ -294,11 +294,19 @@ describe('Worker API', () => {
     ).bind('model_cleanup').all();
     expect(cleanupLogRows).toHaveLength(2);
     expect(cleanupLogRows.every((row) => row.admin_user_id === adminMe.body.user.userId)).toBe(true);
+    // #1202: the log entry used to record only targetCount/reclaimedBytes —
+    // an aggregate with no way to tell which R2 objects a given run actually
+    // removed. targetModelUrls (already computed by cleanupUnreferencedModels,
+    // and already returned in the HTTP response asserted on above) must be
+    // carried into the logged detail too, on both the dry-run preview and
+    // the real delete.
     expect(JSON.parse(cleanupLogRows[0].detail_json)).toEqual({
       maxDeletes: 1, dryRun: true, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect(JSON.parse(cleanupLogRows[1].detail_json)).toEqual({
       maxDeletes: 1, dryRun: false, targetCount: 1, reclaimedBytes: orphan.sizeBytes,
+      targetModelUrls: [orphan.modelUrl],
     });
     expect((await api('/models/cleanup', adminSession({
       method: 'POST', body: JSON.stringify({ maxDeletes: 101 }),
@@ -564,6 +572,87 @@ describe('Worker API', () => {
     });
     expect(batchCreated.response.status).toBe(201);
     expect(batchCreated.body.templates[0].modelSizeBytes).toBe(batchUploaded.sizeBytes);
+  });
+
+  // #1162 (sub-issue of #1161, sellable avatar animations): the skeleton
+  // signature a model carries, mirroring modelSizeBytes' own test shape
+  // directly above — computed client-side, this server only persists and
+  // shape-validates it.
+  it('persists skeletonSignature on catalog templates and validates it', async () => {
+    const signature = 'a'.repeat(64);
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'skeleton-signature-test',
+        name: 'Skeleton signature test',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        skeletonSignature: signature,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.skeletonSignature).toBe(signature);
+    expect((await api('/catalog/skeleton-signature-test')).body.template.skeletonSignature).toBe(signature);
+
+    // A patch that doesn't touch skeletonSignature must not silently wipe
+    // it — same merge-against-existing-row reasoning as modelSizeBytes.
+    const renamed = await api('/catalog/skeleton-signature-test', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(renamed.body.template.skeletonSignature).toBe(signature);
+
+    // A rigid prop with no skeleton at all — NULL, not a validation
+    // failure (every template uploaded before this field existed, or any
+    // ordinary non-avatar product, looks like this).
+    const withoutSignature = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'skeleton-signature-omitted-test',
+        name: 'No skeleton',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(withoutSignature.response.status).toBe(201);
+    expect(withoutSignature.body.template.skeletonSignature).toBeNull();
+
+    // Shape-validated (64-char lowercase hex) rather than trusted as an
+    // opaque string — this server never re-derives it from the model file
+    // itself, but a malformed value is rejected rather than silently
+    // stored as something that could never match a real signature anyway.
+    for (const badSignature of ['too-short', 'A'.repeat(64), 123, `${'a'.repeat(63)}g`]) {
+      const rejected = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `skeleton-signature-bad-${badSignature}`,
+          name: 'Bad signature',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          skeletonSignature: badSignature,
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+    }
+
+    // The batch create/update path stores it too, not just the single-item
+    // route above.
+    const batchSignature = 'b'.repeat(64);
+    const batchCreated = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [{
+          templateId: 'skeleton-signature-batch-test',
+          name: 'Batch skeleton signature test',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          skeletonSignature: batchSignature,
+        }],
+      }),
+    });
+    expect(batchCreated.response.status).toBe(201);
+    expect(batchCreated.body.templates[0].skeletonSignature).toBe(batchSignature);
   });
 
   // #417: completeScan used to be derived purely from R2's listing.truncated
@@ -1008,6 +1097,131 @@ describe('Worker API', () => {
     const notices = await api('/notifications', hostingBuilder.session());
     expect(notices.body.notifications).toHaveLength(1);
     expect(notices.body.notifications[0].message).toContain('you have 3 placed');
+  });
+
+  // #1220: notifyBuildersOfDimensionChangeBatch replaced a per-template loop
+  // (one SELECT+batch-insert round trip per resized template) with a single
+  // grouped query across every resized template in the call, then one
+  // combined insert. The single-resize test above can't catch a mapping bug
+  // in that grouping (e.g. row A's notification text accidentally built from
+  // template B's new dimensions) since it only ever resizes one template at
+  // a time -- this resizes two different templates, each hosted by its own
+  // builder, in the same batch call, and checks each builder's notification
+  // names the right template with the right new size.
+  it('correctly attributes each notification when a batch PUT resizes multiple templates with different hosting builders at once', async () => {
+    const templateA = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'batch-multi-resize-template-a', name: 'Batch multi resize A',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(templateA.response.status).toBe(201);
+    const templateB = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'batch-multi-resize-template-b', name: 'Batch multi resize B',
+        color: '#654321', dimensions: { width: 3, depth: 3, height: 3 },
+      }),
+    });
+    expect(templateB.response.status).toBe(201);
+
+    const builderA = await signupBuilder('batch-multi-resize-builder-a');
+    await api('/landlets', builderA.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'batch-multi-resize-landlet-a', name: 'Batch multi resize landlet A', areaM2: 100,
+        status: 'claimed', ownerBuilderId: builderA.builderId, center: { x: 6400, y: 0 },
+      }),
+    }));
+    expect((await api('/instances', builderA.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'batch-multi-resize-instance-a', landletId: 'batch-multi-resize-landlet-a',
+        templateId: 'batch-multi-resize-template-a', x: 0, y: 0,
+      }),
+    }))).response.status).toBe(201);
+
+    const builderB = await signupBuilder('batch-multi-resize-builder-b');
+    await api('/landlets', builderB.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'batch-multi-resize-landlet-b', name: 'Batch multi resize landlet B', areaM2: 100,
+        status: 'claimed', ownerBuilderId: builderB.builderId, center: { x: 6600, y: 0 },
+      }),
+    }));
+    expect((await api('/instances', builderB.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'batch-multi-resize-instance-b', landletId: 'batch-multi-resize-landlet-b',
+        templateId: 'batch-multi-resize-template-b', x: 0, y: 0,
+      }),
+    }))).response.status).toBe(201);
+
+    const resized = await api('/catalog/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: [
+        { templateId: 'batch-multi-resize-template-a', name: 'Batch multi resize A', color: '#123456', dimensions: { width: 2, depth: 2, height: 2 } },
+        { templateId: 'batch-multi-resize-template-b', name: 'Batch multi resize B', color: '#654321', dimensions: { width: 9, depth: 9, height: 9 } },
+      ] }),
+    });
+    expect(resized.response.status).toBe(200);
+
+    const noticesA = await api('/notifications', builderA.session());
+    expect(noticesA.body.notifications).toHaveLength(1);
+    expect(noticesA.body.notifications[0].templateId).toBe('batch-multi-resize-template-a');
+    expect(noticesA.body.notifications[0].message).toContain('Batch multi resize A');
+    expect(noticesA.body.notifications[0].message).toContain('2.00m x 2.00m x 2.00m');
+
+    const noticesB = await api('/notifications', builderB.session());
+    expect(noticesB.body.notifications).toHaveLength(1);
+    expect(noticesB.body.notifications[0].templateId).toBe('batch-multi-resize-template-b');
+    expect(noticesB.body.notifications[0].message).toContain('Batch multi resize B');
+    expect(noticesB.body.notifications[0].message).toContain('9.00m x 9.00m x 9.00m');
+  });
+
+  // #1220: the fix above is purely a performance one (identical observable
+  // notifications either way -- the old per-template loop was never
+  // behaviorally wrong, just N round trips instead of 1), so the real thing
+  // worth regression-testing is the round-trip count itself, not just the
+  // notification content the test above already covers. Hooks env.DB.prepare
+  // (same binding the worker's own fetch handler sees) to count how many
+  // times the placed_instances lookup query actually runs while resizing
+  // several templates in one batch call -- should be exactly 1 (one grouped
+  // query covering every resized template), not one per template.
+  it('looks up hosting builders in a single grouped query, not once per resized template', async () => {
+    for (const id of ['x', 'y', 'z']) {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: `batch-resize-query-count-template-${id}`, name: `Batch resize query count ${id}`,
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+    }
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let placedInstancesLookupCount = 0;
+    env.DB.prepare = (sql) => {
+      if (sql.includes('FROM placed_instances')) placedInstancesLookupCount += 1;
+      return originalPrepare(sql);
+    };
+    let resized;
+    try {
+      resized = await api('/catalog/batch', {
+        method: 'PUT',
+        body: JSON.stringify({ templates: ['x', 'y', 'z'].map((id) => ({
+          templateId: `batch-resize-query-count-template-${id}`, name: `Batch resize query count ${id}`,
+          color: '#123456', dimensions: { width: 2, depth: 2, height: 2 },
+        })) }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(resized.response.status).toBe(200);
+    expect(placedInstancesLookupCount).toBe(1);
   });
 
   // #932: unlike every other single-item update handler on a comparably-
@@ -2830,7 +3044,14 @@ describe('Worker API', () => {
     const badCursor = await api('/land-candidates?cursor=not-base64');
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
-  }, 30000);
+  // #978's own shape: several real HTTP round trips against a shared,
+  // per-file D1 instance that's accumulated state from every earlier test
+  // in this (large, 70+-test) file — the existing 30000ms override still
+  // wasn't enough under full-suite CI load (CI on PR #1225: timed out at
+  // exactly 30000ms; passes in well under 1s in isolation), so bumping to
+  // the same 45000ms worker/land.test.js's own sibling tests settled on
+  // for the identical root cause.
+  }, 45000);
 
   // #570: generate-mosaic/-ring already reject a new candidate that would
   // overlap already-claimed or already-queued land; the manual single POST
@@ -3498,5 +3719,41 @@ describe('Worker API', () => {
     expect(noMatch.response.status).toBe(200);
     expect(noMatch.body.entries).toEqual([]);
     expect(noMatch.body.total).toBe(0);
+  });
+});
+
+// #1232: the two top-of-fetch() branches that run before any feature
+// handler (worker/index.js's own exported fetch, above the access gate and
+// every route below it) — unlike the thoroughly-tested handlers
+// downstream, neither had ever been exercised directly. Both only behave
+// as expected with env.ACCESS_PASSPHRASE unset (the default this file,
+// unlike access-gate.test.js, already relies on) — the OPTIONS
+// short-circuit sits below the access-gate check in fetch()'s own body, so
+// an OPTIONS request would get gated instead of reaching it if the
+// passphrase gate were active.
+describe('Top-level fetch() routing (#1232)', () => {
+  it('redirects the www hostname to the canonical apex, preserving path/query', async () => {
+    // The check is a literal hostname match against the real production
+    // domain (worker/index.js: url.hostname === 'www.higglehaven.com'),
+    // not derived by stripping a "www." prefix from whatever host the
+    // request came in on — every other test in this suite uses
+    // higglehaven.test, which wouldn't exercise this branch at all.
+    // redirect: 'manual' so this inspects the 301 itself rather than
+    // SELF.fetch transparently following it.
+    const response = await SELF.fetch('https://www.higglehaven.com/api/catalog?limit=5', { redirect: 'manual' });
+    expect(response.status).toBe(301);
+    expect(response.headers.get('location')).toBe('https://higglehaven.com/api/catalog?limit=5');
+  });
+
+  it('short-circuits any OPTIONS request with a bare 204 and the shared CORS headers', async () => {
+    // Arbitrary, otherwise-nonexistent path — the short-circuit sits above
+    // every route (API, uploads, static fallthrough alike), so it should
+    // never fall through to a 404 for a path that doesn't exist either.
+    const response = await SELF.fetch('https://higglehaven.test/api/this-route-does-not-exist', { method: 'OPTIONS' });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET,POST,PATCH,PUT,DELETE,OPTIONS');
+    expect(response.headers.get('access-control-allow-headers')).toBe('content-type');
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
   });
 });

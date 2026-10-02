@@ -399,6 +399,36 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #1176: shown during the spawn-flow rotating orbit (see enterShopMode
+         in src/main.js) when the shopper has a last-known position to offer.
+         Deliberately not a plain .shop-ui (that base class's .visible just
+         flips `display`, which can't transition) — the owner specifically
+         asked for the auto-hide five seconds after the shopper starts
+         navigating on their own to be "a non-jarring fade transition, not
+         an instant hide," so this button fades via opacity both in and out
+         instead. Centered at the same top offset as #shop-status (left: 12
+         there, centered here, so the two never collide). */
+      #shop-last-location-btn {
+        position: fixed;
+        z-index: 16;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 10px 18px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.4s;
+      }
+      #shop-last-location-btn.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
          overlapping sign+calendar without colliding. */
@@ -546,18 +576,15 @@
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
-        transition: transform 0.2s ease;
+      }
+      #shop-fly-btn-icon {
+        display: block;
+        width: 24px;
+        height: 24px;
+        object-fit: contain;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
-        /* N45 follow-up (2026-09-12): grounded/flying used to be two
-           different bird glyphs (a dove vs. a standing bird) so the icon
-           itself carried the state change, but the owner flagged that as
-           looking like two different birds (different species/colors).
-           Both states now render the same dove glyph (setShopFlyBtnFlying
-           in src/main.js); this tilt is what carries the "airborne" reading
-           instead, without touching species or color. */
-        transform: translateX(-50%) rotate(-20deg);
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
@@ -1547,6 +1574,13 @@
       /* Same row-layout checkbox pattern as #upload-digital-good-label
          above — see #680/#681's "avatar" catalog category. */
       #upload-avatar-category-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      /* #1163 (sub-issue of #1161): same row-layout pattern, for the
+         sibling "standalone animation" catalog category. */
+      #upload-animation-category-label {
         flex-direction: row !important;
         align-items: center;
         gap: 8px !important;
@@ -2861,6 +2895,23 @@
       #notifications-load-more-btn:disabled {
         opacity: 0.5;
       }
+      /* #1215: Saved Layouts' own "Load more" — same shape/placement as
+         #notifications-load-more-btn just above, since this panel's list
+         is cursor-paginated the identical way but never had a control for
+         it at all. */
+      #saved-layouts-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #saved-layouts-load-more-btn:disabled {
+        opacity: 0.5;
+      }
       /* Same modal shell as #notifications-modal — friend requests
          (docs/SPEC.md §2), opened from #friends-btn. Three subsections
          (Requests/Sent/Friends) share one .friend-row look with different
@@ -2906,7 +2957,11 @@
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
-      #friends-add-btn {
+      .friends-toolbar {
+        display: flex;
+        gap: 8px;
+      }
+      #friends-add-btn, #friends-map-btn {
         align-self: flex-start;
         padding: 6px 14px;
         border-radius: 999px;
@@ -2926,6 +2981,53 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+      }
+      /* #1205: a lightweight 2D top-down view of every accepted friend's
+         claimed lándlet — deliberately a plain canvas, not the claim
+         flyover's WebGL scene (see drawFriendsMap's own comment in
+         src/main.js for why). Swaps places with #friends-modal itself
+         (hidden while this is open) rather than stacking as a second
+         modal layer, the simplest way to avoid z-index/backdrop-click
+         ordering questions between the two. */
+      #friends-map-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #friends-map-modal.visible {
+        display: flex;
+      }
+      #friends-map-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #friends-map-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #friends-map-canvas {
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #friends-map-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.65);
       }
       .friend-row {
         display: flex;
@@ -3491,6 +3593,7 @@
   <body>
     <canvas id="app"></canvas>
     <div id="shop-status" class="shop-ui"></div>
+    <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
@@ -3499,15 +3602,17 @@
     <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
-    <!-- #506 picked the generic bird glyph (U+1F426) over a plane per the
-         owner's own request, but most platforms render it standing/
-         perched rather than airborne. Owner follow-up
-         (j4qrtom5gafp25dasccz): "Please make the bird be in flight." The
-         dove (U+1F54A) is the one bird emoji most sets (Apple, Twemoji)
-         consistently render mid-glide with wings spread -- a far more
-         reliable way to read as "flight" via a native emoji glyph than
-         trying to force a specific pose out of the same generic bird. -->
-    <button id="shop-fly-btn" class="shop-ui" type="button">&#128330;</button>
+    <!-- #506/N45 history (see this button's own CSS comment below for the
+         fuller account): native bird emoji glyphs kept reading as a species/
+         color mismatch between the grounded and flying states across
+         platforms, so N45 settled for one unchanging dove glyph plus a CSS
+         tilt to carry the state instead. Owner-supplied custom artwork
+         (Control Room, 2026-10-01) replaces both emoji with a matching
+         flying/standing pair of the same bird, same style, same colors --
+         the actual problem N45 was working around -- so the glyph can go
+         back to carrying the state itself; see setShopFlyBtnFlying in
+         src/main.js for the swap. -->
+    <button id="shop-fly-btn" class="shop-ui" type="button"><img id="shop-fly-btn-icon" src="/bird-standing.png" alt="" /></button>
     <div id="shop-vertical-controls" class="shop-ui">
       <button id="shop-up-btn" type="button">&#9650;</button>
       <button id="shop-down-btn" type="button">&#9660;</button>
@@ -3685,6 +3790,10 @@
             <input id="upload-avatar-category-checkbox" type="checkbox" />
             List as an equippable avatar (buyers can equip it as their own in-world character)
           </label>
+          <label id="upload-animation-category-label">
+            <input id="upload-animation-category-checkbox" type="checkbox" />
+            List as a standalone animation (buyers can apply it to whichever avatar they have equipped)
+          </label>
           <label class="upload-dimension-field" data-axis="x">
             <span>Width (X)</span>
             <input class="upload-dimension-input" data-axis="x" type="number" step="0.01" min="0.01" /><span class="upload-dimension-unit">m</span>
@@ -3822,7 +3931,10 @@
       <div id="friends-modal-content">
         <button id="friends-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Friends</h2>
-        <button id="friends-add-btn" type="button">+ Add Friend</button>
+        <div class="friends-toolbar">
+          <button id="friends-add-btn" type="button">+ Add Friend</button>
+          <button id="friends-map-btn" type="button">Show Map</button>
+        </div>
         <div id="friends-status"></div>
         <h3>Requests</h3>
         <div id="friends-incoming-list"></div>
@@ -3833,6 +3945,14 @@
         <h3>Friends</h3>
         <div id="friends-accepted-list"></div>
         <div id="friends-accepted-empty">No friends yet.</div>
+      </div>
+    </div>
+    <div id="friends-map-modal">
+      <div id="friends-map-modal-content">
+        <button id="friends-map-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Friends Map</h2>
+        <canvas id="friends-map-canvas"></canvas>
+        <div id="friends-map-empty">None of your friends have claimed a lándlet yet.</div>
       </div>
     </div>
     <div id="my-lands-modal">

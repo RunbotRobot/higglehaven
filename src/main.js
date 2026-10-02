@@ -116,6 +116,7 @@ import {
   deleteSavedLayout,
   reportPresence,
   fetchNearbyPresence,
+  fetchOwnLastPresence,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -1333,6 +1334,46 @@ function loadModelScene(url) {
 // wizard to surface at upload time (showUploadDimensionPreview).
 function loadModelAnimations(url) {
   return loadModelGltf(url).then((gltf) => gltf.animations);
+}
+
+// #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
+// signature of a model's skeleton — its bone names and parent/child
+// hierarchy — computed at upload time (showUploadDimensionPreview) and
+// persisted on the catalog template (skeletonSignature) alongside
+// modelSizeBytes, so a future standalone animation upload (#1163) and the
+// shop/equip UI (#1164) can compare two models' signatures for
+// compatibility by simple string equality rather than re-fetching and
+// re-parsing both models every time.
+//
+// Exact equality, not a fuzzy/partial match: Three.js's AnimationMixer
+// binds each keyframe track to a bone by name alone, so an animation
+// plays correctly against a different file's skeleton only when the two
+// skeletons share the exact same bone names in the exact same hierarchy
+// — anything looser risks a silently broken retarget (limbs not moving,
+// or moving through the wrong pivot) with no error to warn the shopper.
+// Root bones (no bone parent — normally just one, a hips/root joint, but
+// not assumed) and the rest (as parent>child edges) are each gathered and
+// sorted independently so the signature doesn't depend on the order bones
+// happen to appear in the file, then hashed to a fixed-length digest —
+// compact for storage, and content-opaque since a rig's bone names aren't
+// meaningful to store verbatim.
+//
+// Returns null for a model with no skeleton at all (an ordinary rigid
+// prop) — same "nothing to report" shape loadModelAnimations already
+// uses for a model with zero animation clips.
+async function computeSkeletonSignature(url) {
+  const gltf = await loadModelGltf(url);
+  let skinnedMesh = null;
+  gltf.scene.traverse((child) => {
+    if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
+  });
+  if (!skinnedMesh) return null;
+  const bones = skinnedMesh.skeleton.bones;
+  const roots = bones.filter((bone) => !bone.parent?.isBone).map((bone) => bone.name).sort();
+  const edges = bones.filter((bone) => bone.parent?.isBone).map((bone) => `${bone.parent.name}>${bone.name}`).sort();
+  const canonical = JSON.stringify({ roots, edges });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 // glTF is authored Y-up by convention (whatever tool exported it — Blender,
@@ -2579,6 +2620,18 @@ const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-c
 const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
 const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
 const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
+const uploadAnimationCategoryCheckbox = document.getElementById('upload-animation-category-checkbox');
+
+// #1163 (sub-issue of #1161): a listing is "avatar" or "animation" or
+// neither, never both — checking one clears the other rather than
+// letting handleUploadDimensionsStep's own category pick silently favor
+// whichever it happens to check first.
+uploadAvatarCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
+});
+uploadAnimationCategoryCheckbox.addEventListener('change', () => {
+  if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
+});
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
   uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
@@ -2615,6 +2668,10 @@ let uploadModelUrl = null;
 // model-file-size cap — this is what step 'dimensions' passes through to
 // createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
 let uploadModelSizeBytes = null;
+// #1162: computed in showUploadDimensionPreview alongside the animation
+// detection below, passed through to createCatalogTemplate the same way
+// uploadModelSizeBytes already is.
+let uploadSkeletonSignature = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
 
@@ -2669,8 +2726,10 @@ function resetUploadModalToFileStep() {
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
+  uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadAvatarCategoryCheckbox.checked = false;
+  uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
@@ -2811,6 +2870,15 @@ async function showUploadDimensionPreview(modelUrl) {
   const previewObject = await loadModelInstance(modelUrl);
   if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
   scene.add(previewObject);
+
+  // #1162: awaited (unlike the animation detection just below, which is
+  // fire-and-forget since it only drives a hint label) because
+  // uploadSkeletonSignature needs to be settled before the user can reach
+  // handleUploadDimensionsStep's createCatalogTemplate call — loadModelGltf
+  // caches by URL, so this doesn't re-fetch anything loadModelInstance
+  // above didn't already fetch.
+  uploadSkeletonSignature = await computeSkeletonSignature(modelUrl);
+  if (myFlowToken !== uploadFlowToken) return; // superseded while computing — a newer/canceled flow owns things now
 
   // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
   // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
@@ -3055,6 +3123,7 @@ async function handleUploadDimensionsStep() {
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
       modelSizeBytes: uploadModelSizeBytes,
+      skeletonSignature: uploadSkeletonSignature,
       sellerId: uploaderSellerId,
       // #680/#681's own "upload flow itself" was deliberately deferred as
       // separate scope — until now, category could only ever be set to
@@ -3063,7 +3132,12 @@ async function handleUploadDimensionsStep() {
       // 'placeholder' explicitly, so the server's own default (worker/
       // index.js's createCatalogTemplate) stays the one source of truth
       // for what an unchecked listing's category actually is.
-      category: uploadAvatarCategoryCheckbox.checked ? 'avatar' : undefined,
+      // #1163: same reasoning, for the sibling "standalone animation"
+      // category — the two checkboxes are mutually exclusive (see their
+      // own change listeners above), so at most one of these ever applies.
+      category: uploadAvatarCategoryCheckbox.checked
+        ? 'avatar'
+        : uploadAnimationCategoryCheckbox.checked ? 'animation' : undefined,
       priceCents,
       metadata,
     });
@@ -4045,8 +4119,10 @@ function renderSellerList() {
           color: template.color,
           modelUrl: template.modelUrl,
           // modelUrl is copied by reference (see this button's own comment
-          // above) — the underlying file, and so its size, is identical.
+          // above) — the underlying file, and so its size and skeleton, is
+          // identical.
           modelSizeBytes: template.modelSizeBytes,
+          skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only
@@ -5569,6 +5645,12 @@ function renderBuildSettingsSection() {
   const historyList = document.createElement('div');
   historyList.className = 'version-list';
   historyField.appendChild(historyList);
+  const historyLoadMoreBtn = document.createElement('button');
+  historyLoadMoreBtn.type = 'button';
+  historyLoadMoreBtn.className = 'version-action-btn';
+  historyLoadMoreBtn.textContent = 'Load more';
+  historyLoadMoreBtn.hidden = true;
+  historyField.appendChild(historyLoadMoreBtn);
   settingsSectionEl.appendChild(historyField);
 
   // #634/#635 (sub-issues of #631): a removed level's swept-out instances
@@ -5589,15 +5671,76 @@ function renderBuildSettingsSection() {
   const savedLayoutsList = document.createElement('div');
   savedLayoutsList.className = 'version-list';
   savedLayoutsField.appendChild(savedLayoutsList);
+  const savedLayoutsLoadMoreBtn = document.createElement('button');
+  savedLayoutsLoadMoreBtn.type = 'button';
+  savedLayoutsLoadMoreBtn.id = 'saved-layouts-load-more-btn';
+  savedLayoutsLoadMoreBtn.textContent = 'Load more';
+  savedLayoutsLoadMoreBtn.hidden = true;
+  savedLayoutsField.appendChild(savedLayoutsLoadMoreBtn);
   settingsSectionEl.appendChild(savedLayoutsField);
 
   let savedLayoutsLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load. Same shape as
+  // notificationsNextCursor (src/main.js ~8974) — #1215 found this panel's
+  // own `fetchSavedLayouts({ limit: 20 })` never read the API's own
+  // already-supported `nextCursor` at all, silently hiding anything past
+  // the first 20 saved layouts.
+  let savedLayoutsNextCursor = null;
+
+  function appendSavedLayoutRow(savedLayout) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
+    info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'version-action-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', () => {
+      sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
+      sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
+      location.reload();
+    });
+    actions.appendChild(previewBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'version-action-btn';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
+      deleteBtn.disabled = true;
+      try {
+        await deleteSavedLayout(savedLayout.savedLayoutId);
+        renderSavedLayoutsList();
+      } catch (err) {
+        alert(err.message || 'Could not delete this saved layout.');
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+
+    row.appendChild(actions);
+    savedLayoutsList.appendChild(row);
+  }
+
   async function renderSavedLayoutsList() {
     const myLoadToken = ++savedLayoutsLoadToken;
     savedLayoutsList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
-    let savedLayouts;
+    savedLayoutsLoadMoreBtn.hidden = true;
+    savedLayoutsNextCursor = null;
+    let page;
     try {
-      ({ savedLayouts } = await fetchSavedLayouts({ limit: 20 }));
+      page = await fetchSavedLayouts({ limit: 20 });
     } catch (err) {
       if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
       savedLayoutsList.innerHTML = '';
@@ -5609,56 +5752,31 @@ function renderBuildSettingsSection() {
     }
     if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
     savedLayoutsList.innerHTML = '';
-    if (savedLayouts.length === 0) {
+    if (page.savedLayouts.length === 0) {
       savedLayoutsList.innerHTML = '<div class="settings-empty-note">Nothing saved yet — removing a level with instances on it saves them here first.</div>';
       return;
     }
-    for (const savedLayout of savedLayouts) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
-      info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const previewBtn = document.createElement('button');
-      previewBtn.type = 'button';
-      previewBtn.className = 'version-action-btn';
-      previewBtn.textContent = 'Preview';
-      previewBtn.addEventListener('click', () => {
-        sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
-        sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
-        location.reload();
-      });
-      actions.appendChild(previewBtn);
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.type = 'button';
-      deleteBtn.className = 'version-action-btn';
-      deleteBtn.textContent = 'Delete';
-      deleteBtn.addEventListener('click', async () => {
-        if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
-        deleteBtn.disabled = true;
-        try {
-          await deleteSavedLayout(savedLayout.savedLayoutId);
-          renderSavedLayoutsList();
-        } catch (err) {
-          alert(err.message || 'Could not delete this saved layout.');
-          deleteBtn.disabled = false;
-        }
-      });
-      actions.appendChild(deleteBtn);
-
-      row.appendChild(actions);
-      savedLayoutsList.appendChild(row);
-    }
+    for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+    savedLayoutsNextCursor = page.nextCursor;
+    savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
   }
   renderSavedLayoutsList();
+
+  savedLayoutsLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = savedLayoutsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    savedLayoutsLoadMoreBtn.disabled = true;
+    try {
+      const page = await fetchSavedLayouts({ limit: 20, cursor: savedLayoutsNextCursor });
+      if (myLoadToken !== savedLayoutsLoadToken) return; // panel was reset while this page was loading
+      for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+      savedLayoutsNextCursor = page.nextCursor;
+      savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
+    } catch (err) {
+      console.warn('Could not load more saved layouts:', err);
+    } finally {
+      savedLayoutsLoadMoreBtn.disabled = false;
+    }
+  });
 
   // renderVersionHistory() is called from several places in quick
   // succession — the initial render, and again after Publish or after
@@ -5671,14 +5789,100 @@ function renderBuildSettingsSection() {
   // with out-of-date version/activeVersionId data. Same monotonic-token
   // fix as friendsLoadToken (#448).
   let versionHistoryLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load, same shape as
+  // notificationsNextCursor (#320) and savedLayoutsNextCursor (#1215).
+  // Reset to null every time renderVersionHistory starts a fresh first
+  // page; advanced by historyLoadMoreBtn's click handler as later pages
+  // come in.
+  let versionHistoryNextCursor = null;
+  // Set by renderVersionHistory on the initial load; historyLoadMoreBtn's
+  // click handler reuses it for later pages rather than re-fetching
+  // fetchLandlet on every "Load more" click just to learn the same id again.
+  let versionHistoryActiveVersionId = null;
+
+  function appendVersionRow(version, activeVersionId) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+    const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+    info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const setLiveBtn = document.createElement('button');
+    setLiveBtn.type = 'button';
+    setLiveBtn.className = 'version-action-btn';
+    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.disabled = version.versionId === activeVersionId;
+    setLiveBtn.addEventListener('click', async () => {
+      setLiveBtn.disabled = true;
+      try {
+        await activateLandletVersion(landletId, version.versionId);
+        // Feedback goes through the shared publishStatus, not a status
+        // element inside this row — renderVersionHistory() (below) tears
+        // down and rebuilds every row's DOM, including this one, so
+        // anything set on a per-row element here would be wiped before
+        // ever actually being visible.
+        publishStatus.textContent = `Shoppers now see "${version.name}".`;
+        publishStatus.classList.remove('error');
+        renderVersionHistory();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.classList.add('error');
+        setLiveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(setLiveBtn);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'version-action-btn';
+    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+      restoreBtn.disabled = true;
+      publishStatus.textContent = 'Restoring…';
+      publishStatus.classList.remove('error');
+      try {
+        const full = await fetchLandletVersion(landletId, version.versionId);
+        await replaceLandletDraft(landletId, {
+          instances: full.instances,
+          versionName: `Restored from "${version.name}"`,
+        });
+        // Simplest correct way to get the live scene back in sync with
+        // whatever the server now holds — the same "something changed
+        // server-side, reload" pattern claimBackBtn already uses
+        // elsewhere in this file.
+        sessionStorage.setItem(START_MODE_KEY, 'build');
+        location.reload();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not restore.';
+        publishStatus.classList.add('error');
+        restoreBtn.disabled = false;
+      }
+    });
+    actions.appendChild(restoreBtn);
+
+    row.appendChild(actions);
+    historyList.appendChild(row);
+  }
 
   async function renderVersionHistory() {
     const myLoadToken = ++versionHistoryLoadToken;
     historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    historyLoadMoreBtn.hidden = true;
+    versionHistoryNextCursor = null;
     let versions;
     let activeVersionId;
+    let nextCursor;
     try {
-      [{ versions }, { activeVersionId }] = await Promise.all([
+      [{ versions, nextCursor }, { activeVersionId }] = await Promise.all([
         fetchLandletVersions(landletId, { limit: 20 }),
         fetchLandlet(landletId),
       ]);
@@ -5697,78 +5901,27 @@ function renderBuildSettingsSection() {
       historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
       return;
     }
-    for (const version of versions) {
-      const row = document.createElement('div');
-      row.className = 'version-row';
-
-      const info = document.createElement('div');
-      info.className = 'version-row-info';
-      const itemWord = version.instanceCount === 1 ? 'item' : 'items';
-      const liveTag = version.versionId === activeVersionId ? ' — live' : '';
-      info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
-      row.appendChild(info);
-
-      const actions = document.createElement('div');
-      actions.className = 'version-row-actions';
-
-      const setLiveBtn = document.createElement('button');
-      setLiveBtn.type = 'button';
-      setLiveBtn.className = 'version-action-btn';
-      setLiveBtn.textContent = 'Set Live';
-      setLiveBtn.disabled = version.versionId === activeVersionId;
-      setLiveBtn.addEventListener('click', async () => {
-        setLiveBtn.disabled = true;
-        try {
-          await activateLandletVersion(landletId, version.versionId);
-          // Feedback goes through the shared publishStatus, not a status
-          // element inside this row — renderVersionHistory() (below) tears
-          // down and rebuilds every row's DOM, including this one, so
-          // anything set on a per-row element here would be wiped before
-          // ever actually being visible.
-          publishStatus.textContent = `Shoppers now see "${version.name}".`;
-          publishStatus.classList.remove('error');
-          renderVersionHistory();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not activate.';
-          publishStatus.classList.add('error');
-          setLiveBtn.disabled = false;
-        }
-      });
-      actions.appendChild(setLiveBtn);
-
-      const restoreBtn = document.createElement('button');
-      restoreBtn.type = 'button';
-      restoreBtn.className = 'version-action-btn';
-      restoreBtn.textContent = 'Restore to Editor';
-      restoreBtn.addEventListener('click', async () => {
-        if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-        restoreBtn.disabled = true;
-        publishStatus.textContent = 'Restoring…';
-        publishStatus.classList.remove('error');
-        try {
-          const full = await fetchLandletVersion(landletId, version.versionId);
-          await replaceLandletDraft(landletId, {
-            instances: full.instances,
-            versionName: `Restored from "${version.name}"`,
-          });
-          // Simplest correct way to get the live scene back in sync with
-          // whatever the server now holds — the same "something changed
-          // server-side, reload" pattern claimBackBtn already uses
-          // elsewhere in this file.
-          sessionStorage.setItem(START_MODE_KEY, 'build');
-          location.reload();
-        } catch (err) {
-          publishStatus.textContent = err.message || 'Could not restore.';
-          publishStatus.classList.add('error');
-          restoreBtn.disabled = false;
-        }
-      });
-      actions.appendChild(restoreBtn);
-
-      row.appendChild(actions);
-      historyList.appendChild(row);
-    }
+    for (const version of versions) appendVersionRow(version, activeVersionId);
+    versionHistoryNextCursor = nextCursor;
+    versionHistoryActiveVersionId = activeVersionId;
+    historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
   }
+
+  historyLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = versionHistoryLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    historyLoadMoreBtn.disabled = true;
+    try {
+      const { versions, nextCursor } = await fetchLandletVersions(landletId, { limit: 20, cursor: versionHistoryNextCursor });
+      if (myLoadToken !== versionHistoryLoadToken) return; // panel was reset while this page was loading
+      for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
+      versionHistoryNextCursor = nextCursor;
+      historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    } catch (err) {
+      console.warn('Could not load more versions:', err);
+    } finally {
+      historyLoadMoreBtn.disabled = false;
+    }
+  });
 
   publishBtn.addEventListener('click', async () => {
     publishBtn.disabled = true;
@@ -9131,8 +9284,8 @@ async function refreshAccountMenuTaxNotice() {
   }
 }
 
-// Friend requests (docs/SPEC.md §2: "Friend/group systems: standard friend
-// requests; social map shows friends' approximate location.") Same plain
+// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
+// requests; social map shows an accepted friend's location.") Same plain
 // pill-button-plus-badge design as Notices just above, badge counting
 // pending incoming requests rather than unread notices.
 const friendsBtn = document.getElementById('friends-btn');
@@ -9147,6 +9300,11 @@ const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
 const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
 const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
 const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+const friendsMapBtn = document.getElementById('friends-map-btn');
+const friendsMapModalEl = document.getElementById('friends-map-modal');
+const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
+const friendsMapCanvas = document.getElementById('friends-map-canvas');
+const friendsMapEmptyEl = document.getElementById('friends-map-empty');
 
 async function refreshFriendsBadge() {
   if (!builderId) return;
@@ -9160,13 +9318,13 @@ async function refreshFriendsBadge() {
   }
 }
 
-// "Social map ... approximate location" (see worker/index.js's own comment
-// on handleFriendships for why this is simplified to a friend's claimed
-// lándlet rather than a live position) — rendered here as plain text, not
-// an actual map widget. A real map would need its own renderer/camera the
-// way the claim flyover does (a full WebGL scene, not something to spin up
-// just for a small modal list) — this ships the underlying "where do my
-// friends live" data first.
+// "Social map" (see worker/index.js's own comment on handleFriendships for
+// why this is simplified to a friend's claimed lándlet rather than a live
+// position — exact coordinates, not fuzzed, per #1195's owner decision) —
+// rendered here as plain text, not an actual map widget. A real map would
+// need its own renderer/camera the way the claim flyover does (a full
+// WebGL scene, not something to spin up just for a small modal list) —
+// this ships the underlying "where do my friends live" data first.
 function friendLocationText(friendship) {
   if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
   const { name, center } = friendship.otherLandlet;
@@ -9319,6 +9477,92 @@ async function renderFriends() {
     friendsAcceptedListEl.appendChild(row);
   }
 }
+
+// #1205: plots every accepted friend's claimed lándlet at once, rather
+// than the per-friend inline text friendLocationText already shows.
+// Deliberately a plain 2D canvas, not a three.js scene like the claim
+// flyover's own world map (loadLandletMap) — that one needs a full WebGL
+// renderer because it draws every landlet's real polygon with click-to-
+// select/confirm wiring; this only needs to plot a handful of already-known
+// (x, y) points with labels, which a 2D canvas context does directly with
+// no scene/camera/renderer setup at all. World-radius-scaled the same way
+// the claim flyover sizes itself, just via a linear 2D transform instead of
+// a 3D camera. A friend with no claimed lándlet (otherLandlet null) is
+// simply omitted, same as friendLocationText's own "hasn't claimed a
+// lándlet yet" case — there's no position to plot for them.
+async function drawFriendsMap() {
+  let world;
+  let friendships;
+  try {
+    [world, friendships] = await Promise.all([fetchWorld(), fetchFriendships()]);
+  } catch (err) {
+    console.warn('Could not load the friends map:', err);
+    friendsMapEmptyEl.textContent = err.message || 'Could not load the friends map.';
+    friendsMapEmptyEl.hidden = false;
+    return;
+  }
+  const located = friendships.filter((f) => f.status === 'accepted' && f.otherLandlet);
+  friendsMapEmptyEl.hidden = located.length > 0;
+  if (located.length === 0) return;
+
+  // Matches the canvas's own CSS size (width: 100%, aspect-ratio: 1) in
+  // real pixels, so the drawing isn't blurrily upscaled/downscaled from a
+  // mismatched default 300x150 canvas backing size.
+  const rect = friendsMapCanvas.getBoundingClientRect();
+  friendsMapCanvas.width = rect.width;
+  friendsMapCanvas.height = rect.height;
+  const ctx = friendsMapCanvas.getContext('2d');
+  const centerPx = { x: friendsMapCanvas.width / 2, y: friendsMapCanvas.height / 2 };
+  // A little inset so a friend right at the world edge doesn't plot a dot
+  // half-clipped by the canvas border.
+  const pxPerMeter = (Math.min(centerPx.x, centerPx.y) * 0.9) / world.radiusM;
+  // World +Y is "up"/North (see updateCompassNeedle's own comment on this
+  // app's one existing map-orientation convention) — canvas +Y is down, so
+  // the y axis is negated going from world meters to canvas pixels.
+  function worldToCanvas(x, y) {
+    return { x: centerPx.x + x * pxPerMeter, y: centerPx.y - y * pxPerMeter };
+  }
+
+  ctx.clearRect(0, 0, friendsMapCanvas.width, friendsMapCanvas.height);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(centerPx.x, centerPx.y, Math.min(centerPx.x, centerPx.y) * 0.9, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // A canvas fillStyle has to be an actual resolved color, not a raw
+  // `var(...)` reference the way a stylesheet declaration can use —
+  // resolved once here via getComputedStyle rather than per-point below.
+  const labelColor = getComputedStyle(document.documentElement).getPropertyValue('--pill-text').trim();
+
+  // #1205's own test diagnostic (same "expose what a test needs to read
+  // back" idiom as window.__shopAvatarOrientation/__shopOtherAvatars) —
+  // canvas pixel content isn't otherwise inspectable from an e2e test
+  // without reading back raw ImageData.
+  window.__friendsMapPoints = [];
+  for (const friendship of located) {
+    const { x, y } = worldToCanvas(friendship.otherLandlet.center.x, friendship.otherLandlet.center.y);
+    ctx.fillStyle = '#2f7de1';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = labelColor;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(friendship.otherLabel ?? '', x, y - 10);
+    window.__friendsMapPoints.push({ builderId: friendship.otherBuilderId, label: friendship.otherLabel, x, y });
+  }
+}
+
+friendsMapBtn.addEventListener('click', () => {
+  friendsModalEl.classList.remove('visible');
+  friendsMapModalEl.classList.add('visible');
+  drawFriendsMap();
+});
+friendsMapCloseBtn.addEventListener('click', () => {
+  friendsMapModalEl.classList.remove('visible');
+  friendsModalEl.classList.add('visible');
+});
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
 // Log In/Notices/Friends/Settings buttons above are unchanged in every
@@ -10225,6 +10469,8 @@ const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 const shopFlyBtn = document.getElementById('shop-fly-btn');
+const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
+const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
@@ -10301,6 +10547,20 @@ const SHOP_SPAWN_START_ALTITUDE_M = 80;
 // a full revolution takes a couple of minutes, plenty of time to take in
 // the view before (or without ever) touching a control.
 const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
+// #1176: the "Go to Last Location" button's own fade in/out — same
+// duration both ways, applied via CSS transition (#shop-last-location-btn
+// in index.html), not JS-driven opacity.
+const SHOP_LAST_LOCATION_BUTTON_FADE_S = 0.4;
+// #1176 (owner, live Control Room conversation): the button disappears
+// "automatically five seconds after the shopper begins navigating on their
+// own" — i.e. ignores the rotating spawn view and starts moving/flying
+// themselves instead, as opposed to tapping the button itself (which hides
+// it immediately, no countdown — see startGoToLastLocation).
+const SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S = 5;
+// #1176: how long the avatar takes to fade out before it's teleported
+// above the last location, and again to fade back in once there — two
+// separate fades, each this long, not one round trip of this total length.
+const SHOP_LAST_LOCATION_AVATAR_FADE_S = 0.6;
 // Speed-vs-altitude curve: spec's own two data points — "~10x walking
 // speed near building-height" and "up to ~100x at max altitude" — plus its
 // governing rule, "each doubling of altitude ≈ 50% more max ground speed."
@@ -11111,6 +11371,16 @@ function bindShopFlyToggle(el) {
 }
 bindShopFlyToggle(shopFlyBtn);
 
+// #1176: "Go to Last Location" — see startGoToLastLocation's own comment.
+// A plain click, not pointerdown like the fly button above: this one has
+// no in-air-vs-grounded ambiguity to resolve quickly, and it's only ever
+// shown during the spawn orbit anyway, never competing with another
+// control for the same tap.
+shopLastLocationBtn.addEventListener('click', () => {
+  if (!shopActive) return;
+  startGoToLastLocation();
+});
+
 // A double-tap/double-press, not a single one, so an ordinary spacebar
 // press while, say, a builder is just looking around with keyboard focus
 // on the page never launches the player into the air unintentionally —
@@ -11493,6 +11763,20 @@ let shopLastSpacePressAt = -Infinity;
 let shopSpawnRotating = false;
 let shopSpawnOrbitRadiusM = 0;
 
+// #1176: the shopper's own last-reported avatar_presence position (fetched
+// once in enterShopMode via fetchOwnLastPresence), or null when there is
+// none (a brand-new account, or one that's never entered Shop mode
+// before) — the "Go to Last Location" button is only ever shown when this
+// is non-null. shopLastLocationHideTimerS counts seconds since the
+// shopper began navigating on their own (null while not counting — see
+// stopShopSpawnRotationForNavigation); shopGoToLastLocationPhase/
+// ElapsedS drive the click-triggered fade-out/teleport/fade-in sequence
+// (see updateGoToLastLocation) — null/0 while no such sequence is running.
+let shopLastLocation = null;
+let shopLastLocationHideTimerS = null;
+let shopGoToLastLocationPhase = null; // null | 'fadingOut' | 'fadingIn'
+let shopGoToLastLocationElapsedS = 0;
+
 // Swing amplitude eases toward its target (moving vs. standing still)
 // rather than snapping, so stopping doesn't visibly freeze the legs
 // mid-stride — and phase only advances while actually moving, so a full
@@ -11648,19 +11932,18 @@ function shopFlightSpeedMultiplier(altitudeM) {
 // fly." Owner follow-up (2026-09-12): "make the in-flight bird and the
 // standing bird look like the same bird" — 🕊️ and 🐦 render as visibly
 // different species/colors across platforms (white dove vs. a often-blue
-// generic bird), which read as a mismatch rather than a state change. Kept
-// a single glyph (the dove, since it already reads as "in flight") for
-// both states and moved the state distinction entirely onto CSS (the
-// .active background tint plus a takeoff/landing tilt — see
-// #shop-fly-btn.active in index.html) so there's no species/color jump.
-// Still centralized here (rather than duplicated across toggleShopFlight's
-// two branches and enterShopMode's first-visit spawn below) so the classes
-// can never drift out of sync with each other.
-const SHOP_FLY_BTN_ICON = '\u{1F54A}'; // 🕊️ dove — same glyph grounded or flying
+// generic bird), which read as a mismatch rather than a state change. That
+// problem was specific to native emoji glyphs, not to having two icons —
+// owner-supplied custom artwork (Control Room, 2026-10-01, a matching
+// flying/standing pair of the same bird) fixes it at the source, so the
+// icon itself can carry the state again, same as before N45, with no CSS
+// tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
+const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
+const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtn.textContent = SHOP_FLY_BTN_ICON;
+  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_FLYING : SHOP_FLY_BTN_ICON_STANDING;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
@@ -11669,10 +11952,12 @@ function setShopFlyBtnFlying(flying) {
 // own starting altitude (shopFlightLandingStartAltitudeM) so its descent
 // ramps from wherever the player actually was, not always the same height.
 function toggleShopFlight() {
-  // #1175: a deliberate tap of the fly button is navigation input same as
-  // any joystick deflection — stop the hands-off spawn orbit immediately
-  // rather than leaving it fighting the player's own takeoff/landing.
-  stopShopSpawnRotation();
+  // #1175/#1176: a deliberate tap of the fly button is navigation input
+  // same as any joystick deflection — stop the hands-off spawn orbit
+  // immediately rather than leaving it fighting the player's own
+  // takeoff/landing, and start the "Go to Last Location" button's own
+  // auto-hide countdown the same way (see stopShopSpawnRotationForNavigation).
+  stopShopSpawnRotationForNavigation();
   if (shopFlightState === 'grounded') {
     shopFlightState = 'takingOff';
     shopFlightTransitionElapsedS = 0;
@@ -11699,6 +11984,107 @@ function toggleShopFlight() {
 // itself.
 function stopShopSpawnRotation() {
   shopSpawnRotating = false;
+}
+
+// #1176: the navigation-input-specific wrapper around stopShopSpawnRotation
+// above — also starts the "Go to Last Location" button's own 5-second
+// auto-hide countdown, but only the first time (shopLastLocationHideTimerS
+// stays non-null once started, so a second navigation input while it's
+// already counting down doesn't restart the clock), and only when the
+// orbit was actually still running (a tap/deflection that arrives after the
+// orbit already stopped itself isn't a new "the shopper began navigating"
+// moment) and there's a button showing at all to hide. Every navigation-
+// input path (the joystick/vertical-button checks in updateShopMovement,
+// the fly-button tap in toggleShopFlight) calls this instead of the bare
+// stopShopSpawnRotation — the one exception is startGoToLastLocation
+// below, since clicking that button is not "navigating on their own."
+function stopShopSpawnRotationForNavigation() {
+  const wasRotating = shopSpawnRotating;
+  stopShopSpawnRotation();
+  if (wasRotating && shopLastLocation && shopLastLocationHideTimerS === null) {
+    shopLastLocationHideTimerS = 0;
+  }
+}
+
+// #1176: fades every material in the avatar's own group uniformly — used
+// by the "Go to Last Location" sequence's fade-out/fade-in (see
+// updateGoToLastLocation). Skips the AFK sprite: that one already drives
+// its own opacity every frame from shopAfkBlend (updateShopAvatarIdle),
+// independently of this sequence, and fighting it here would just lose to
+// whichever ran later this same frame.
+function setShopAvatarOpacity(opacity) {
+  shopAvatar.group.traverse((object) => {
+    if (object === shopAvatar.afkSprite || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = opacity;
+    }
+  });
+}
+
+// #1176: click handler for #shop-last-location-btn. Stops the spawn orbit
+// (plain stopShopSpawnRotation — clicking this button is the shopper
+// choosing the rotating view's own offered alternative, not "navigating on
+// their own," so it must never start the auto-hide countdown) and hides
+// the button immediately (no fade, no countdown — it's served its purpose
+// the instant it's tapped), then hands off to updateGoToLastLocation for
+// the actual fade-out/teleport/fade-in/auto-land sequence.
+function startGoToLastLocation() {
+  if (!shopLastLocation || shopGoToLastLocationPhase) return;
+  stopShopSpawnRotation();
+  shopLastLocationHideTimerS = null;
+  shopLastLocationBtn.classList.remove('visible');
+  shopGoToLastLocationPhase = 'fadingOut';
+  shopGoToLastLocationElapsedS = 0;
+}
+
+// #1176: the click-triggered sequence itself — fade the avatar out, jump
+// it (and the camera, via shopYaw/shopAvatarFacing) above the last
+// reported location once fully invisible, fade back in, then hand off to
+// the ordinary 'landing' flight state (updateShopFlight already knows how
+// to fly that down to the real ground/obstruction top — see its own
+// comment) so the rest of the descent is exactly the same code path a
+// manual fly-button landing already uses, not a parallel one. Called every
+// frame from updateShopMovement; a no-op whenever no sequence is running.
+function updateGoToLastLocation(dt) {
+  if (!shopGoToLastLocationPhase) return;
+  shopGoToLastLocationElapsedS += dt;
+  const t = Math.min(1, shopGoToLastLocationElapsedS / SHOP_LAST_LOCATION_AVATAR_FADE_S);
+  if (shopGoToLastLocationPhase === 'fadingOut') {
+    setShopAvatarOpacity(1 - t);
+    if (t < 1) return;
+    shopAvatarPosition.x = shopLastLocation.x;
+    shopAvatarPosition.y = shopLastLocation.y;
+    shopFlightState = 'flying';
+    shopFlightTransitionElapsedS = 0;
+    shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
+    shopAvatarPosition.z =
+      shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    // Face whichever direction the shopper was last facing, if known —
+    // falls back to whatever shopYaw already was (invisible either way at
+    // this exact instant, so it's never a visible jump) rather than
+    // guessing a direction that isn't actually meaningful here.
+    if (shopLastLocation.heading !== null && shopLastLocation.heading !== undefined) {
+      shopYaw = shopLastLocation.heading;
+    }
+    shopAvatarFacing = shopYaw;
+    applyShopCameraOrientation();
+    shopGoToLastLocationPhase = 'fadingIn';
+    shopGoToLastLocationElapsedS = 0;
+    setShopAvatarOpacity(0);
+  } else {
+    setShopAvatarOpacity(t);
+    if (t < 1) return;
+    shopGoToLastLocationPhase = null;
+    // Auto-begin the descent the instant the fade-in finishes — same
+    // landing ramp a manual fly-button tap starts (see toggleShopFlight),
+    // just triggered automatically instead of waiting for one.
+    shopFlightLandingStartAltitudeM = shopFlightAltitudeM;
+    shopFlightState = 'landing';
+    shopFlightTransitionElapsedS = 0;
+    setShopFlyBtnFlying(false);
+  }
 }
 
 // #1175: drives the spawn-time "slow clockwise rotating aerial shot at a
@@ -11886,13 +12272,32 @@ function updateShopMovement(now) {
   // fire, so no extra guard is needed to keep them from fighting the orbit.
   if (shopSpawnRotating) {
     if (shopLookX !== 0 || shopLookY !== 0 || shopMoveX !== 0 || shopMoveY !== 0 || shopVerticalInput !== 0) {
-      stopShopSpawnRotation();
+      stopShopSpawnRotationForNavigation();
     } else {
       updateShopSpawnRotation(dt);
     }
   }
+  // #1176: counts down to the "Go to Last Location" button's own auto-hide
+  // (started by stopShopSpawnRotationForNavigation above, or by the fly
+  // button's own tap in toggleShopFlight — either way, "the shopper began
+  // navigating on their own") independently of whichever phase the orbit
+  // or the button's own click sequence is in.
+  if (shopLastLocationHideTimerS !== null) {
+    shopLastLocationHideTimerS += dt;
+    if (shopLastLocationHideTimerS >= SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S) {
+      shopLastLocationBtn.classList.remove('visible');
+      shopLastLocationHideTimerS = null;
+    }
+  }
+  updateGoToLastLocation(dt);
 
-  if (shopLookX !== 0 || shopLookY !== 0) {
+  // #1176: the fade-out/teleport/fade-in sequence owns the camera/avatar
+  // completely once it's running (startGoToLastLocation already stopped
+  // the spawn orbit before this point) — "no further input needed
+  // mid-sequence" per the owner's own spec means real joystick/look input
+  // is simply ignored for its duration, rather than fighting a predetermined
+  // teleport the moment it lands.
+  if (!shopGoToLastLocationPhase && (shopLookX !== 0 || shopLookY !== 0)) {
     shopYaw -= shopLookX * SHOP_LOOK_SPEED_RAD_S * dt;
     shopPitch = Math.max(
       -SHOP_MAX_PITCH,
@@ -11905,7 +12310,7 @@ function updateShopMovement(now) {
   const airborne = shopFlightState !== 'grounded';
 
   let moveMagnitude = 0;
-  if (shopMoveX !== 0 || shopMoveY !== 0) {
+  if (!shopGoToLastLocationPhase && (shopMoveX !== 0 || shopMoveY !== 0)) {
     // Movement stays in the horizontal plane (forward/right with their Z
     // dropped) so looking up or down while walking/flying doesn't also
     // steer altitude — that's updateShopFlight's own separate concern.
@@ -13316,6 +13721,32 @@ async function enterShopMode() {
     }
   }
 
+  // #1176: the shopper's own last-reported position, if any — powers the
+  // "Go to Last Location" button shown during the spawn orbit below. Never
+  // blocks Shop mode entry on failure, same as equippedAvatarModelUrl just
+  // above — but unlike that one, this also skips the call entirely during
+  // accountRecoveryFlowActive, not just when logged out: GET /api/presence/me
+  // is gated by requireSessionBuilder (full age/trust-tier verification,
+  // same bar every other presence endpoint already uses), while the
+  // equipped-avatar endpoint above only requires a login. A logged-in-but-
+  // not-yet-verified account reaching Shop mode specifically through the
+  // accountRecoveryFlowActive path (its own comment above: "mid verify-
+  // email/password-reset flow") would otherwise call this anyway and get a
+  // real 403 — caught here same as any other failure, but Chromium still
+  // logs the failed resource load as a console error regardless of the
+  // catch (the exact e2e/auth.test.mjs failure mode equippedAvatarModelUrl's
+  // own comment already describes for a 401; this is that same shape for a
+  // 403 instead, found via that file's own errors.length === 0 check during
+  // its reset-password flow). null (no button shown) either way.
+  shopLastLocation = null;
+  if (currentAuthUser && !accountRecoveryFlowActive) {
+    try {
+      shopLastLocation = await fetchOwnLastPresence();
+    } catch (err) {
+      console.warn('Could not fetch last known location:', err);
+    }
+  }
+
   let world;
   let allLandlets;
   try {
@@ -13506,6 +13937,15 @@ async function enterShopMode() {
   // wait until here, unlike the other Shop HUD elements above).
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
+  // #1176: the "Go to Last Location" button, offered only when there's
+  // actually somewhere to offer — reset alongside the rest of this
+  // function's own re-entrant spawn state (see its opening comment on
+  // Shop mode being re-enterable without a reload) rather than carrying
+  // over a previous round trip's now-stale countdown/sequence state.
+  shopLastLocationHideTimerS = null;
+  shopGoToLastLocationPhase = null;
+  shopGoToLastLocationElapsedS = 0;
+  shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
   shopPitch = -0.12;
   // shopYaw (set above, the orbit's starting angle) already faces the
@@ -14056,6 +14496,13 @@ async function enterSellMode() {
   updateSellerViewToggleUI();
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
+  // #1214: openSellerModal() (see its own comment above) has never actually
+  // been called from anywhere since #540 moved Sell to this reload-based
+  // entry path — this function inlines the rest of its body, but had
+  // dropped this one call along the way, leaving #seller-feedback-summary
+  // permanently hidden/stale in the live app regardless of real feedback
+  // on file. Found while adding e2e coverage for the seller-feedback flow.
+  renderSellerFeedbackSummary(id);
 }
 
 // The persistent Shop/Build/Sell switcher (#mode-nav). All three are real
