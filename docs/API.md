@@ -4678,7 +4678,10 @@ exist.
 ### `GET /api/auctions/:auctionId/bids`
 
 Every bid on this auction, highest first (ties broken by earliest),
-capped at 200. `404` if the auction doesn't exist.
+capped at 200, plus a real `totalCount` (uncapped `COUNT(*)`) so a client
+can tell the list is truncated (`#1275`, same fix as `#356`). Returns
+`{ "bids": [...], "totalCount": <number> }`. `404` if the auction doesn't
+exist.
 
 ### `POST /api/auctions/:auctionId/bids`
 

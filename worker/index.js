@@ -4710,7 +4710,11 @@ async function handleAuctionBids(request, db, route) {
     const { results } = await db.prepare(`
       SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 200
     `).bind(auctionId).all();
-    return json({ bids: results.map(auctionBidFromRow) });
+    // Same totalCount-alongside-the-cap pattern as handleSignPosts/
+    // handleCalendarEvents (#356) — lets a caller tell the 200-row cap
+    // ever actually truncates something.
+    const total = await db.prepare('SELECT COUNT(*) AS count FROM auction_bids WHERE auction_id = ?').bind(auctionId).first();
+    return json({ bids: results.map(auctionBidFromRow), totalCount: total.count });
   }
 
   if (request.method === 'POST') {
