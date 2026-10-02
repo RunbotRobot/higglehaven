@@ -3093,7 +3093,13 @@ describe('Landlet levels', () => {
     await seedLevelDirectly();
     const limited = await api('/landlets/levels-remove-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(limited.response.status).toBe(429);
-  });
+  }, 45000); // #978: same fixed-20s-timeout-under-CI-load gap as the
+  // sweep-specific rate-limit test above -- 40 iterations x 2 real HTTP
+  // requests each (seed, delete) reliably finishes in ~2s in isolation,
+  // but this file's 121 tests share one D1 instance, and late-file
+  // cumulative state occasionally pushes this specific test past the 20s
+  // default under CI load too. Never caught before now because CI load
+  // (and exactly which tests ran before it) varies run to run.
 
   // #924: the rate-limit check used to run AFTER the level row was already
   // deleted -- a rate-limited caller still got the real, irreversible
