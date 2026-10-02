@@ -5853,7 +5853,7 @@ notice (see its own comment on why):
   `$600` for the year — 1099-NEC's standard nonemployee-compensation
   threshold, much lower than 1099-K's and a genuinely different number
   from `GET /api/tax/summary`'s combined-total threshold. Per #350's own
-  research, this form-type choice for daller-commission income is a
+  research, this form-type choice for higgle-commission income is a
   reasonable default, not a tax professional's confirmed answer yet.
 
 Only builder/seller profiles actually linked to a real login

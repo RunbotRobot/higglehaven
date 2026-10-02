@@ -1,8 +1,8 @@
 -- #645 (sub-issue of #616, itself sub-issue of #350): 1099-K/1099-NEC
 -- form-record data model. One row per (user, tax year, form type) --
 -- 1099-k for a seller's real-money payout income, 1099-nec for a
--- builder's daller-commission income (per #350's own research: the
--- daller side is never TPSO-settled the way the Stripe side is, so it
+-- builder's higgle-commission income (per #350's own research: the
+-- higgle side is never TPSO-settled the way the Stripe side is, so it
 -- doesn't qualify for 1099-K; still flagged there as needing a real tax
 -- professional's sign-off before anything is actually filed).
 --
