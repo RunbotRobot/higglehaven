@@ -1544,7 +1544,11 @@ post-shipping hold instead of an early release.
 Response: `{ "confirmed": true }`. Idempotent — confirming an
 already-confirmed purchase (a second visit to the same link) is a no-op,
 not an error. Returns `400` if the token doesn't match any purchase, or if
-the purchase has been refunded.
+the purchase has been refunded. On the first confirmation (not a repeat
+visit), notifies the seller that delivery was confirmed and their payout
+was released early — same best-effort notification convention as every
+other transactional event in this app (#1289), skipped if the seller has
+since self-deleted.
 
 ## Catalog templates
 
