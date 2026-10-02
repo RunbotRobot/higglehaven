@@ -7480,7 +7480,13 @@ to a SHA-256 hex digest — compact, and content-opaque since a rig's bone
 names aren't meaningful to store verbatim. `null` for a model with no
 skeleton at all (an ordinary rigid prop), the same "nothing to report"
 shape `loadModelAnimations` already uses for a model with no animation
-clips.
+clips. The root/edge-sorting-and-hashing step itself is extracted into a
+pure, dependency-free helper, `skeletonSignatureFromBones` (`src/
+skeletonSignature.js`, #1233), covered by its own unit tests — the only
+part of `computeSkeletonSignature` this repo's test suite can exercise
+directly, since the rest depends on a loaded `THREE.SkinnedMesh` (see
+`vitest.config.js`'s own note on why three.js-importing code can't run in
+the `src/**/*.test.js` pool).
 
 Persisted as `catalog_templates.skeleton_signature` (migration 0105),
 passed through `createCatalogTemplate`/`updateCatalogTemplate` as
