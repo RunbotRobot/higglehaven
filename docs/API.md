@@ -7203,9 +7203,14 @@ longer 20,000-character text cap instead (see PATCH below). These are the
 owner's own two named criteria from N31. An
 explicit `id` may be supplied (`409` if already taken); otherwise one is
 generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
-`session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`) is optional,
+`session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`, `subIssues`,
+`subIssueSummaries`) is optional,
 defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
 matching the Artifact-era board's own defaults for a freeform note.
+`subIssues`/`subIssueSummaries` (#998) can be set at creation time, not
+just via a later PATCH — useful for filing a tracking task with its
+breakdown already attached in one call. See their validation rules
+under PATCH below, which apply identically here.
 
 **`noteNumber` is auto-assigned when omitted, for a message-shaped task
 only** (owner feedback, control room notes 9461ee39/96d6d08c,
