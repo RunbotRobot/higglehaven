@@ -2898,6 +2898,23 @@
       #notifications-load-more-btn:disabled {
         opacity: 0.5;
       }
+      /* #1215: Saved Layouts' own "Load more" — same shape/placement as
+         #notifications-load-more-btn just above, since this panel's list
+         is cursor-paginated the identical way but never had a control for
+         it at all. */
+      #saved-layouts-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #saved-layouts-load-more-btn:disabled {
+        opacity: 0.5;
+      }
       /* Same modal shell as #notifications-modal — friend requests
          (docs/SPEC.md §2), opened from #friends-btn. Three subsections
          (Requests/Sent/Friends) share one .friend-row look with different
