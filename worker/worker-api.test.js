@@ -2911,7 +2911,14 @@ describe('Worker API', () => {
     const badCursor = await api('/land-candidates?cursor=not-base64');
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
-  }, 30000);
+  // #978's own shape: several real HTTP round trips against a shared,
+  // per-file D1 instance that's accumulated state from every earlier test
+  // in this (large, 70+-test) file — the existing 30000ms override still
+  // wasn't enough under full-suite CI load (CI on PR #1225: timed out at
+  // exactly 30000ms; passes in well under 1s in isolation), so bumping to
+  // the same 45000ms worker/land.test.js's own sibling tests settled on
+  // for the identical root cause.
+  }, 45000);
 
   // #570: generate-mosaic/-ring already reject a new candidate that would
   // overlap already-claimed or already-queued land; the manual single POST
