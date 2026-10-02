@@ -4389,8 +4389,9 @@ function renderSellerList() {
       const myLoadToken = ++reviewLoadToken;
       let reviews;
       let averageRating;
+      let count;
       try {
-        ({ reviews, averageRating } = await fetchProductReviews(template.templateId));
+        ({ reviews, averageRating, count } = await fetchProductReviews(template.templateId));
       } catch (err) {
         if (myLoadToken !== reviewLoadToken) return; // superseded while fetching
         reviewEmptyEl.textContent = err.message || 'Could not load reviews.';
@@ -4407,7 +4408,7 @@ function renderSellerList() {
       reviewEmptyEl.hidden = reviews.length > 0;
       if (reviews.length > 0) {
         const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
-        reviewSummaryEl.textContent = `${stars} ${averageRating.toFixed(1)} average (${reviews.length} review${reviews.length === 1 ? '' : 's'})`;
+        reviewSummaryEl.textContent = `${stars} ${averageRating.toFixed(1)} average (${count} review${count === 1 ? '' : 's'})`;
       }
       for (const review of reviews) {
         const reviewRow = document.createElement('div');
@@ -4778,8 +4779,9 @@ updateSellerViewToggleUI();
 async function renderSellerFeedbackSummary(id) {
   let feedback;
   let averageRating;
+  let count;
   try {
-    ({ feedback, averageRating } = await fetchSellerFeedback(id));
+    ({ feedback, averageRating, count } = await fetchSellerFeedback(id));
   } catch (err) {
     console.warn('Could not load seller feedback summary:', err);
     sellerFeedbackSummaryEl.hidden = true;
@@ -4789,7 +4791,7 @@ async function renderSellerFeedbackSummary(id) {
   if (feedback.length === 0) return;
   const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
   sellerFeedbackSummaryEl.textContent =
-    `Seller feedback: ${stars} ${averageRating.toFixed(1)} average (${feedback.length} rating${feedback.length === 1 ? '' : 's'})`;
+    `Seller feedback: ${stars} ${averageRating.toFixed(1)} average (${count} rating${count === 1 ? '' : 's'})`;
 }
 
 async function openSellerModal() {
