@@ -13010,6 +13010,17 @@ function updateOtherShopAvatars(now) {
 async function loadShopLandletInstances(entry, myToken) {
   let instances;
   try {
+    // #1282: entry.record is a one-time snapshot taken when Shop mode was
+    // entered (fetchAllLandlets, far above) and was never refreshed after
+    // that — a builder publishing a new version, or switching which
+    // version is live, while a shopper's session was already open went
+    // unnoticed indefinitely, since every reload here (updateShopProximity
+    // walking the shopper toward/away from the landlet) kept branching on
+    // that same stale activeVersionId. Re-fetching the landlet record
+    // fresh on every load keeps this decision current, the same way a
+    // fresh page load already would, without changing anything else
+    // entry.record is used for.
+    entry.record.activeVersionId = (await fetchLandlet(entry.record.landletId)).activeVersionId;
     // A landlet that's actually been published (see the Build settings
     // tab's "Publish"/Version History) shows shoppers a frozen snapshot,
     // not the builder's own live in-progress edits — the whole point of a
