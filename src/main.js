@@ -56,6 +56,9 @@ import {
   fetchMyEquippedAvatar,
   fetchMyOwnedAvatars,
   equipAvatar,
+  fetchMyEquippedAnimation,
+  fetchMyOwnedAnimations,
+  equipAnimation,
   fetchTaxSummary,
   submitTaxIdForm,
   fetchSellerStripeAccount,
@@ -4931,6 +4934,7 @@ function renderShopSettingsSection() {
   settingsSectionEl.appendChild(field);
 
   renderMyAvatarsField();
+  renderMyAnimationsField();
 }
 
 // #713 (sub-issue of #710): #679 shipped the backend (GET /api/builders/
@@ -5003,6 +5007,11 @@ function renderMyAvatarsField() {
         equipBtn.disabled = true;
         try {
           const newEquipped = await equipAvatar(templateId);
+          // #1164: keep the Shop-mode buy hint's own compatibility note
+          // (productInfoText) current — without this, re-equipping while
+          // already in Shop mode left it comparing against whichever
+          // avatar was equipped when enterShopMode last ran.
+          shopEquippedAvatarSkeletonSignature = newEquipped.skeletonSignature;
           await refreshEquippedShopAvatar(newEquipped.modelUrl);
           renderMyAvatarsList();
         } catch (err) {
@@ -5016,6 +5025,131 @@ function renderMyAvatarsField() {
     }
   }
   renderMyAvatarsList();
+}
+
+// #1164 (sub-issue of #1161): shared by this file's own two compatibility
+// surfaces (this settings panel, and the Shop-mode buy hint below) so
+// "what does compatible/incompatible/unknown actually mean" lives in
+// exactly one place. Exact-match string equality (#1162's own contract —
+// see computeSkeletonSignature's doc comment on why this is never fuzzy),
+// gated on both signatures actually being present: `null` either means
+// "the default procedural avatar" (no skeleton at all, see myAvatarJson's
+// own comment) or "this animation file carries no skeleton," and neither
+// can ever match anything, compatible or not.
+function animationCompatibility(animationSignature, avatarSignature) {
+  if (!avatarSignature) return 'no-avatar';
+  if (!animationSignature) return 'unknown';
+  return animationSignature === avatarSignature ? 'compatible' : 'incompatible';
+}
+
+function animationCompatibilityLabel(compatibility) {
+  switch (compatibility) {
+    case 'compatible': return 'Compatible with your equipped avatar';
+    case 'incompatible': return 'Incompatible with your equipped avatar';
+    case 'no-avatar': return 'Equip a custom avatar to check compatibility';
+    default: return 'Compatibility unknown';
+  }
+}
+
+// #1164: the "My Animations" sibling of renderMyAvatarsField just above —
+// same row shape, equip/unequip against owned_animations (#1163) instead
+// of owned_avatars, plus a compatibility badge per row (see
+// animationCompatibility) since, unlike an avatar, whether an animation
+// actually plays correctly depends on which avatar is currently equipped.
+// Equipping an incompatible animation is still allowed here, deliberately
+// — the issue's own scope note is that incompatibility should be
+// *visible*, not blocked outright; #1165's own "sane fallback behavior if
+// the shopper later switches to a different, incompatible avatar while an
+// animation is applied" only makes sense if that combination can exist in
+// the first place.
+function renderMyAnimationsField() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'My Animations';
+  field.appendChild(label);
+  const hint = document.createElement('div');
+  hint.className = 'settings-empty-note';
+  hint.textContent = 'Apply an animation you own to your currently equipped avatar.';
+  field.appendChild(hint);
+  const list = document.createElement('div');
+  list.className = 'version-list';
+  field.appendChild(list);
+  settingsSectionEl.appendChild(field);
+
+  let myAnimationsLoadToken = 0;
+  async function renderMyAnimationsList() {
+    const myLoadToken = ++myAnimationsLoadToken;
+    list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let animations;
+    let equipped;
+    let equippedAvatar;
+    try {
+      [animations, equipped, equippedAvatar] = await Promise.all([
+        fetchMyOwnedAnimations(), fetchMyEquippedAnimation(), fetchMyEquippedAvatar(),
+      ]);
+    } catch (err) {
+      if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      list.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load your animations.';
+      list.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    list.innerHTML = '';
+
+    if (animations.length === 0) {
+      const emptyNote = document.createElement('div');
+      emptyNote.className = 'settings-empty-note';
+      emptyNote.textContent = "You don't own any standalone animations yet.";
+      list.appendChild(emptyNote);
+      return;
+    }
+
+    // Unlike My Avatars, "None applied" is only a meaningful choice once
+    // you own at least one animation — an empty list above already covers
+    // "nothing to apply" on its own, so this row only appears alongside
+    // real owned animations.
+    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null }, ...animations];
+    for (const { templateId, name, skeletonSignature } of rowSpecs) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const isEquipped = equipped.equippedTemplateId === templateId;
+      const parts = [isEquipped ? `${name} — applied` : name];
+      if (templateId !== null) {
+        parts.push(animationCompatibilityLabel(animationCompatibility(skeletonSignature, equippedAvatar.skeletonSignature)));
+      }
+      info.textContent = parts.join(' — ');
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const equipBtn = document.createElement('button');
+      equipBtn.type = 'button';
+      equipBtn.className = 'version-action-btn';
+      equipBtn.textContent = templateId === null ? 'Clear' : 'Apply';
+      equipBtn.disabled = isEquipped;
+      equipBtn.addEventListener('click', async () => {
+        equipBtn.disabled = true;
+        try {
+          await equipAnimation(templateId);
+          renderMyAnimationsList();
+        } catch (err) {
+          alert(err.message || 'Could not apply this animation.');
+          equipBtn.disabled = false;
+        }
+      });
+      actions.appendChild(equipBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+  renderMyAnimationsList();
 }
 
 function renderGeneralSettingsSection() {
@@ -11127,6 +11261,12 @@ let shopLastProximityCheck = 0;
 const shopLandlets = new Map(); // landletId -> { record, group, loaded, loadToken, objects }
 let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode, patched on an in-session rename (#741) — see updateShopLandletInfo
 let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
+// #1164 (sub-issue of #1161): the shopper's own currently-equipped avatar's
+// skeleton signature (#1162), fetched once in enterShopMode alongside
+// equippedAvatarModelUrl just below — null for the default procedural
+// avatar or a logged-out/anonymous visit. productInfoText reads this to
+// show a compatibility note on an "animation"-category product's buy hint.
+let shopEquippedAvatarSkeletonSignature = null;
 // #1100: the own-position report loop's own throttle state — see
 // reportOwnPresenceIfNeeded.
 let shopLastPresenceReportAt = 0;
@@ -13040,7 +13180,7 @@ function updateReviewFade() {
 // Shared by the tap handler below and formerly by proximity — the actual
 // "name — price (disclaimer)" line #shop-product-info shows once tapped.
 function productInfoText(template) {
-  const { name, priceCents, metadata } = template;
+  const { name, priceCents, metadata, category, skeletonSignature } = template;
   let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
   // The "clear higglehaven-controlled disclaimer" digital goods require
   // (docs/SPEC.md §4) — shown to the shopper right where they'd otherwise
@@ -13063,6 +13203,13 @@ function productInfoText(template) {
   // covers the default case, and repeating "returns accepted" on every
   // single product would just be noise.
   if (metadata?.noReturns) text += ' (no returns)';
+  // #1164 (sub-issue of #1161): same tap-to-inspect disclosure slot as the
+  // notes above, so a shopper sees whether a standalone animation will
+  // actually play against their own currently-equipped avatar before
+  // buying it, rather than discovering that only after purchase.
+  if (category === 'animation') {
+    text += ` (${animationCompatibilityLabel(animationCompatibility(skeletonSignature, shopEquippedAvatarSkeletonSignature))})`;
+  }
   return text;
 }
 
@@ -13715,10 +13862,12 @@ async function enterShopMode() {
   // logout -> reset-password reload tripping its errors.length === 0
   // check).
   let equippedAvatarModelUrl = null;
+  shopEquippedAvatarSkeletonSignature = null;
   if (currentAuthUser) {
     try {
       const avatar = await fetchMyEquippedAvatar();
       equippedAvatarModelUrl = avatar.modelUrl;
+      shopEquippedAvatarSkeletonSignature = avatar.skeletonSignature;
     } catch (err) {
       console.warn('Could not fetch equipped avatar, using the default avatar:', err);
     }
