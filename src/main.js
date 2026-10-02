@@ -14351,6 +14351,13 @@ async function enterSellMode() {
   updateSellerViewToggleUI();
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
+  // #1214: openSellerModal() (see its own comment above) has never actually
+  // been called from anywhere since #540 moved Sell to this reload-based
+  // entry path — this function inlines the rest of its body, but had
+  // dropped this one call along the way, leaving #seller-feedback-summary
+  // permanently hidden/stale in the live app regardless of real feedback
+  // on file. Found while adding e2e coverage for the seller-feedback flow.
+  renderSellerFeedbackSummary(id);
 }
 
 // The persistent Shop/Build/Sell switcher (#mode-nav). All three are real
