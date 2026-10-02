@@ -898,8 +898,7 @@ export async function deleteBundle(bundleId) {
 // under the sign's own instanceId, not a top-level collection, since a post
 // never exists independent of the sign it's on.
 export async function fetchSignPosts(instanceId) {
-  const { posts } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
-  return posts;
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
 }
 
 export async function createSignPost(instanceId, { authorLabel, text }) {
@@ -919,8 +918,7 @@ export async function deleteSignPost(instanceId, postId) {
 // same nested-under-the-instance shape as sign posts above, for the same
 // reason.
 export async function fetchCalendarEvents(instanceId) {
-  const { events } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`);
-  return events;
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/events`);
 }
 
 // authorLabel is not accepted here — docs/SPEC.md §6 calls calendar events
