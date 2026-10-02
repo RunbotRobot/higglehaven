@@ -9302,6 +9302,11 @@ const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
 const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
 const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
 const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+const friendsMapBtn = document.getElementById('friends-map-btn');
+const friendsMapModalEl = document.getElementById('friends-map-modal');
+const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
+const friendsMapCanvas = document.getElementById('friends-map-canvas');
+const friendsMapEmptyEl = document.getElementById('friends-map-empty');
 
 async function refreshFriendsBadge() {
   if (!builderId) return;
@@ -9474,6 +9479,92 @@ async function renderFriends() {
     friendsAcceptedListEl.appendChild(row);
   }
 }
+
+// #1205: plots every accepted friend's claimed lándlet at once, rather
+// than the per-friend inline text friendLocationText already shows.
+// Deliberately a plain 2D canvas, not a three.js scene like the claim
+// flyover's own world map (loadLandletMap) — that one needs a full WebGL
+// renderer because it draws every landlet's real polygon with click-to-
+// select/confirm wiring; this only needs to plot a handful of already-known
+// (x, y) points with labels, which a 2D canvas context does directly with
+// no scene/camera/renderer setup at all. World-radius-scaled the same way
+// the claim flyover sizes itself, just via a linear 2D transform instead of
+// a 3D camera. A friend with no claimed lándlet (otherLandlet null) is
+// simply omitted, same as friendLocationText's own "hasn't claimed a
+// lándlet yet" case — there's no position to plot for them.
+async function drawFriendsMap() {
+  let world;
+  let friendships;
+  try {
+    [world, friendships] = await Promise.all([fetchWorld(), fetchFriendships()]);
+  } catch (err) {
+    console.warn('Could not load the friends map:', err);
+    friendsMapEmptyEl.textContent = err.message || 'Could not load the friends map.';
+    friendsMapEmptyEl.hidden = false;
+    return;
+  }
+  const located = friendships.filter((f) => f.status === 'accepted' && f.otherLandlet);
+  friendsMapEmptyEl.hidden = located.length > 0;
+  if (located.length === 0) return;
+
+  // Matches the canvas's own CSS size (width: 100%, aspect-ratio: 1) in
+  // real pixels, so the drawing isn't blurrily upscaled/downscaled from a
+  // mismatched default 300x150 canvas backing size.
+  const rect = friendsMapCanvas.getBoundingClientRect();
+  friendsMapCanvas.width = rect.width;
+  friendsMapCanvas.height = rect.height;
+  const ctx = friendsMapCanvas.getContext('2d');
+  const centerPx = { x: friendsMapCanvas.width / 2, y: friendsMapCanvas.height / 2 };
+  // A little inset so a friend right at the world edge doesn't plot a dot
+  // half-clipped by the canvas border.
+  const pxPerMeter = (Math.min(centerPx.x, centerPx.y) * 0.9) / world.radiusM;
+  // World +Y is "up"/North (see updateCompassNeedle's own comment on this
+  // app's one existing map-orientation convention) — canvas +Y is down, so
+  // the y axis is negated going from world meters to canvas pixels.
+  function worldToCanvas(x, y) {
+    return { x: centerPx.x + x * pxPerMeter, y: centerPx.y - y * pxPerMeter };
+  }
+
+  ctx.clearRect(0, 0, friendsMapCanvas.width, friendsMapCanvas.height);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(centerPx.x, centerPx.y, Math.min(centerPx.x, centerPx.y) * 0.9, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // A canvas fillStyle has to be an actual resolved color, not a raw
+  // `var(...)` reference the way a stylesheet declaration can use —
+  // resolved once here via getComputedStyle rather than per-point below.
+  const labelColor = getComputedStyle(document.documentElement).getPropertyValue('--pill-text').trim();
+
+  // #1205's own test diagnostic (same "expose what a test needs to read
+  // back" idiom as window.__shopAvatarOrientation/__shopOtherAvatars) —
+  // canvas pixel content isn't otherwise inspectable from an e2e test
+  // without reading back raw ImageData.
+  window.__friendsMapPoints = [];
+  for (const friendship of located) {
+    const { x, y } = worldToCanvas(friendship.otherLandlet.center.x, friendship.otherLandlet.center.y);
+    ctx.fillStyle = '#2f7de1';
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = labelColor;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(friendship.otherLabel ?? '', x, y - 10);
+    window.__friendsMapPoints.push({ builderId: friendship.otherBuilderId, label: friendship.otherLabel, x, y });
+  }
+}
+
+friendsMapBtn.addEventListener('click', () => {
+  friendsModalEl.classList.remove('visible');
+  friendsMapModalEl.classList.add('visible');
+  drawFriendsMap();
+});
+friendsMapCloseBtn.addEventListener('click', () => {
+  friendsMapModalEl.classList.remove('visible');
+  friendsModalEl.classList.add('visible');
+});
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
 // Log In/Notices/Friends/Settings buttons above are unchanged in every
@@ -10380,6 +10471,7 @@ const shopMoveKnobEl = shopMoveJoystickEl.querySelector('.shop-joystick-knob');
 const shopLookJoystickEl = document.getElementById('shop-look-joystick');
 const shopLookKnobEl = shopLookJoystickEl.querySelector('.shop-joystick-knob');
 const shopFlyBtn = document.getElementById('shop-fly-btn');
+const shopFlyBtnIcon = document.getElementById('shop-fly-btn-icon');
 const shopLastLocationBtn = document.getElementById('shop-last-location-btn');
 const shopVerticalControlsEl = document.getElementById('shop-vertical-controls');
 const shopUpBtn = document.getElementById('shop-up-btn');
@@ -11842,19 +11934,18 @@ function shopFlightSpeedMultiplier(altitudeM) {
 // fly." Owner follow-up (2026-09-12): "make the in-flight bird and the
 // standing bird look like the same bird" — 🕊️ and 🐦 render as visibly
 // different species/colors across platforms (white dove vs. a often-blue
-// generic bird), which read as a mismatch rather than a state change. Kept
-// a single glyph (the dove, since it already reads as "in flight") for
-// both states and moved the state distinction entirely onto CSS (the
-// .active background tint plus a takeoff/landing tilt — see
-// #shop-fly-btn.active in index.html) so there's no species/color jump.
-// Still centralized here (rather than duplicated across toggleShopFlight's
-// two branches and enterShopMode's first-visit spawn below) so the classes
-// can never drift out of sync with each other.
-const SHOP_FLY_BTN_ICON = '\u{1F54A}'; // 🕊️ dove — same glyph grounded or flying
+// generic bird), which read as a mismatch rather than a state change. That
+// problem was specific to native emoji glyphs, not to having two icons —
+// owner-supplied custom artwork (Control Room, 2026-10-01, a matching
+// flying/standing pair of the same bird) fixes it at the source, so the
+// icon itself can carry the state again, same as before N45, with no CSS
+// tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
+const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
+const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtn.textContent = SHOP_FLY_BTN_ICON;
+  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_FLYING : SHOP_FLY_BTN_ICON_STANDING;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
