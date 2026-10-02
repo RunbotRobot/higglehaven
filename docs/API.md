@@ -7622,6 +7622,54 @@ Surfaced in two places:
   currently-equipped avatar, and an Apply/Clear button that calls the
   endpoint above.
 
+### Runtime application (#1165, sub-issue of #1161)
+
+The fourth and last piece of #1161. `createCustomShopAvatar` (`src/main.js`)
+now takes a second, optional `appliedAnimation` argument
+(`{ modelUrl, skeletonSignature }`, or omitted/`null`) and, when given one,
+compares it against the avatar model it's actually building via the exact
+same signature-equality check `animationCompatibility` uses. When they
+match, the applied animation's own `idle`/`walk`/`fly` clips — loaded from
+its own, separately-uploaded file via the same `loadModelAnimations` #682
+already uses for an avatar's own clips — are bound to the avatar's
+`THREE.AnimationMixer` *instead of* that avatar's own clips. When they
+don't match (or nothing is applied, or the avatar has no skeleton at all),
+the avatar falls back to its own clips exactly as #682 already shipped it
+— unchanged behavior for every account with nothing applied.
+
+This works because `THREE.AnimationMixer` resolves a clip's keyframe
+tracks by bone *name* against whatever root object the mixer was
+constructed with — never by which file's `GLTFLoader.loadAsync` call
+originally produced the `AnimationClip` instance. Since #1162's
+compatibility signature already guarantees the two files share the exact
+same bone names in the exact same hierarchy, binding an animation file's
+own clip against a *different* file's loaded skeleton (the avatar's) just
+works, with no retargeting step needed.
+
+Both call sites that build a custom avatar fetch
+`GET /api/builders/me/animation` and thread it through:
+`enterShopMode` (a fresh Shop-mode entry, alongside its own existing
+`GET /api/builders/me/avatar` fetch) and `refreshEquippedShopAvatar`
+(the live, no-reload swap path — now re-fetches the applied animation
+fresh on every call, not just the avatar, so it also handles the "My
+Animations" picker applying/clearing one while already in Shop mode, not
+only the "My Avatars" picker equipping a different avatar). Either
+trigger rebuilds the exact same way, since compatibility depends on both
+together — switching to an incompatible avatar while an animation stays
+applied, or applying an incompatible animation to the currently-equipped
+avatar, both just quietly fall back to that avatar's own clips (or none)
+on the very next rebuild, never erroring or leaving a stale bind in
+place. This *is* the "sane fallback behavior" the issue's own text asks
+for — there's no separate error state to design, because an incompatible
+combination simply never reaches `mixer.clipAction` with the wrong clip
+in the first place.
+
+`shopAvatar.animationSource` (`'applied'` | `'own'` | `null`) records
+which source actually won, mirrored onto `window.__shopAvatarAnimationSource`
+alongside the existing `window.__shopAvatarModelUrl`/`__shopAvatarMetrics`
+diagnostics (#982/#1091's own "nothing in the DOM reflects this" reasoning)
+so an e2e test can observe it without a real rigged model fixture.
+
 ### The upload flow itself (#712, sub-issue of #710)
 
 #680's own scope note above ("the upload flow itself" is separate scope)
