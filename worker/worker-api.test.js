@@ -3750,6 +3750,41 @@ describe('Worker API', () => {
     expect(noMatch.body.entries).toEqual([]);
     expect(noMatch.body.total).toBe(0);
   });
+
+  // #1243: the test above only ever sends all three filters together (plus
+  // a no-match case), never proving any single filter narrows results on
+  // its own while leaving the other two filters' matching logic genuinely
+  // unexercised in isolation. Synthetic rows (not a real admin action) give
+  // exact control over which actionType/targetType combinations exist,
+  // rather than hunting for real action types that happen to share one
+  // dimension but not the other.
+  it('filters by actionType or targetType alone, each narrowing independently of the other', async () => {
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id) VALUES (?, ?, ?, ?, ?)',
+      ).bind('isolation-log-a', adminUserId, 'isolation-action', 'isolation-widget-a', 'a'),
+      env.DB.prepare(
+        'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id) VALUES (?, ?, ?, ?, ?)',
+      ).bind('isolation-log-b', adminUserId, 'isolation-action', 'isolation-widget-b', 'b'),
+      env.DB.prepare(
+        'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id) VALUES (?, ?, ?, ?, ?)',
+      ).bind('isolation-log-c', adminUserId, 'isolation-action-2', 'isolation-widget-a', 'c'),
+    ]);
+
+    const byActionType = await api('/admin-action-log?actionType=isolation-action', adminSession());
+    expect(byActionType.response.status).toBe(200);
+    const byActionTypeIds = byActionType.body.entries.map((e) => e.targetId);
+    expect(byActionTypeIds).toEqual(expect.arrayContaining(['a', 'b']));
+    expect(byActionTypeIds).not.toContain('c');
+    expect(byActionType.body.entries.every((e) => e.actionType === 'isolation-action')).toBe(true);
+
+    const byTargetType = await api('/admin-action-log?targetType=isolation-widget-a', adminSession());
+    expect(byTargetType.response.status).toBe(200);
+    const byTargetTypeIds = byTargetType.body.entries.map((e) => e.targetId);
+    expect(byTargetTypeIds).toEqual(expect.arrayContaining(['a', 'c']));
+    expect(byTargetTypeIds).not.toContain('b');
+    expect(byTargetType.body.entries.every((e) => e.targetType === 'isolation-widget-a')).toBe(true);
+  });
 });
 
 // #1232: the two top-of-fetch() branches that run before any feature
