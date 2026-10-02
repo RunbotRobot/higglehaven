@@ -3361,6 +3361,18 @@ const PRESENCE_STALE_AFTER_MS = 10_000;
 const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 
 async function handlePresence(request, db, route, url) {
+  // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
+  // the caller's own last-reported row, unfiltered by staleness or
+  // landletId — unlike the GET below, this is "wherever I was last,"
+  // however long ago, not "who's nearby right now." null when the caller
+  // has never reported a position at all.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    return json({ presence: row ? avatarPresenceFromRow(row) : null });
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
