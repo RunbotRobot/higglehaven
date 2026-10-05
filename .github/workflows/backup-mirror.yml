@@ -7,13 +7,22 @@ name: Backup mirror to GitLab
 # against. Runs on its own nightly schedule, deliberately not on every
 # push, so it never competes with ci.yml's own runner-pool usage.
 #
-# Fast-forward only, on purpose: this pushes each ref individually
-# (`refs/heads/*:refs/heads/*`, `refs/tags/*:refs/tags/*`) with no
+# Fast-forward only, on purpose: this pushes `main` and tags individually
+# (`refs/heads/main:refs/heads/main`, `refs/tags/*:refs/tags/*`) with no
 # `--force` and never `git push --mirror` (which forces by default). A
 # normal push creates new branches and fast-forwards existing ones fine,
 # but simply fails if a branch's history was ever rewritten backwards
 # (a force-push) — so a disaster on GitHub can't get silently copied over
 # and overwrite the one clean copy sitting on GitLab.
+#
+# Scoped to `main` specifically, not `refs/heads/*` (#1307): per AGENTS.md's
+# per-session branch convention, every `higglehavenN`/`claude/higglehavenN-*`
+# branch is deliberately reset to main's tip at the start of each work cycle
+# — a routine, intentional non-fast-forward, not a disaster. Mirroring those
+# too meant this job failed every night on exactly that, which both carries
+# no disaster-recovery value (anything durable in them is already in `main`
+# once merged) and masked whether a real problem with `main` itself would
+# even be noticed.
 on:
   schedule:
     - cron: '0 9 * * *'
@@ -30,4 +39,4 @@ jobs:
         working-directory: mirror.git
         run: |
           git push "https://oauth2:${{ secrets.GITLAB_BACKUP_TOKEN }}@gitlab.com/higglehaven-group/higglehaven.git" \
-            'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*'
+            'refs/heads/main:refs/heads/main' 'refs/tags/*:refs/tags/*'
