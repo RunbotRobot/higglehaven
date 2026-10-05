@@ -10483,6 +10483,28 @@ async function generateRingAtWorldBoundary(db) {
     // (radius only ever grows) the same way the old frontend flow's own
     // `dev-ring-${Math.round(innerRadiusM)}` prefix was.
     const prefix = `auto-ring-${Math.round(innerRadiusM)}`;
+
+    // #1314: a previous, interrupted run (e.g. the Worker was recycled
+    // mid-cycle) may have already committed this exact reservation --
+    // generateLandletRingCandidates' own db.batch is atomic, so the ring
+    // row and its candidates are either both there or neither is, but the
+    // completion/enclosure steps below never got to run. Checked *before*
+    // attempting generation, not caught as an error afterward: a fresh
+    // attempt at this same radius would generate candidates with the exact
+    // same footprint as the ones already stored, so generateLandletRingCandidates'
+    // own radial-overlap precheck would always report a conflict against
+    // itself first (an HttpError, not the raw D1 UNIQUE-constraint error
+    // the old reactive check here used to key off) -- silently bumping past
+    // its own prior reservation and abandoning it in 'generating' limbo
+    // forever, rather than ever finishing it.
+    const existing = await db.prepare(
+      'SELECT outer_radius_m FROM landlet_candidate_rings WHERE ring_id = ?',
+    ).bind(prefix).first();
+    if (existing) {
+      ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
+      break;
+    }
+
     try {
       const result = await generateLandletRingCandidates(db, {
         prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM, startAngleRad: 0, distribution: null,
@@ -10491,16 +10513,7 @@ async function generateRingAtWorldBoundary(db) {
       ring = { ringId: prefix, outerRadiusM: result.outerRadiusM };
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
-      if (err.message === 'Resource already exists') {
-        // A previous, interrupted run already reserved this exact radius
-        // (e.g. the Worker was recycled mid-cycle) — reuse that
-        // reservation instead of failing outright.
-        const existing = await db.prepare(
-          'SELECT outer_radius_m FROM landlet_candidate_rings WHERE ring_id = ?',
-        ).bind(prefix).first();
-        if (!existing) throw err;
-        ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
-      } else if (err.message === 'Generated ring would overlap existing land candidates') {
+      if (err.message === 'Generated ring would overlap existing land candidates') {
         innerRadiusM += settings.expansion_increment_m;
       } else {
         throw err;
