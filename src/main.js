@@ -7545,7 +7545,11 @@ for (const field of trimAxisFieldEls) {
     const clampedRealLength = THREE.MathUtils.clamp(requestedLength, extensible.minM * scale, maxLength * scale);
     const clampedLength = clampedRealLength / scale;
     const instanceId = mesh.userData.instanceId;
-    pushUndoSnapshot();
+    // #402/#1295's own fix for this race (a commit-time pushUndoSnapshot()
+    // capturing productMeshes while another mutation is still mid-flight
+    // rebuilding it) reached the drag-release Trim listener but missed this
+    // separate typed-length commit path.
+    if (!sceneMutationBusy) pushUndoSnapshot();
     queueTrimEdit(async () => {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
