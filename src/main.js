@@ -7647,7 +7647,11 @@ for (const field of trimAxisFieldEls) {
     const clampedRealLength = THREE.MathUtils.clamp(requestedLength, extensible.minM * scale, maxLength * scale);
     const clampedLength = clampedRealLength / scale;
     const instanceId = mesh.userData.instanceId;
-    pushUndoSnapshot();
+    // #402's shared-gate fix for this exact race (a drag-start pushUndoSnapshot()
+    // capturing productMeshes while another mutation is still mid-flight
+    // rebuilding it) reached wireDraggingBehavior and trimControls' own
+    // drag-start listener (#1295), but missed this typed-length alternative.
+    if (!sceneMutationBusy) pushUndoSnapshot();
     queueTrimEdit(async () => {
       const current = productMeshes.find((m) => m.userData.instanceId === instanceId);
       if (!current) return; // deleted, or otherwise gone, since this edit was queued
