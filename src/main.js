@@ -1536,6 +1536,8 @@ async function replaceMeshWithCrop(mesh, crop) {
     label: mesh.userData.label ?? null,
     crop: nextCrop,
     scale: mesh.userData.scale ?? 1,
+    isCommunitySign: mesh.userData.isCommunitySign ?? false,
+    isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
   };
   const newMesh = await createMeshForInstance(instanceLike);
   if (!newMesh) return mesh;
@@ -7128,6 +7130,13 @@ async function restoreSnapshot(snapshot) {
       // doesn't need re-deriving here — only the scale itself does.
       mesh.scale.setScalar(inst.scale ?? 1);
       mesh.userData.scale = inst.scale ?? 1;
+      // Same reasoning as scale above: replaceMeshWithCrop only reconciles
+      // crop, so it carries the mesh's own (pre-restore) flag values
+      // forward rather than the snapshot's — a reused mesh needs these
+      // explicitly re-applied too, or an undo/redo jump across a
+      // Community Sign/Calendar flag change leaves the flag untouched.
+      mesh.userData.isCommunitySign = inst.isCommunitySign ?? false;
+      mesh.userData.isCommunityCalendar = inst.isCommunityCalendar ?? false;
       mesh.userData.safePosition = mesh.position.clone();
       updatedMeshes.push(mesh);
     } else {
