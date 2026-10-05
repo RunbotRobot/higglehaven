@@ -3673,6 +3673,84 @@ describe('Worker API', () => {
     ).run();
   }, 15000);
 
+  // Regression test for #1314: generateRingAtWorldBoundary's own catch
+  // block only recognized a previous, interrupted run's reservation via
+  // `err instanceof HttpError && err.message === 'Resource already exists'`
+  // -- but that message is only ever produced by databaseHttpError(),
+  // which normally only runs inside handleApi's own top-level catch. This
+  // function's one real caller, scheduled(), never goes through that catch,
+  // so the raw D1 UNIQUE-constraint error it actually sees here used to be
+  // rethrown unconditionally and swallowed by scheduled()'s own
+  // console.error handler -- permanently wedging auto-growth at that radius
+  // on every subsequent cron tick.
+  it('scheduled() recovers a previous auto-growth ring reservation left behind by an interrupted run (#1314)', async () => {
+    // Nothing left for Phase 1 to enclose -- guarantees the real test tick
+    // below recomputes its deterministic prefix from the *same* radius this
+    // test seeds, rather than a radius Phase 1 already bumped past it. A
+    // ratio of 1 can never be satisfied, so this warm-up tick fully drains
+    // whatever this file's other tests left pending (Phase 1 loops up to
+    // WORLD_GROWTH_MAX_STEPS times on its own) and, if it also runs Phase 2,
+    // fully completes and encloses whatever it generates within the same
+    // tick (generateRingAtWorldBoundary's own trailing expand-until-enclosed
+    // loop) -- so nothing pending survives past this call either.
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 1 WHERE world_id = 'default-world'`,
+    ).run();
+    await worker.scheduled(createScheduledController(), env, createExecutionContext());
+    const stillPending = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM landlets WHERE status = 'generating' AND generated_at IS NOT NULL`,
+    ).first()).count;
+    expect(stillPending).toBe(0);
+
+    const worldBefore = (await api('/world')).body.world;
+    const prefix = `auto-ring-${Math.round(worldBefore.radiusM)}`;
+
+    // Simulates the interrupted cron tick: generateLandletRingCandidates'
+    // own db.batch already committed the ring reservation and its 12
+    // candidates (materialized immediately, since they start exactly at
+    // the current radius) -- but the worker died before ever reaching
+    // completeRingGenerationInternal, the same gap a real CPU/wall-time
+    // eviction mid-tick would leave.
+    const reserved = await api('/land-candidates/generate-ring', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ prefix, count: 12 }),
+    }));
+    expect(reserved.response.status).toBe(201);
+    expect(reserved.body.readyForGenerationCompletion).toBe(true);
+    const outerRadiusM = reserved.body.outerRadiusM;
+
+    // Ratio is still 1 (set above) -- guarantees this tick's Phase 2 runs
+    // and recomputes this exact same prefix, since the radius hasn't moved.
+    const controller = createScheduledController();
+    const ctx = createExecutionContext();
+    await worker.scheduled(controller, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    // Reused the existing reservation rather than failing outright: still
+    // exactly one ring for this prefix, never a second one or an error.
+    const ringCount = (await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM landlet_candidate_rings WHERE ring_id = ?`,
+    ).bind(prefix).first()).count;
+    expect(ringCount).toBe(1);
+
+    // ...and the reservation's own landlets actually got completed and
+    // enclosed this tick -- the whole point of auto-growth, which the bug
+    // silently skipped (the raw D1 error was swallowed by scheduled()'s own
+    // catch, leaving these landlets stuck 'generating' forever and the
+    // world radius never advancing to enclose them).
+    const worldAfter = (await api('/world')).body.world;
+    expect(worldAfter.radiusM).toBeGreaterThanOrEqual(outerRadiusM);
+    const landletStatuses = await env.DB.prepare(
+      `SELECT DISTINCT landlets.status AS status FROM landlets
+       JOIN landlet_candidates USING (landlet_id) WHERE landlet_candidates.ring_id = ?`,
+    ).bind(prefix).all();
+    expect(landletStatuses.results.map((row) => row.status)).toEqual(['greenbelt']);
+
+    await env.DB.prepare(
+      `UPDATE world_settings SET greenbelt_min_ratio = 0.1 WHERE world_id = 'default-world'`,
+    ).run();
+  }, 15000);
+
   it('scheduled() sweeps expired sessions, verification/reset tokens, stale rate-limit rows, and abandoned model-upload reservations', async () => {
     // Two separate accounts so the sweep's selectivity is actually proven —
     // only the expired one's session should disappear, not every session in
