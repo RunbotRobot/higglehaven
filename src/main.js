@@ -2369,6 +2369,18 @@ function buildCatalogTemplateTile(template) {
   // may be more current than a not-yet-finished persistCatalogThumbnail
   // call.
   thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+  // The ?? chain above only falls back to a flat-color swatch when
+  // imageUrl is itself missing — it never fires if imageUrl is present
+  // but the actual request for it fails (a 404 on a since-deleted R2
+  // object, a transient network error, ...), which otherwise leaves a
+  // permanently broken-image icon in the tile instead of the same
+  // on-brand placeholder the ?? chain already has on hand. onerror
+  // clears itself before swapping in the data: URL fallback so a
+  // (never actually expected) failure to render *that* can't loop.
+  thumb.onerror = () => {
+    thumb.onerror = null;
+    thumb.src = solidColorDataUrl(template.color);
+  };
   tile.appendChild(thumb);
 
   const name = document.createElement('span');
@@ -4783,6 +4795,13 @@ function renderSellerListView() {
     // same templates, so they should never disagree on what a product
     // looks like.
     thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    // See buildCatalogTemplateTile's own onerror comment — same gap, same
+    // fix: fall back to the flat-color swatch if the persisted imageUrl
+    // actually fails to load, not just when it's missing outright.
+    thumb.onerror = () => {
+      thumb.onerror = null;
+      thumb.src = solidColorDataUrl(template.color);
+    };
     card.appendChild(thumb);
     if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
       renderCatalogThumbnail(template).then((dataUrl) => {
