@@ -3614,17 +3614,17 @@
          the actual problem N45 was working around -- so the glyph can go
          back to carrying the state itself; see setShopFlyBtnFlying in
          src/main.js for the swap. -->
-    <button id="shop-fly-btn" class="shop-ui" type="button"><img id="shop-fly-btn-icon" src="/bird-standing.png" alt="" /></button>
+    <button id="shop-fly-btn" class="shop-ui" type="button" aria-label="Toggle flying"><img id="shop-fly-btn-icon" src="/bird-standing.png" alt="" /></button>
     <div id="shop-vertical-controls" class="shop-ui">
-      <button id="shop-up-btn" type="button">&#9650;</button>
-      <button id="shop-down-btn" type="button">&#9660;</button>
+      <button id="shop-up-btn" type="button" aria-label="Fly up">&#9650;</button>
+      <button id="shop-down-btn" type="button" aria-label="Fly down">&#9660;</button>
     </div>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
       </div>
       <div id="account-menu">
-        <button id="account-menu-toggle" type="button">&#9881;&#65039;</button>
+        <button id="account-menu-toggle" type="button" aria-label="Account menu">&#9881;&#65039;</button>
         <div id="account-menu-panel">
           <button id="account-auth-btn" type="button">Log In / Sign Up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
