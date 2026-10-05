@@ -1405,6 +1405,30 @@ describe('Authentication', () => {
     expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
   });
 
+  // #1323: unlike handleResendVerification (the token-issuing side, #363),
+  // this consuming side had no rate limit at all — a repeatable,
+  // unauthenticated, always-does-a-DB-read-per-call endpoint. Same
+  // invalid-token-every-time shape as the login rate-limit test above,
+  // since a distinct real token per attempt isn't needed to exercise the
+  // bucket.
+  it('rate-limits repeated verify-email attempts from the same IP', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/verify-email', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ token: `not-a-real-token-${i}` }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/auth/verify-email', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ token: 'not-a-real-token-final' }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('resets a forgotten password via a real token, and signs out every existing session', async () => {
     const email = `auth-reset-${crypto.randomUUID()}@example.com`;
     const oldPassword = 'the original password';
@@ -1483,6 +1507,26 @@ describe('Authentication', () => {
       body: JSON.stringify({ token: firstToken, newPassword: 'attacker-chosen password' }),
     });
     expect(reusedFirstToken.response.status).toBe(400);
+  });
+
+  // #1323: same gap as verify-email's own rate limit just above, for the
+  // password-reset token's consuming side.
+  it('rate-limits repeated reset-password attempts from the same IP', async () => {
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/reset-password', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ token: `not-a-real-token-${i}`, newPassword: 'a fine long password' }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/auth/reset-password', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ token: 'not-a-real-token-final', newPassword: 'a fine long password' }),
+    });
+    expect(limited.response.status).toBe(429);
   });
 
   it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {

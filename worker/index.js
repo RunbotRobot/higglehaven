@@ -8701,7 +8701,17 @@ async function handleMe(request, db) {
   return json({ user: user ? userFromRow(user) : null });
 }
 
+// #1323: handleResendVerification (the token-issuing side) already
+// rate-limits itself (#363) -- this, the token-consuming side, never did,
+// leaving it the one public, cheap-to-hit, always-does-a-DB-read-per-call
+// mutation endpoint in this file with no throttle at all. Same
+// LOGIN_RATE_LIMIT_MAX/CONFIRM_DELIVERY_RATE_LIMIT_MAX "= 20" convention
+// for an unauthenticated repeatable write, bucketed by IP since no
+// builder/user identity exists yet at this point in the handler.
+const EMAIL_VERIFY_RATE_LIMIT_MAX = 20;
+
 async function handleVerifyEmail(request, db) {
+  await checkRateLimit(db, `email-verify:${clientIp(request)}`, EMAIL_VERIFY_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const tokenHash = await sha256Hex(token);
@@ -8779,7 +8789,13 @@ async function handleRequestPasswordReset(request, env, db, ctx) {
   return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
 }
 
+// #1323: same gap as EMAIL_VERIFY_RATE_LIMIT_MAX just above, for the
+// password-reset token's own consuming side -- handleRequestPasswordReset
+// (the issuing side) already rate-limits itself.
+const PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX = 20;
+
 async function handleResetPassword(request, db) {
+  await checkRateLimit(db, `password-reset-consume:${clientIp(request)}`, PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const token = stringValue(input.token, 'token');
   const newPassword = passwordValue(input.newPassword);
