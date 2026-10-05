@@ -2644,6 +2644,74 @@ catalogPickerCloseBtn.addEventListener('click', () => {
 // This only works with the real backend reachable — creating a new
 // persistent catalog entry has nowhere to live in offline/fallback mode,
 // since catalog.js is a static file, not a runtime data store.
+// #1316: shared modal keyboard accessibility. role="dialog"/aria-modal are
+// set on each modal element in index.html; this covers what markup alone
+// can't — moving focus into a dialog when it opens, restoring it to
+// whatever opened the dialog once it closes, trapping Tab/Shift+Tab inside
+// the dialog while it's open, and closing the currently-open dialog on
+// Escape. Only one modal is ever open at a time in this app, so a single
+// tracked "active" modal (rather than a stack) matches how
+// openModalA11y/closeModalA11y are called below.
+let activeModalEl = null;
+let activeModalCloseFn = null;
+let modalReturnFocusEl = null;
+
+function getModalFocusable(modalEl) {
+  return Array.from(modalEl.querySelectorAll(
+    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((el) => el.offsetParent !== null);
+}
+
+function openModalA11y(modalEl, closeFn) {
+  activeModalEl = modalEl;
+  activeModalCloseFn = closeFn || null;
+  modalReturnFocusEl = document.activeElement;
+  const target = getModalFocusable(modalEl)[0] || modalEl;
+  target.focus({ preventScroll: true });
+}
+
+function closeModalA11y(modalEl) {
+  if (activeModalEl !== modalEl) return;
+  activeModalEl = null;
+  activeModalCloseFn = null;
+  const returnTo = modalReturnFocusEl;
+  modalReturnFocusEl = null;
+  if (returnTo && document.body.contains(returnTo) && returnTo.offsetParent !== null) {
+    returnTo.focus({ preventScroll: true });
+  } else if (accountMenuToggle.offsetParent !== null) {
+    // The settings/notifications/friends/my-lands triggers all live inside
+    // the collapsible account-menu panel (see openAccountMenu's own
+    // comment in e2e/helpers.mjs), which auto-collapses — hiding the very
+    // button that opened the modal — the moment that button is clicked.
+    // Falling back to the toggle that controls the panel is a more useful
+    // landing spot than leaving focus wherever the browser defaults it
+    // (document.body) once the original trigger is no longer focusable.
+    accountMenuToggle.focus({ preventScroll: true });
+  }
+}
+
+document.addEventListener('keydown', (event) => {
+  if (!activeModalEl) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    activeModalCloseFn?.();
+    return;
+  }
+  if (event.key === 'Tab') {
+    const focusable = getModalFocusable(activeModalEl);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+});
+
 const uploadModalEl = document.getElementById('upload-modal');
 const uploadModalTitleEl = document.getElementById('upload-modal-title');
 const uploadStepFileEl = document.getElementById('upload-step-file');
@@ -2785,11 +2853,13 @@ function openUploadModal() {
   uploadSubmitBtn.disabled = false;
   resetUploadModalToFileStep();
   uploadModalEl.classList.add('visible');
+  openModalA11y(uploadModalEl, closeUploadModal);
 }
 
 function closeUploadModal() {
   uploadModalEl.classList.remove('visible');
   resetUploadModalToFileStep();
+  closeModalA11y(uploadModalEl);
 }
 
 uploadModelBtn.addEventListener('click', openUploadModal);
@@ -4845,9 +4915,11 @@ async function openSellerModal() {
   updateSellerViewToggleUI();
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
 }
 function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
+  closeModalA11y(sellerModalEl);
   disposeAxisPreview();
   // An Edit Size save while this modal was open can have just created a
   // notification for this same builder identity — refresh the badge now
@@ -6783,9 +6855,11 @@ function openSettingsModal() {
   }
   renderSettingsSection();
   settingsModalEl.classList.add('visible');
+  openModalA11y(settingsModalEl, closeSettingsModal);
 }
 function closeSettingsModal() {
   settingsModalEl.classList.remove('visible');
+  closeModalA11y(settingsModalEl);
 }
 settingsBtn.addEventListener('click', openSettingsModal);
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
@@ -8045,18 +8119,22 @@ async function renderSignPosts() {
 function openSignPostsModal(mesh) {
   signPostsTargetMesh = mesh;
   signPostsModalEl.classList.add('visible');
+  openModalA11y(signPostsModalEl, closeSignPostsModal);
   renderSignPosts();
 }
-signPostsCloseBtn.addEventListener('click', () => {
+function closeSignPostsModal() {
   signPostsModalEl.classList.remove('visible');
   signPostsTargetMesh = null;
-});
+  closeModalA11y(signPostsModalEl);
+}
+signPostsCloseBtn.addEventListener('click', closeSignPostsModal);
 signPostsUnflagBtn.addEventListener('click', async () => {
   if (!signPostsTargetMesh) return;
   const mesh = signPostsTargetMesh;
   mesh.userData.isCommunitySign = false;
   signPostsModalEl.classList.remove('visible');
   signPostsTargetMesh = null;
+  closeModalA11y(signPostsModalEl);
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
@@ -8172,18 +8250,22 @@ async function renderCalendarEvents() {
 function openCalendarEventsModal(mesh) {
   calendarEventsTargetMesh = mesh;
   calendarEventsModalEl.classList.add('visible');
+  openModalA11y(calendarEventsModalEl, closeCalendarEventsModal);
   renderCalendarEvents();
 }
-calendarEventsCloseBtn.addEventListener('click', () => {
+function closeCalendarEventsModal() {
   calendarEventsModalEl.classList.remove('visible');
   calendarEventsTargetMesh = null;
-});
+  closeModalA11y(calendarEventsModalEl);
+}
+calendarEventsCloseBtn.addEventListener('click', closeCalendarEventsModal);
 calendarEventsUnflagBtn.addEventListener('click', async () => {
   if (!calendarEventsTargetMesh) return;
   const mesh = calendarEventsTargetMesh;
   mesh.userData.isCommunityCalendar = false;
   calendarEventsModalEl.classList.remove('visible');
   calendarEventsTargetMesh = null;
+  closeModalA11y(calendarEventsModalEl);
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
@@ -8450,6 +8532,7 @@ renderer.domElement.addEventListener('click', (event) => {
     const hitRoot = hits.length > 0 ? findRootSellerShowcaseMesh(hits[0].object) : null;
     if (hitRoot) {
       sellerModalEl.classList.add('visible');
+      openModalA11y(sellerModalEl, closeSellerModal);
       focusSellerManageRow(hitRoot.userData.template.templateId);
     }
     return;
@@ -9138,6 +9221,7 @@ function openVerifyModal(user) {
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
   setVerifyStatus('');
   verifyModalEl.classList.add('visible');
+  openModalA11y(verifyModalEl, closeVerifyModal);
   if (!user.ageAttested) {
     verifyAgeStepEl.hidden = false;
     verifyContinueBtn.textContent = 'Continue';
@@ -9149,6 +9233,7 @@ function openVerifyModal(user) {
 
 function closeVerifyModal() {
   verifyModalEl.classList.remove('visible');
+  closeModalA11y(verifyModalEl);
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
 }
 
@@ -9412,14 +9497,17 @@ notificationsLoadMoreBtn.addEventListener('click', async () => {
   }
 });
 
-notificationsBtn.addEventListener('click', () => {
-  notificationsModalEl.classList.add('visible');
-  renderNotifications();
-});
-notificationsCloseBtn.addEventListener('click', () => {
+function closeNotificationsModal() {
   notificationsModalEl.classList.remove('visible');
   refreshNotificationsBadge();
+  closeModalA11y(notificationsModalEl);
+}
+notificationsBtn.addEventListener('click', () => {
+  notificationsModalEl.classList.add('visible');
+  openModalA11y(notificationsModalEl, closeNotificationsModal);
+  renderNotifications();
 });
+notificationsCloseBtn.addEventListener('click', closeNotificationsModal);
 notificationsMarkAllBtn.addEventListener('click', async () => {
   if (!builderId) return;
   notificationsMarkAllBtn.disabled = true;
@@ -9777,14 +9865,21 @@ async function drawFriendsMap() {
   }
 }
 
+function closeFriendsMapModal() {
+  friendsMapModalEl.classList.remove('visible');
+  closeModalA11y(friendsMapModalEl);
+}
 friendsMapBtn.addEventListener('click', () => {
   friendsModalEl.classList.remove('visible');
+  closeModalA11y(friendsModalEl);
   friendsMapModalEl.classList.add('visible');
+  openModalA11y(friendsMapModalEl, closeFriendsMapModal);
   drawFriendsMap();
 });
 friendsMapCloseBtn.addEventListener('click', () => {
-  friendsMapModalEl.classList.remove('visible');
+  closeFriendsMapModal();
   friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
 });
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
@@ -9922,11 +10017,14 @@ async function renderMyLands() {
 
 myLandsBtn.addEventListener('click', () => {
   myLandsModalEl.classList.add('visible');
+  openModalA11y(myLandsModalEl, closeMyLandsModal);
   renderMyLands();
 });
-myLandsCloseBtn.addEventListener('click', () => {
+function closeMyLandsModal() {
   myLandsModalEl.classList.remove('visible');
-});
+  closeModalA11y(myLandsModalEl);
+}
+myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
 
 // Real login (docs/API.md's "Authentication") — now the sole way a
 // builder/seller identity is established (see ensureBuilderIdentity/
@@ -10055,10 +10153,12 @@ function openAuthModal(view = 'login') {
   if (!currentAuthUser) showAuthView(view);
   setAuthStatus('');
   authModalEl.classList.add('visible');
+  openModalA11y(authModalEl, closeAuthModal);
 }
 
 function closeAuthModal() {
   authModalEl.classList.remove('visible');
+  closeModalA11y(authModalEl);
 }
 
 async function refreshCurrentUser() {
@@ -10617,20 +10717,24 @@ const authInitPromise = (async () => {
     authLoggedOutEl.hidden = false;
     authLoggedInEl.hidden = true;
     authModalEl.classList.add('visible');
+    openModalA11y(authModalEl, closeAuthModal);
     showAuthView('reset');
   }
 })();
 
+function closeFriendsModal() {
+  friendsModalEl.classList.remove('visible');
+  refreshFriendsBadge();
+  closeModalA11y(friendsModalEl);
+}
 friendsBtn.addEventListener('click', () => {
   friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
   friendsStatusEl.textContent = '';
   friendsStatusEl.classList.remove('error');
   renderFriends();
 });
-friendsCloseBtn.addEventListener('click', () => {
-  friendsModalEl.classList.remove('visible');
-  refreshFriendsBadge();
-});
+friendsCloseBtn.addEventListener('click', closeFriendsModal);
 friendsAddBtn.addEventListener('click', async () => {
   const label = prompt("Friend's name (must match their identity exactly):", '');
   if (!label || !label.trim()) return;
@@ -13639,6 +13743,7 @@ let checkoutCardElement = null;
 
 function closeCheckoutModal() {
   checkoutModalEl.classList.remove('visible');
+  closeModalA11y(checkoutModalEl);
   if (checkoutCardElement) {
     checkoutCardElement.unmount();
     checkoutCardElement = null;
@@ -13663,6 +13768,7 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutPayBtn.disabled = true;
     checkoutCancelBtn.disabled = false;
     checkoutModalEl.classList.add('visible');
+    openModalA11y(checkoutModalEl, closeCheckoutModal);
 
     checkoutCancelBtn.onclick = () => {
       closeCheckoutModal();
@@ -13711,12 +13817,15 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
 // #659: read-only, no submit/confirm action — just the close button, same
 // as every other dismissible modal in this file (see #checkout-modal's
 // own comment on why there's no backdrop-click-to-close convention here).
+function closeRefundPolicyModal() {
+  refundPolicyModalEl.classList.remove('visible');
+  closeModalA11y(refundPolicyModalEl);
+}
 shopReturnPolicyLinkEl.addEventListener('click', () => {
   refundPolicyModalEl.classList.add('visible');
+  openModalA11y(refundPolicyModalEl, closeRefundPolicyModal);
 });
-refundPolicyCloseBtn.addEventListener('click', () => {
-  refundPolicyModalEl.classList.remove('visible');
-});
+refundPolicyCloseBtn.addEventListener('click', closeRefundPolicyModal);
 
 // #1096: distinct from shopReviewHintEl's product review above — this
 // rates the seller's own service (listing accuracy, timeliness,
@@ -14800,6 +14909,7 @@ async function enterSellMode() {
   updateSellerViewToggleUI();
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
   // #1214: openSellerModal() (see its own comment above) has never actually
   // been called from anywhere since #540 moved Sell to this reload-based
   // entry path — this function inlines the rest of its body, but had
@@ -14853,6 +14963,11 @@ const claimConfirmBtn = document.getElementById('claim-confirm-btn');
 function runClaimFlow() {
   return new Promise((resolve) => {
     claimModalEl.classList.add('visible');
+    // No closeFn: this flow has no cancel action (claimBackBtn reloads the
+    // page rather than dismissing the modal in place — see its own comment
+    // below), so Escape intentionally does nothing here rather than
+    // silently abandoning a mandatory first-claim flow.
+    openModalA11y(claimModalEl, null);
     loadLandletMap(resolve);
     claimRefreshBtn.onclick = () => loadLandletMap(resolve);
     // A reload rather than trying to unwind this modal in place — the
@@ -15347,6 +15462,7 @@ async function claimSelectedLandlet(landlet, resolve) {
     const claimed = await claimLandlet(landlet.landletId);
     disposeClaimFlyover();
     claimModalEl.classList.remove('visible');
+    closeModalA11y(claimModalEl);
     resolve(claimed.landletId);
   } catch (err) {
     // Someone else likely claimed it in the meantime (409) — refresh the
