@@ -7195,7 +7195,10 @@ way a builder's or seller's own resources get.
 
 Lists tasks, most-recently-updated first (capped at 500). Optional
 `?status=queued|in_progress|done` query param filters to one column, the
-same three values the board's own three columns use. Response also
+same three values the board's own three columns use. An unrecognized
+`status` value is rejected outright with a `400` (`controlRoomStatusValue`,
+shared with the write routes below), not silently ignored or treated as
+"no filter". Response also
 includes `total`: the real, uncapped count of tasks matching the same
 `status` filter (or all tasks, unfiltered) — separate from `tasks.length`,
 which is at most 500 regardless of how many actually match. The admin
