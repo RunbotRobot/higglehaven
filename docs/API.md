@@ -491,6 +491,9 @@ expiry. On success, sets `email_verified_at` and returns
 (`email_verification_tokens.token_hash`), the same reasoning as sessions
 above, and marked consumed rather than deleted so a replay attempt is
 still detectable as "already used" rather than silently "not found."
+`429` after 20 attempts from the same IP within 15 minutes (#1323) — the
+tokens themselves are 256-bit random and not practically guessable, so
+this is a resource-exhaustion guard, not a brute-force one.
 
 ### `POST /api/auth/request-password-reset`
 
@@ -532,7 +535,9 @@ verification's 24 hours, since a leaked reset link is higher-stakes).
 updates the password, clears any lockout, marks the token consumed, and —
 deliberately — deletes every existing session for that account, signing
 out every device. If the reset was prompted by a compromised password, an
-attacker riding an existing session loses it too.
+attacker riding an existing session loses it too. `429` after 20 attempts
+from the same IP within 15 minutes (#1323), the same resource-exhaustion
+guard as `verify-email` above.
 
 ### `POST /api/auth/change-password`
 
