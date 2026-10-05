@@ -3409,6 +3409,31 @@ describe('Simulated purchases', () => {
       expect(refundIdempotencyKey('purchase-abc')).toBe(refundIdempotencyKey('purchase-abc'));
       expect(refundIdempotencyKey('purchase-abc')).not.toBe(refundIdempotencyKey('purchase-xyz'));
     });
+
+    // #1302: same "real outbound Stripe API call on the shared key" gap
+    // #948/#1050 already closed for the other Stripe-calling handlers --
+    // handlePurchaseRefund had no checkRateLimit call at all. Direct-inserts
+    // 21 already-refundable (no payment_intent_id, so no Stripe call) purchase
+    // rows for one seller, same technique as the mark-shipped rate-limit test,
+    // rather than calling the much more expensive purchase flow 21 times.
+    it('rate-limits repeated refund attempts from the same seller', async () => {
+      const builder = await signupBuilder('refund-rate-limit-builder');
+      const seller = await signupSeller('refund-rate-limit-seller');
+      const purchaseIds = Array.from({ length: 21 }, (_, i) => `refund-rate-limit-purchase-${i}`);
+      await env.DB.batch(purchaseIds.map((purchaseId) => env.DB.prepare(`
+        INSERT INTO purchases (
+          purchase_id, instance_id, template_id, builder_id, seller_id, unit_price_cents, quantity,
+          total_cents, commission_cents, builder_share_cents, platform_share_cents
+        ) VALUES (?, ?, ?, ?, ?, 5000, 1, 5000, 100, 4900, 100)
+      `).bind(purchaseId, `${purchaseId}-instance`, `${purchaseId}-template`, builder.builderId, seller.sellerId)));
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/purchases/${purchaseIds[i]}/refund`, seller.session({ method: 'POST' }));
+        expect(attempt.response.status).toBe(200);
+      }
+      const limited = await api(`/purchases/${purchaseIds[20]}/refund`, seller.session({ method: 'POST' }));
+      expect(limited.response.status).toBe(429);
+    });
   });
 
   // #732: unlike DELETE /api/builders/:builderId (which already guards a
@@ -3648,6 +3673,21 @@ describe('Simulated purchases', () => {
 
       const reShipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
       expect(reShipped.response.status).toBe(400);
+    });
+
+    // #1288: every other "something happened that the other party should
+    // passively learn about" event already fires a notification -- the
+    // buyer waiting on a physical purchase was the one missing.
+    it('notifies the buyer once their purchase is marked shipped', async () => {
+      const builder = await signupBuilder('mark-shipped-notify-builder');
+      const seller = await createConnectedSeller('mark-shipped-notify-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+
+      const shipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      expect(shipped.response.status).toBe(200);
+
+      const notices = await api('/notifications', builder.session());
+      expect(notices.body.notifications.some((n) => n.message.includes('has shipped!'))).toBe(true);
     });
 
     // #925: the sequential re-ship test above only proves a repeat call

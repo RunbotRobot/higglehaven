@@ -11950,6 +11950,21 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (admin) {
     await adminActionLogStatement(db, admin.user_id, 'mark_shipped_override', 'purchase', purchaseId).run();
   }
+  // #1288: every other "something happened that the other party should
+  // passively learn about" event already fires a notification (dimension
+  // changes, auction bids/sales, purchase sale/refund, friend requests,
+  // reviews) -- the buyer waiting on a physical purchase was the one
+  // missing. buyer_builder_id (not purchase.builder_id, the *hosting*
+  // builder clawBackPurchaseCommission notifies for a different reason)
+  // can be null (pre-#1112 purchase, or a self-deleted buyer -- ON DELETE
+  // SET NULL), so skipped silently rather than erroring, same guard
+  // clawBackPurchaseCommission uses for its own nullable builder_id.
+  if (purchase.buyer_builder_id) {
+    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+      .bind(purchase.template_id).first();
+    await notificationStatement(db, purchase.buyer_builder_id,
+      `"${template?.name || 'A product'}" has shipped!`).run();
+  }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
 }
@@ -12262,8 +12277,16 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+    // #1302: same "real outbound Stripe API call on the shared key" gap
+    // #948/#1050 already closed for the other Stripe-calling handlers —
+    // the refund below fires an unconditional real Stripe `refunds` call,
+    // so it needs the identical guard. Same placement precedent: right
+    // after the session/identity resolves, ahead of the rest of the
+    // function.
+    await checkRateLimit(db, `purchase-refund:${sessionSeller.seller_id}`, STRIPE_RATE_LIMIT_MAX);
   } else {
     admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `purchase-refund:${admin.user_id}`, STRIPE_RATE_LIMIT_MAX);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
