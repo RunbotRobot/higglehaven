@@ -12262,8 +12262,16 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   if (purchase.seller_id && await sellerExists(db, purchase.seller_id)) {
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(purchase.seller_id, sessionSeller.seller_id, 'Not your product');
+    // #1302: same "real outbound Stripe API call on the shared key" gap
+    // #948/#1050 already closed for the other Stripe-calling handlers —
+    // the refund below fires an unconditional real Stripe `refunds` call,
+    // so it needs the identical guard. Same placement precedent: right
+    // after the session/identity resolves, ahead of the rest of the
+    // function.
+    await checkRateLimit(db, `purchase-refund:${sessionSeller.seller_id}`, STRIPE_RATE_LIMIT_MAX);
   } else {
     admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `purchase-refund:${admin.user_id}`, STRIPE_RATE_LIMIT_MAX);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has already been refunded', 400);
