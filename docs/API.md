@@ -4631,6 +4631,9 @@ neither has anywhere to attach to in this dev-mode backend yet:
   above). The spec's "default 24-hour duration for inactivity-triggered
   listings" still just applies as the uniform default for every auction,
   voluntary or not — there's no separate duration for this path.
+  #783 added two owner-facing notifications around this path — a warning
+  sent while there's still time to act, not just a report after the land
+  is already gone — see "Notifications" below.
 - ~~No scheduled resolution job~~ — implemented (#770): `resolveDueAuctions`
   now also runs on the same Cloudflare Cron Trigger as `autoAuctionInactiveLandlets`
   above (see `scheduled()` near the top of `worker/index.js`), so an auction
@@ -4888,13 +4891,31 @@ just show up.
   ("you won"); on an unsold `$0` auction, the seller that it released to
   greenbelt; on an unsold reserved auction, the seller that they keep the
   land.
+- **`autoAuctionInactiveLandlets`** (#783) notifies the landlet owner at
+  the moment their land is auto-listed for inactivity, not just at
+  resolution — since resolution can happen up to 24 hours later, a
+  builder who logs back in during that window would otherwise get no
+  signal their land is at risk until it's already too late.
+- **`warnInactiveLandletOwners`** (#783's own further scope expansion,
+  `INACTIVITY_WARNING_DAYS` = 3) runs on the same cron cycle and warns an
+  owner `INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS` days into
+  their inactivity window — while there's still time to log back in and
+  avoid the auto-auction outright, not merely a report after the fact.
+  Guarded by `builders.inactivity_warning_sent_at` (migrations/0109,
+  `IS NULL` in the query) so the same builder isn't re-notified on every
+  10-minute tick for the whole warning window; cleared back to `NULL` by
+  `getOrCreateBuilderForUser` the moment the builder is active again (the
+  same statement that bumps `last_active_at`), so a later inactivity
+  cycle warns again rather than staying permanently silenced by one stale
+  row.
 
 Covered by `worker/commerce.test.js` (a notification-content assertion added
-to each existing resolution-outcome test, plus a dedicated case for the
-new-bid/outbid pair) and `e2e/land-auctions.test.mjs` (the seller's real
-notification, read through the actual Notifications modal after the
-bidder's bid — confirms the whole path works end to end, not just that
-a row landed in the table).
+to each existing resolution-outcome test, a dedicated case for the
+new-bid/outbid pair, and #783's own "Inactivity-triggered auctions"
+describe block for both new notifications) and
+`e2e/land-auctions.test.mjs` (the seller's real notification, read through
+the actual Notifications modal after the bidder's bid — confirms the whole
+path works end to end, not just that a row landed in the table).
 
 ### Frontend wiring
 
