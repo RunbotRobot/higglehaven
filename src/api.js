@@ -582,23 +582,39 @@ export async function createInstancesRemote(instances) {
 export async function upsertInstancesRemote(instances) {
   const updated = [];
   for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
-    const { instances: stored } = await requestJson('/instances/batch', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ instances: batch }),
-    });
-    updated.push(...stored);
+    try {
+      const { instances: stored } = await requestJson('/instances/batch', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instances: batch }),
+      });
+      updated.push(...stored);
+    } catch (err) {
+      // #1380: same reasoning as createInstancesRemote's own #903 fix above
+      // — a later chunk failing doesn't mean nothing was saved.
+      err.succeededCount = updated.length;
+      throw err;
+    }
   }
   return updated;
 }
 
 export async function deleteInstancesRemote(instanceIds) {
+  let deletedCount = 0;
   for (const batch of chunk(instanceIds, INSTANCE_BATCH_CHUNK_SIZE)) {
-    await requestJson('/instances/batch', {
-      method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ instanceIds: batch }),
-    });
+    try {
+      await requestJson('/instances/batch', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instanceIds: batch }),
+      });
+      deletedCount += batch.length;
+    } catch (err) {
+      // #1380: same reasoning as createInstancesRemote's own #903 fix above
+      // — a later chunk failing doesn't mean nothing was saved.
+      err.succeededCount = deletedCount;
+      throw err;
+    }
   }
 }
 

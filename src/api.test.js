@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  confirmCard, createInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets, fetchBundles,
-  fetchCurrentUser, fetchSharedBundles,
+  confirmCard, createInstancesRemote, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
+  fetchBundles, fetchCurrentUser, fetchSharedBundles, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -176,6 +176,77 @@ describe('createInstancesRemote', () => {
     const instances = [{ templateId: 'a', x: 0, y: 0, z: 0 }];
     const created = await createInstancesRemote(instances);
     expect(created).toEqual([{ templateId: 'a', x: 0, y: 0, z: 0, instanceId: 'a-saved' }]);
+  });
+});
+
+// #1380: upsertInstancesRemote/deleteInstancesRemote never attached
+// succeededCount on a mid-chunk failure, unlike their sibling
+// createInstancesRemote (#903 above) — so syncBatchUpdate/syncBatchDelete
+// (src/main.js) overstated how much a large group-move/multi-delete lost
+// when a later chunk failed after an earlier one already committed.
+describe('upsertInstancesRemote', () => {
+  it('attaches how many instances succeeded before a chunk failure', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      call += 1;
+      if (call === 1) {
+        const sent = JSON.parse(options.body).instances;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ instances: sent }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: 'Internal server error' }),
+      });
+    }));
+
+    const instances = Array.from({ length: 150 }, (_, i) => ({ instanceId: `item-${i}`, x: i, y: 0, z: 0 }));
+    const error = await upsertInstancesRemote(instances).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.succeededCount).toBe(100); // the first 100-item chunk
+  });
+
+  it('never sets succeededCount when every chunk succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      const sent = JSON.parse(options.body).instances;
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ instances: sent }),
+      });
+    }));
+    const instances = [{ instanceId: 'a', x: 0, y: 0, z: 0 }];
+    const updated = await upsertInstancesRemote(instances);
+    expect(updated).toEqual(instances);
+  });
+});
+
+describe('deleteInstancesRemote', () => {
+  it('attaches how many instances succeeded before a chunk failure', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(() => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ deletedInstanceIds: [] }) });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: 'Internal server error' }),
+      });
+    }));
+
+    const instanceIds = Array.from({ length: 150 }, (_, i) => `item-${i}`);
+    const error = await deleteInstancesRemote(instanceIds).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.succeededCount).toBe(100); // the first 100-item chunk
+  });
+
+  it('never sets succeededCount when every chunk succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ deletedInstanceIds: [] }) })));
+    await expect(deleteInstancesRemote(['a'])).resolves.toBeUndefined();
   });
 });
 

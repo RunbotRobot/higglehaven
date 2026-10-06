@@ -2017,7 +2017,12 @@ async function syncBatchUpdate(meshes) {
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    alert(`Couldn't save ${meshes.length} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+    // #1380: same reasoning as syncBatchCreate's own #903 fix above —
+    // err.succeededCount (set by upsertInstancesRemote) says how many of a
+    // large group-move/undo-redo batch already landed before the chunk
+    // that failed, so this doesn't overstate how much was actually lost.
+    const failedCount = meshes.length - (err.succeededCount ?? 0);
+    alert(`Couldn't save ${failedCount} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   }
 }
 
@@ -2030,7 +2035,12 @@ async function syncBatchDelete(instanceIds) {
   } catch (err) {
     console.warn('Failed to sync instance deletes to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    alert(`Couldn't save the deletion of ${instanceIds.length} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
+    // #1380: same reasoning as syncBatchCreate's own #903 fix above —
+    // err.succeededCount (set by deleteInstancesRemote) says how many of a
+    // large multi-delete/undo-redo batch already landed before the chunk
+    // that failed, so this doesn't overstate how much was actually lost.
+    const failedCount = instanceIds.length - (err.succeededCount ?? 0);
+    alert(`Couldn't save the deletion of ${failedCount} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
   }
 }
 
