@@ -5946,14 +5946,17 @@ async function renderRedeemHigglesField() {
           currency: 'usd',
         },
       });
-      // submitBuilderStripeAccount's response is the same shape GET
-      // returns minus availableCents (worker/index.js's
-      // stripeAccountStatusJson never computes it) — merge onto the
-      // existing redeemStatus rather than replacing it outright, so the
-      // balance already loaded above doesn't get clobbered with undefined.
       redeemStatus = { ...redeemStatus, ...updated };
-      refreshStatusNote();
-      formStatus.textContent = 'Submitted.';
+      // #1403: submitBtn's "Set up"/"Update payout account" label (line
+      // 5918 above) is only ever set once, at this function's own initial
+      // render, gated on redeemStatus.connected as it stood then — a
+      // first-time submit flips connected from false to true right here,
+      // but nothing re-evaluated that gate afterward, so the button kept
+      // reading "Set up payout account" until the tab was closed and
+      // reopened. Same renderSettingsSection() full-redraw idiom #1373
+      // already uses for the sibling Sell tab's own onboarding form.
+      renderSettingsSection();
+      return;
     } catch (err) {
       formStatus.textContent = err.message || 'Could not submit — check the fields above.';
       formStatus.classList.add('error');
