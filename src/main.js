@@ -2091,6 +2091,17 @@ function disposeMaterialTextures(material) {
 // uploaded model could have any number of parts/materials.
 function disposeObject(object) {
   object.traverse((child) => {
+    // #1370: a THREE.Sprite (e.g. a billboard label) is neither isMesh nor
+    // does it carry .geometry to dispose — only its SpriteMaterial (and the
+    // CanvasTexture that material's own .map holds) needs cleanup, which
+    // disposeMaterialTextures already covers generically.
+    if (child.isSprite) {
+      if (child.material) {
+        disposeMaterialTextures(child.material);
+        child.material.dispose();
+      }
+      return;
+    }
     if (!child.isMesh) return;
     child.geometry.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
@@ -14107,6 +14118,17 @@ function reportRendererMemoryDiagnostic() {
 
 function disposeObject3D(object) {
   object.traverse((child) => {
+    // #1370: same Sprite gap disposeObject's own fix just closed — e.g. the
+    // shop avatar's afkSprite is a THREE.Sprite, not a Mesh, so it (and its
+    // SpriteMaterial's CanvasTexture) was silently skipped by this traverse
+    // every time a shop avatar was swapped/unequipped.
+    if (child.isSprite) {
+      if (child.material) {
+        disposeMaterialTextures(child.material);
+        child.material.dispose();
+      }
+      return;
+    }
     if (!child.isMesh) return;
     child.geometry?.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
