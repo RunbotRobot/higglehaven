@@ -11005,9 +11005,22 @@ async function handleSignPosts(request, db, route) {
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     const postId = `post-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO sign_posts (post_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
-    `).bind(postId, instanceId, authorLabel, text).run();
+    // #1327: the is_community_sign check above is a point-in-time read, and
+    // readJson is a real awaited gap after it -- without re-checking here,
+    // a concurrent PATCH unflagging this instance (whose own #1022 cleanup
+    // deletes every existing sign_posts row for it, specifically so a post
+    // can never resurface on re-flagging) could still let this INSERT land
+    // afterward, resurrecting exactly what that cleanup exists to prevent.
+    // Same #929/#960 idiom as this handler's own DELETE sibling below.
+    const inserted = await db.prepare(`
+      INSERT INTO sign_posts (post_id, instance_id, author_label, text)
+      SELECT ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM placed_instances WHERE instance_id = ? AND is_community_sign = 1
+      )
+    `).bind(postId, instanceId, authorLabel, text, instanceId).run();
+    if (inserted.meta.changes === 0) {
+      throw new HttpError('This placed instance is not marked as a community sign', 400);
+    }
     const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
     return json({ post: signPostFromRow(row) }, 201);
   }
@@ -11128,9 +11141,29 @@ async function handleCalendarEvents(request, db, route) {
       ? null
       : isoDateString(input.scheduledAt, 'scheduledAt');
     const eventId = `event-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at) VALUES (?, ?, ?, ?, ?)
-    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt).run();
+    // #1327: both the is_community_calendar check and requireOwnedLandlet
+    // above are point-in-time reads, with real awaited gaps (readJson,
+    // checkRateLimit) after them -- without re-checking both here, a
+    // concurrent PATCH unflagging this instance (whose own #1022 cleanup
+    // deletes every existing calendar_events row for it, specifically so an
+    // event can never resurface on re-flagging) or a landlet ownership
+    // change (auction resolution, admin reassignment) could still let this
+    // INSERT land afterward. Same #929/#960 idiom as this handler's own
+    // DELETE sibling below.
+    const inserted = await db.prepare(`
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND pi.is_community_calendar = 1 AND l.owner_builder_id IS ?
+      )
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, instanceId, sessionBuilder.builder_id).run();
+    if (inserted.meta.changes === 0) {
+      const current = await db.prepare('SELECT is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+      if (!current?.is_community_calendar) {
+        throw new HttpError('This placed instance is not marked as a community calendar', 400);
+      }
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
   }

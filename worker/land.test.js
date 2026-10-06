@@ -761,6 +761,53 @@ describe('Community signs', () => {
     expect(rejected.body.error).toMatch(/not marked as a community sign/);
   });
 
+  // #1327: the is_community_sign check above is a point-in-time read --
+  // without folding it into the INSERT itself, a PATCH unflagging this
+  // instance (whose own #1022 cleanup clears sign_posts specifically so a
+  // post can't resurface on reflagging) landing in the gap before the
+  // INSERT would still let this post land anyway. Injected at the INSERT
+  // itself (the only db.prepare call between the flag check and the write
+  // in this handler -- readJson has no DB call of its own to key off).
+  it('rejects a post if the instance was unflagged between the initial check and the insert', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-post-flag-race-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 6,
+        y: 6,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO sign_posts')) {
+        armed = false;
+        originalPrepare('UPDATE placed_instances SET is_community_sign = 0 WHERE instance_id = ?')
+          .bind('sign-post-flag-race-instance').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/instances/sign-post-flag-race-instance/posts', {
+        method: 'POST',
+        body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Too late' }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/not marked as a community sign/);
+
+    const stored = await env.DB.prepare('SELECT COUNT(*) AS count FROM sign_posts WHERE instance_id = ?')
+      .bind('sign-post-flag-race-instance').first();
+    expect(stored.count).toBe(0);
+  });
+
   it('creates, lists, and moderates posts on a community sign', async () => {
     await api('/instances', signsBuilder.session({
       method: 'POST',
@@ -1169,6 +1216,51 @@ describe('Community calendar', () => {
     expect(rejected.body.error).toMatch(/not marked as a community calendar/);
   });
 
+  // #1327: same gap as the sign-post POST race above -- the
+  // is_community_calendar check is a point-in-time read, with checkRateLimit
+  // a real awaited write after it (and before the INSERT), unlike this
+  // handler's own DELETE sibling which already folds its own re-check into
+  // the write (#929/#960).
+  it('rejects an event if the instance was unflagged between the initial check and the insert', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-post-flag-race-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 8,
+        y: 8,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE placed_instances SET is_community_calendar = 0 WHERE instance_id = ?')
+          .bind('calendar-post-flag-race-instance').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/instances/calendar-post-flag-race-instance/events', calendarBuilder.session({
+        method: 'POST',
+        body: JSON.stringify({ text: 'Too late' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/not marked as a community calendar/);
+
+    const stored = await env.DB.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?')
+      .bind('calendar-post-flag-race-instance').first();
+    expect(stored.count).toBe(0);
+  });
+
   it('creates, lists, and moderates events on a community calendar', async () => {
     await api('/instances', calendarBuilder.session({
       method: 'POST',
@@ -1492,6 +1584,53 @@ describe('Community calendar', () => {
 
     const stillThere = await env.DB.prepare('SELECT 1 FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     expect(stillThere).not.toBeNull();
+  });
+
+  // #1327: same #929/#960 race as the DELETE sibling just above, but for
+  // POST -- requireOwnedLandlet is a point-in-time read, and checkRateLimit
+  // is a real awaited write after it; without folding the ownership
+  // re-check into the INSERT too, a landlet transferred away from this
+  // builder in that gap could still let their event land on it.
+  it('rejects an event on a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('calendar-post-ownership-race-owner');
+    const newOwner = await signupBuilder('calendar-post-ownership-race-new-owner');
+    await createGreenbeltLandlet('calendar-post-ownership-race-landlet');
+    await api('/landlets/calendar-post-ownership-race-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-post-ownership-race-instance',
+        landletId: 'calendar-post-ownership-race-landlet',
+        templateId: 'placeholder-tree',
+        x: 1, y: 1, isCommunityCalendar: true,
+      }),
+    }));
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'calendar-post-ownership-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/instances/calendar-post-ownership-race-instance/events', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ text: 'Too late' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+
+    const stored = await env.DB.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?')
+      .bind('calendar-post-ownership-race-instance').first();
+    expect(stored.count).toBe(0);
   });
 
   // #944: unlike its own POST sibling above, the DELETE branch had no rate
