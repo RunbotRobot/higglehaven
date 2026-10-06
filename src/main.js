@@ -10135,7 +10135,16 @@ const myLandsStatusEl = document.getElementById('my-lands-status');
 const myLandsListEl = document.getElementById('my-lands-list');
 const myLandsEmptyEl = document.getElementById('my-lands-empty');
 
+// Monotonic-token guard, same idiom as friendsLoadToken/notificationsLoadToken
+// above: myLandsBtn's click handler calls renderMyLands() directly on every
+// click, including while a previous call's fetchAllLandlets() is still in
+// flight (rapid double-click, or close-then-reopen before it resolves) — an
+// earlier call's now-stale response would otherwise overwrite a later call's
+// fresh render.
+let myLandsLoadToken = 0;
+
 async function renderMyLands() {
+  const myToken = ++myLandsLoadToken;
   myLandsStatusEl.textContent = '';
   myLandsStatusEl.classList.remove('error');
   myLandsEmptyEl.hidden = true;
@@ -10149,11 +10158,13 @@ async function renderMyLands() {
   try {
     owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
   } catch (err) {
+    if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
     myLandsListEl.innerHTML = '';
     myLandsStatusEl.textContent = err.message || 'Could not load your lands.';
     myLandsStatusEl.classList.add('error');
     return;
   }
+  if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
   myLandsListEl.innerHTML = '';
   if (owned.length === 0) {
     myLandsEmptyEl.hidden = false;
