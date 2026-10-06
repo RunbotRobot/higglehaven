@@ -198,6 +198,46 @@ describe('Seller feedback', () => {
     expect(conflicted).toHaveLength(9);
   });
 
+  // #1385: deterministic reproduction of the real race, same
+  // env.DB.prepare-interception idiom as worker/land.test.js's own
+  // community-sign flag-race test and reviews-auth.test.js's identically-
+  // shaped regression test for the product-review case this mirrors — a
+  // refund fired (unawaited) the instant before the real INSERT INTO
+  // seller_feedback statement the handler runs, landing in the exact
+  // window between the eager refunded_at check above it and the INSERT.
+  it('does not let feedback be inserted for a purchase refunded in the exact window between its eligibility check and its INSERT', async () => {
+    const buyer = await signupBuilder('feedback-refund-race-buyer');
+    const purchaseId = await createPurchase(buyer);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO seller_feedback')) {
+        armed = false;
+        originalPrepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
+          .bind(purchaseId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'POST', body: JSON.stringify({ rating: 5 }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/refunded/i);
+
+    const feedbackRow = await env.DB.prepare('SELECT 1 FROM seller_feedback WHERE purchase_id = ?')
+      .bind(purchaseId).first();
+    expect(feedbackRow).toBeNull();
+    const row = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
+      .bind(purchaseId).first();
+    expect(row.refunded_at).not.toBeNull();
+  });
+
   it('lists feedback for a seller with an average and count, scoped to that seller only', async () => {
     const sellerId = `seller-list-${crypto.randomUUID()}`;
     const otherSellerId = `seller-list-other-${crypto.randomUUID()}`;
