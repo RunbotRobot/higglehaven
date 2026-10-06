@@ -1866,6 +1866,19 @@ async function handleCatalog(request, db, route, url, models, env) {
     return json({ imageUrl });
   }
 
+  // #362/#381: unlike the PATCH/DELETE siblings below (which do
+  // checkRateLimit on their unauthenticated/unowned-template path),
+  // creation here is deliberately NOT rate-limited. Unauthenticated
+  // catalog creation is this app's own primary way of seeding system/
+  // placeholder products, and is used 50+ times across this file's own
+  // test-suite setup helpers alone -- an IP-keyed rate limit here breaks
+  // the suite wholesale unless every one of those call sites gets its
+  // own synthetic IP (see #381, closed unmerged after discovering exactly
+  // this). The chosen fix for #362 instead length-caps name/color via
+  // labelValue (see validateTemplate below) and keeps the rate limit only
+  // on builders/sellers creation (BUILDER_CREATE_RATE_LIMIT_MAX/
+  // SELLER_CREATE_RATE_LIMIT_MAX below), which have no such fixture-
+  // seeding use.
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const template = validateTemplate(input, crypto.randomUUID());
