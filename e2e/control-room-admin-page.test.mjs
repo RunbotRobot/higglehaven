@@ -244,9 +244,36 @@ await page.evaluate(async (title) => {
 await page.reload({ waitUntil: 'networkidle' });
 await page.click('.tabs button[data-status="__quicklook__"]');
 const quickLookCard = page.locator('.card', { has: page.locator('.title', { hasText: quickLookOlderTitle }) });
-await quickLookCard.waitFor({ timeout: 10000 });
+// #1355: Quick Look's own tab click now re-fetches via loadTasks() (async)
+// rather than the old synchronous render(), so the card can be visible
+// (already rendered by the page's pre-click, unfiltered initial load)
+// before the click's own re-render has applied the "open" class -- wait for
+// that class specifically rather than just visibility, which would resolve
+// against the stale pre-click render instead.
+await page.waitForFunction(
+  (title) => [...document.querySelectorAll('.card.open')].some((c) => c.querySelector('.title')?.textContent.includes(title)),
+  quickLookOlderTitle,
+  { timeout: 10000 },
+);
 const quickLookIsOpen = await quickLookCard.evaluate((el) => el.classList.contains('open'));
 console.log('Quick Look picks the older of two owner-blocked tasks, already expanded (actual):', quickLookIsOpen);
+
+// #1355 regression: switching to Quick Look used to only call render(),
+// reusing whatever `tasks` array was already cached by the previously
+// active tab's own status-scoped loadTasks() call -- so coming from the
+// "Done" tab (cache scoped to status==='done'), pickQuickLookTask()'s own
+// `status !== 'done'` filter always came up empty, falsely showing
+// "Nothing is waiting on you right now" even though quickLookOlderTitle
+// (seeded above, still waitingOn: 'owner') genuinely is. Checked with a
+// short timeout -- well under this page's own 15s poll interval -- so a
+// regression can't be masked by the next poll tick quietly self-healing it.
+await page.click('.tabs button[data-status="done"]');
+await page.waitForTimeout(100);
+await page.click('.tabs button[data-status="__quicklook__"]');
+const quickLookCardAfterDoneTab = page.locator('.card', { has: page.locator('.title', { hasText: quickLookOlderTitle }) });
+await quickLookCardAfterDoneTab.waitFor({ timeout: 3000 });
+const quickLookSurvivesDoneTabSwitch = await quickLookCardAfterDoneTab.count();
+console.log('Quick Look still finds the owner-blocked task right after switching from the Done tab (should be 1):', quickLookSurvivesDoneTabSwitch);
 
 // Replying doesn't clear waitingOn, but it does bump updatedAt — so the
 // just-answered (older) task should lose its "longest waiting" spot to
@@ -419,6 +446,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   cursorPreservedAfterPoll &&
   doneTabTotalMatchesApi &&
   quickLookIsOpen &&
+  quickLookSurvivesDoneTabSwitch === 1 &&
   advancedToOther === 1 &&
   replyRecorded &&
   subChipVisible &&

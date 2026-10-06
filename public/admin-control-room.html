@@ -571,11 +571,7 @@
     if (!btn) return;
     filterStatus = btn.dataset.status;
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b === btn));
-    if (filterStatus === QUICK_LOOK) {
-      render();
-    } else {
-      loadTasks();
-    }
+    loadTasks();
   });
 
   document.getElementById('search').addEventListener('input', (event) => {
