@@ -3971,4 +3971,22 @@ describe('Top-level fetch() routing (#1232)', () => {
     expect(response.headers.get('access-control-allow-headers')).toBe('content-type');
     expect((await response.arrayBuffer()).byteLength).toBe(0);
   });
+
+  // #1360: applied once, in fetch()'s own withSecurityHeaders wrapper around
+  // routeRequest, rather than threaded through every individual handler —
+  // checking an ordinary API response is therefore enough to prove the
+  // wrapper runs, same reasoning the redirect/OPTIONS cases below extend to
+  // the handful of response shapes that bypass routeRequest's normal return
+  // value (Response.redirect, a bare 204 built inline).
+  it('attaches the baseline security headers to every response shape', async () => {
+    const apiResponse = await SELF.fetch('https://higglehaven.test/api/health');
+    const redirectResponse = await SELF.fetch('https://www.higglehaven.com/', { redirect: 'manual' });
+    const optionsResponse = await SELF.fetch('https://higglehaven.test/api/this-route-does-not-exist', { method: 'OPTIONS' });
+    for (const response of [apiResponse, redirectResponse, optionsResponse]) {
+      expect(response.headers.get('x-frame-options')).toBe('DENY');
+      expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000; includeSubDomains');
+    }
+  });
 });
