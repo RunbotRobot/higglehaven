@@ -58,9 +58,20 @@ await xInput.fill(String(newX));
 await xInput.dispatchEvent('input');
 await page.waitForTimeout(200);
 
-// Kick off Save Size — a real uploaded model means this does a genuine
-// fetch-rescale-reupload round trip before its own PATCH, giving a real
-// window during which the guard should hold Save Price disabled.
+// #1330: delay the PATCH Save Size's own round trip ends on, the same
+// page.route idiom seller-size-save-preview-race.test.mjs already uses —
+// racing a real fetch-rescale-reupload round trip against a fixed
+// wall-clock sleep below is backwards (a fast/idle runner can finish the
+// whole round trip before the sleep elapses, misreading correct guard
+// behavior as a failure). Delaying the PATCH guarantees the "still in
+// flight" window is actually observable regardless of real backend speed.
+await page.route('**/api/catalog/*', async (route) => {
+  if (route.request().method() === 'PATCH') await new Promise((resolve) => setTimeout(resolve, 3000));
+  await route.continue();
+});
+
+// Kick off Save Size — the delayed PATCH above keeps it in flight long
+// enough to reliably observe the guard holding Save Price disabled.
 await row().locator('button', { hasText: 'Save Size' }).click();
 await page.waitForTimeout(100);
 const pricebtnDisabledWhileSizeSaving = await row().locator('.seller-price-save-btn').isDisabled();
