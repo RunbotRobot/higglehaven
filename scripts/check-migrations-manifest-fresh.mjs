@@ -42,4 +42,6 @@ function main() {
   console.log('worker/migrations-manifest.json is up to date.');
 }
 
-main();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
