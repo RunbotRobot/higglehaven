@@ -2134,6 +2134,14 @@ const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
 const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
 const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 
+// #1082 (owner's own call): one search box covering both the product grid
+// above and the bundle section below, with this scope toggle picking which
+// section(s) it actually applies to — 'both' is the default so existing
+// "search products" behavior is unchanged until a builder deliberately
+// narrows it.
+const searchScopeButtons = [...document.querySelectorAll('.search-scope-btn')];
+let catalogSearchScope = 'both'; // 'products' | 'bundles' | 'both'
+
 // #329/#330: "Prompt mode" — a second way into the exact same
 // enterPlacementMode({type:'template',...}) flow manual mode's own tiles
 // use above, just arrived at via a generated concept image and a
@@ -2334,18 +2342,43 @@ async function persistCatalogThumbnail(template) {
 // buildCatalogPickerButtons last stamped into each tile's dataset.name, so
 // it's safe to call any time after the grid exists, including right after
 // a rebuild while the picker itself is closed.
+//
+// #1082: the whole product grid (not just its tiles) hides outright when
+// catalogSearchScope narrows the search to Bundles only — the empty-state
+// message is product-specific wording ("No products match...") so it's
+// suppressed too rather than shown for an unrelated, deliberately-hidden
+// section.
 function filterCatalogTiles() {
+  const showProducts = catalogSearchScope !== 'bundles';
+  catalogPickerGridEl.hidden = !showProducts;
   const query = catalogSearchInputEl.value.trim().toLowerCase();
   let anyVisible = false;
-  for (const tile of catalogPickerGridEl.children) {
-    const matches = !query || tile.dataset.name.includes(query);
-    tile.hidden = !matches;
-    if (matches) anyVisible = true;
+  if (showProducts) {
+    for (const tile of catalogPickerGridEl.children) {
+      const matches = !query || tile.dataset.name.includes(query);
+      tile.hidden = !matches;
+      if (matches) anyVisible = true;
+    }
   }
-  catalogPickerEmptyEl.hidden = anyVisible || !query;
+  catalogPickerEmptyEl.hidden = !showProducts || anyVisible || !query;
   catalogPickerEmptyQueryEl.textContent = catalogSearchInputEl.value.trim();
 }
-catalogSearchInputEl.addEventListener('input', filterCatalogTiles);
+
+// #1082: re-applies both the product filter and the bundle filter/visibility
+// together — the one handler for anything that can change what the search
+// box's scope covers (typing, or switching the scope toggle itself).
+function updateCatalogSearchPanel() {
+  filterCatalogTiles();
+  renderBundlePicker();
+}
+catalogSearchInputEl.addEventListener('input', updateCatalogSearchPanel);
+for (const btn of searchScopeButtons) {
+  btn.addEventListener('click', () => {
+    catalogSearchScope = btn.dataset.searchScope;
+    for (const b of searchScopeButtons) b.classList.toggle('active', b === btn);
+    updateCatalogSearchPanel();
+  });
+}
 
 // Shared by manual mode's own grid below and prompt mode's search-result
 // grid (#329/#330) — both list catalog template objects and both arm the
@@ -2497,12 +2530,17 @@ promptModeGenerateBtn.addEventListener('click', async () => {
 // owns — a shared bundle is still owned by whoever created it (see
 // handleBundles' own comment in worker/index.js); the backend does no
 // ownership check, so this is the only place that's actually enforced.
+//
+// #1082: also hidden outright when catalogSearchScope narrows the search
+// to Products only — same reasoning as filterCatalogTiles hiding the
+// product grid for the Bundles-only case, just the other section.
 function currentBundleTabList() {
   return activeBundleTab === 'mine' ? myBundles : communityBundles;
 }
 
 function renderBundlePicker() {
-  bundlePickerSectionEl.hidden = myBundles.length === 0 && communityBundles.length === 0;
+  const hasAnyBundles = myBundles.length > 0 || communityBundles.length > 0;
+  bundlePickerSectionEl.hidden = catalogSearchScope === 'products' || !hasAnyBundles;
   if (bundlePickerSectionEl.hidden) return;
 
   for (const btn of bundleTabButtons) {
@@ -2522,6 +2560,9 @@ function renderBundlePicker() {
   for (const bundle of bundles) {
     const tile = document.createElement('div');
     tile.className = 'bundle-tile';
+    // #1082: read by filterBundleTiles below, same dataset.name idiom
+    // buildCatalogTemplateTile already uses for the product grid.
+    tile.dataset.name = bundle.name.toLowerCase();
     const owned = bundle.builderId === builderId;
 
     const placeBtn = document.createElement('button');
@@ -2623,6 +2664,30 @@ function renderBundlePicker() {
 
     bundlePickerGridEl.appendChild(tile);
   }
+
+  filterBundleTiles();
+}
+
+// #1082: applies the shared search box's query to the just-built bundle
+// tiles, same hidden-toggling idiom filterCatalogTiles uses for products.
+// Only reachable once renderBundlePicker has already confirmed the
+// section isn't hidden and the active tab has at least one bundle, so
+// bundlePickerGridEl always has real tiles here — the "no bundles in this
+// tab at all" empty-state text renderBundlePicker sets above is left
+// alone in that case rather than this function ever running against an
+// empty grid.
+function filterBundleTiles() {
+  const query = catalogSearchInputEl.value.trim().toLowerCase();
+  let anyVisible = false;
+  for (const tile of bundlePickerGridEl.children) {
+    const matches = !query || tile.dataset.name.includes(query);
+    tile.hidden = !matches;
+    if (matches) anyVisible = true;
+  }
+  if (query && !anyVisible) {
+    bundlePickerEmptyEl.hidden = false;
+    bundlePickerEmptyEl.textContent = `No bundles match "${catalogSearchInputEl.value.trim()}".`;
+  }
 }
 for (const btn of bundleTabButtons) {
   btn.addEventListener('click', () => {
@@ -2639,10 +2704,15 @@ addItemBtn.addEventListener('click', () => {
   catalogPickerEl.classList.toggle('visible');
   if (opening) {
     // Fresh search each time the picker opens, rather than carrying over
-    // whatever was last typed — the same "reset on open" pattern the
-    // upload modal's own file step uses.
+    // whatever was last typed (or last scoped to) — the same "reset on
+    // open" pattern the upload modal's own file step uses. #1082 extends
+    // this to the scope toggle: reopening with Bundles-only still
+    // selected would otherwise leave the product grid silently hidden
+    // with no query typed to explain why.
     catalogSearchInputEl.value = '';
-    filterCatalogTiles();
+    catalogSearchScope = 'both';
+    for (const b of searchScopeButtons) b.classList.toggle('active', b.dataset.searchScope === 'both');
+    updateCatalogSearchPanel();
   }
 });
 catalogPickerCloseBtn.addEventListener('click', () => {

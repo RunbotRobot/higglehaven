@@ -1192,7 +1192,13 @@
          than re-querying or re-rendering thumbnails, since a template's
          appearance/name never changes mid-session (see buildCatalogPickerButtons's
          own thumbnail-cache comment). Matters once the catalog has more
-         than a screenful of products to scroll through. */
+         than a screenful of products to scroll through.
+
+         #1082: unified across both products and the bundle section below
+         (owner's own call — one search box, with a scope toggle for which
+         section(s) it applies to — rather than a second, separate bundle
+         search box). "Search…" rather than "Search products…" since the
+         box itself no longer implies products-only. */
       #catalog-search-input {
         display: block;
         width: 100%;
@@ -1205,6 +1211,28 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
+      /* #1082: which section(s) the search box above (and the sections'
+         own visibility) applies to — mirrors .bundle-tab-btn's look, one
+         level up from it (that toggle picks a tab *within* the bundle
+         section; this one picks which section(s) show at all). */
+      #catalog-search-scope-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .search-scope-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .search-scope-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
       #catalog-picker-grid,
       #prompt-mode-grid {
         display: grid;
@@ -1212,6 +1240,14 @@
         gap: 8px;
         max-height: calc(50vh - 88px);
         overflow-y: auto;
+      }
+      /* #1082: the base rule above sets display unconditionally, which (per
+         .catalog-tile[hidden]'s own precedent just below) outranks the
+         browser's default [hidden] rule on specificity ties, broken by
+         source order — needed now that filterCatalogTiles can hide this
+         whole grid, not just individual tiles within it. */
+      #catalog-picker-grid[hidden] {
+        display: none;
       }
       /* #329: a top-level toggle between today's search-and-drag-and-drop
          flow and prompt mode, mirroring .bundle-tab-btn's own look one
@@ -1370,6 +1406,12 @@
         display: flex;
         align-items: center;
         gap: 6px;
+      }
+      /* #1082: same reasoning as #catalog-picker-grid[hidden] above — the
+         unconditional display: flex just above needs an explicit override
+         now that filterBundleTiles can hide an individual tile. */
+      .bundle-tile[hidden] {
+        display: none;
       }
       .bundle-tile-place {
         flex: 1;
@@ -3725,7 +3767,12 @@
           <button class="catalog-mode-tab-btn" type="button" data-catalog-mode="prompt">Prompt</button>
         </div>
         <div id="catalog-manual-mode">
-          <input id="catalog-search-input" type="text" placeholder="Search products…" />
+          <input id="catalog-search-input" type="text" placeholder="Search…" />
+          <div id="catalog-search-scope-tabs">
+            <button class="search-scope-btn active" type="button" data-search-scope="both">All</button>
+            <button class="search-scope-btn" type="button" data-search-scope="products">Products</button>
+            <button class="search-scope-btn" type="button" data-search-scope="bundles">Bundles</button>
+          </div>
           <div id="catalog-picker-grid"></div>
           <div id="catalog-picker-empty" hidden>No products match "<span id="catalog-picker-empty-query"></span>".</div>
           <div id="bundle-picker-section" hidden>

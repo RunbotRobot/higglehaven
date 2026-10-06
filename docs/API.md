@@ -3830,9 +3830,10 @@ step the spec calls for.
 
 Add Item's catalog picker gets a bundle section below the ordinary product
 grid, with "My Bundles" / "Community" tabs (`renderBundlePicker` in
-`src/main.js`) — hidden entirely only when *both* lists are empty, so a
-builder who's never saved a bundle themselves still gets to discover
-Community if a neighbor has shared one. Tapping a tile arms placement with
+`src/main.js`) — hidden entirely only when *both* lists are empty (or the
+search scope below is narrowed to Products), so a builder who's never
+saved a bundle themselves still gets to discover Community if a neighbor
+has shared one. Tapping a tile arms placement with
 `enterPlacementMode({ type: 'clipboard', items: bundle.items })`, the exact
 same pending-placement shape a Paste uses, so `handlePlacementClick`'s
 existing clipboard-placement path needs no changes to place a bundle.
@@ -3845,6 +3846,27 @@ section's own opening paragraph). All three use separate CSS classes
 despite an identical look, not a shared one — a selector meant for one must
 never accidentally hit another (this bit a test once already — see the
 share-toggle's own comment in `src/main.js`).
+
+### Unified catalog/bundle search (#1082)
+
+`#catalog-search-input` (placeholder "Search…", no longer "Search
+products…") is shared by the product grid above and the bundle section
+below it, rather than each getting its own search box — the owner's own
+call, over giving bundles a separate control. A three-way scope toggle
+(`#catalog-search-scope-tabs` — All / Products / Bundles) sits directly
+under the input and picks which section(s) the query actually applies to;
+it also drives which section(s) show at all, so narrowing to Bundles
+hides the product grid outright (and vice versa) rather than leaving an
+unfiltered, scope-irrelevant section visible underneath. `filterCatalogTiles`
+and the new `filterBundleTiles` (`src/main.js`) apply the same
+toggle-`hidden`-per-tile idiom independently to each grid; `bundlePickerEmptyEl`
+shows "No bundles match…" on a filtered-to-nothing query, distinct from
+its existing "you haven't saved any yet"/"no one has shared one yet"
+empty-tab messages, which a query never overwrites since `filterBundleTiles`
+only runs once `renderBundlePicker` has already confirmed the active tab
+has at least one bundle to filter. Reopening the picker resets both the
+query and the scope back to "All," the same "fresh search on open"
+treatment the query alone already had.
 
 ## Community signs
 
