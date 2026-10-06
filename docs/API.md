@@ -1534,7 +1534,11 @@ automatically) — starts the 7-day payout-hold fallback clock described
 above. Requires a session logged in as this purchase's own seller (`403`
 otherwise). Returns `400` if the purchase isn't real-money
 (`paymentIntentId` unset), is a digital good (nothing to ship), is
-already marked shipped, or has been refunded.
+already marked shipped, or has been refunded. On success, notifies the
+purchase's buyer (`purchases.buyer_builder_id`) that it has shipped — same
+best-effort notification convention as every other transactional event in
+this app (#1288), skipped silently if there's no `buyer_builder_id` (a
+pre-#1112 purchase, or a buyer who has since self-deleted).
 
 ```json
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
