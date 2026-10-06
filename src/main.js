@@ -2538,6 +2538,15 @@ function currentBundleTabList() {
   return activeBundleTab === 'mine' ? myBundles : communityBundles;
 }
 
+// #1349: the rename and share-toggle handlers below each do their own
+// updateBundle -> refetch-both-lists -> renderBundlePicker() round trip
+// against this same shared myBundles/communityBundles state — without a
+// shared token, a rename and a share-toggle fired close together could
+// have the slower refetch land last and redraw from a snapshot that's
+// already stale relative to the other's already-applied change. Same
+// monotonic-token fix as friendsLoadToken/notificationsLoadToken.
+let bundlePickerLoadToken = 0;
+
 function renderBundlePicker() {
   const hasAnyBundles = myBundles.length > 0 || communityBundles.length > 0;
   bundlePickerSectionEl.hidden = catalogSearchScope === 'products' || !hasAnyBundles;
@@ -2592,6 +2601,7 @@ function renderBundlePicker() {
         const next = prompt('Rename this bundle', bundle.name);
         if (!next || !next.trim() || next.trim() === bundle.name) return;
         renameBtn.disabled = true;
+        const myLoadToken = ++bundlePickerLoadToken;
         try {
           const updated = await updateBundle(bundle.bundleId, { name: next.trim() });
           Object.assign(bundle, updated);
@@ -2602,7 +2612,10 @@ function renderBundlePicker() {
           // tile showing the stale name. Refetching both, the same fix
           // the share-toggle handler below already uses for the same
           // divergence risk, keeps both tabs' copies in sync.
-          [myBundles, communityBundles] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
+          const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
+          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
+          myBundles = freshMine;
+          communityBundles = freshShared;
           renderBundlePicker();
         } catch (err) {
           console.warn('Could not rename bundle:', err);
@@ -2626,6 +2639,7 @@ function renderBundlePicker() {
       shareToggleBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
         shareToggleBtn.disabled = true;
+        const myLoadToken = ++bundlePickerLoadToken;
         try {
           const updated = await updateBundle(bundle.bundleId, { shared: !bundle.shared });
           Object.assign(bundle, updated);
@@ -2633,7 +2647,10 @@ function renderBundlePicker() {
           // — simplest to just re-fetch both rather than hand-patch
           // communityBundles for an add/remove that only affects this one
           // tab's membership.
-          [myBundles, communityBundles] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
+          const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
+          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
+          myBundles = freshMine;
+          communityBundles = freshShared;
           renderBundlePicker();
         } catch (err) {
           console.warn('Could not update bundle sharing:', err);
