@@ -145,6 +145,17 @@ console.log('no fallback-to-default-avatar warning logged when equipping (should
 const markerAfterEquip = await page.evaluate(() => window.__noReloadMarker);
 console.log('window marker set before equipping still present (proves no page reload happened):', markerAfterEquip);
 
+// #1358: a snapshot of the renderer's own live (not-yet-disposed) GPU
+// resource counts, written by refreshEquippedShopAvatar itself right after
+// this swap (reportRendererMemoryDiagnostic, src/main.js) — see that
+// function's own comment for why this always lands on the same "scene
+// content minus whichever avatar was just swapped out" baseline when the
+// outgoing avatar is actually disposed, not just detached from the scene
+// graph. Captured now so the revert/re-equip steps below can confirm this
+// doesn't climb across repeated swaps.
+const memAfterFirstEquip = await page.evaluate(() => window.__rendererMemory);
+console.log('renderer live-geometry count right after equipping the custom avatar:', memAfterFirstEquip);
+
 // --- Revert to the default avatar via the same picker, no page reload ---
 const defaultRow = myAvatarsField.locator('.version-row', { hasText: 'Default avatar' });
 await defaultRow.locator('button', { hasText: 'Equip' }).click();
@@ -159,6 +170,25 @@ const purchasedRowAfterRevert = rowTextsAfterRevert.find((t) => t.includes(PRODU
 
 const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 
+// #1358: without disposing the outgoing custom avatar's own geometry/
+// material on this revert (the bug this test now also covers), its
+// geometries would stay tracked by the renderer forever once first drawn,
+// so this count would read *higher* than memAfterFirstEquip rather than
+// back at the same baseline.
+const memAfterRevert = await page.evaluate(() => window.__rendererMemory);
+console.log('renderer live-geometry count right after reverting to the default avatar (should match the count above, not exceed it):', memAfterRevert);
+
+// --- Equip the purchased avatar a second time — confirms the count stays
+// flat across a repeated swap rather than merely returning once by luck ---
+await purchasedRow.locator('button', { hasText: 'Equip' }).click();
+await page.waitForFunction(
+  (name) => [...document.querySelectorAll('.version-row')].some((r) => r.textContent.includes(name) && r.textContent.includes('equipped')),
+  PRODUCT_NAME,
+  { timeout: 10000 },
+);
+const memAfterSecondEquip = await page.evaluate(() => window.__rendererMemory);
+console.log('renderer live-geometry count right after re-equipping the custom avatar (should still match):', memAfterSecondEquip);
+
 const pass = purchased.status === 201 &&
   !!defaultRowBefore?.includes('equipped') &&
   !purchasedRowBefore?.includes('equipped') &&
@@ -171,5 +201,7 @@ const pass = purchased.status === 201 &&
   !!defaultRowAfterRevert?.includes('equipped') &&
   !purchasedRowAfterRevert?.includes('equipped') &&
   markerAfterRevert === 'still-here' &&
+  memAfterRevert?.geometries === memAfterFirstEquip?.geometries &&
+  memAfterSecondEquip?.geometries === memAfterFirstEquip?.geometries &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713)', errors });
+await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources (#1358)', errors });

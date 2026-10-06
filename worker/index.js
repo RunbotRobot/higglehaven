@@ -321,6 +321,13 @@ export default {
     ctx.waitUntil(autoAuctionInactiveLandlets(env.DB).catch((error) => {
       console.error('autoAuctionInactiveLandlets failed', error);
     }));
+    // #783: runs independently of autoAuctionInactiveLandlets above (not
+    // sequenced before/after it) — the two cover disjoint inactivity
+    // windows (27-30 days vs. 30+), so neither needs the other to have
+    // run first.
+    ctx.waitUntil(warnInactiveLandletOwners(env.DB).catch((error) => {
+      console.error('warnInactiveLandletOwners failed', error);
+    }));
     // #770: without this, an auction that expires while nobody happens to
     // load GET /api/auctions (its own reactive sweep, kept below as a fast
     // path) never resolves — worst case for autoAuctionInactiveLandlets'
@@ -2945,8 +2952,13 @@ async function getOrCreateBuilderForUser(db, user) {
   // shopping or selling." Every one of this function's own callers is
   // already an authenticated request by definition (requireCurrentUser
   // already ran), so there's nothing further to gate this on.
+  // #783: inactivity_warning_sent_at (migrations/0109) is re-armed to
+  // NULL in this same statement — real activity ends the current
+  // inactivity cycle, so warnInactiveLandletOwners should be free to warn
+  // again the next time this builder goes quiet, rather than staying
+  // permanently silenced by a warning from a previous cycle.
   await db.prepare(
-    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE builder_id = ?`,
+    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), inactivity_warning_sent_at = NULL WHERE builder_id = ?`,
   ).bind(row.builder_id).run();
   return row;
 }
@@ -10515,10 +10527,17 @@ const INACTIVITY_AUCTION_DAYS = 30;
 // this cron first runs. auction_id is generated in SQL (not
 // crypto.randomUUID(), unavailable per-row in a single bulk statement)
 // but is unique and namespaced the same way every other auction_id is.
+// #783: the owner's own call (live voice, 2026-10-06) on this issue's
+// original ask — every other state-changing event in this file notifies
+// the affected builder, but putting their land up for auction here never
+// did, even though resolution (up to 24h later) does. RETURNING lets this
+// stay the single atomic bulk INSERT above's own comment already
+// explains the need for — no separate SELECT, so nothing can see a
+// landlet as "just auctioned" without also seeing who to notify about it.
 async function autoAuctionInactiveLandlets(db) {
   const cutoff = new Date(Date.now() - INACTIVITY_AUCTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // matches handleStartAuction's own default duration
-  await db.prepare(`
+  const inserted = await db.prepare(`
     INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
     SELECT 'auction-' || lower(hex(randomblob(16))), landlets.landlet_id, landlets.owner_builder_id, 0, ?
     FROM landlets
@@ -10529,7 +10548,59 @@ async function autoAuctionInactiveLandlets(db) {
       AND NOT EXISTS (
         SELECT 1 FROM auctions WHERE auctions.landlet_id = landlets.landlet_id AND auctions.status = 'active'
       )
+    RETURNING landlet_id, seller_builder_id
   `).bind(endsAt, cutoff).run();
+  await fireNotifications(db, inserted.results.map((row) => ({
+    builderId: row.seller_builder_id,
+    // Not "bid to keep it" — there's no cancel/reclaim path once this
+    // runs (a separate, already-flagged gap), and a $0 starting bid
+    // means the owner loses the land to a bidder or to greenbelt either
+    // way once it resolves (resolveAuction's own no-bid/winner branches),
+    // never back to themselves. Purely informational.
+    message: `Your land at ${row.landlet_id} has been inactive for ${INACTIVITY_AUCTION_DAYS}+ days and was automatically put up for a $0 starting-bid auction — it will go to a bidder, or revert to greenbelt, once the auction resolves.`,
+  })));
+}
+
+// #783 (continued): the owner's own expansion of this issue's scope, past
+// the notification above — a warning sent while there's still time to
+// act, not just a report after the land is already gone. Lives on
+// builders (migrations/0109), mirroring last_active_at itself, rather
+// than on landlets: #799's own comment already establishes at most one
+// claimed landlet per builder, so there's nothing ambiguous about which
+// landlet a builder-scoped warning refers to. inactivity_warning_sent_at
+// IS NULL is this function's own idempotency guard — without it, this
+// would re-notify the same builder every */10 cron tick for the whole
+// 3-day warning window. Cleared back to NULL by getOrCreateBuilderForUser
+// the moment the builder is active again (same statement that bumps
+// last_active_at), so a later inactivity cycle warns again rather than
+// staying permanently silenced by one stale row.
+const INACTIVITY_WARNING_DAYS = 3;
+
+async function warnInactiveLandletOwners(db) {
+  const auctionCutoff = new Date(Date.now() - INACTIVITY_AUCTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const warningCutoff = new Date(
+    Date.now() - (INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS) * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const warned = await db.prepare(`
+    UPDATE builders
+    SET inactivity_warning_sent_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE last_active_at IS NOT NULL
+      AND last_active_at < ?
+      AND last_active_at >= ?
+      AND inactivity_warning_sent_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM landlets
+        WHERE landlets.owner_builder_id = builders.builder_id AND landlets.status = 'claimed'
+          AND NOT EXISTS (
+            SELECT 1 FROM auctions WHERE auctions.landlet_id = landlets.landlet_id AND auctions.status = 'active'
+          )
+      )
+    RETURNING builder_id
+  `).bind(warningCutoff, auctionCutoff).run();
+  await fireNotifications(db, warned.results.map((row) => ({
+    builderId: row.builder_id,
+    message: `Your land has been inactive for ${INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS} days. Log in within ${INACTIVITY_WARNING_DAYS} days or it will automatically go up for a $0 starting-bid auction.`,
+  })));
 }
 
 async function generateRingAtWorldBoundary(db) {
@@ -12196,10 +12267,15 @@ async function handlePurchaseConfirmDelivery(request, env) {
   if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
   if (purchase.refunded_at) throw new HttpError('This purchase has been refunded.', 400);
   // Idempotent — clicking an already-confirmed link again (a second visit,
-  // a bookmark) is a no-op, not an error.
-  if (!purchase.delivery_confirmed_at) {
-    await db.prepare('UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
-      .bind(purchase.purchase_id).run();
+  // a bookmark) is a no-op, not an error. #1361: the guard is folded into
+  // the UPDATE's own WHERE clause rather than branching on the preceding
+  // read, so two concurrent requests with the same token can't both pass a
+  // stale check and both fire the notification below — same pattern as
+  // handleMarkShipped's own #925 fix just above.
+  const result = await db.prepare(
+    'UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND delivery_confirmed_at IS NULL',
+  ).bind(purchase.purchase_id).run();
+  if (result.meta.changes > 0) {
     // #1289: per #1043's own convention, every other real "something
     // happened that the other party should passively learn about" event in
     // this file fires a notification — this is also what releases the
