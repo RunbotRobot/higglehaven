@@ -2076,12 +2076,25 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true,
 // Group wrapping a loaded model's own node hierarchy — traverse either way
 // rather than assuming a flat single-mesh shape, since a real seller-
 // uploaded model could have any number of parts/materials.
+// #1359: Material.dispose() only releases the material's own WebGL
+// program/uniform resources, not any THREE.Texture it references (.map,
+// .normalMap, .roughnessMap, ...) — those leak unless disposed separately.
+// Checking every own-enumerable property for .isTexture (the same
+// duck-typing idiom child.isMesh above already uses) catches every texture
+// slot a material of any type might carry, current or future, rather than
+// hardcoding a property-name list that would silently miss one.
 function disposeObject(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
-    child.geometry.dispose();
+    child.geometry?.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) material.dispose();
+    for (const material of materials) {
+      if (!material) continue;
+      for (const value of Object.values(material)) {
+        if (value?.isTexture) value.dispose();
+      }
+      material.dispose();
+    }
   });
 }
 
@@ -14070,14 +14083,10 @@ shopBuyHintEl.addEventListener('click', async () => {
   }
 });
 
-function disposeObject3D(object) {
-  object.traverse((child) => {
-    if (!child.isMesh) return;
-    child.geometry?.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) material?.dispose();
-  });
-}
+// #1359: was an exact duplicate of disposeObject (including the same
+// missing-texture-disposal gap) — consolidated into one shared helper so
+// a future fix only ever needs to land in one place.
+const disposeObject3D = disposeObject;
 
 function unloadShopLandletInstances(entry) {
   entry.loaded = false;
