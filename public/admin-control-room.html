@@ -140,6 +140,10 @@
   // initial content on every render, cleared once that reply actually
   // sends.
   const drafts = new Map(); // taskId -> in-progress reply text
+  // #1398: same rebuild-wipes-mid-edit race as `drafts` above, for the
+  // adjacent reply "From" input -- it sits in the same reply-row but never
+  // got the same draft-preservation treatment.
+  const fromDrafts = new Map(); // taskId -> in-progress reply "from" value
 
   const listEl = document.getElementById('list');
   const statusLine = document.getElementById('statusLine');
@@ -343,7 +347,7 @@
           (task.tag ? '<button class="secondary" data-action="clearTag" data-task="' + task.id + '">Clear tag</button>' : '') +
         '</div>' +
         '<div class="reply-row">' +
-          '<input name="replyFrom" value="owner" />' +
+          '<input name="replyFrom" data-reply-from="' + task.id + '" value="' + escapeHtml(fromDrafts.get(task.id) || 'owner') + '" />' +
           '<textarea placeholder="Reply…" data-reply-text="' + task.id + '">' + escapeHtml(drafts.get(task.id) || '') + '</textarea>' +
           '<button data-action="reply" data-task="' + task.id + '">Send</button>' +
         '</div>' +
@@ -404,22 +408,25 @@
 
   // Owner feedback: "the keyboard occasionally disappears" while typing a
   // reply -- every poll tick (and any mutation) rebuilds #list's innerHTML
-  // from scratch, destroying and recreating the reply <textarea> mid-
-  // keystroke. `drafts` already preserves the typed *value* across that
-  // rebuild, but never the focus/cursor -- losing focus on a textarea is
-  // exactly what makes a mobile browser dismiss its on-screen keyboard.
-  // This wraps every #list innerHTML rewrite so a reply box that's
-  // currently focused gets refocused (cursor position included) once the
-  // new DOM node exists.
+  // from scratch, destroying and recreating the reply <textarea> (and, per
+  // #1398, the adjacent "From" <input>) mid-keystroke. `drafts`/`fromDrafts`
+  // already preserve the typed *value* across that rebuild, but never the
+  // focus/cursor -- losing focus on either field is exactly what makes a
+  // mobile browser dismiss its on-screen keyboard. This wraps every #list
+  // innerHTML rewrite so whichever reply field is currently focused gets
+  // refocused (cursor position included) once the new DOM node exists.
   function setListHTML(html) {
     const active = document.activeElement;
-    const wasFocused = active && listEl.contains(active) && active.matches('textarea[data-reply-text]');
-    const focusState = wasFocused
-      ? { taskId: active.dataset.replyText, selectionStart: active.selectionStart, selectionEnd: active.selectionEnd }
-      : null;
+    const activeIsReplyText = active && listEl.contains(active) && active.matches('textarea[data-reply-text]');
+    const activeIsReplyFrom = active && listEl.contains(active) && active.matches('input[data-reply-from]');
+    const focusState = activeIsReplyText
+      ? { selector: 'textarea[data-reply-text="', taskId: active.dataset.replyText, selectionStart: active.selectionStart, selectionEnd: active.selectionEnd }
+      : activeIsReplyFrom
+        ? { selector: 'input[data-reply-from="', taskId: active.dataset.replyFrom, selectionStart: active.selectionStart, selectionEnd: active.selectionEnd }
+        : null;
     listEl.innerHTML = html;
     if (focusState) {
-      const el = listEl.querySelector('textarea[data-reply-text="' + focusState.taskId + '"]');
+      const el = listEl.querySelector(focusState.selector + focusState.taskId + '"]');
       if (el) {
         el.focus();
         el.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
@@ -474,6 +481,8 @@
   listEl.addEventListener('input', (event) => {
     const el = event.target.closest('[data-reply-text]');
     if (el) drafts.set(el.dataset.replyText, el.value);
+    const fromEl = event.target.closest('[data-reply-from]');
+    if (fromEl) fromDrafts.set(fromEl.dataset.replyFrom, fromEl.value);
   });
 
   listEl.addEventListener('click', async (event) => {
@@ -556,6 +565,7 @@
         });
         textEl.value = '';
         drafts.delete(taskId);
+        fromDrafts.delete(taskId);
         repliesCache.delete(taskId);
         await loadReplies(taskId);
       }
