@@ -4745,11 +4745,17 @@ function renderSellerList() {
     salesEmptyEl.textContent = 'No sales yet.';
     salesPanel.appendChild(salesEmptyEl);
 
+    const salesTruncatedEl = document.createElement('div');
+    salesTruncatedEl.className = 'seller-sales-truncated';
+    salesTruncatedEl.hidden = true;
+    salesPanel.appendChild(salesTruncatedEl);
+
     // #425: same per-row reasoning as reviewLoadToken above.
     let salesLoadToken = 0;
     async function renderSales() {
       salesListEl.innerHTML = '';
       salesSummaryEl.textContent = '';
+      salesTruncatedEl.hidden = true;
       const myLoadToken = ++salesLoadToken;
       let purchases;
       let totalCount;
@@ -4770,6 +4776,11 @@ function renderSellerList() {
       if (totalCount > 0) {
         salesSummaryEl.textContent = `${totalCount} sale${totalCount === 1 ? '' : 's'}`;
       }
+      // #1377: same "windowed list + real total" shape #1331 fixed for the
+      // sibling Reviews panel (handlePurchases caps purchases at LIMIT 100
+      // but totalCount is the real, uncapped count) — missed here too.
+      salesTruncatedEl.hidden = totalCount <= purchases.length;
+      salesTruncatedEl.textContent = `Showing newest ${purchases.length} of ${totalCount} sales.`;
       for (const purchase of purchases) {
         const saleRow = document.createElement('div');
         saleRow.className = 'product-sale-row';
