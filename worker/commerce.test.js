@@ -4,7 +4,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker, {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
-  auctionSettlementEventId, resolveFinalizeBuilderId, cosineSimilarity,
+  auctionSettlementEventId, resolveFinalizeBuilderId, cosineSimilarity, selectPurchasesForPayout,
 } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
@@ -4388,6 +4388,38 @@ describe('Simulated purchases', () => {
         const blocked = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
         expect(blocked.response.status).toBe(403);
         expect(blocked.body.error).toMatch(/tax-reporting/i);
+      });
+
+      // #1335: same unfiltered-`eligible` gap #1087 fixed just above for
+      // eligibleGrossCents, missed in the inclusion loop itself -- a stale
+      // prior-year purchase must not spend any of this year's
+      // taxBudgetCents, or (since unpaidSellerPurchases orders oldest-first,
+      // same as this array) it can eat the whole budget and wrongly skip a
+      // genuinely current-year purchase that would otherwise fit easily.
+      // Pure-logic test against the extracted primitive directly, same
+      // precedent as claimPurchasesForPayout's own direct tests elsewhere in
+      // this file -- this suite never configures STRIPE_SECRET_KEY, so
+      // nothing past handleSellerPayouts' own stripeConfigured check (this
+      // selection logic included) is reachable through the real endpoint.
+      it('selectPurchasesForPayout does not let a stale prior-year purchase spend this year\'s tax budget', () => {
+        const yearStart = '2026-01-01T00:00:00.000Z';
+        const yearEnd = '2027-01-01T00:00:00.000Z';
+        const stale = {
+          purchase_id: 'stale', created_at: '2020-06-15T00:00:00.000Z', total_cents: 8000, commission_cents: 0,
+        };
+        const current = {
+          purchase_id: 'current', created_at: '2026-06-15T00:00:00.000Z', total_cents: 5000, commission_cents: 0,
+        };
+        // unpaidSellerPurchases orders ASC by created_at, so the stale
+        // (older) purchase is processed first here too.
+        const result = selectPurchasesForPayout([stale, current], {
+          payoutCapCents: 1000000, // generous -- Stripe availability isn't what this test is about
+          taxBudgetCents: 10000, // smaller than stale+current combined, but bigger than either alone
+          yearStart, yearEnd,
+        });
+        expect(result.skippedForTax).toBe(false);
+        expect(result.included.map((p) => p.purchase_id)).toEqual(['stale', 'current']);
+        expect(result.payoutCents).toBe(8000 + 5000);
       });
 
       it('does not block a payout while combined earnings stay under the threshold', async () => {
