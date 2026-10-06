@@ -308,8 +308,7 @@ export async function clearVerifyModalIfShown(page) {
 // grows the world as an admin if nothing's claimable yet (see
 // growWorldAsAdmin's own comment on why this can no longer be a player-
 // facing button click), tries a handful of candidate points until one
-// reads "Available," and confirms. Leaves the page on the claimed
-// landlet's own Build view (#account-menu-toggle visible).
+// reads "Available," and confirms.
 export async function claimLandlet(page) {
   await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
   await page.waitForTimeout(2000);
@@ -328,8 +327,14 @@ export async function claimLandlet(page) {
     if (selection && selection.includes('Available')) break;
   }
   await page.click('#claim-confirm-btn');
-  await page.waitForTimeout(2500);
-  await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
+  // #1368: #account-menu-toggle is unconditionally present/visible in
+  // #topbar-left from the moment the page loads -- #claim-modal only dims
+  // it visually with a higher z-index overlay, which Playwright's default
+  // "visible" check doesn't account for. Waiting for it here never actually
+  // verified the claim succeeded. #claim-modal:not(.visible) (same pattern
+  // as #auth-modal/#verify-modal above) is the real "did the modal close"
+  // signal.
+  await page.waitForSelector('#claim-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 
 // Identity/Notices/Friends/Settings live inside the collapsed account menu
