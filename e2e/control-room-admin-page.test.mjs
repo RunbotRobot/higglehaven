@@ -133,11 +133,27 @@ const replyBox = card.locator('textarea[data-reply-text]');
 await replyBox.click();
 await replyBox.fill('Typing without sending, to catch focus loss on the next poll tick.');
 await replyBox.evaluate((el) => el.setSelectionRange(5, 5));
+// #1398: the adjacent reply "From" input sits in the same reply-row but
+// never got the same draft-preservation treatment as the textarea above —
+// set its value here to prove it survives the same rebuild regardless of
+// which field actually has focus. Deliberately not using Playwright's own
+// .fill() (which always focuses its target first) — that would steal focus
+// away from replyBox above and break this block's own focus/cursor checks
+// on the textarea; dispatching a real 'input' event after setting .value
+// directly exercises the same listener (see listEl's 'input' handler) that
+// a real keystroke would, without moving focus.
+const fromBox = card.locator('input[data-reply-from]');
+await fromBox.evaluate((el) => {
+  el.value = 'alice';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+});
 await page.waitForTimeout(16000);
 const stillFocusedAfterPoll = await replyBox.evaluate((el) => document.activeElement === el);
 const cursorPreservedAfterPoll = await replyBox.evaluate((el) => el.selectionStart === 5 && el.selectionEnd === 5);
+const fromValuePreservedAfterPoll = await fromBox.inputValue();
 console.log('reply textarea keeps focus across a poll tick (should be true):', stillFocusedAfterPoll);
 console.log('cursor position preserved across a poll tick (should be true):', cursorPreservedAfterPoll);
+console.log('reply "From" input keeps its typed value across a poll tick, not reverted to "owner" (should be "alice"):', fromValuePreservedAfterPoll);
 
 // #988: clicking a status tab used to only filter the already-fetched,
 // status-less 500-row page client-side, so "N tasks total" kept showing
@@ -444,6 +460,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   blockingCardIsOpen &&
   stillFocusedAfterPoll &&
   cursorPreservedAfterPoll &&
+  fromValuePreservedAfterPoll === 'alice' &&
   doneTabTotalMatchesApi &&
   quickLookIsOpen &&
   quickLookSurvivesDoneTabSwitch === 1 &&
