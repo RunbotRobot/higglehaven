@@ -4321,7 +4321,12 @@ function renderSellerList() {
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
         refreshSellerShowcase();
-        renderSellerList();
+        // #1342: this used to call renderSellerList() directly -- if List
+        // view was active (toggled while this await was in flight), that
+        // rebuilt the hidden Manage DOM while the visible List view never
+        // picked up the new copy. renderActiveSellerView() is the shared
+        // dispatcher every other mutation path in this file already uses.
+        renderActiveSellerView();
       } catch (err) {
         rowStatus.textContent = err.message || 'Could not duplicate.';
         rowStatus.classList.add('error');
@@ -4352,7 +4357,11 @@ function renderSellerList() {
         activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
         buildCatalogPickerButtons();
         refreshSellerShowcase();
-        renderSellerList();
+        // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
+        // instead of renderSellerList() directly, so a deleted product
+        // doesn't keep showing (and staying tappable) in List view if that
+        // was the active view when this await resolved.
+        renderActiveSellerView();
       } catch (err) {
         // #729: a saved-layout or landlet-version-history block (see the
         // worker's assertCatalogTemplatesDeletable) has nothing placed to
