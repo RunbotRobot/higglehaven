@@ -3977,6 +3977,35 @@ describe('Simulated purchases', () => {
       expect(notificationsAfterSecondConfirm).toHaveLength(1);
     });
 
+    // #1361: the sequential idempotency test above only proves a repeat call
+    // after the first one is already committed doesn't re-notify -- it
+    // doesn't exercise the actual race, two requests genuinely concurrent
+    // (Promise.all, not awaited one at a time) with the same token, which a
+    // plain check-then-act UPDATE with no WHERE delivery_confirmed_at IS
+    // NULL guard could let both pass the read-check and both fire the
+    // seller notification. Unlike mark-shipped's own #925 race test, this
+    // endpoint is deliberately idempotent rather than erroring on a repeat,
+    // so both responses should come back 200 -- the notification count is
+    // what actually proves only one request's write won the race.
+    it('does not let two concurrent confirm-delivery requests both notify the seller', async () => {
+      const builder = await signupBuilder('confirm-delivery-race-builder');
+      const seller = await createConnectedSeller('confirm-delivery-race-seller');
+      const sellerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      const rawToken = `test-delivery-race-token-${crypto.randomUUID()}`;
+      await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
+
+      const [first, second] = await Promise.all([
+        api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) }),
+        api('/purchases/confirm-delivery', { method: 'POST', body: JSON.stringify({ token: rawToken }) }),
+      ]);
+      expect([first.response.status, second.response.status]).toEqual([200, 200]);
+
+      const { results: notifications } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(sellerBuilderId).all();
+      expect(notifications).toHaveLength(1);
+    });
+
     // #1248: this endpoint is unauthenticated by design (no buyer account
     // exists in this app) and hashes + looks up a token on every call, so
     // it's keyed by client IP the same way other unauthenticated repeatable

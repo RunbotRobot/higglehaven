@@ -12267,10 +12267,15 @@ async function handlePurchaseConfirmDelivery(request, env) {
   if (!purchase) throw new HttpError('This delivery-confirmation link is invalid.', 400);
   if (purchase.refunded_at) throw new HttpError('This purchase has been refunded.', 400);
   // Idempotent — clicking an already-confirmed link again (a second visit,
-  // a bookmark) is a no-op, not an error.
-  if (!purchase.delivery_confirmed_at) {
-    await db.prepare('UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
-      .bind(purchase.purchase_id).run();
+  // a bookmark) is a no-op, not an error. #1361: the guard is folded into
+  // the UPDATE's own WHERE clause rather than branching on the preceding
+  // read, so two concurrent requests with the same token can't both pass a
+  // stale check and both fire the notification below — same pattern as
+  // handleMarkShipped's own #925 fix just above.
+  const result = await db.prepare(
+    'UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND delivery_confirmed_at IS NULL',
+  ).bind(purchase.purchase_id).run();
+  if (result.meta.changes > 0) {
     // #1289: per #1043's own convention, every other real "something
     // happened that the other party should passively learn about" event in
     // this file fires a notification — this is also what releases the
