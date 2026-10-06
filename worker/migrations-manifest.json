@@ -105,5 +105,6 @@
   "0105_catalog_template_skeleton_signature.sql",
   "0106_owned_animations.sql",
   "0107_equipped_animation.sql",
-  "0108_landlet_candidate_land_type.sql"
+  "0108_landlet_candidate_land_type.sql",
+  "0109_inactivity_warning_sent_at.sql"
 ]
