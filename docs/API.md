@@ -6252,10 +6252,12 @@ the gate would never see those requests.
   with existing local instance handling.
 - Frontend code should treat backend persistence as the source of truth once the
   API is available, with any offline/local fallback kept intentionally separate.
-- Future auth should not be inferred from this API. All endpoints are currently
-  open by design for dev-only MVP work — the optional private-preview gate
-  above controls who can reach the API at all, but doesn't add per-user
-  identity, permissions, or ownership checks within it.
+- Real per-user auth is already built and live — see "Authentication" and
+  "Authorization model" above. The optional private-preview gate is a
+  separate, coarser layer in front of that: it controls who can reach the
+  API at all, but every route behind it still enforces its own per-user
+  identity, permissions, and ownership checks exactly as documented
+  elsewhere in this file.
 
 ## Frontend-only navigation (Shop / Build / Sell)
 
