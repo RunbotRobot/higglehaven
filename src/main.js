@@ -9924,17 +9924,29 @@ async function renderFriends() {
 // a 3D camera. A friend with no claimed lándlet (otherLandlet null) is
 // simply omitted, same as friendLocationText's own "hasn't claimed a
 // lándlet yet" case — there's no position to plot for them.
+//
+// #1348: closing and quickly reopening the map modal fires a second
+// drawFriendsMap() before the first's own fetch has resolved — the same
+// stale-response-lands-after-a-fresher-one race renderFriends/renderSignPosts/
+// renderCalendarEvents already guard against with their own load token. No
+// guard existed here, so the earlier (slower) call's response could still
+// clear the canvas and redraw with stale points on top of the later call's
+// already-correct ones.
+let friendsMapLoadToken = 0;
 async function drawFriendsMap() {
+  const myLoadToken = ++friendsMapLoadToken;
   let world;
   let friendships;
   try {
     [world, friendships] = await Promise.all([fetchWorld(), fetchFriendships()]);
   } catch (err) {
+    if (myLoadToken !== friendsMapLoadToken) return; // superseded while loading — a newer call owns the map now
     console.warn('Could not load the friends map:', err);
     friendsMapEmptyEl.textContent = err.message || 'Could not load the friends map.';
     friendsMapEmptyEl.hidden = false;
     return;
   }
+  if (myLoadToken !== friendsMapLoadToken) return; // superseded while loading — a newer call owns the map now
   const located = friendships.filter((f) => f.status === 'accepted' && f.otherLandlet);
   friendsMapEmptyEl.hidden = located.length > 0;
   // #1252: clear any stale canvas content/points from a previous render
