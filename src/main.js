@@ -6902,8 +6902,16 @@ async function renderAuctionSection() {
         resolveBtn.disabled = true;
         try {
           await resolveAuctionNow(auction.auctionId);
-          await renderAuctionList();
-          await renderStartSection();
+          // #1346: resolution happens synchronously server-side, before
+          // this await returns -- it credits the seller's higgles balance
+          // and transfers the landlet immediately, the exact figures Land
+          // Cap/Redeem Higgles display. Those are sibling fields with their
+          // own fetch, not refreshed by renderAuctionList/renderStartSection
+          // below. Same #1124 idiom (a full renderSettingsSection() redraw,
+          // the same thing a manual tab switch already triggers) rather
+          // than patching only this section's own calls.
+          renderSettingsSection();
+          return;
         } catch (err) {
           alert(err.message || 'Could not resolve this auction.');
           resolveBtn.disabled = false;
