@@ -3900,6 +3900,75 @@ describe('Simulated purchases', () => {
       expect(rowAfterConfirm.delivery_confirmed_at).toBeNull();
     });
 
+    // #1384: #749's own test above only covers a purchase ALREADY refunded
+    // before mark-shipped/confirm-delivery is ever called — it doesn't
+    // exercise the race where a refund lands in the gap between the eager
+    // refunded_at read and the atomic UPDATE. Same db.prepare-interception
+    // idiom worker/land.test.js already uses for this exact race shape
+    // (injecting the concurrent write right as the real statement's own SQL
+    // is about to run, deterministically landing it inside the window a
+    // real two-request race would only hit by chance).
+    it('rejects marking shipped if the purchase is refunded in the window between the check and the write', async () => {
+      const builder = await signupBuilder('payout-shipped-refund-race-builder');
+      const seller = await createConnectedSeller('payout-shipped-refund-race-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('UPDATE purchases SET shipped_at')) {
+          armed = false;
+          originalPrepare('UPDATE purchases SET refunded_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+            .bind(purchaseId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let rejected;
+      try {
+        rejected = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/refunded/);
+
+      const row = await env.DB.prepare('SELECT shipped_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.shipped_at).toBeNull();
+      expect(row.refunded_at).not.toBeNull();
+    });
+
+    it('rejects confirming delivery if the purchase is refunded in the window between the check and the write', async () => {
+      const builder = await signupBuilder('payout-confirm-refund-race-builder');
+      const seller = await createConnectedSeller('payout-confirm-refund-race-seller');
+      const rawToken = `test-confirm-refund-race-token-${crypto.randomUUID()}`;
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { deliveryConfirmToken: rawToken });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('UPDATE purchases SET delivery_confirmed_at')) {
+          armed = false;
+          originalPrepare('UPDATE purchases SET refunded_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ?')
+            .bind(purchaseId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let rejected;
+      try {
+        rejected = await api('/purchases/confirm-delivery', {
+          method: 'POST', body: JSON.stringify({ token: rawToken }),
+        });
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(rejected.response.status).toBe(400);
+      expect(rejected.body.error).toMatch(/refunded/);
+
+      const row = await env.DB.prepare('SELECT delivery_confirmed_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.delivery_confirmed_at).toBeNull();
+      expect(row.refunded_at).not.toBeNull();
+    });
+
     it('rejects marking a digital good or a simulated purchase as shipped', async () => {
       const builder = await signupBuilder('payout-mark-shipped-reject-builder');
       const seller = await createConnectedSeller('payout-mark-shipped-reject-seller');
