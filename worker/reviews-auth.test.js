@@ -487,6 +487,40 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1329: the authenticated seller-owner branch above had no rate limit at
+  // all -- PR #367's own reasoning ("the session requirement already bounds
+  // it") never held up against this file's later convention that an
+  // authenticated mutation with a real notification fan-out (here,
+  // notifyBuildersOfDimensionChange) still needs its own limit regardless of
+  // the session gate, same as this endpoint's own unauthenticated branch
+  // just above.
+  it('rate-limits repeated authenticated PATCHes on a seller-owned template', async () => {
+    const seller = await signupSeller('catalog-patch-owner-rate-limit-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-patch-owner-rate-limit-template',
+        name: 'Owned rate-limit product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/catalog/${templateId}`, seller.session({
+        method: 'PATCH', body: JSON.stringify({ dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 } }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/catalog/${templateId}`, seller.session({
+      method: 'PATCH', body: JSON.stringify({ dimensions: { width: 9, depth: 1, height: 1 } }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #520: DELETE's unowned/orphaned path had the identical missing-rate-limit
   // gap as PATCH above — a single unauthenticated DELETE (unlike PATCH,
   // consumed one-shot) needs a fresh template per attempt.
