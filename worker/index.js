@@ -12169,10 +12169,18 @@ async function handleMarkShipped(request, env, purchaseId) {
   // Folding the guard into the UPDATE's own WHERE clause closes it, same
   // pattern as the other claim-before-act writes in this file (landlet-
   // level guards, friendship-accept, refund guards).
+  // #1384: also re-checks refunded_at IS NULL here, not just above -- the
+  // eager refunded_at read a few lines up is a fast-path only, same as
+  // #925's own shipped_at read; a concurrent handlePurchaseRefund landing
+  // in the window between that read and this write used to still let
+  // shipped_at get set (and the "it shipped!" notification fire) on a
+  // purchase that was, by the time this actually committed, refunded.
   const result = await db.prepare(
-    'UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND shipped_at IS NULL',
+    'UPDATE purchases SET shipped_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND shipped_at IS NULL AND refunded_at IS NULL',
   ).bind(purchaseId).run();
   if (result.meta.changes === 0) {
+    const current = await db.prepare('SELECT shipped_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    if (current.refunded_at) throw new HttpError('This purchase has been refunded', 400);
     throw new HttpError('This purchase is already marked shipped', 400);
   }
   // Logged only once the update above actually succeeded, same reasoning as
@@ -12340,9 +12348,25 @@ async function handlePurchaseConfirmDelivery(request, env) {
   // read, so two concurrent requests with the same token can't both pass a
   // stale check and both fire the notification below — same pattern as
   // handleMarkShipped's own #925 fix just above.
+  // #1384: also re-checks refunded_at IS NULL here, not just above -- the
+  // eager read a few lines up is a fast-path only, same as #925's own
+  // shipped_at read; a concurrent handlePurchaseRefund landing in the
+  // window between that read and this write used to still let
+  // delivery_confirmed_at get set (releasing the seller's payout hold
+  // early and notifying them) on a purchase that was, by the time this
+  // actually committed, refunded.
   const result = await db.prepare(
-    'UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND delivery_confirmed_at IS NULL',
+    'UPDATE purchases SET delivery_confirmed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE purchase_id = ? AND delivery_confirmed_at IS NULL AND refunded_at IS NULL',
   ).bind(purchase.purchase_id).run();
+  if (result.meta.changes === 0) {
+    // Disambiguates the two reasons this UPDATE could no-op: already
+    // confirmed (genuinely idempotent, still returns success below) vs.
+    // refunded in the race window just described (not idempotent -- the
+    // purchase was never actually confirmed, so this must still error the
+    // same way the eager check above would have caught it synchronously).
+    const current = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchase.purchase_id).first();
+    if (current.refunded_at) throw new HttpError('This purchase has been refunded.', 400);
+  }
   if (result.meta.changes > 0) {
     // #1289: per #1043's own convention, every other real "something
     // happened that the other party should passively learn about" event in
