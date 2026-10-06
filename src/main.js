@@ -12243,6 +12243,12 @@ async function refreshEquippedShopAvatar(modelUrl) {
   }
   if (myToken !== shopAvatarEquipToken) return; // a newer equip superseded this one while the model was loading
   scene.remove(shopAvatar.group);
+  // #1358: the outgoing avatar's own meshes/materials are being discarded
+  // either way (every call site that swaps or removes a group elsewhere in
+  // this file disposes it the same way) — without this, every re-equip
+  // leaks the previous avatar's geometry/material (and, for a custom GLTF
+  // avatar, its textures) for the lifetime of the tab.
+  disposeObject3D(shopAvatar.group);
   shopAvatar = nextAvatar;
   scene.add(shopAvatar.group);
   // Nothing in the DOM reflects which avatar is actually live-rendered
@@ -12258,6 +12264,7 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // #1165: same reasoning again — see createCustomShopAvatar's own
   // animationSource comment.
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
+  reportRendererMemoryDiagnostic();
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -14070,6 +14077,18 @@ shopBuyHintEl.addEventListener('click', async () => {
   }
 });
 
+// #1358: the renderer's own live (i.e. still-referenced, not-yet-disposed)
+// GPU resource counts — exposed on `window` the same way __shopAvatarModelUrl
+// (#982) etc. are, purely so an e2e test can confirm a shop-avatar swap
+// actually released the outgoing avatar's geometry/material instead of only
+// detaching it from the scene graph. THREE's own WebGLRenderer tracks a
+// geometry/texture in these counts from the first frame it's actually drawn
+// until its own `dispose()` fires (it listens for that event internally), so
+// this reflects real live GPU resources, not just "everything ever created."
+function reportRendererMemoryDiagnostic() {
+  window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+}
+
 function disposeObject3D(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
@@ -14456,7 +14475,14 @@ async function enterShopMode() {
   // opening comment) — remove any avatar left over from a previous round
   // trip before building a fresh one, rather than ending up with two
   // overlapping bodies.
-  if (shopAvatar) scene.remove(shopAvatar.group);
+  // #1358: also dispose it, not just detach it from the scene graph — left
+  // over from a previous round trip means its geometry/material (and any
+  // custom GLTF avatar's textures) would otherwise leak every time Shop
+  // mode is re-entered without a page reload.
+  if (shopAvatar) {
+    scene.remove(shopAvatar.group);
+    disposeObject3D(shopAvatar.group);
+  }
   shopAvatar = null;
   if (equippedAvatarModelUrl) {
     try {
@@ -14470,6 +14496,7 @@ async function enterShopMode() {
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
+  reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
