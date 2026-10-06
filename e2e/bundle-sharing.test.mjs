@@ -27,10 +27,24 @@ await sharerPage.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await sharerPage.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
 await sharerPage.waitForTimeout(300);
 await sharerPage.mouse.click(210, 400);
-await sharerPage.waitForTimeout(800);
+// Placement itself (spawnInstanceAt in src/main.js) is async — it loads/
+// parses the tree model (a real network fetch the first time any test in
+// this process places one) before calling selectOnly on it — so a fixed
+// sleep here is a race: under load (slow model fetch/parse, a loaded CI
+// runner — see run-all.mjs's own comment on request times spiking well
+// past their usual 10-70ms there), toggling Multi-Select below could fire
+// before that selectOnly ever happens, carrying an empty selection into
+// Multi-Select mode instead of the tree. Waiting for the actual selection
+// text (the single selected item's own name, exactly what updateSelectionUI
+// sets product-info to for a 1-item selection) makes this deterministic
+// instead of guessing a delay that's long enough.
+await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), { timeout: 10000 });
 
 // Placing already auto-selected the tree (handlePlacementClick's own
-// selectOnly) — Multi-Select carries that selection in, nothing more to tap.
+// selectOnly) — Multi-Select carries that selection in (confirmed: see the
+// multiSelectBtn click handler's own comment in src/main.js — "Whatever's
+// already selected carries into (and out of) multi-select rather than
+// being cleared"), nothing more to tap.
 await sharerPage.click('#toggle-multiselect');
 await sharerPage.waitForTimeout(300);
 await sharerPage.click('#save-bundle-item');
