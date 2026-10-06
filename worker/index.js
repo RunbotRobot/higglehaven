@@ -1854,6 +1854,14 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+      // #1329: the session requirement alone doesn't bound this -- it has
+      // the same notifyBuildersOfDimensionChange fan-out as the
+      // unauthenticated branch below, and every other authenticated
+      // mutation-with-fan-out in this file (friendship/bundle mutate,
+      // calendar-event delete, notification mutate, auction bids, and most
+      // directly this same resource's own DELETE sibling, #990/#991) rate-
+      // limits itself regardless of the session gate.
+      await checkRateLimit(db, `catalog-patch:${sessionSeller.seller_id}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     } else {
       // No owning seller to gate this PATCH behind a session (a system/
       // placeholder template, or one whose seller has since deleted their
