@@ -2072,6 +2072,19 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true,
   return mesh;
 }
 
+// #1359: material.dispose() releases the material's own WebGL program/
+// uniform resources but never the THREE.Texture instances it references
+// (map, normalMap, roughnessMap, ... — any PBR map a real uploaded GLTF/GLB
+// can carry). Iterating the material's own properties and disposing
+// whatever's a real Texture (duck-typed via isTexture, same idiom sprite
+// cleanup elsewhere in this file already uses for .map specifically) covers
+// every current and future map property without hardcoding each name.
+function disposeMaterialTextures(material) {
+  for (const value of Object.values(material)) {
+    if (value?.isTexture) value.dispose();
+  }
+}
+
 // A product's Object3D might be a single Mesh (the box fallback) or a
 // Group wrapping a loaded model's own node hierarchy — traverse either way
 // rather than assuming a flat single-mesh shape, since a real seller-
@@ -2081,7 +2094,10 @@ function disposeObject(object) {
     if (!child.isMesh) return;
     child.geometry.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) material.dispose();
+    for (const material of materials) {
+      disposeMaterialTextures(material);
+      material.dispose();
+    }
   });
 }
 
@@ -14094,7 +14110,12 @@ function disposeObject3D(object) {
     if (!child.isMesh) return;
     child.geometry?.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) material?.dispose();
+    for (const material of materials) {
+      if (!material) continue;
+      // #1359: same texture-leak gap disposeObject's own fix just closed.
+      disposeMaterialTextures(material);
+      material.dispose();
+    }
   });
 }
 
