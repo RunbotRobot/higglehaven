@@ -5137,8 +5137,16 @@ function renderShopSettingsSection() {
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
-  renderMyAvatarsField();
-  renderMyAnimationsField();
+  // #1340: My Animations' own compatibility badges are a function of
+  // whichever avatar is currently equipped -- without wiring the two
+  // together, re-equipping via My Avatars left My Animations rendering
+  // badges against the previous avatar until Settings was closed and
+  // reopened. refreshMyAnimationsList is reassigned below once
+  // renderMyAnimationsField exists; the forward reference preserves the
+  // existing DOM order (My Avatars field above My Animations field).
+  let refreshMyAnimationsList = () => {};
+  renderMyAvatarsField(() => refreshMyAnimationsList());
+  refreshMyAnimationsList = renderMyAnimationsField();
 }
 
 // #713 (sub-issue of #710): #679 shipped the backend (GET /api/builders/
@@ -5150,7 +5158,7 @@ function renderShopSettingsSection() {
 // Shop-mode player character. Reuses Saved Layouts/Version History's own
 // .version-list/.version-row row shape above (a named, actionable list
 // entry is the same kind of thing here).
-function renderMyAvatarsField() {
+function renderMyAvatarsField(onEquipped) {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
@@ -5223,6 +5231,7 @@ function renderMyAvatarsField() {
           shopEquippedAvatarSkeletonSignature = newEquipped.skeletonSignature;
           await refreshEquippedShopAvatar(newEquipped.modelUrl);
           renderMyAvatarsList();
+          onEquipped?.();
         } catch (err) {
           alert(err.message || 'Could not equip this avatar.');
           equipBtn.disabled = false;
@@ -5368,6 +5377,7 @@ function renderMyAnimationsField() {
     }
   }
   renderMyAnimationsList();
+  return renderMyAnimationsList;
 }
 
 function renderGeneralSettingsSection() {
