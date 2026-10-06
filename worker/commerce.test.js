@@ -1358,6 +1358,12 @@ describe('Inactivity-triggered auctions', () => {
     ).bind(landletId).first();
   }
 
+  async function notificationsFor(builderId) {
+    return (await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(builderId).all()).results;
+  }
+
   it('auto-starts a $0 auction on a claimed landlet whose owner has been inactive past 30 days', async () => {
     const owner = await signupBuilder('inactive-owner');
     await createGreenbeltLandlet('inactivity-landlet-a');
@@ -1370,6 +1376,14 @@ describe('Inactivity-triggered auctions', () => {
     expect(auction).toBeTruthy();
     expect(auction.seller_builder_id).toBe(owner.builderId);
     expect(auction.starting_bid_cents).toBe(0);
+
+    // #783: the owner should learn their land was auto-auctioned at
+    // creation time, not only (up to 24h later) at resolution.
+    const notifications = await notificationsFor(owner.builderId);
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].message).toContain('inactivity-landlet-a');
+    expect(notifications[0].message).toContain('automatically put up for a $0 starting-bid auction');
+    expect(notifications[0].message).not.toContain('bid to keep it'); // no cancel/reclaim path exists
   });
 
   it('does not auction a landlet whose owner has been active within 30 days', async () => {
@@ -1412,6 +1426,97 @@ describe('Inactivity-triggered auctions', () => {
     const auction = await activeAuctionFor('inactivity-landlet-d');
     expect(auction.auction_id).toBe(started.body.auction.auctionId);
     expect(auction.starting_bid_cents).toBe(500); // untouched — not replaced by the cron's own $0 listing
+  });
+
+  // #783: the owner's own expansion of this issue beyond its original
+  // ask — a warning sent while there's still time to log in and reset
+  // the inactivity clock, not just a report after the land is already
+  // gone (the auction-creation notification covered above).
+  describe('advance warning before the inactivity cutoff', () => {
+    it('warns an owner within the 3-day window before the 30-day cutoff', async () => {
+      const owner = await signupBuilder('about-to-be-inactive-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-a');
+      await claim('inactivity-warning-landlet-a', owner);
+      await backdateLastActive(owner.builderId, 28); // 2 days left before day 30
+
+      await runScheduled();
+
+      expect(await activeAuctionFor('inactivity-warning-landlet-a')).toBeNull();
+      const notifications = await notificationsFor(owner.builderId);
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].message).toContain('inactive for 27 days');
+      expect(notifications[0].message).toContain('within 3 days');
+    });
+
+    it('does not warn an owner who is not yet within the warning window', async () => {
+      const owner = await signupBuilder('comfortably-active-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-b');
+      await claim('inactivity-warning-landlet-b', owner);
+      await backdateLastActive(owner.builderId, 10); // nowhere near either cutoff
+
+      await runScheduled();
+
+      expect(await notificationsFor(owner.builderId)).toHaveLength(0);
+    });
+
+    it('does not re-warn an owner who was already warned this inactivity cycle', async () => {
+      const owner = await signupBuilder('already-warned-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-c');
+      await claim('inactivity-warning-landlet-c', owner);
+      await backdateLastActive(owner.builderId, 28);
+
+      await runScheduled();
+      await runScheduled(); // the next */10 cron tick, same inactivity window
+
+      expect(await notificationsFor(owner.builderId)).toHaveLength(1);
+    });
+
+    it('warns again on a later inactivity cycle after the owner was active in between', async () => {
+      const owner = await signupBuilder('returned-then-left-again-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-d');
+      await claim('inactivity-warning-landlet-d', owner);
+      await backdateLastActive(owner.builderId, 28);
+      await runScheduled();
+      expect(await notificationsFor(owner.builderId)).toHaveLength(1);
+
+      // Real activity (any resolved builder profile, per #325) clears
+      // inactivity_warning_sent_at (migrations/0109) along with bumping
+      // last_active_at back to "now" — see getOrCreateBuilderForUser.
+      await api('/builders/me', owner.session());
+      await backdateLastActive(owner.builderId, 28); // inactive again, a new cycle
+
+      await runScheduled();
+
+      expect(await notificationsFor(owner.builderId)).toHaveLength(2);
+    });
+
+    it('does not warn once the owner has crossed into the auto-auction cutoff itself', async () => {
+      const owner = await signupBuilder('past-cutoff-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-e');
+      await claim('inactivity-warning-landlet-e', owner);
+      await backdateLastActive(owner.builderId, 31); // past 30 days — autoAuctionInactiveLandlets' own job, not this one
+
+      await runScheduled();
+
+      const notifications = await notificationsFor(owner.builderId);
+      expect(notifications).toHaveLength(1); // the auction-creation notification, not a warning
+      expect(notifications[0].message).toContain('automatically put up for a $0 starting-bid auction');
+    });
+
+    it('does not warn an owner whose land already has an active auction', async () => {
+      const owner = await signupBuilder('already-auctioning-owner');
+      await createGreenbeltLandlet('inactivity-warning-landlet-f');
+      await claim('inactivity-warning-landlet-f', owner);
+      const started = await api('/landlets/inactivity-warning-landlet-f/auction', owner.session({
+        method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+      }));
+      expect(started.response.status).toBe(201);
+      await backdateLastActive(owner.builderId, 28);
+
+      await runScheduled();
+
+      expect(await notificationsFor(owner.builderId)).toHaveLength(0);
+    });
   });
 });
 

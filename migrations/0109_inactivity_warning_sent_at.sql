@@ -1,0 +1,14 @@
+-- #783: owner's call (live voice, 2026-10-06) adds an advance warning
+-- notification 3 days before autoAuctionInactiveLandlets' own 30-day
+-- INACTIVITY_AUCTION_DAYS cutoff would otherwise put a claimed landlet up
+-- for a $0 auction -- on top of the original ask, a notification at the
+-- moment that auction is actually created.
+--
+-- Nullable, same reasoning as last_active_at itself (migrations/0067):
+-- needs to distinguish "never warned this cycle" from "already warned,
+-- don't re-send every */10 cron tick for the same 3-day window" without
+-- a separate lookup. Cleared back to NULL by the same statement that
+-- bumps last_active_at (getOrCreateBuilderForUser in worker/index.js) --
+-- any real activity re-arms the warning for a future inactivity cycle,
+-- the same way it already resets the inactivity clock itself.
+ALTER TABLE builders ADD COLUMN inactivity_warning_sent_at TEXT;
