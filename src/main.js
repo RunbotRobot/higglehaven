@@ -14919,7 +14919,26 @@ layoutPreviewPasteBtn.addEventListener('click', async () => {
     sessionStorage.setItem(START_MODE_KEY, 'build');
     location.reload();
   } catch (err) {
-    alert(err.message || "Couldn't paste these items.");
+    // #1362: a mid-chunk failure (createInstancesRemote's own #903
+    // succeededCount) already landed the earlier chunks server-side — a
+    // plain alert()-and-retry left selectedSavedInstanceIds covering the
+    // full original selection, so clicking Paste again resubmitted
+    // already-succeeded items too and created duplicates (ids are always
+    // stripped before submission, so the server just assigns them fresh
+    // ones). Dropping the already-succeeded prefix from the selection
+    // before re-enabling the button means a retry only resends what
+    // actually still needs it, same as syncBatchCreate's own use of this
+    // field.
+    const succeededCount = err.succeededCount ?? 0;
+    for (const instance of selected.slice(0, succeededCount)) {
+      selectedSavedInstanceIds.delete(instance.instanceId);
+    }
+    const remaining = selected.length - succeededCount;
+    alert(
+      succeededCount > 0
+        ? `Pasted ${succeededCount} item(s), but ${remaining} failed: ${err.message || ''}`.trim()
+        : (err.message || "Couldn't paste these items."),
+    );
     layoutPreviewPasteBtn.disabled = false;
   }
 });
