@@ -223,6 +223,53 @@ describe('Product reviews', () => {
     expect(listed.body.reviews).toHaveLength(1);
   });
 
+  // #1385: deterministic reproduction of the real race, the same
+  // env.DB.prepare-interception idiom worker/land.test.js's own community-
+  // sign flag-race test uses -- a refund fired (unawaited, relying on this
+  // environment's same-connection statement ordering) the instant before
+  // the real INSERT INTO product_reviews statement the handler itself
+  // runs, landing in the exact window between its eligibility SELECT
+  // (already read this purchase as eligible) and its INSERT. Exercises the
+  // real handler end to end through the real HTTP endpoint, unlike a raw
+  // SQL reproduction of the fix, which would pass regardless of whether
+  // worker/index.js's own query actually includes the guard.
+  it('does not let a review be inserted for a purchase refunded in the exact window between its eligibility check and its INSERT', async () => {
+    const templateId = await createTemplate('review-refund-race');
+    const shopper = await signupBuilder('review-refund-race-shopper');
+    await createPurchase(templateId, shopper);
+    const purchase = await env.DB.prepare(
+      'SELECT purchase_id FROM purchases WHERE template_id = ? AND buyer_builder_id = ?',
+    ).bind(templateId, shopper.builderId).first();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO product_reviews')) {
+        armed = false;
+        originalPrepare(`UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?`)
+          .bind(purchase.purchase_id).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/catalog/${templateId}/reviews`, shopper.session({
+        method: 'POST', body: JSON.stringify({ rating: 5 }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/refunded/i);
+
+    const reviewRow = await env.DB.prepare('SELECT 1 FROM product_reviews WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).first();
+    expect(reviewRow).toBeNull();
+    const row = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).first();
+    expect(row.refunded_at).not.toBeNull();
+  });
+
   it('creates, lists (with an average), and moderates reviews on a catalog template — no opt-in required', async () => {
     const templateId = await createTemplate('reviewable-product');
     const shopperA = await signupBuilder('reviewable-product-shopper-a');

@@ -2080,8 +2080,14 @@ async function handleProductReviews(request, db, route) {
     // commits) — folding the existence check into the INSERT's own WHERE
     // clause instead makes the whole check-and-insert one atomic statement,
     // same idiom checkRateLimit uses for its own check-then-act race.
-    // `changes === 0` means the WHERE NOT EXISTS already found a review for
-    // this purchase, i.e. the guard blocked the insert.
+    // #1385: the eligibility SELECT above already required refunded_at IS
+    // NULL, but that's the same stale-read problem — a refund landing
+    // between that SELECT and this INSERT would otherwise leave nothing
+    // blocking the insert, since the only atomic guard was "not already
+    // reviewed." Re-checking refunded_at IS NULL here too, in the same
+    // WHERE clause, closes that race the same way the double-review guard
+    // already does. `changes === 0` means one of the two guards blocked
+    // the insert; re-reading disambiguates which for a clearer error.
     const reviewId = `review-${crypto.randomUUID()}`;
     const result = await db.prepare(`
       INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id)
@@ -2089,8 +2095,16 @@ async function handleProductReviews(request, db, route) {
       WHERE NOT EXISTS (
         SELECT 1 FROM product_reviews WHERE purchase_id = ?
       )
-    `).bind(reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, purchase.purchase_id).run();
+      AND EXISTS (
+        SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL
+      )
+    `).bind(reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, purchase.purchase_id, purchase.purchase_id).run();
     if (result.meta.changes === 0) {
+      const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
+        .bind(purchase.purchase_id).first();
+      if (stillEligible?.refunded_at) {
+        throw new HttpError('This purchase has been refunded and can no longer be reviewed', 409);
+      }
       throw new HttpError('This purchase has already been reviewed', 409);
     }
     // #1043: every other real "something happened that the other party
@@ -12250,13 +12264,24 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
   // handleProductReviews' own comment explains, avoids a check-then-act
   // race between two concurrent submits for the same purchase ever
   // reaching the UNIQUE constraint as a raw, unhandled error.
+  // #1385: the eager refunded_at check above has the same stale-read
+  // problem handleProductReviews' own INSERT guard just closed — a refund
+  // landing between that check and this INSERT would otherwise leave
+  // nothing blocking it, since the only atomic guard was "not already
+  // left." Re-checking refunded_at IS NULL here too closes that race.
   const feedbackId = `seller-feedback-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO seller_feedback (feedback_id, purchase_id, seller_id, author_label, rating, text)
     SELECT ?, ?, ?, ?, ?, ?
     WHERE NOT EXISTS (SELECT 1 FROM seller_feedback WHERE purchase_id = ?)
-  `).bind(feedbackId, purchaseId, purchase.seller_id, authorLabel, rating, text, purchaseId).run();
+    AND EXISTS (SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL)
+  `).bind(feedbackId, purchaseId, purchase.seller_id, authorLabel, rating, text, purchaseId, purchaseId).run();
   if (result.meta.changes === 0) {
+    const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
+      .bind(purchaseId).first();
+    if (stillEligible?.refunded_at) {
+      throw new HttpError('This purchase has been refunded and can no longer have feedback left for it', 409);
+    }
     throw new HttpError('Feedback has already been left for this purchase', 409);
   }
   // Best-effort notification, same convention as handleProductReviews'
