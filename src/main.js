@@ -6496,8 +6496,17 @@ async function renderSellSettingsSection() {
           currency: 'usd',
         },
       });
-      statusNote.textContent = describeStatus();
-      formStatus.textContent = 'Submitted.';
+      // #1373: the Payouts field (balance + Cash out button) below only
+      // ever gets built once, gated on account.connected as it stood at
+      // this function's own initial render -- a first-time submit flips
+      // account.connected from false to true right here, but nothing
+      // re-evaluates that gate afterward, so the field (and the
+      // "Update payout account" relabel) never appeared until the tab was
+      // closed and reopened. Same renderSettingsSection() full-redraw
+      // idiom #1124/#1346 already use for this exact "a mutation here
+      // should refresh what a sibling/gated block shows" shape.
+      renderSettingsSection();
+      return;
     } catch (err) {
       formStatus.textContent = err.message || 'Could not submit — check the fields above.';
       formStatus.classList.add('error');
