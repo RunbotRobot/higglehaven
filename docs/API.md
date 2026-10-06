@@ -156,11 +156,13 @@ can burn shared R2 storage headroom, so it's bucketed by client IP alone
 (no per-target email to key on), 20 attempts per 15-minute window.
 
 It also guards `POST /api/instances/:instanceId/purchase` (see "Simulated
-purchases" below), bucketed by client IP alone, 30 attempts per 15-minute
-window — the one other public, repeatable endpoint that credits real state
-(a builder's `higgles_balance_cents`/`higgles_earnings_events`, which feeds
-land cap) with no shopper account of any kind to otherwise attribute or
-throttle by.
+purchases" below), 30 attempts per 15-minute window — bucketed by the
+resolved account's `userId`, not client IP: N44 (owner direction,
+2026-09-12) made this endpoint require a verified session (see "Session
+and verification requirement" under "Purchases" below), so unlike
+`POST /api/models` just above, there's always a real account to key the
+bucket on once a session is required, same as every other session-gated
+rate limit in this file.
 
 **Email delivery:** [Resend](https://resend.com)'s REST API, via
 `sendEmail` in `worker/index.js` — chosen for a simple, well-documented API
