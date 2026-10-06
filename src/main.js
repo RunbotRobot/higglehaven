@@ -4494,6 +4494,11 @@ function renderSellerList() {
     reviewEmptyEl.textContent = 'No reviews yet.';
     reviewPanel.appendChild(reviewEmptyEl);
 
+    const reviewTruncatedEl = document.createElement('div');
+    reviewTruncatedEl.className = 'seller-review-truncated';
+    reviewTruncatedEl.hidden = true;
+    reviewPanel.appendChild(reviewTruncatedEl);
+
     // #425: per-row, not module-level — signPostsLoadToken/
     // calendarEventsLoadToken's own single shared counter works there
     // because only one of those panels is ever open at a time, but every
@@ -4504,6 +4509,7 @@ function renderSellerList() {
     async function renderReviews() {
       reviewListEl.innerHTML = '';
       reviewSummaryEl.textContent = '';
+      reviewTruncatedEl.hidden = true;
       const myLoadToken = ++reviewLoadToken;
       let reviews;
       let averageRating;
@@ -4524,6 +4530,11 @@ function renderSellerList() {
       // later load succeeds with zero reviews.
       reviewEmptyEl.textContent = 'No reviews yet.';
       reviewEmptyEl.hidden = reviews.length > 0;
+      // #1274's own fix added this notice for sign posts/calendar events
+      // (count is the real, uncapped total; reviews is windowed to the
+      // newest 200 by handleProductReviews) but missed this sibling panel.
+      reviewTruncatedEl.hidden = count <= reviews.length;
+      reviewTruncatedEl.textContent = `Showing newest ${reviews.length} of ${count} reviews.`;
       if (reviews.length > 0) {
         const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
         reviewSummaryEl.textContent = `${stars} ${averageRating.toFixed(1)} average (${count} review${count === 1 ? '' : 's'})`;
