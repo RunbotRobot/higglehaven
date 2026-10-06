@@ -7272,6 +7272,43 @@ export async function claimPurchasesForPayout(db, purchases, nowIso) {
   return purchases.filter((_, i) => results[i].meta.changes === 1);
 }
 
+// Decides which of this payout's otherwise-eligible purchases actually fit
+// inside both this request's own limits: Stripe's currently-available
+// balance (payoutCapCents) and this tax year's remaining reporting-
+// threshold headroom (taxBudgetCents). Exported and pulled out of
+// handleSellerPayouts for the same reason claimPurchasesForPayout above is
+// its own function: this suite never configures STRIPE_SECRET_KEY, so
+// nothing past handleSellerPayouts' own stripeConfigured check (everything
+// this function decides) is reachable through the real endpoint at all.
+//
+// #1335: taxBudgetCents is a current-tax-year-only budget (mirroring
+// eligibleGrossCents' own [yearStart, yearEnd) scoping two steps up in
+// handleSellerPayouts, fixed by #1087) -- a stale prior-year purchase in
+// `eligible` (unpaidSellerPurchases has no year filter of its own, and
+// orders by created_at ASC, so a stale one is seen first) must never spend
+// that budget, or it can eat the whole headroom and wrongly skip a
+// genuinely current-year purchase for tax reasons it has nothing to do
+// with.
+export function selectPurchasesForPayout(eligible, { payoutCapCents, taxBudgetCents, yearStart, yearEnd }) {
+  let payoutCents = 0;
+  let grossIncludedCents = 0;
+  let skippedForTax = false;
+  const included = [];
+  for (const purchase of eligible) {
+    const share = purchaseSellerShareCents(purchase);
+    if (payoutCents + share > payoutCapCents) continue;
+    const countsTowardTaxYear = purchase.created_at >= yearStart && purchase.created_at < yearEnd;
+    if (countsTowardTaxYear && grossIncludedCents + purchase.total_cents > taxBudgetCents) {
+      skippedForTax = true;
+      continue;
+    }
+    payoutCents += share;
+    if (countsTowardTaxYear) grossIncludedCents += purchase.total_cents;
+    included.push(purchase);
+  }
+  return { included, payoutCents, skippedForTax };
+}
+
 // Undoes a claim made by claimPurchasesForPayout, for when the Stripe call
 // that was supposed to follow it never succeeds — otherwise a failed
 // attempt would strand these purchases as permanently "already paid out"
@@ -7454,19 +7491,16 @@ async function handleSellerPayouts(request, env, db) {
     // will actually let us withdraw right now, and its own gross still
     // fits inside the tax-threshold headroom computed above; anything left
     // over just stays "available" for a later cash-out request (once more
-    // Stripe balance clears, or once paperwork is filed).
-    let payoutCents = 0;
-    let grossIncludedCents = 0;
-    let skippedForTax = false;
-    const included = [];
-    for (const purchase of eligible) {
-      const share = purchaseSellerShareCents(purchase);
-      if (payoutCents + share > payoutCapCents) continue;
-      if (grossIncludedCents + purchase.total_cents > taxBudgetCents) { skippedForTax = true; continue; }
-      payoutCents += share;
-      grossIncludedCents += purchase.total_cents;
-      included.push(purchase);
-    }
+    // Stripe balance clears, or once paperwork is filed). Extracted to its
+    // own function (rather than inlined here) for the same reason
+    // claimPurchasesForPayout is its own function -- this suite never
+    // configures STRIPE_SECRET_KEY, so nothing past the stripeConfigured
+    // check above (including this selection logic) is reachable through
+    // the real endpoint; testing the primitive directly is the only way to
+    // cover it at all, same precedent as that function's own comment.
+    const { included, payoutCents, skippedForTax } = selectPurchasesForPayout(
+      eligible, { payoutCapCents, taxBudgetCents, yearStart, yearEnd },
+    );
     if (included.length === 0) {
       if (skippedForTax) throw taxThresholdPayoutBlockedError();
       throw new HttpError('Funds are still clearing with Stripe — try again soon.', 400);
