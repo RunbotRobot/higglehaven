@@ -4187,10 +4187,13 @@ back a new one. Unlike the old label-matched design, a buyer with several
 separate eligible purchases of the same product now gets one review slot
 **per purchase**, not one per product overall — a deliberate tightening
 matching the "strict one to one with a purchase" direction this redesign
-follows, not just a side effect. This still matches docs/SPEC.md §5's
-review incentives being "capped per account/period" — a purchase is this
-app's real stand-in for "one transaction," now backed by an actual account
-rather than a label.
+follows, not just a side effect — a purchase is this app's real
+stand-in for "one transaction," now backed by an actual account rather
+than a label. (docs/SPEC.md §5 v20 removed the review-incentive higgles
+bonus this one-review-per-purchase cap originally also supported; the
+cap itself stays, since it still prevents one purchase from backing an
+unbounded number of reviews regardless of whether a review ever paid
+out.)
 
 **Original design (superseded by #1113 above, kept for history):** before
 this redesign, there was no real account system to check purchase history
