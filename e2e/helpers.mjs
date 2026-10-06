@@ -260,7 +260,12 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // itself is always attached to the DOM and this selector specifically
   // matches it once it's HIDDEN (no .visible class, so display:none),
   // which Playwright's default "wait for visible" can never satisfy.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
+  // #1388: 10000ms was tight enough to intermittently time out under CI
+  // load -- seen tripping two completely unrelated test files (friends.test.mjs,
+  // friends-map.test.mjs) at this exact call site, not a bug in either
+  // feature. 20000ms matches the margin waitForLoadState('networkidle')
+  // just below already uses for its own slower post-action wait.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 20000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the
