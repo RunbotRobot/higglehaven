@@ -61,6 +61,16 @@ Raw SQL and internal D1 error details are never included in API responses.
 
 The Worker currently sets permissive CORS headers for dev use.
 
+Every response the Worker returns (API, the static app shell, `/uploads/*`,
+and the admin pages) also carries baseline hardening headers:
+`X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
+`X-Content-Type-Options: nosniff`, and
+`Strict-Transport-Security: max-age=63072000; includeSubDomains` (see
+`worker/index.js`'s `SECURITY_HEADERS`/`withSecurityHeaders`, applied once in
+`fetch`'s own wrapper around `routeRequest` rather than per-handler).
+Content-Security-Policy is a real gap, deliberately not closed here — see
+issue #1360.
+
 ## Health endpoint
 
 ### `GET /api/health`

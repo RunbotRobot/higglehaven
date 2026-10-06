@@ -14,6 +14,36 @@ const JSON_HEADERS = {
   'access-control-allow-headers': 'content-type',
 };
 
+// #1360: generic hardening every response from this Worker should carry,
+// regardless of path — applied in one place (fetch's own wrapper below)
+// rather than threaded through every individual handler/JSON_HEADERS call
+// site, so nothing can accidentally skip it. Content-Security-Policy is
+// deliberately NOT included here: this app's Three.js model loading,
+// canvas/WebGL rendering, and the built Vite bundle's own script/style
+// tags would need real allow-list tuning first, which is a scoping task
+// left to #1360's own tracking, not a mechanical header add like these.
+// x-frame-options only controls whether other sites can frame OUR pages —
+// it has no effect on this app embedding something else's iframe (e.g. a
+// Stripe Elements widget), so DENY here is unconditionally safe.
+// strict-transport-security is likewise safe to send unconditionally: per
+// spec, browsers ignore an HSTS header delivered over plain HTTP, so local
+// `wrangler dev` over http:// is unaffected. `preload` is intentionally
+// omitted -- submitting to the HSTS preload list is a one-way, owner-level
+// operational commitment, not something a session should opt this domain
+// into unilaterally.
+const SECURITY_HEADERS = {
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'x-content-type-options': 'nosniff',
+  'strict-transport-security': 'max-age=63072000; includeSubDomains',
+};
+
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 // Real-time web/mobile products should be tiny — see catalog.js's own
 // comments and the size guidance given when this endpoint was built.
 // 20MB is a generous ceiling above that guidance (most uploads should land
@@ -255,54 +285,58 @@ async function checkAccessGate(request, url, env) {
   return htmlResponse(accessLoginPage(null), 401);
 }
 
+async function routeRequest(request, env, ctx) {
+  const url = new URL(request.url);
+
+  if (url.hostname === 'www.higglehaven.com') {
+    url.hostname = 'higglehaven.com';
+    return Response.redirect(url.toString(), 301);
+  }
+
+  if (env.ACCESS_PASSPHRASE) {
+    const gateResponse = await checkAccessGate(request, url, env);
+    if (gateResponse) return gateResponse;
+  }
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: JSON_HEADERS });
+  }
+
+  if (url.pathname === '/admin/control-room') {
+    return handleControlRoomAdminPage(request, env);
+  }
+
+  if (url.pathname === '/admin/action-log') {
+    return handleAdminActionLogPage(request, env);
+  }
+
+  if (url.pathname.startsWith('/api/')) {
+    return handleApi(request, env, url, ctx).catch((error) => {
+      const httpError = error instanceof HttpError ? error : databaseHttpError(error);
+      if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
+  }
+
+  // Uploaded/imported model files live in R2, not the static ASSETS
+  // bundle (which only has whatever shipped with the build) — served
+  // from their own path prefix so they never collide with the built-in
+  // models under /models/.
+  if (url.pathname.startsWith('/uploads/')) {
+    return handleUploadedAsset(request, env).catch((error) => {
+      console.error(error);
+      if (error instanceof HttpError) return json({ error: error.message }, error.status);
+      return json({ error: 'Internal server error' }, 500);
+    });
+  }
+
+  return env.ASSETS.fetch(request);
+}
+
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-
-    if (url.hostname === 'www.higglehaven.com') {
-      url.hostname = 'higglehaven.com';
-      return Response.redirect(url.toString(), 301);
-    }
-
-    if (env.ACCESS_PASSPHRASE) {
-      const gateResponse = await checkAccessGate(request, url, env);
-      if (gateResponse) return gateResponse;
-    }
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: JSON_HEADERS });
-    }
-
-    if (url.pathname === '/admin/control-room') {
-      return handleControlRoomAdminPage(request, env);
-    }
-
-    if (url.pathname === '/admin/action-log') {
-      return handleAdminActionLogPage(request, env);
-    }
-
-    if (url.pathname.startsWith('/api/')) {
-      return handleApi(request, env, url, ctx).catch((error) => {
-        const httpError = error instanceof HttpError ? error : databaseHttpError(error);
-        if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
-        console.error(error);
-        return json({ error: 'Internal server error' }, 500);
-      });
-    }
-
-    // Uploaded/imported model files live in R2, not the static ASSETS
-    // bundle (which only has whatever shipped with the build) — served
-    // from their own path prefix so they never collide with the built-in
-    // models under /models/.
-    if (url.pathname.startsWith('/uploads/')) {
-      return handleUploadedAsset(request, env).catch((error) => {
-        console.error(error);
-        if (error instanceof HttpError) return json({ error: error.message }, error.status);
-        return json({ error: 'Internal server error' }, 500);
-      });
-    }
-
-    return env.ASSETS.fetch(request);
+    return withSecurityHeaders(await routeRequest(request, env, ctx));
   },
 
   // Cloudflare Cron Trigger (wrangler.jsonc's triggers.crons) — the actual
