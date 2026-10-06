@@ -2621,6 +2621,25 @@ describe('Land cap', () => {
     expect(JSON.parse(logRow.detail_json)).toEqual({ amountCents: 100000 });
   });
 
+  // #1372: computeNextLandCap used to round-trip trailingEarningsCents
+  // through an intermediate cents/100 dollars division before multiplying
+  // back by 100, which IEEE-754 doesn't always cancel exactly (29 cents ->
+  // 0.29 * 100 === 28.999999999999996, not 29) -- the truncating Math.floor
+  // then silently cost the builder 1 m² of cap they actually earned. 29 is
+  // one of the smallest cents values that triggers it (verified by scanning
+  // every integer cents value 0-2,000,000 against the exact expected
+  // result). A fresh builder owns 0 m² (normalizedThousands clamps to the
+  // 1000 m² starter), so the grant should land exactly at 1000 + 29 = 1029,
+  // not 1028.
+  it('does not lose a m² of land cap to floating-point imprecision on a 29-cent earnings grant', async () => {
+    const builder = await createBuilder('Land Cap Precision Builder');
+    const granted = await api(`/builders/${builder}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 29 }),
+    }));
+    expect(granted.response.status).toBe(201);
+    expect(granted.body.landCapM2).toBe(1029);
+  });
+
   // #629: bidding now also requires the bidder to hold enough
   // higgles_balance_cents to cover their bid — deliberately independent of
   // land-cap-grants above, which only ever touches the earnings ledger

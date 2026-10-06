@@ -4986,9 +4986,18 @@ const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 // have (the ratchet).
 function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
   const normalizedThousands = Math.max(ownedAreaM2, LAND_CAP_STARTER_M2) / 1000;
-  const trailingEarningsDollars = trailingEarningsCents / 100;
-  const earningsDollarsPerThousandM2Owned = trailingEarningsDollars / normalizedThousands;
-  const increaseM2 = Math.floor(earningsDollarsPerThousandM2Owned * LAND_CAP_M2_PER_DOLLAR_PER_1000M2);
+  // #1372: dividing trailingEarningsCents by 100 into dollars and then
+  // separately multiplying back by LAND_CAP_M2_PER_DOLLAR_PER_1000M2 (also
+  // 100) round-tripped through an avoidable floating-point division --
+  // IEEE-754 doesn't always cancel that exactly (29 cents -> 0.29 * 100 ===
+  // 28.999999999999996, not 29), and the truncating Math.floor below then
+  // threw away a whole m² the builder actually earned. Multiplying the
+  // exact integer cents by the rate first, then dividing once by
+  // normalizedThousands * 100, computes the same intended value without
+  // ever representing an inexact intermediate dollar fraction.
+  const increaseM2 = Math.floor(
+    (trailingEarningsCents * LAND_CAP_M2_PER_DOLLAR_PER_1000M2) / (normalizedThousands * 100),
+  );
   const candidateCap = LAND_CAP_STARTER_M2 + increaseM2;
   return Math.max(currentCapM2, candidateCap);
 }
