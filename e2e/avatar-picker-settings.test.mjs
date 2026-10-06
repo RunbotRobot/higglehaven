@@ -174,9 +174,11 @@ const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 // material on this revert (the bug this test now also covers), its
 // geometries would stay tracked by the renderer forever once first drawn,
 // so this count would read *higher* than memAfterFirstEquip rather than
-// back at the same baseline.
+// back at the same baseline. #1370: the same disposeObject3D traverse also
+// skips every avatar's own afkSprite (a THREE.Sprite, not a Mesh) unless
+// its texture-disposal gap is also fixed -- textures below covers that.
 const memAfterRevert = await page.evaluate(() => window.__rendererMemory);
-console.log('renderer live-geometry count right after reverting to the default avatar (should match the count above, not exceed it):', memAfterRevert);
+console.log('renderer live-geometry/texture counts right after reverting to the default avatar (should match the counts above, not exceed them):', memAfterRevert);
 
 // --- Equip the purchased avatar a second time — confirms the count stays
 // flat across a repeated swap rather than merely returning once by luck ---
@@ -203,5 +205,7 @@ const pass = purchased.status === 201 &&
   markerAfterRevert === 'still-here' &&
   memAfterRevert?.geometries === memAfterFirstEquip?.geometries &&
   memAfterSecondEquip?.geometries === memAfterFirstEquip?.geometries &&
+  memAfterRevert?.textures === memAfterFirstEquip?.textures &&
+  memAfterSecondEquip?.textures === memAfterFirstEquip?.textures &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources (#1358)', errors });
+await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources, including its afkSprite texture (#1358, #1370)', errors });
