@@ -6192,7 +6192,7 @@ business name to exist yet.
 
 ## D1 schema overview
 
-The migrations currently create seventeen main backend tables:
+The migrations currently create twenty main backend tables:
 
 - `builders`: the shared dev-mode builder identity roster (see "Builders").
 - `sellers`: a genuinely separate dev-mode identity roster for sellers (see
