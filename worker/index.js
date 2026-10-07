@@ -3689,6 +3689,14 @@ function notificationFromRow(row) {
 // filtering them at read time) is #1101's own scope.
 const PRESENCE_STALE_AFTER_MS = 10_000;
 
+// #1438: every other list-shaped GET in this file caps its row count (either
+// real pagination, or a flat LIMIT 200 for a "snapshot, not something to
+// paginate through" resource like sign_posts/calendar_events/seller_feedback
+// above) -- this one was missed. A landlet with many concurrent visitors at
+// once would otherwise return every one of them in a single response, and
+// the client spawns a real avatar mesh group per entry on every poll tick.
+const PRESENCE_NEARBY_LIMIT = 200;
+
 // #1098 (sub-issue of #1095, multiplayer presence): a 15-minute window is
 // this file's one shared RATE_LIMIT_WINDOW_MS (defined further below), so a
 // literal cap here is picked to approximate the issue's own "~1 write per
@@ -3717,6 +3725,7 @@ async function handlePresence(request, db, route, url) {
     const { results } = await db.prepare(`
       SELECT * FROM avatar_presence
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
+      ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
     `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
     return json({ avatars: results.map(avatarPresenceFromRow) });
   }
