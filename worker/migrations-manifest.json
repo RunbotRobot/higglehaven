@@ -107,5 +107,6 @@
   "0107_equipped_animation.sql",
   "0108_landlet_candidate_land_type.sql",
   "0109_inactivity_warning_sent_at.sql",
-  "0110_account_moderation_decisions.sql"
+  "0110_account_moderation_decisions.sql",
+  "0111_tax_1099_forms_filing_status.sql"
 ]
