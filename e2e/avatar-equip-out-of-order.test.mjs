@@ -8,6 +8,12 @@
 // (refreshEquippedShopAvatar) while already in Shop mode, not a fresh
 // Shop-mode entry (enterShopMode) — that's the function this bug lived in.
 //
+// #1426: this same race also leaked the superseded custom avatar's own
+// already-built geometry/materials/textures (discarded without ever being
+// disposed) — this file's own supersede guard already existed for #982, it
+// just never disposed what it was discarding. Covered below via
+// window.__supersededAvatarDisposals.
+//
 // The slow side of the race is simulated via window.__testAvatarLoadDelayMs
 // (createCustomShopAvatar's own test-only hook), not a network-level delay
 // (e.g. page.route()) — found the hard way that holding a response open via
@@ -171,12 +177,20 @@ console.log(
   liveShopAvatarModelUrl,
 );
 
+// #1426: the superseded custom avatar's own fully-built geometry/materials/
+// textures must still be disposed even though they're discarded without
+// ever reaching the scene — window.__supersededAvatarDisposals is the test
+// hook refreshEquippedShopAvatar bumps right where that dispose happens.
+const supersededAvatarDisposals = await page.evaluate(() => window.__supersededAvatarDisposals);
+console.log('supersededAvatarDisposals after the race (should be 1 — the custom avatar\'s build was disposed, not leaked):', supersededAvatarDisposals);
+
 const pass = placeholderPurchased.status === 201 &&
   purchased.status === 201 &&
   placeholderEquipped.status === 200 &&
   !!defaultRowText?.includes('equipped') &&
   !customRowText?.includes('equipped') &&
   liveShopAvatarModelUrl === null &&
+  supersededAvatarDisposals === 1 &&
   errors.length === 0;
 await finish(browser, {
   pass,

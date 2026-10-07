@@ -12319,7 +12319,22 @@ async function refreshEquippedShopAvatar(modelUrl) {
   } else {
     nextAvatar = createShopAvatar();
   }
-  if (myToken !== shopAvatarEquipToken) return; // a newer equip superseded this one while the model was loading
+  if (myToken !== shopAvatarEquipToken) {
+    // #1426: nextAvatar was already fully built (a real GLTF load, for the
+    // custom-model branch) before this guard ever runs -- without disposing
+    // it here, the superseded-but-already-built avatar's geometry/materials/
+    // textures leak for the rest of the tab's lifetime, since nothing else
+    // ever references it once this function returns.
+    disposeObject3D(nextAvatar.group);
+    // Nothing else observes this branch (nextAvatar is never added to the
+    // scene, so it's never drawn and therefore never counted by
+    // reportRendererMemoryDiagnostic's renderer.info.memory snapshot either)
+    // -- exposed purely so an e2e test can confirm the dispose above actually
+    // ran, the same reasoning as every other window.__test*-style hook in
+    // this file.
+    window.__supersededAvatarDisposals = (window.__supersededAvatarDisposals ?? 0) + 1;
+    return;
+  }
   scene.remove(shopAvatar.group);
   // #1358: the outgoing avatar's own meshes/materials are being discarded
   // either way (every call site that swaps or removes a group elsewhere in
