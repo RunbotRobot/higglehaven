@@ -93,32 +93,28 @@ await page.click('#shop-last-location-btn');
 const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 
 // SHOP_LAST_LOCATION_AVATAR_FADE_S (0.6s) fade-out + 0.6s fade-in +
-// SHOP_FLIGHT_LANDING_DURATION_S (2s) landing = 3.2s. #1436: polling up to
-// a generous ceiling instead of sleeping a flat "generous buffer" survives
-// a loaded CI runner delaying the sequence's own timers past that buffer.
-await page.waitForFunction(
-  () => !document.body.classList.contains('shop-flying'),
-  null,
-  { timeout: 15000, polling: 150 },
-).catch(() => {});
+// SHOP_FLIGHT_LANDING_DURATION_S (2s) landing = 3.2s, plus a generous
+// buffer. #1436: tried polling for `!shop-flying` here instead of a flat
+// sleep, but that class is removed earlier than the avatar's position
+// actually finishes settling (confirmed locally: polling exited early
+// and the subsequent presence read then caught the avatar still
+// mid-sequence, at flight altitude, nowhere near the target — a
+// consistent, reproducible failure, not a rare one) — so unlike the
+// button-visibility wait above, this one keeps the original flat-sleep
+// shape and is just widened for load margin instead.
+await page.waitForTimeout(6000);
 const groundedAfterSequence = await page.evaluate(() => !document.body.classList.contains('shop-flying'));
 
 // SHOP_PRESENCE_REPORT_INTERVAL_MS (1500ms) — give the client's own report
-// loop a cycle to actually write the post-teleport position back out,
-// the same "read the real server state back, don't trust the client
-// alone" approach e2e/multiplayer-presence.test.mjs uses. #1436: polling
-// for the expected value (up to a generous ceiling) instead of one flat
-// sleep + single read survives a report-loop tick arriving late under load.
+// loop a cycle to actually write the post-teleport position back out, the
+// same "read the real server state back, don't trust the client alone"
+// approach e2e/multiplayer-presence.test.mjs uses. #1436: widened from
+// 2000ms for load margin, same reasoning as the wait just above (kept as
+// a flat sleep rather than polling-to-convergence, which risks reading a
+// transient non-final position if the predicate happens to match before
+// the avatar has actually finished settling).
 const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1;
-await page.waitForFunction(
-  async (tx, ty) => {
-    const res = await fetch('/api/presence/me');
-    const { presence } = await res.json();
-    return !!presence && Math.abs(presence.x - tx) < 1 && Math.abs(presence.y - ty) < 1;
-  },
-  [targetX, targetY],
-  { timeout: 15000, polling: 250 },
-).catch(() => {});
+await page.waitForTimeout(3500);
 const finalPresence = await page.evaluate(async () => {
   const res = await fetch('/api/presence/me');
   return (await res.json()).presence;
