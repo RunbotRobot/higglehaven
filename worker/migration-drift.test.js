@@ -99,4 +99,44 @@ describe('checkMigrationDrift (#561)', () => {
       ).bind(row.name, new Date().toISOString()).run();
     }
   });
+
+  // #1452: without migration_drift_alert_state (migrations/0115), this
+  // cron-driven alert email would re-fire on every */10 tick for as long
+  // as the drift goes unfixed — asserted here against the dedup table's
+  // own state, not a sendEmail spy, since sendEmail itself isn't exported
+  // and already safely no-ops in this test env (no RESEND_API_KEY).
+  it('#1452: alerts at most once per drift episode, then re-arms once drift resolves', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const row = await env.DB.prepare('SELECT name FROM d1_migrations ORDER BY id DESC LIMIT 1').first();
+    await env.DB.prepare('DELETE FROM d1_migrations WHERE name = ?').bind(row.name).run();
+    const envWithAlert = { ...env, OPS_ALERT_EMAIL: 'ops@example.com' };
+    try {
+      await checkMigrationDrift(envWithAlert);
+      const first = await env.DB.prepare(
+        'SELECT alerted_at FROM migration_drift_alert_state WHERE id = 1',
+      ).first();
+      expect(first.alerted_at).not.toBeNull();
+
+      // Drift is still present on this second tick — must not re-stamp
+      // (and, in production, must not re-send) the same alert.
+      await checkMigrationDrift(envWithAlert);
+      const second = await env.DB.prepare(
+        'SELECT alerted_at FROM migration_drift_alert_state WHERE id = 1',
+      ).first();
+      expect(second.alerted_at).toBe(first.alerted_at);
+    } finally {
+      await env.DB.prepare(
+        'INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)',
+      ).bind(row.name, new Date().toISOString()).run();
+    }
+
+    // Drift is now resolved — the next tick should clear the flag so a
+    // future, unrelated drift episode alerts fresh rather than staying
+    // permanently silenced by this episode's stale row.
+    await checkMigrationDrift(envWithAlert);
+    const cleared = await env.DB.prepare(
+      'SELECT alerted_at FROM migration_drift_alert_state WHERE id = 1',
+    ).first();
+    expect(cleared.alerted_at).toBeNull();
+  });
 });

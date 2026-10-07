@@ -441,7 +441,17 @@ export async function checkMigrationDrift(env) {
   }
 
   const missing = computeMissingMigrations(appliedNames, migrationsManifest);
-  if (missing.length === 0) return;
+  if (missing.length === 0) {
+    // #1452: re-arm the dedup guard below the moment drift resolves, the
+    // same way inactivity_warning_sent_at (migrations/0109) is cleared the
+    // moment a builder is active again — so the *next* drift episode
+    // alerts fresh rather than staying permanently silenced by this run's
+    // stale row.
+    await env.DB.prepare(
+      `UPDATE migration_drift_alert_state SET alerted_at = NULL WHERE id = 1 AND alerted_at IS NOT NULL`,
+    ).run();
+    return;
+  }
 
   const message = `Production D1 is missing ${missing.length} migration(s) present in migrations/: `
     + `${missing.join(', ')}. Run "npm run db:migrate:remote" to apply them (see issue #488).`;
@@ -452,12 +462,27 @@ export async function checkMigrationDrift(env) {
   // surfaces loudly in `wrangler tail`/dashboard logs via the console.error
   // above, it just won't also land in anyone's inbox.
   if (env.OPS_ALERT_EMAIL) {
-    await sendEmail(env, {
-      to: env.OPS_ALERT_EMAIL,
-      subject: 'higglehaven: production D1 migration drift detected',
-      text: message,
-      html: `<p>${message}</p>`,
-    }).catch((error) => console.error('checkMigrationDrift: failed to send alert email', error));
+    // #1452: migration_drift_alert_state (migrations/0115) is this block's
+    // own idempotency guard, same shape as warnInactiveLandletOwners' own
+    // inactivity_warning_sent_at — without it, this cron (scheduled()
+    // fires every */10 minutes) would re-send the identical alert email
+    // 144+ times/day for as long as the drift goes unfixed, rather than
+    // once per drift episode. The console.error above is deliberately
+    // left outside this guard: repeating to the logs on every tick is
+    // the whole point of a log-based monitor, only the inbox spam is the
+    // problem this closes.
+    const claimed = await env.DB.prepare(
+      `UPDATE migration_drift_alert_state SET alerted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = 1 AND alerted_at IS NULL`,
+    ).run();
+    if (claimed.meta.changes > 0) {
+      await sendEmail(env, {
+        to: env.OPS_ALERT_EMAIL,
+        subject: 'higglehaven: production D1 migration drift detected',
+        text: message,
+        html: `<p>${message}</p>`,
+      }).catch((error) => console.error('checkMigrationDrift: failed to send alert email', error));
+    }
   }
 }
 
