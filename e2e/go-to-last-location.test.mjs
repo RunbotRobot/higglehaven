@@ -69,7 +69,17 @@ await page.mouse.up();
 
 await page.waitForTimeout(1000);
 const stillVisibleUnder5s = await lastLocationVisible();
-await page.waitForTimeout(4500); // total well past SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S (5s)
+// #1436: a flat sleep "well past" SHOP_LAST_LOCATION_BUTTON_HIDE_DELAY_S
+// (5s) left only ~500ms of margin on top of the 1s wait just above, which
+// a loaded CI runner can eat into (the fade-out is the button's own
+// setTimeout, delayed by however busy the page's JS thread is, not just
+// wall-clock time). Polling up to a much longer ceiling instead still
+// fails if it's never hidden, but no longer races a tight fixed delay.
+await page.waitForFunction(
+  () => !document.querySelector('#shop-last-location-btn')?.classList.contains('visible'),
+  null,
+  { timeout: 15000, polling: 150 },
+).catch(() => {});
 const hiddenAfter5s = !(await lastLocationVisible());
 
 // --- Phase 3: clicking it fades, teleports, lands at the seeded spot ---
@@ -83,21 +93,37 @@ await page.click('#shop-last-location-btn');
 const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 
 // SHOP_LAST_LOCATION_AVATAR_FADE_S (0.6s) fade-out + 0.6s fade-in +
-// SHOP_FLIGHT_LANDING_DURATION_S (2s) landing, plus a generous buffer.
-await page.waitForTimeout(4500);
+// SHOP_FLIGHT_LANDING_DURATION_S (2s) landing = 3.2s. #1436: polling up to
+// a generous ceiling instead of sleeping a flat "generous buffer" survives
+// a loaded CI runner delaying the sequence's own timers past that buffer.
+await page.waitForFunction(
+  () => !document.body.classList.contains('shop-flying'),
+  null,
+  { timeout: 15000, polling: 150 },
+).catch(() => {});
 const groundedAfterSequence = await page.evaluate(() => !document.body.classList.contains('shop-flying'));
 
 // SHOP_PRESENCE_REPORT_INTERVAL_MS (1500ms) — give the client's own report
 // loop a cycle to actually write the post-teleport position back out,
 // the same "read the real server state back, don't trust the client
-// alone" approach e2e/multiplayer-presence.test.mjs uses.
-await page.waitForTimeout(2000);
+// alone" approach e2e/multiplayer-presence.test.mjs uses. #1436: polling
+// for the expected value (up to a generous ceiling) instead of one flat
+// sleep + single read survives a report-loop tick arriving late under load.
+const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1;
+await page.waitForFunction(
+  async (tx, ty) => {
+    const res = await fetch('/api/presence/me');
+    const { presence } = await res.json();
+    return !!presence && Math.abs(presence.x - tx) < 1 && Math.abs(presence.y - ty) < 1;
+  },
+  [targetX, targetY],
+  { timeout: 15000, polling: 250 },
+).catch(() => {});
 const finalPresence = await page.evaluate(async () => {
   const res = await fetch('/api/presence/me');
   return (await res.json()).presence;
 });
 console.log('presence after the Go to Last Location sequence (should be near x:31 y:-18):', finalPresence);
-const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1;
 
 console.log('no button on a genuinely fresh account (should be true):', noButtonOnFreshAccount);
 console.log('seed presence A status (should be 200):', seedStatusA);
