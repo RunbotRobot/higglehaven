@@ -183,6 +183,21 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.waitingOn).toBe('issue-123');
   });
 
+  // #1449: #1070 normalized casing for the 'owner' sentinel only -- 'claude'
+  // and 'subtasks' are also sentinels the board (admin-control-room.html's
+  // waitingBadge()) compares with a strict ===, so a casing variant of
+  // either used to render a nonsensical "Blocked on #Claude"-style pill
+  // instead of the correct badge.
+  it('normalizes a casing variant of waitingOn claude to the canonical lowercase value', async () => {
+    const task = await createTask({ from: 'higglehaven2', title: 'Ready for Claude, cased oddly', waitingOn: 'Claude' });
+    expect(task.waitingOn).toBe('claude');
+  });
+
+  it('normalizes a casing variant of waitingOn subtasks to the canonical lowercase value', async () => {
+    const task = await createTask({ from: 'higglehaven2', title: 'Waiting on subtasks, cased oddly', waitingOn: 'SUBTASKS' });
+    expect(task.waitingOn).toBe('subtasks');
+  });
+
   it('creates a task with a prUrl', async () => {
     const task = await createTask({ prUrl: 'https://github.com/RunbotRobot/higglehaven/pull/902' });
     expect(task.pr).toBe('https://github.com/RunbotRobot/higglehaven/pull/902');
@@ -445,6 +460,27 @@ describe('Control Room tasks (#N31)', () => {
     }));
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.task.waitingOn).toBe('owner');
+  });
+
+  // #1449: same gap as the create-path tests above, on the update path's
+  // own separate comparison -- these two sentinels never required a reason,
+  // so there's no reject-then-accept shape to test, just the normalization.
+  it('normalizes a casing variant of waitingOn claude to the canonical lowercase value on update', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'Claude' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.waitingOn).toBe('claude');
+  });
+
+  it('normalizes a casing variant of waitingOn subtasks to the canonical lowercase value on update', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'SUBTASKS' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.waitingOn).toBe('subtasks');
   });
 
   it('accepts setting waitingOn to owner with a reason, and posts it as a real linked reply', async () => {
