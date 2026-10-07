@@ -1728,6 +1728,11 @@ existing template's dimensions triggers `notifyBuildersOfDimensionChange`
 per template (see "Notifications" above), the same as the single-item
 `PATCH /api/catalog/:templateId` — a seller batch-resizing several products
 at once still warns every builder hosting a placed instance of one of them.
+`PUT` is therefore rate-limited the same way that single-item sibling is
+(#1416): `429` past 20 `PUT`s per 15 minutes, keyed per-seller when
+session-authenticated or per-client-IP otherwise — protecting the same
+notification fan-out, just batched. `POST`/`DELETE` have no such fan-out and
+stay unthrottled.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
