@@ -3400,6 +3400,10 @@ can be added without their own table or endpoints — current sources are:
   deletes their account mid-auction, the auction row (and its bids) are
   removed outright by a DB-level cascade instead — see "Land acquisition
   auctions" below for why there's no one left to notify in that case.
+  Also covers the inactivity-triggered side of the same feature (#783,
+  see that section's own "Notifications" below): the owner is warned once
+  their claimed landlet nears the inactivity cutoff, and notified again
+  once it's actually auto-listed for a $0 starting-bid auction.
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
@@ -3416,6 +3420,14 @@ can be added without their own table or endpoints — current sources are:
   /api/builders/:builderId` above, #1080) — the owner's call there was to
   leave this silent too, matching the unfriend decision rather than
   treating account deletion as a separate case worth notifying on.
+- A product review (#1043, see "Product reviews" below): the builder
+  hosting the reviewed template is notified.
+- Seller feedback on a purchase (see "Seller feedback" below): the seller
+  is notified.
+- A physical purchase marked shipped (#1288, see "Mark purchase shipped"
+  above): the buyer is notified.
+- A buyer confirming delivery (#1289, see "Purchase delivery confirmation"
+  above): the seller is notified.
 
 It's cursor-paginated (#320, see `GET /api/notifications` below), but has
 no `DELETE`, since a read notification is still useful history ("wait,
@@ -6203,8 +6215,10 @@ The migrations currently create seventeen main backend tables:
 - `landlet_candidate_rings`: atomic radial reservations for procedurally generated
   candidate bands, including boundary signatures that keep adjacent polygonal
   rings seam-compatible and optional parent links for derived ring chains.
-- `notifications`: builder-facing notices, currently only ever created by a
-  seller's product-dimension change (see "Notifications" above).
+- `notifications`: builder-facing notices, fired from a growing set of
+  sources (dimension changes, auctions, purchases, friend requests,
+  reviews, seller feedback, and more — see "Notifications" above for the
+  current full list).
 - `friendships`: one row per friend relationship between two builders,
   direction preserved, status `pending`/`accepted` (see "Friend requests"
   above).
