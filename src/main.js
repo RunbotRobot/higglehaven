@@ -10523,6 +10523,12 @@ authForms.signup.addEventListener('submit', async (event) => {
     // the way the backend's own dev-mode fallback is meant to be used.
     if (result.devVerifyUrl) {
       setAuthStatus(`Account created! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else if (!result.verificationEmailSent) {
+      // #1451: devVerifyUrl is dev-mode-only (#811) -- a real production
+      // Resend failure shows up here instead, as verificationEmailSent:
+      // false, and was previously never checked, silently closing the
+      // modal as if the email had gone out.
+      setAuthStatus('Account created, but the verification email failed to send — use "Resend verification email" from your account menu.', 'error');
     } else {
       closeAuthModal();
     }
@@ -10580,12 +10586,14 @@ authResendVerifyBtn.addEventListener('click', async () => {
   setAuthStatus('');
   try {
     const result = await resendVerificationEmail();
-    setAuthStatus(
-      result.devVerifyUrl
-        ? `Verification email sent. (dev mode: ${result.devVerifyUrl})`
-        : 'Verification email sent.',
-      'success',
-    );
+    if (result.devVerifyUrl) {
+      setAuthStatus(`Verification email sent. (dev mode: ${result.devVerifyUrl})`, 'success');
+    } else if (!result.verificationEmailSent) {
+      // #1451: same real-Resend-failure gap as the signup handler above.
+      setAuthStatus('Could not send the verification email — please try again in a moment.', 'error');
+    } else {
+      setAuthStatus('Verification email sent.', 'success');
+    }
   } catch (err) {
     setAuthStatus(err.message || 'Could not resend the verification email.', 'error');
   }
@@ -10760,6 +10768,9 @@ authChangeEmailForm.addEventListener('submit', async (event) => {
     // above — only present when no real email provider is configured.
     if (result.devVerifyUrl) {
       setAuthStatus(`Email changed! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
+    } else if (!result.verificationEmailSent) {
+      // #1451: same real-Resend-failure gap as the signup handler above.
+      setAuthStatus('Email changed, but the verification email failed to send — use "Resend verification email" from your account menu.', 'error');
     } else {
       setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
     }
