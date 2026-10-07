@@ -8067,10 +8067,17 @@ async function handleTax(request, env, db, route, url) {
   // step) and both taxIdEncryptionConfigured (to decrypt it) and
   // tax1099EfilingConfigured (to have somewhere to send it) — same
   // guarded-secret 503 as every other unconfigured vendor integration
-  // here, not a silent no-op. The status='approved' guard on the UPDATE
-  // itself is the same atomic check-then-act idiom as the approve route
-  // above, so a second concurrent file attempt on the same form can't
-  // double-transmit it.
+  // here, not a silent no-op.
+  // #1410: transmitTax1099Form is a real, irreversible outbound call to
+  // the e-filing vendor -- a status='approved' guard on the UPDATE
+  // *after* that call only serializes the database row, not the external
+  // side effect, so two concurrent /file requests could both pass the
+  // pre-check above and both transmit the same form (two distinct federal
+  // filings). Claiming the row (status -> 'filing') *before* the
+  // transmission closes that window the same way claimOrResumeSellerPayout/
+  // claimPurchasesForPayout claim a payout's purchases before the real
+  // Stripe call; releasing the claim back to 'approved' on failure keeps
+  // the form retryable rather than stranding it.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'file') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
     const formId = route[2];
@@ -8094,20 +8101,36 @@ async function handleTax(request, env, db, route, url) {
     if (!tax1099EfilingConfigured(env)) {
       throw new HttpError('1099 e-filing is not configured on this server yet.', 503);
     }
-    const payeeTaxId = await decryptTaxIdPayload(env, form.payee_tax_id_encrypted);
-    const filingReference = await transmitTax1099Form(env, { form, payeeEmail: form.payee_email, payeeTaxId });
+    const claimedAt = new Date().toISOString();
+    const claim = await db.prepare(`
+      UPDATE tax_1099_forms SET status = 'filing', updated_at = ?
+      WHERE form_id = ? AND status = 'approved'
+    `).bind(claimedAt, formId).run();
+    if (claim.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
+    let filingReference;
+    try {
+      const payeeTaxId = await decryptTaxIdPayload(env, form.payee_tax_id_encrypted);
+      filingReference = await transmitTax1099Form(env, { form, payeeEmail: form.payee_email, payeeTaxId });
+    } catch (err) {
+      await db.prepare(`
+        UPDATE tax_1099_forms SET status = 'approved', updated_at = ?
+        WHERE form_id = ? AND status = 'filing'
+      `).bind(new Date().toISOString(), formId).run();
+      throw err;
+    }
     const filedAt = new Date().toISOString();
-    // #897: same reasoning as approve_1099_form above -- this UPDATE's own
-    // status='approved' guard can legitimately affect 0 rows, so the log
-    // INSERT must not be batched with it (a batch commits a 0-rows-changed
-    // statement same as any other). The transmission above already
-    // succeeded by this point regardless, so this only ever affects the
-    // audit trail, never a double-transmit.
+    // #897: same reasoning as approve_1099_form above -- the log INSERT
+    // must not be batched with the UPDATE, since a batch commits a
+    // 0-rows-changed statement same as any other. Unlike before #1410's
+    // fix, changes === 0 here would mean something else moved this form
+    // out of 'filing' entirely (no other code path does), not a benign
+    // "someone else already filed it" race -- the transmission above only
+    // ever runs once per claim.
     const result = await db.prepare(`
       UPDATE tax_1099_forms SET status = 'filed', filed_at = ?, filing_reference = ?, updated_at = ?
-      WHERE form_id = ? AND status = 'approved'
+      WHERE form_id = ? AND status = 'filing'
     `).bind(filedAt, filingReference, filedAt, formId).run();
-    if (result.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
+    if (result.meta.changes === 0) throw new HttpError('Tax form claim was lost before it could be recorded as filed', 409);
     await adminActionLogStatement(db, user.user_id, 'file_1099_form', 'tax_1099_form', formId, {
       formType: form.form_type, taxYear: form.tax_year, payeeUserId: form.user_id, filingReference,
     }).run();
