@@ -3546,6 +3546,19 @@ describe('Landlet levels', () => {
       const limited = await api(`/saved-layouts/${savedLayoutIds[20]}`, owner.session({ method: 'DELETE' }));
       expect(limited.response.status).toBe(429);
     });
+
+    // #1441: GET /api/builders/me/saved-layouts sorts by
+    // `created_at DESC, saved_layout_id DESC`, but the old builder_id index
+    // didn't cover that sort — same "schema-only change, check the index
+    // exists" shape as #1004's auctions/auction_bids test. The old index is
+    // dropped in the same migration (now a strict leftmost-prefix subset of
+    // the composite one), so this also confirms that drop didn't silently
+    // no-op.
+    it('indexes saved_level_layouts on builder_id, covering the sort', async () => {
+      const indexes = (await env.DB.prepare('PRAGMA index_list(saved_level_layouts)').all()).results;
+      expect(indexes.some((idx) => idx.name === 'idx_saved_level_layouts_builder_created')).toBe(true);
+      expect(indexes.some((idx) => idx.name === 'idx_saved_level_layouts_builder_id')).toBe(false);
+    });
   });
 
   // #976: POST/PATCH /api/catalog used to return the locally-constructed

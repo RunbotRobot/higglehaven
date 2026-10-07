@@ -1789,6 +1789,22 @@ describe('Bundles', () => {
     expect(deleted.body).toEqual({ deleted: true });
     expect((await api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' }))).response.status).toBe(404);
   });
+
+  // #1441: both GET /api/bundles branches (the "my bundles" builder_id
+  // filter and the shared=true community tab) sort by
+  // `created_at DESC, bundle_id DESC`, but neither of this table's old
+  // indexes covered that sort — same "schema-only change, check the index
+  // exists" shape as #1004's auctions/auction_bids test above. The old
+  // indexes are dropped in the same migration (now a strict leftmost-prefix
+  // subset of the composite ones), so this also confirms that drop didn't
+  // silently no-op.
+  it('indexes bundles on both the builder_id filter and the shared partial filter, covering the sort', async () => {
+    const indexes = (await env.DB.prepare('PRAGMA index_list(bundles)').all()).results;
+    expect(indexes.some((idx) => idx.name === 'idx_bundles_builder_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_bundles_shared_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_bundles_builder_id')).toBe(false);
+    expect(indexes.some((idx) => idx.name === 'idx_bundles_shared')).toBe(false);
+  });
 });
 
 describe('Prohibited categories and digital goods', () => {
