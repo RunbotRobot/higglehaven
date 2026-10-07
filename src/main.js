@@ -2318,11 +2318,17 @@ function renderCatalogThumbnail(template) {
   if (catalogThumbnailCache.has(template.templateId)) {
     return Promise.resolve(catalogThumbnailCache.get(template.templateId));
   }
-  const result = catalogThumbnailQueue.then(() => renderCatalogThumbnailNow(template));
-  catalogThumbnailQueue = result.then(
-    () => {},
-    () => {}, // keep the queue alive even if one template's render fails
-  );
+  // #1446: renderCatalogThumbnailNow can genuinely reject (e.g. a
+  // SecurityError from a tainted canvas on a model whose texture lacks
+  // CORS headers) -- caught here, once, so neither of this function's two
+  // internal .then()s nor either of its callers need their own catch.
+  // Degrades the same way a null previewObject already does: no thumbnail,
+  // same error-logging style persistCatalogThumbnail's own catch uses.
+  const result = catalogThumbnailQueue.then(() => renderCatalogThumbnailNow(template)).catch((err) => {
+    console.error('renderCatalogThumbnail: could not render a thumbnail for', template.templateId, err);
+    return null;
+  });
+  catalogThumbnailQueue = result.then(() => {}); // keep the queue alive even if one template's render fails
   result.then((rendered) => {
     if (rendered) {
       catalogThumbnailCache.set(template.templateId, rendered.dataUrl);
