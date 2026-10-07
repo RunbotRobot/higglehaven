@@ -2947,14 +2947,22 @@ async function handleBuilders(request, env, db, route, url) {
     }
     const previousAccountId = builder.stripe_account_id;
     const nowIso = new Date().toISOString();
-    await db.batch([
-      db.prepare(`
-        UPDATE builders
-        SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
-        WHERE builder_id = ?
-      `).bind(nowIso, nowIso, route[1]),
-      adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'builder', route[1], { previousAccountId }),
-    ]);
+    // #1414: the UPDATE's own WHERE must re-assert stripe_account_id, not
+    // just builder_id -- otherwise a concurrent/retried reset request
+    // (built from this same stale read) can land after the builder has
+    // already reconnected a brand-new account and silently null that one
+    // out instead, orphaning a live Stripe account the same way #474 fixed
+    // for the sibling create path (see handleBuilderStripeAccount's own
+    // "AND stripe_account_id IS NULL" guard below).
+    const result = await db.prepare(`
+      UPDATE builders
+      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+      WHERE builder_id = ? AND stripe_account_id = ?
+    `).bind(nowIso, nowIso, route[1], previousAccountId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('This builder\'s Stripe account changed concurrently -- refetch and retry', 409);
+    }
+    await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'builder', route[1], { previousAccountId }).run();
     const updated = await requireBuilder(db, route[1]);
     return json(stripeAccountStatusJson(env, updated));
   }
@@ -3524,14 +3532,20 @@ async function handleSellers(request, env, db, route, url) {
     }
     const previousAccountId = seller.stripe_account_id;
     const nowIso = new Date().toISOString();
-    await db.batch([
-      db.prepare(`
-        UPDATE sellers
-        SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
-        WHERE seller_id = ?
-      `).bind(nowIso, nowIso, route[1]),
-      adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'seller', route[1], { previousAccountId }),
-    ]);
+    // #1414: same fix as the builder-side handler above -- the UPDATE's own
+    // WHERE must re-assert stripe_account_id, not just seller_id, or a
+    // concurrent/retried reset (from this same stale read) can land after
+    // the seller has already reconnected a brand-new account and silently
+    // null that one out instead.
+    const result = await db.prepare(`
+      UPDATE sellers
+      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+      WHERE seller_id = ? AND stripe_account_id = ?
+    `).bind(nowIso, nowIso, route[1], previousAccountId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('This seller\'s Stripe account changed concurrently -- refetch and retry', 409);
+    }
+    await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'seller', route[1], { previousAccountId }).run();
     const updated = await requireSeller(db, route[1]);
     return json(stripeAccountStatusJson(env, updated));
   }
