@@ -931,12 +931,17 @@ async function handleControlRoomTaskCreate(request, env, db) {
   //
   // #1070: normalized to the canonical lowercase sentinel (not just
   // compared case-insensitively) once it matches -- admin-control-room.html's
-  // own badge/Quick-Look logic does a strict === 'owner' against the STORED
-  // value, so a casing variant that only passed the gate check here would
+  // own badge/Quick-Look logic does a strict === against the STORED value
+  // for all three sentinels ('owner'/'claude'/'subtasks'; #1449 extended
+  // this past #1070's original owner-only scope once the other two were
+  // added), so a casing variant that only passed a gate check here would
   // still render wrong on the board. Any other value (a genuine "blocked on
   // #123" task id) passes through untouched.
   let waitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
-  if (waitingOn?.toLowerCase() === 'owner') waitingOn = 'owner';
+  const waitingOnLower = waitingOn?.toLowerCase();
+  if (waitingOnLower === 'owner') waitingOn = 'owner';
+  else if (waitingOnLower === 'claude') waitingOn = 'claude';
+  else if (waitingOnLower === 'subtasks') waitingOn = 'subtasks';
   let reason = null;
   if (waitingOn === 'owner') {
     reason = controlRoomTextValue(body.reason, 'reason (message text explaining the owner block)');
@@ -1001,12 +1006,19 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   const body = await readJson(request);
   const caller = labelValue(body.caller, 'caller (caller name)');
 
-  // #1070: normalized to the canonical lowercase sentinel once it matches
-  // case-insensitively, on both the incoming and already-stored side --
-  // see handleControlRoomTaskCreate's own comment on why a strict === alone
-  // (against a column that's also genuinely free-text) isn't enough.
+  // #1070/#1449: normalized to the canonical lowercase sentinel once it
+  // matches case-insensitively, on both the incoming and already-stored
+  // side -- see handleControlRoomTaskCreate's own comment on why a strict
+  // === alone (against a column that's also genuinely free-text) isn't
+  // enough, and on why this covers all three sentinels, not just 'owner'.
   let normalizedIncomingWaitingOn = body.waitingOn ? labelValue(body.waitingOn, 'waitingOn') : null;
-  if (normalizedIncomingWaitingOn?.toLowerCase() === 'owner') normalizedIncomingWaitingOn = 'owner';
+  const normalizedIncomingWaitingOnLower = normalizedIncomingWaitingOn?.toLowerCase();
+  if (normalizedIncomingWaitingOnLower === 'owner') normalizedIncomingWaitingOn = 'owner';
+  else if (normalizedIncomingWaitingOnLower === 'claude') normalizedIncomingWaitingOn = 'claude';
+  else if (normalizedIncomingWaitingOnLower === 'subtasks') normalizedIncomingWaitingOn = 'subtasks';
+  // Only 'owner' gates real behavior (the required-reason check below) --
+  // 'claude'/'subtasks' are purely display sentinels, so this stays scoped
+  // to 'owner' alone, unlike the normalization above.
   const existingWaitingOnOwner = existing.waiting_on?.toLowerCase() === 'owner';
   const settingWaitingOnOwner = normalizedIncomingWaitingOn === 'owner' && !existingWaitingOnOwner;
   let reason = null;
