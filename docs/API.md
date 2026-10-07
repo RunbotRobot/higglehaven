@@ -3733,6 +3733,13 @@ doesn't grow unbounded) is `pruneStaleAvatarPresence` (#1101, below),
 run from the existing `scheduled()` cron on a longer (5-minute) threshold,
 since its job is table hygiene, not hiding a briefly-stale builder.
 
+Capped at 200 rows, most-recently-updated first (#1438) — a live snapshot
+rather than something a caller would paginate through, same flat-cap
+convention this doc already uses for sign_posts/calendar_events/
+seller_feedback. Without it, a landlet with many concurrent visitors would
+return every one of them in one response, and the client spawns a real
+avatar mesh group per entry on every poll tick.
+
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
 Requires a session. Unlike `GET /api/presence?landletId=X` above, this
