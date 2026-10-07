@@ -14768,7 +14768,28 @@ async function loadSellerShowcasePage(pageIndex) {
     crop: {},
     scale: 1,
   })));
-  if (myToken !== sellerShowcaseLoadToken) return; // a newer page load superseded this one while models were loading
+  if (myToken !== sellerShowcaseLoadToken) {
+    // A newer page load superseded this one while models were loading.
+    // `meshes` already finished building (geometry + material + textures)
+    // but was never added to the scene, so nothing else will ever dispose
+    // it — same leak family as #1358/#1359/#1370/#1426. Mirrors
+    // disposeSellerShowcaseMeshes's own per-mesh disposeObject call below.
+    let disposedCount = 0;
+    for (const mesh of meshes) {
+      if (!mesh) continue;
+      disposeObject(mesh);
+      disposedCount++;
+    }
+    // #1427: e2e-only diagnostic, same "expose a minimal hook purely for
+    // test verification" reasoning as window.__rendererMemory (#1358) —
+    // a superseded page's meshes are never added to the scene, so
+    // renderer.info's own live counts never reflect them either way and
+    // can't tell a test whether this disposal actually ran. This counter
+    // is incremented only in this branch, so a test can assert it grew
+    // across a deliberately raced Next/Prev pair.
+    window.__sellerShowcaseDisposedMeshCount = (window.__sellerShowcaseDisposedMeshCount || 0) + disposedCount;
+    return;
+  }
 
   for (const mesh of meshes) {
     if (!mesh) continue;
