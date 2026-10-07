@@ -12361,6 +12361,22 @@ async function refreshEquippedShopAvatar(modelUrl) {
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
+// #1445: e2e-only hook for forcing a deterministic cross of
+// SHOP_LOAD_RADIUS_M/SHOP_UNLOAD_RADIUS_M without racing real joystick/
+// flight movement choreography against a tight artificial network delay.
+// Sets shopAvatarPosition directly rather than camera.position -- Shop
+// mode's own per-frame positionShopCamera() derives camera.position fresh
+// from shopAvatarPosition every single frame (see its own definition), so
+// writing camera.position here would just be silently overwritten on the
+// very next frame. updateShopProximity reads camera.position.x/y, and
+// positionShopCamera runs unconditionally ahead of it in the same
+// updateShopMovement tick, so this still lands before the next proximity
+// check sees it. Always inert unless a test calls it, same convention as
+// window.__testAvatarLoadDelayMs.
+window.__testTeleportShopAvatar = (x, y) => {
+  shopAvatarPosition.x = x;
+  shopAvatarPosition.y = y;
+};
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 
@@ -13425,7 +13441,23 @@ async function loadShopLandletInstances(entry, myToken) {
   for (const instance of instances) {
     if (myToken !== entry.loadToken) return; // superseded while this was in flight
     const object = await createMeshForInstance(instance);
-    if (!object || myToken !== entry.loadToken) continue;
+    if (!object) continue;
+    // #1445: object was already fully built above (a real GLTF load) before
+    // this guard runs — same hazard #1426/#1427 already fixed for their own
+    // async-supersede loaders. Without disposing it here, the superseded-
+    // but-already-built instance's geometry/materials/textures leak for the
+    // rest of the tab's lifetime, since nothing else ever references it.
+    if (myToken !== entry.loadToken) {
+      disposeObject3D(object);
+      // Nothing else observes this branch (object is never added to
+      // entry.group, so it's never drawn and therefore never counted by
+      // reportRendererMemoryDiagnostic's renderer.info.memory snapshot
+      // either) -- exposed purely so an e2e test can confirm the dispose
+      // above actually ran, same reasoning as window.__sellerShowcaseDisposedMeshCount
+      // (#1427/#1432) and window.__supersededAvatarDisposals (#1426).
+      window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+      return;
+    }
     entry.group.add(object);
     entry.objects.push(object);
     growShopDomeIfNeeded(object);
