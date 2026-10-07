@@ -326,6 +326,87 @@ describe('Stripe account reset (#1065)', () => {
     expect(logRow.target_type).toBe('builder');
     expect(JSON.parse(logRow.detail_json)).toEqual({ previousAccountId: 'acct_dead_builder' });
   });
+
+  // #1414: the UPDATE's own WHERE used to only constrain on builder_id/
+  // seller_id, not the stripe_account_id this handler's own precondition
+  // check just read -- so a reset request built from a stale read could
+  // land after the builder/seller already reconnected a brand-new account
+  // and silently null that one out instead. Same db.prepare monkey-patch
+  // idiom worker/commerce.test.js's own mark-shipped/confirm-delivery
+  // refund-race tests use to inject a concurrent write mid-request.
+  it('rejects resetting a builder whose dead account was already replaced by a real reconnect in the window between the check and the write', async () => {
+    const builder = await signupBuilder('stripe-reset-builder-race');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_dead_builder_race', stripe_onboarding_status = 'action_needed' WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE builders') && sql.includes('stripe_account_id = NULL')) {
+        armed = false;
+        originalPrepare(`
+          UPDATE builders SET stripe_account_id = 'acct_new_builder_race', stripe_onboarding_status = 'complete' WHERE builder_id = ?
+        `).bind(builder.builderId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/builders/${builder.builderId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/changed concurrently/);
+
+    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.stripe_account_id).toBe('acct_new_builder_race');
+    expect(row.stripe_onboarding_status).toBe('complete');
+
+    const logRow = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('stripe_account_reset', builder.builderId).first();
+    expect(logRow.count).toBe(0);
+  });
+
+  it('rejects resetting a seller whose dead account was already replaced by a real reconnect in the window between the check and the write', async () => {
+    const seller = await signupSeller('stripe-reset-seller-race');
+    await env.DB.prepare(`
+      UPDATE sellers SET stripe_account_id = 'acct_dead_seller_race', stripe_onboarding_status = 'action_needed' WHERE seller_id = ?
+    `).bind(seller.sellerId).run();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE sellers') && sql.includes('stripe_account_id = NULL')) {
+        armed = false;
+        originalPrepare(`
+          UPDATE sellers SET stripe_account_id = 'acct_new_seller_race', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+        `).bind(seller.sellerId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/changed concurrently/);
+
+    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBe('acct_new_seller_race');
+    expect(row.stripe_onboarding_status).toBe('complete');
+
+    const logRow = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('stripe_account_reset', seller.sellerId).first();
+    expect(logRow.count).toBe(0);
+  });
 });
 
 // #625 (sub-issue of #349/#324): redeeming a builder's higgles balance for
