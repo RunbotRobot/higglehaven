@@ -2222,12 +2222,11 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
   if (results.length === 0) return;
 
   const fmt = (m) => `${m.toFixed(2)}m`;
-  await db.batch(results.map((row) => {
-    const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
-    return db.prepare(
-      'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
-    ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId);
-  }));
+  await fireNotifications(db, results.map((row) => ({
+    builderId: row.builderId,
+    message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+    templateId: template.templateId,
+  })));
 }
 
 // #1220: list-endpoint version of the above, same "N queries -> one grouped
@@ -2267,13 +2266,14 @@ async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
 
   const templateById = new Map(changed.map(({ template }) => [template.templateId, template]));
   const fmt = (m) => `${m.toFixed(2)}m`;
-  await db.batch(results.map((row) => {
+  await fireNotifications(db, results.map((row) => {
     const template = templateById.get(row.templateId);
     const { width, depth, height } = template.dimensions;
-    const message = `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`;
-    return db.prepare(
-      'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
-    ).bind(`notification-${crypto.randomUUID()}`, row.builderId, message, template.templateId);
+    return {
+      builderId: row.builderId,
+      message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+      templateId: row.templateId,
+    };
   }));
 }
 
@@ -5579,10 +5579,10 @@ async function notifyOfNewBid(db, auction, amountCents, bidderBuilderId, previou
   await fireNotifications(db, notifications);
 }
 
-function notificationStatement(db, builderId, message) {
+function notificationStatement(db, builderId, message, templateId = null) {
   return db.prepare(
-    'INSERT INTO notifications (notification_id, builder_id, message) VALUES (?, ?, ?)',
-  ).bind(`notification-${crypto.randomUUID()}`, builderId, message);
+    'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
+  ).bind(`notification-${crypto.randomUUID()}`, builderId, message, templateId);
 }
 
 // #1122: notifications.builder_id is NOT NULL REFERENCES builders ON DELETE
@@ -5607,9 +5607,9 @@ function isForeignKeyConstraintError(err) {
 // Exported so #1122's own regression test can exercise the swallow-vs-
 // rethrow decision directly, the same way refundIdempotencyKey and
 // auctionSettlementEventId above are exported for their own tests.
-export async function fireNotification(db, builderId, message) {
+export async function fireNotification(db, builderId, message, templateId = null) {
   try {
-    await notificationStatement(db, builderId, message).run();
+    await notificationStatement(db, builderId, message, templateId).run();
   } catch (err) {
     if (!isForeignKeyConstraintError(err)) throw err;
   }
@@ -5619,8 +5619,8 @@ export async function fireNotification(db, builderId, message) {
 // still run and caught independently, so one recipient's self-delete race
 // never affects another's notification.
 async function fireNotifications(db, notifications) {
-  for (const { builderId, message } of notifications) {
-    await fireNotification(db, builderId, message);
+  for (const { builderId, message, templateId } of notifications) {
+    await fireNotification(db, builderId, message, templateId);
   }
 }
 
@@ -12319,8 +12319,8 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (purchase.buyer_builder_id) {
     const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
       .bind(purchase.template_id).first();
-    await notificationStatement(db, purchase.buyer_builder_id,
-      `"${template?.name || 'A product'}" has shipped!`).run();
+    await fireNotification(db, purchase.buyer_builder_id,
+      `"${template?.name || 'A product'}" has shipped!`);
   }
   const updated = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(updated) });
@@ -12502,8 +12502,8 @@ async function handlePurchaseConfirmDelivery(request, env) {
         WHERE s.seller_id = ?
       `).bind(purchase.seller_id).first();
       if (owner) {
-        await notificationStatement(db, owner.builder_id,
-          `"${template?.name || 'A product'}" delivery was confirmed by the buyer.`).run();
+        await fireNotification(db, owner.builder_id,
+          `"${template?.name || 'A product'}" delivery was confirmed by the buyer.`);
       }
     }
   }
