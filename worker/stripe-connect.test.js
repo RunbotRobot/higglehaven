@@ -233,6 +233,101 @@ describe('Builder Stripe Connect account (#624)', () => {
   });
 });
 
+// #1065 (sub-issue of #1404): once Stripe permanently disables/closes a
+// connected account, the POST .../stripe-account handlers above only ever
+// update the existing stripe_account_id, never clear it -- these are the
+// admin-gated endpoints that make a fresh onboarding attempt possible
+// again. Deliberately mechanical only: no judgment call here about
+// whether reconnection *should* be allowed (that's #1407's future job).
+describe('Stripe account reset (#1065)', () => {
+  it("requires admin for both the seller and builder reset, 404s on an unknown id, and 409s with nothing connected", async () => {
+    const seller = await signupSeller('stripe-reset-seller-guards');
+    const builder = await signupBuilder('stripe-reset-builder-guards');
+
+    const unauthSeller = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, { method: 'POST' });
+    expect(unauthSeller.response.status).toBe(401);
+    const unauthBuilder = await api(`/builders/${builder.builderId}/stripe-account-reset`, { method: 'POST' });
+    expect(unauthBuilder.response.status).toBe(401);
+
+    const nonAdminSeller = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, seller.session({ method: 'POST' }));
+    expect(nonAdminSeller.response.status).toBe(403);
+    const nonAdminBuilder = await api(`/builders/${builder.builderId}/stripe-account-reset`, builder.session({ method: 'POST' }));
+    expect(nonAdminBuilder.response.status).toBe(403);
+
+    const missingSeller = await api('/sellers/does-not-exist/stripe-account-reset', adminSession({ method: 'POST' }));
+    expect(missingSeller.response.status).toBe(404);
+    const missingBuilder = await api('/builders/does-not-exist/stripe-account-reset', adminSession({ method: 'POST' }));
+    expect(missingBuilder.response.status).toBe(404);
+
+    // Neither has a connected account yet (not_started, per the earlier
+    // "reports not_started" tests above).
+    const nothingToResetSeller = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    expect(nothingToResetSeller.response.status).toBe(409);
+    const nothingToResetBuilder = await api(`/builders/${builder.builderId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    expect(nothingToResetBuilder.response.status).toBe(409);
+  });
+
+  it('clears a dead stripe_account_id, logs the admin action, and lets a fresh account be created afterward', async () => {
+    const seller = await signupSeller('stripe-reset-seller');
+    await env.DB.prepare(`
+      UPDATE sellers SET stripe_account_id = 'acct_dead_seller', stripe_onboarding_status = 'action_needed', stripe_requirements_due = '["individual.verification.document"]' WHERE seller_id = ?
+    `).bind(seller.sellerId).run();
+
+    const reset = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    expect(reset.response.status).toBe(200);
+    expect(reset.body).toMatchObject({ connected: false, status: 'not_started', requirementsCurrentlyDue: [] });
+
+    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status, stripe_requirements_due FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBeNull();
+    expect(row.stripe_onboarding_status).toBe('not_started');
+    expect(row.stripe_requirements_due).toBeNull();
+
+    // Same GET surface a seller sees themselves now reflects the reset.
+    const status = await api('/sellers/me/stripe-account', seller.session());
+    expect(status.body.connected).toBe(false);
+
+    // A fresh onboarding submission is possible again rather than trying
+    // (and failing) to update the dead account id -- same 503-before-ever-
+    // reaching-Stripe shape every other unconfigured POST in this suite
+    // hits, which is itself proof it took the "create" branch, not
+    // "update acct_dead_seller".
+    const resubmit = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST', body: JSON.stringify(validPayload()),
+    }));
+    expect(resubmit.response.status).toBe(503);
+
+    const me = await api('/auth/me', adminSession());
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('stripe_account_reset', seller.sellerId).first();
+    expect(logRow.admin_user_id).toBe(me.body.user.userId);
+    expect(logRow.target_type).toBe('seller');
+    expect(JSON.parse(logRow.detail_json)).toEqual({ previousAccountId: 'acct_dead_seller' });
+  });
+
+  it("resets a builder's dead account independently of the seller reset above", async () => {
+    const builder = await signupBuilder('stripe-reset-builder');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_dead_builder', stripe_onboarding_status = 'action_needed' WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+
+    const reset = await api(`/builders/${builder.builderId}/stripe-account-reset`, adminSession({ method: 'POST' }));
+    expect(reset.response.status).toBe(200);
+    expect(reset.body).toMatchObject({ connected: false, status: 'not_started' });
+
+    const row = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.stripe_account_id).toBeNull();
+
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('stripe_account_reset', builder.builderId).first();
+    expect(logRow.target_type).toBe('builder');
+    expect(JSON.parse(logRow.detail_json)).toEqual({ previousAccountId: 'acct_dead_builder' });
+  });
+});
+
 // #625 (sub-issue of #349/#324): redeeming a builder's higgles balance for
 // real cash. Stripe is never configured in this suite (see this file's own
 // top-of-suite convention), so the actual transfer+payout round trip isn't
