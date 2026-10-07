@@ -1221,6 +1221,41 @@ instead of its seller one. A builder and a seller profile on the same
 account have completely independent Stripe Connect accounts; submitting
 one's onboarding never touches the other's.
 
+### `POST /api/sellers/:sellerId/stripe-account-reset`
+### `POST /api/builders/:builderId/stripe-account-reset`
+
+Admin-gated (#1065, sub-issue of #1404). Once Stripe permanently disables
+or closes a connected account (a fraud/compliance rejection, or a
+platform-initiated closure), the `POST .../stripe-account` handlers above
+only ever *update* the existing `stripe_account_id` — there's no path that
+ever clears it, so the affected seller/builder is stuck at `action_needed`
+forever with no way to reconnect. This clears `stripe_account_id` back to
+`null` and `stripe_onboarding_status` back to `not_started` (clearing
+`stripe_requirements_due` too), so a subsequent `POST .../stripe-account`
+call creates a fresh Stripe account instead of trying to update the dead
+one.
+
+`404` if the seller/builder doesn't exist, `409` if it has no connected
+Stripe account to reset (`stripe_account_id` already `null`). Logs the
+reset to `admin_action_log` (`stripe_account_reset`, with the cleared
+account id in `detail_json`) in the same atomic batch as the clear, same
+discipline every other admin mutation in this file follows. Response
+shape matches `GET .../stripe-account` above, reflecting the now-cleared
+state.
+
+**Deliberately makes no judgment call about whether reconnection should be
+allowed** — this is mechanical plumbing only, narrowed down from this
+issue's own original, broader "self-service vs. manual intervention" UX
+question once that got superseded by a bigger decision (owner, live voice
+conversation, 2026-10-06): reinstatement after a fraud/misuse flag is a
+judgment call the owner wants an AI session to make directly, backed by a
+written rubric, a mandatory audit trail, an escalate-on-ambiguity rule,
+and redundant secondary review — see the tracking issue (#1404) for the
+full design. This endpoint is the one piece of that framework that was
+already safe to build standalone: the actual reinstatement *decision* flow
+(#1407) depends on this landing first, then calls this same admin-gated
+primitive once the rubric and audit-trail sub-issues are in place.
+
 ### `POST /api/auth/stripe-webhook`
 
 #766: `stripe_onboarding_status`/`stripe_requirements_due` on both the

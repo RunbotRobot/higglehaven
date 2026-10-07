@@ -2930,6 +2930,35 @@ async function handleBuilders(request, env, db, route, url) {
     return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
   }
 
+  // #1065 (sub-issue of #1404): mechanical plumbing only. Once Stripe
+  // permanently disables/closes a connected account, stripe_account_id is
+  // otherwise stuck forever (every POST .../stripe-account branch above
+  // only ever updates an existing account id, never clears it) with no way
+  // for this builder to ever reconnect. This deliberately makes no
+  // judgment call about whether reconnection *should* be allowed -- that's
+  // #1407's reviewed AI reinstatement decision, which calls this same
+  // admin-gated primitive once it lands. Admin-gated the same way every
+  // other sensitive account mutation in this file is.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
+    const admin = await requireAdmin(request, db);
+    const builder = await requireBuilder(db, route[1]);
+    if (!builder.stripe_account_id) {
+      throw new HttpError('This builder has no connected Stripe account to reset', 409);
+    }
+    const previousAccountId = builder.stripe_account_id;
+    const nowIso = new Date().toISOString();
+    await db.batch([
+      db.prepare(`
+        UPDATE builders
+        SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+        WHERE builder_id = ?
+      `).bind(nowIso, nowIso, route[1]),
+      adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'builder', route[1], { previousAccountId }),
+    ]);
+    const updated = await requireBuilder(db, route[1]);
+    return json(stripeAccountStatusJson(env, updated));
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -3480,6 +3509,31 @@ async function handleSellers(request, env, db, route, url) {
       throw new HttpError("Cannot delete this seller while a real-money purchase's proceeds are still unpaid — request a payout first", 409);
     }
     return json({ deleted: true });
+  }
+
+  // #1065 (sub-issue of #1404): mechanical plumbing only, mirroring the
+  // builder-side reset above handleBuilders adds — see that handler's own
+  // comment for the full reasoning (why stripe_account_id otherwise never
+  // clears, and why this makes no judgment call about whether reconnection
+  // should be allowed).
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
+    const admin = await requireAdmin(request, db);
+    const seller = await requireSeller(db, route[1]);
+    if (!seller.stripe_account_id) {
+      throw new HttpError('This seller has no connected Stripe account to reset', 409);
+    }
+    const previousAccountId = seller.stripe_account_id;
+    const nowIso = new Date().toISOString();
+    await db.batch([
+      db.prepare(`
+        UPDATE sellers
+        SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+        WHERE seller_id = ?
+      `).bind(nowIso, nowIso, route[1]),
+      adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'seller', route[1], { previousAccountId }),
+    ]);
+    const updated = await requireSeller(db, route[1]);
+    return json(stripeAccountStatusJson(env, updated));
   }
 
   return json({ error: 'Not found' }, 404);
