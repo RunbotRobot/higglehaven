@@ -599,6 +599,71 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1416: PUT /catalog/batch fires the identical notifyBuildersOfDimension-
+  // ChangeBatch fan-out its single-item sibling (PATCH/PUT above) is rate-
+  // limited to protect, on a seller-less template with no session required
+  // -- but this batch endpoint had no rate limit at all, authenticated or
+  // not. One seller-less template reused across every attempt (same
+  // "consumed one-shot" distinction the single-item PATCH test above notes
+  // for DELETE) with a different dimension each time.
+  it('rate-limits repeated unauthenticated batch PUTs containing a seller-less template', async () => {
+    const templateId = await createTemplate('catalog-batch-put-rate-limit');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog/batch', {
+        method: 'PUT', headers,
+        body: JSON.stringify({ templates: [{
+          templateId, name: 'Batch put rate limit', color: '#123456',
+          dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 },
+        }] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog/batch', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ templates: [{
+        templateId, name: 'Batch put rate limit', color: '#123456',
+        dimensions: { width: 9, depth: 1, height: 1 },
+      }] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
+  it('rate-limits repeated authenticated batch PUTs on a seller-owned template', async () => {
+    const seller = await signupSeller('catalog-batch-put-rl-seller');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-batch-put-owner-rate-limit-template',
+        name: 'Owned batch rate-limit product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog/batch', seller.session({
+        method: 'PUT',
+        body: JSON.stringify({ templates: [{
+          templateId, name: 'Owned batch rate-limit product', color: '#123456',
+          dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 }, sellerId: seller.sellerId,
+        }] }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog/batch', seller.session({
+      method: 'PUT',
+      body: JSON.stringify({ templates: [{
+        templateId, name: 'Owned batch rate-limit product', color: '#123456',
+        dimensions: { width: 9, depth: 1, height: 1 }, sellerId: seller.sellerId,
+      }] }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // Found via backlog audit: review moderation (DELETE) has the identical
   // permissive-when-orphaned shape as catalog template DELETE above (#520)
   // — a seller-less template's reviews stay unrestricted, but until now had
