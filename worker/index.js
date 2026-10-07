@@ -1529,9 +1529,22 @@ async function handleCatalog(request, db, route, url, models, env) {
     const sellerIdsToCheck = new Set(sellerIds);
     const danglingCandidates = existingOwnerRows.results.map((row) => row.seller_id).filter(Boolean);
     for (const sellerId of await existingSellerIds(db, danglingCandidates)) sellerIdsToCheck.add(sellerId);
+    let sessionSeller = null;
     if (sellerIdsToCheck.size > 0) {
-      const sessionSeller = await requireSessionSeller(request, db);
+      sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of sellerIdsToCheck) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+    }
+    // #1416: PUT fires the identical notifyBuildersOfDimensionChange
+    // fan-out its single-item sibling (the PATCH/PUT handler above) is
+    // rate-limited to protect, "regardless of the session gate" per
+    // #1329 -- but this batch endpoint never carried that guard over,
+    // authenticated or not. Scoped to PUT only, same as the single-item
+    // sibling: plain POST creation has no notification fan-out and is
+    // deliberately left unthrottled (see this function's own top
+    // comment on why an IP-keyed limit there would trip on ordinary
+    // system/placeholder-template seeding).
+    if (request.method === 'PUT') {
+      await checkRateLimit(db, sessionSeller ? `catalog-patch:${sessionSeller.seller_id}` : `catalog-patch:${clientIp(request)}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     }
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
