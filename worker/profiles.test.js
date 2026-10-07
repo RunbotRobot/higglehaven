@@ -1657,4 +1657,19 @@ describe('Friendships', () => {
     }
     expect(paged.map((f) => f.friendshipId)).toEqual(whole.body.friendships.map((f) => f.friendshipId));
   });
+
+  // #1434: the list query's `(requester_builder_id = ? OR recipient_builder_id
+  // = ?) ... ORDER BY created_at DESC, friendship_id DESC` had no index
+  // covering either side's sort key — same "schema-only change, check the
+  // index exists" shape as the auctions/auction_bids test above. The old
+  // single-column indexes are dropped in the same migration (now a strict
+  // leftmost-prefix subset of the composite ones), so this also confirms
+  // that drop didn't silently no-op.
+  it('indexes friendships on each side of the requester/recipient OR, covering the sort', async () => {
+    const indexes = (await env.DB.prepare('PRAGMA index_list(friendships)').all()).results;
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_requester_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_requester')).toBe(false);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient')).toBe(false);
+  });
 });
