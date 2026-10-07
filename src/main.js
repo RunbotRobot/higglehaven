@@ -3602,7 +3602,14 @@ async function showAxisPreview(template, container, highlightAxes) {
     rotationX: 0, rotationY: 0, rotationZ: 0,
     crop: {},
   });
-  if (myLoadToken !== axisPreviewLoadToken) return; // superseded while loading — a newer call owns the preview now
+  if (myLoadToken !== axisPreviewLoadToken) {
+    // A newer call owns the preview now — this one's just-built object was
+    // never added to any scene disposeAxisPreview knows about, so without
+    // this it leaks the exact same way #1426/#1427 did for their own
+    // superseded in-flight loads.
+    if (previewObject) disposeObject(previewObject);
+    return;
+  }
   if (!previewObject) return;
   scene.add(previewObject);
 
