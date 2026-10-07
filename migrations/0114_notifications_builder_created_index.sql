@@ -1,0 +1,16 @@
+-- #1433: notifications' only index, idx_notifications_builder_id
+-- (migrations/0038, builder_id + read_at), covers GET /api/notifications'
+-- own builder_id (+ unreadOnly) filter but nothing about its
+-- `ORDER BY created_at DESC, notification_id DESC` -- so every call sorts
+-- with a temporary b-tree instead of walking an index in the order it
+-- already needs. That handler's own comment already establishes this
+-- table isn't small in practice ("a popular auction alone can generate
+-- 100+ bid notifications for its seller"), there's no cleanup sweep for
+-- old rows anywhere in this file, and the notification-panel/unread-badge
+-- UI polls this endpoint on essentially every logged-in page load.
+--
+-- Additive, not a replacement: idx_notifications_builder_id still earns
+-- its keep for unread-count's own `COUNT(*) WHERE builder_id = ? AND
+-- read_at IS NULL`, which this new index's leading columns don't help
+-- with the same way (read_at isn't in it).
+CREATE INDEX IF NOT EXISTS idx_notifications_builder_created ON notifications(builder_id, created_at, notification_id);
