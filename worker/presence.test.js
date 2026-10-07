@@ -77,6 +77,40 @@ describe('Avatar presence (#1095)', () => {
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toEqual([]);
     });
+
+    // #1438: unlike every sibling list endpoint, this query had no LIMIT at
+    // all — a landlet with many concurrent visitors would return every one
+    // of them in a single response, and the client spawns a real avatar
+    // mesh group per entry on every poll tick.
+    it('caps the number of nearby avatars returned, favoring the most recently updated', async () => {
+      const viewer = await signupBuilder('presence-cap-viewer');
+      // Bulk-fabricating 205 other builders via real signup (password
+      // hashing per account) is far too slow for a single test — insert
+      // the `builders` rows directly instead, the same "produce the state
+      // a real write would have, skip the expensive path" shortcut this
+      // file's own setPresence already takes for avatar_presence itself.
+      const otherBuilderIds = Array.from({ length: 205 }, () => `builder-presence-cap-${crypto.randomUUID()}`);
+      for (const builderId of otherBuilderIds) {
+        await env.DB.prepare('INSERT INTO builders (builder_id, label) VALUES (?, ?)').bind(builderId, builderId).run();
+      }
+      const base = Date.now();
+      for (const [i, builderId] of otherBuilderIds.entries()) {
+        await setPresence(builderId, {
+          landletId: 'presence-landlet-cap',
+          updatedAt: new Date(base - i * 10).toISOString(),
+        });
+      }
+
+      const got = await api('/presence?landletId=presence-landlet-cap', viewer.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.avatars).toHaveLength(200);
+      const returnedIds = new Set(got.body.avatars.map((a) => a.builderId));
+      // The 200 most recently updated reports (i.e. the smallest indices
+      // above, since each subsequent one is 10ms older) should all be
+      // present; the 5 stalest should have been dropped by the cap.
+      for (let i = 0; i < 200; i += 1) expect(returnedIds.has(otherBuilderIds[i])).toBe(true);
+      for (let i = 200; i < 205; i += 1) expect(returnedIds.has(otherBuilderIds[i])).toBe(false);
+    });
   });
 
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
