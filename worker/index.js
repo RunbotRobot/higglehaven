@@ -1962,9 +1962,12 @@ async function handleCatalog(request, db, route, url, models, env) {
       // the same notifyBuildersOfDimensionChange fan-out as the
       // unauthenticated branch below, and every other authenticated
       // mutation-with-fan-out in this file (friendship/bundle mutate,
-      // calendar-event delete, notification mutate, auction bids, and most
-      // directly this same resource's own DELETE sibling, #990/#991) rate-
-      // limits itself regardless of the session gate.
+      // calendar-event delete, notification mutate, auction bids, and (as
+      // of #1455) this same resource's own DELETE sibling) rate-limits
+      // itself regardless of the session gate. (#990/#991, despite the
+      // similar name, fixed product_reviews' own nested DELETE, a
+      // different handler -- not this resource's own DELETE, which #1455
+      // found still lacked this until then.)
       await checkRateLimit(db, `catalog-patch:${sessionSeller.seller_id}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     } else {
       // No owning seller to gate this PATCH behind a session (a system/
@@ -2023,6 +2026,13 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
+      // #1455: the session requirement alone doesn't bound this, same
+      // reasoning as the PATCH handler's own #1329 fix above — this branch
+      // was the one authenticated mutation path on this resource still
+      // missing it (the PATCH comment's claim of parity with "this same
+      // resource's own DELETE sibling, #990/#991" was mistaken: #990/#991
+      // fixed product_reviews' own nested DELETE, not this one).
+      await checkRateLimit(db, `catalog-delete:${sessionSeller.seller_id}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     } else {
       // No owning seller to gate this DELETE behind a session (see the
       // PATCH handler's identical comment above) — cap the request rate the

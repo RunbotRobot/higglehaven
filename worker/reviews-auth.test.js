@@ -583,6 +583,40 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1455: the authenticated seller-owner DELETE branch had no rate limit at
+  // all -- #1329's own comment on the PATCH handler above mistakenly claimed
+  // parity with "this same resource's own DELETE sibling, #990/#991," but
+  // #990/#991 actually fixed product_reviews' own nested DELETE, a different
+  // handler. This top-level DELETE never got the fix. Unlike the repeatable
+  // authenticated-PATCH test above, DELETE consumes its target, so each
+  // attempt needs its own fresh owned template.
+  it('rate-limits repeated authenticated DELETEs of seller-owned templates', async () => {
+    const seller = await signupSeller('catalog-delete-owner-rate-limit-seller');
+    async function createOwnedTemplate(templateId) {
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId,
+          name: `Owned delete rate-limit product ${templateId}`,
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      return templateId;
+    }
+
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createOwnedTemplate(`catalog-delete-owner-rate-limit-${i}`);
+      const attempt = await api(`/catalog/${templateId}`, seller.session({ method: 'DELETE' }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const templateId = await createOwnedTemplate('catalog-delete-owner-rate-limit-final');
+    const limited = await api(`/catalog/${templateId}`, seller.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('rate-limits repeated unauthenticated batch DELETEs containing seller-less templates', async () => {
     const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 20; i++) {
