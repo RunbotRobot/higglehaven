@@ -109,5 +109,6 @@
   "0109_inactivity_warning_sent_at.sql",
   "0110_account_moderation_decisions.sql",
   "0111_tax_1099_forms_filing_status.sql",
-  "0112_friendships_sort_indexes.sql"
+  "0112_friendships_sort_indexes.sql",
+  "0113_bundles_saved_layouts_sort_indexes.sql"
 ]
