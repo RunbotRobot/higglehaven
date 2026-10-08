@@ -816,7 +816,11 @@ describe('Product reviews', () => {
       seller.session({ method: 'DELETE' }),
     );
     expect(limited.response.status).toBe(429);
-  });
+  }, 30000); // #1511: 20 iterations of signupBuilder+createPurchase+POST+
+  // DELETE (~80 real HTTP/DB operations total), matching #1469's precedent
+  // for a comparable request volume elsewhere in this shared-D1-per-file
+  // suite -- reliably fast in isolation but has hit the 20s default under
+  // CI load.
 
   // #804: review *creation* itself had no rate limit at all, unlike its own
   // sibling DELETE branch (tested just above) and every comparable write in
