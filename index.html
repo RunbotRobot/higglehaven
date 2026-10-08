@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>higglehaven (dev)</title>
     <style>
@@ -70,10 +70,20 @@
         height: 100%;
         background: #eef4e0;
       }
+      /* #1504: the viewport meta tag used to carry user-scalable=no/
+         maximum-scale=1.0 site-wide so the custom pinch-zoom camera
+         gesture (setShopFov's pointerdown/pointermove pinch handlers in
+         main.js) wouldn't fight the browser's own native pinch-zoom —
+         but that disabled pinch-zoom everywhere, including every
+         text-heavy modal with no competing gesture. touch-action:none
+         scopes the same prevention to just this canvas, matching the
+         existing pattern on #claim-map-canvas/.seller-preview-canvas
+         below, and leaves the rest of the document pinch-zoomable. */
       #app {
         width: 100vw;
         height: 100vh;
         display: block;
+        touch-action: none;
       }
       /* Wordmark and the account-menu toggle share one fixed top-left row
          (owner request: a cog icon "just to the right of the higglehaven
