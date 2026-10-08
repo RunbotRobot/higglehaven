@@ -239,6 +239,13 @@ describe('Control Room tasks (#N31)', () => {
     expect(got.body.error).toMatch(/imageUrl.*http/i);
   });
 
+  // imageUrl, unlike url/prUrl, routinely holds a same-origin /uploads/
+  // reference (a real uploaded image), not a full URL -- must keep working.
+  it('accepts a task imageUrl pointing at a same-origin /uploads/ path', async () => {
+    const task = await createTask({ imageUrl: '/uploads/e2e-task-thumb.png' });
+    expect(task.imageUrl).toBe('/uploads/e2e-task-thumb.png');
+  });
+
   // Owner feedback (control room notes 9461ee39/96d6d08c, 2026-09-28): a
   // message-shaped task (kind feedback/question, no GitHub issue/PR behind
   // it) had no visible id at all, since taskNumberLabel (admin-control-
@@ -693,6 +700,16 @@ describe('Control Room replies (#N31)', () => {
     }));
     expect(got.response.status).toBe(400);
     expect(got.body.error).toMatch(/imageUrl.*http/i);
+  });
+
+  it('accepts a reply imageUrl pointing at a same-origin /uploads/ path', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', text: 'Hi', imageUrl: '/uploads/e2e-reply-attachment.png' }),
+    }));
+    expect(got.response.status).toBe(201);
+    expect(got.body.reply.imageUrl).toBe('/uploads/e2e-reply-attachment.png');
   });
 
   it('404s replying to a task that does not exist', async () => {
