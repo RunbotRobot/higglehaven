@@ -512,8 +512,8 @@
     // a tap only ever jumps, never also toggles the card it's tapped from.
     const jumpBtn = event.target.closest('[data-jump-to]');
     if (jumpBtn) {
-      const target = taskById(Number(jumpBtn.dataset.jumpTo));
-      if (!target) return;
+      const jumpToNumber = Number(jumpBtn.dataset.jumpTo);
+      let target = taskById(jumpToNumber);
       // Clear whatever tab/search would otherwise hide the target task —
       // "jump to it" should work even from a filtered view, not just when
       // the tab/search already happens to include it.
@@ -521,6 +521,16 @@
       document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.status === ''));
       searchTerm = '';
       document.getElementById('search').value = '';
+      if (!target) {
+        // loadTasks scopes its own fetch to the active tab's status
+        // server-side (#988), not just the client-side render -- the
+        // target may simply not be in `tasks` yet rather than not
+        // existing at all. Reload now that the filter above is cleared,
+        // then retry once before giving up.
+        await loadTasks();
+        target = taskById(jumpToNumber);
+        if (!target) return;
+      }
       expanded.add(target.id);
       if (!repliesCache.has(target.id)) loadReplies(target.id);
       render();
