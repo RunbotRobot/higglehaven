@@ -7688,8 +7688,8 @@ pure, dependency-free helper, `skeletonSignatureFromBones` (`src/
 skeletonSignature.js`, #1233), covered by its own unit tests — the only
 part of `computeSkeletonSignature` this repo's test suite can exercise
 directly, since the rest depends on a loaded `THREE.SkinnedMesh` (see
-`vitest.config.js`'s own note on why three.js-importing code can't run in
-the `src/**/*.test.js` pool).
+`vitest.config.js`'s own note on the real constraint: a loaded model/
+rendering pipeline, not "imports three.js" itself).
 
 Persisted as `catalog_templates.skeleton_signature` (migration 0105),
 passed through `createCatalogTemplate`/`updateCatalogTemplate` as
