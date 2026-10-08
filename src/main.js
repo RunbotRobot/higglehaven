@@ -15023,17 +15023,6 @@ const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee')
 const layoutPreviewPasteTargetEl = document.getElementById('layout-preview-paste-target');
 const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
 
-function disposeLayoutPreviewMeshes() {
-  for (const mesh of layoutPreviewMeshes) {
-    removeSelectionOutline(mesh);
-    scene.remove(mesh);
-    disposeObject(mesh);
-  }
-  layoutPreviewMeshes = [];
-  layoutPreviewInstances = [];
-  selectedSavedInstanceIds.clear();
-}
-
 function updateLayoutPreviewSelectionUI() {
   const n = selectedSavedInstanceIds.size;
   layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
