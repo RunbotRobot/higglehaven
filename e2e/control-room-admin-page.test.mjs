@@ -226,6 +226,37 @@ await blockingCard.waitFor({ timeout: 10000 });
 const blockingCardIsOpen = await blockingCard.evaluate((el) => el.classList.contains('open'));
 console.log('tapping the pill expanded the blocking task\'s own card (actual):', blockingCardIsOpen);
 
+// #1538 regression: loadTasks() scopes its own fetch to the active tab's
+// status server-side (#988), not just the render -- a jump target whose
+// status differs from the currently active tab used to never resolve,
+// since taskById only ever searched whatever status-filtered `tasks`
+// array was already loaded. Seeded with the blocking task already `done`
+// and the blocked task `queued`, then switched to the Queued tab (so
+// `tasks` holds only queued rows) before clicking the pill, to actually
+// exercise the gap rather than coincidentally having both already loaded.
+const filteredBlockingNumber = blockingNumber + 1;
+const filteredBlockingTitle = `E2E filtered blocking task ${filteredBlockingNumber}`;
+const filteredBlockedTitle = `E2E filtered blocked task ${filteredBlockingNumber}`;
+await page.evaluate(async ({ number, blockingTitle: bTitle, blockedTitle: kTitle }) => {
+  const post = (body) => fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await post({ from: 'e2e-owner', kind: 'feedback', number, title: bTitle, status: 'done' });
+  await post({ from: 'e2e-owner', kind: 'feedback', title: kTitle, waitingOn: String(number) });
+}, { number: filteredBlockingNumber, blockingTitle: filteredBlockingTitle, blockedTitle: filteredBlockedTitle });
+
+await page.reload({ waitUntil: 'networkidle' });
+await page.click('.tabs button[data-status="queued"]');
+const filteredBlockedCard = page.locator('.card', { has: page.locator('.title', { hasText: filteredBlockedTitle }) });
+await filteredBlockedCard.waitFor({ timeout: 10000 });
+await filteredBlockedCard.locator('.pill-blocked-on').click();
+const filteredBlockingCard = page.locator('.card', { has: page.locator('.title', { hasText: filteredBlockingTitle }) });
+await filteredBlockingCard.waitFor({ timeout: 10000 });
+const filteredBlockingCardIsOpen = await filteredBlockingCard.evaluate((el) => el.classList.contains('open'));
+console.log('jumping to a "done" target while the "Queued" tab is active still finds and expands it (actual):', filteredBlockingCardIsOpen);
+
 // Quick Look (Control Room feedback: "Let's make a quick-look tab ... that
 // shows the single most important thing needed from me with a textarea
 // for me to respond.") — nothing is waiting on the owner yet in this
@@ -458,6 +489,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   !readyForClaudePillShowsOnInProgress &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
+  filteredBlockingCardIsOpen &&
   stillFocusedAfterPoll &&
   cursorPreservedAfterPoll &&
   fromValuePreservedAfterPoll === 'alice' &&
