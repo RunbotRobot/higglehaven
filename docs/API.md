@@ -1999,6 +1999,11 @@ above) plus `similarity` (this query's own cosine similarity score, highest
 first) — `similarity` is not itself persisted anywhere, only computed
 per-request.
 
+Rate-limited per client IP (`SIMILARITY_SEARCH_RATE_LIMIT_MAX`, 30 per
+15-minute window, `429` past that) — this is an unauthenticated, O(rows)
+full-table scan, so it gets the same IP-keyed throttling as every other
+unauthenticated repeatable endpoint in this file.
+
 ### `POST /api/catalog/concept-image`
 
 #328 — given a builder's free-text prompt, generates a concept image via an
@@ -2010,9 +2015,11 @@ picked over the cheaper Cloudflare Workers AI option per the owner's own
 stated priority (generation quality over minimizing per-call cost).
 
 Requires a session (`requireSessionBuilder`) and is rate-limited per builder
-— unlike everything else this file calls out to externally, this is a real,
-non-trivial per-call cost, so this can't be left anonymous or unthrottled the
-way similarity-search's read-only query above is.
+rather than per IP, unlike similarity-search above — this calls out to a
+real, non-trivial-cost external image-generation API on every request, so
+tying the limit to an authenticated identity (rather than an IP address,
+easy to rotate) matters more here than it does for similarity-search's
+cheap, local, read-only scan.
 
 Request body:
 
