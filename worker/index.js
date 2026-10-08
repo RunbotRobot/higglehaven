@@ -13791,8 +13791,10 @@ function subIssueSummariesValue(value, field) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new HttpError(`${field} must be an object mapping a sub-issue number to a short summary`, 400);
   }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_SUB_ISSUES) throw new HttpError(`${field} must have ${MAX_SUB_ISSUES} entries or fewer`, 400);
   const result = {};
-  for (const [key, summary] of Object.entries(value)) {
+  for (const [key, summary] of entries) {
     if (!/^\d+$/.test(key)) throw new HttpError(`${field} keys must be sub-issue numbers`, 400);
     result[key] = labelValue(summary, field);
   }
