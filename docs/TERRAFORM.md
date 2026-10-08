@@ -18,6 +18,7 @@ against what's actually live in this account today (`wrangler.jsonc`):
 | R2 bucket `higglehaven-db-backups` | Live | Yes (#1139) |
 | R2 bucket for Terraform's own remote state | Does not exist yet | Created by #1137, referenced as the backend |
 | Worker Build trigger (Git integration: repo, branch, build command, deploy command) | Live, dashboard-configured; this is the #662 root cause | Yes (#1140) |
+| Cron Triggers (`*/10 * * * *`, `0 3 * * *`) | Live, in `wrangler.jsonc` | Yes (#1139) |
 | KV namespace | **None exist** — grep across the repo finds no `kv_namespaces` binding anywhere | Not in scope today; see note below |
 | Custom domain routes (`higglehaven.com`, `www.higglehaven.com`) | Live, in `wrangler.jsonc` | **Not** in #1136's design sketch — out of scope for now, see note below |
 
