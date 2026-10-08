@@ -6143,7 +6143,7 @@ function renderBuildSettingsSection() {
   savedLayoutsField.appendChild(savedLayoutsLabel);
   const savedLayoutsHint = document.createElement('div');
   savedLayoutsHint.className = 'settings-empty-note';
-  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level lándlet here, so nothing's really lost.";
+  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level here, so nothing's really lost.";
   savedLayoutsField.appendChild(savedLayoutsHint);
   const savedLayoutsList = document.createElement('div');
   savedLayoutsList.className = 'version-list';
