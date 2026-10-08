@@ -2,8 +2,9 @@
 // (src/main.js) — deriving a deterministic signature from a model's
 // skeleton bone names/hierarchy, extracted the same way flight.js/
 // settings.js already are so it's directly unit-testable in the workerd
-// test pool (see vitest.config.js's own note on why three.js-importing
-// code can't live there). Takes plain {name, parent, isBone}-shaped bone
+// test pool (see vitest.config.js's own note on the real constraint: a
+// loaded model/rendering pipeline, not "imports three.js" itself). Takes
+// plain {name, parent, isBone}-shaped bone
 // objects, duck-typed the same way computeSkeletonSignature's own real
 // THREE.Bone instances already satisfy this shape, so a test can hand-build
 // a bone hierarchy with no three.js import at all.

@@ -208,6 +208,44 @@ describe('Control Room tasks (#N31)', () => {
     expect(task.pr).toBeNull();
   });
 
+  // #1460: url/prUrl/imageUrl used to go through plain labelValue (length
+  // cap only) -- the admin board renders them as an <a href>/<img src> with
+  // only HTML-entity escaping, so a non-http(s) scheme like "javascript:"
+  // landed in the DOM untouched and executed on click.
+  it('rejects a task url with a non-http(s) scheme', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Has a title', url: 'javascript:alert(1)' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/url.*http/i);
+  });
+
+  it('rejects a task prUrl with a non-http(s) scheme', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Has a title', prUrl: 'javascript:alert(1)' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/prUrl.*http/i);
+  });
+
+  it('rejects a task imageUrl with a non-http(s) scheme', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', title: 'Has a title', imageUrl: 'javascript:alert(1)' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/imageUrl.*http/i);
+  });
+
+  // imageUrl, unlike url/prUrl, routinely holds a same-origin /uploads/
+  // reference (a real uploaded image), not a full URL -- must keep working.
+  it('accepts a task imageUrl pointing at a same-origin /uploads/ path', async () => {
+    const task = await createTask({ imageUrl: '/uploads/e2e-task-thumb.png' });
+    expect(task.imageUrl).toBe('/uploads/e2e-task-thumb.png');
+  });
+
   // Owner feedback (control room notes 9461ee39/96d6d08c, 2026-09-28): a
   // message-shaped task (kind feedback/question, no GitHub issue/PR behind
   // it) had no visible id at all, since taskNumberLabel (admin-control-
@@ -377,6 +415,16 @@ describe('Control Room tasks (#N31)', () => {
     }));
     expect(got.response.status).toBe(200);
     expect(got.body.task.pr).toBe('https://github.com/RunbotRobot/higglehaven/pull/910');
+  });
+
+  it('rejects updating prUrl to a non-http(s) scheme', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH',
+      body: JSON.stringify({ caller: 'higglehaven2', prUrl: 'javascript:alert(1)' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/prUrl.*http/i);
   });
 
   it('clears prUrl by setting it to null', async () => {
@@ -589,6 +637,18 @@ describe('Control Room tasks (#N31)', () => {
       expect(got.body.error).toMatch(/subIssueSummaries/);
     });
 
+    it('rejects more than 50 subIssueSummaries entries', async () => {
+      const subIssueSummaries = Object.fromEntries(
+        Array.from({ length: 51 }, (_, i) => [String(i + 1), 'Summary']),
+      );
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssueSummaries }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/50/);
+    });
+
     it('updates subIssues and subIssueSummaries on an existing task', async () => {
       const task = await createTask({ title: 'Tracking task, updated later' });
       const got = await api(`/control-room/tasks/${task.id}`, keySession({
@@ -642,6 +702,26 @@ describe('Control Room replies (#N31)', () => {
     }));
     expect(got.response.status).toBe(400);
     expect(got.body.error).toMatch(/from.*must be 100 characters or fewer/i);
+  });
+
+  it('rejects a reply imageUrl with a non-http(s) scheme', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', text: 'Hi', imageUrl: 'javascript:alert(1)' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/imageUrl.*http/i);
+  });
+
+  it('accepts a reply imageUrl pointing at a same-origin /uploads/ path', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', text: 'Hi', imageUrl: '/uploads/e2e-reply-attachment.png' }),
+    }));
+    expect(got.response.status).toBe(201);
+    expect(got.body.reply.imageUrl).toBe('/uploads/e2e-reply-attachment.png');
   });
 
   it('404s replying to a task that does not exist', async () => {
