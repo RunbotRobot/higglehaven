@@ -1606,9 +1606,12 @@ pre-#1112 purchase, or a buyer who has since self-deleted).
 
 `POST /api/purchases/confirm-delivery`
 
-Unauthenticated on purpose — there is no buyer account anywhere in this
-app (see "Simulated purchases" below) to authenticate a "my orders" view
-against. A real-money physical purchase gets an unguessable token the
+Unauthenticated on purpose — not because there's no buyer identity to
+check against (every purchase does carry a real `buyerBuilderId` FK,
+captured from the session at purchase time post-N44; see "Simulated
+purchases" below), but for emailed-link convenience: a buyer following a
+delivery-confirmation link from their inbox shouldn't have to re-log in
+first. A real-money physical purchase gets an unguessable token the
 instant it's finalized; only its SHA-256 hash is ever stored (same
 discipline as password-reset tokens), and the raw token is handed to the
 buyer exactly once, in their own checkout's finalize response (see
