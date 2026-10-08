@@ -987,6 +987,20 @@ Response:
 
 Returns `404` if the builder doesn't exist.
 
+If this builder has a connected Stripe account (`stripe_account_id` set),
+the live Stripe Connect account itself is deliberately left untouched —
+owner's call (#1003, 2026-10-06): avoids conflicting with the separate
+tax-record-retention requirement, and Stripe may itself refuse a deletion
+mid-tax-year if 1099 reporting obligations are still pending. Its
+`acct_...` id is instead snapshotted into `retained_stripe_accounts`
+(`source: 'builder'`, `sourceId` the now-deleted `builderId`) before the
+live reference disappears — the same "keep the record, drop the live
+reference" pattern already used for `tax_1099_forms` on full account
+deletion (see "Retention through account deletion (#1147..." under 1099
+forms below). Actual account deactivation/cleanup is a separate, later
+pass once a given tax year's reporting is confirmed settled — not this
+endpoint's job.
+
 ## Founding/pioneer recognition — removed (#1094)
 
 Previously documented here: a permanent, ranked "Pioneer #N" badge
@@ -1126,6 +1140,11 @@ Response:
 ```
 
 Returns `404` if the seller doesn't exist.
+
+Same `retained_stripe_accounts` snapshot as `DELETE
+/api/builders/:builderId` above (#1003) if this seller has a connected
+Stripe account — `source: 'seller'`, `sourceId` the now-deleted
+`sellerId`. See that endpoint's own doc for the full reasoning.
 
 ### `GET /api/sellers/me/stripe-account`
 ### `POST /api/sellers/me/stripe-account`

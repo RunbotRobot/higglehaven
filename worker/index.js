@@ -2886,6 +2886,18 @@ async function handleBuilders(request, env, db, route, url) {
         RETURNING landlet_id
       `).bind(route[1], route[1]),
     ];
+    // #1003: the connected Stripe account itself is deliberately left alone
+    // (owner's call, issue-1003 comment) -- this only snapshots its acct_...
+    // id before the row that referenced it disappears, so a later cleanup
+    // pass has something to act on. Gated on ${builderGone} exactly like
+    // the other statements in this same batch, so it stays a no-op on
+    // whichever request the guards above actually block.
+    if (sessionBuilder.stripe_account_id) {
+      statements.push(db.prepare(`
+        INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
+        SELECT ?, 'builder', ?, ?, ? WHERE ${builderGone}
+      `).bind(crypto.randomUUID(), route[1], sessionBuilder.stripe_account_id, sessionBuilder.stripe_onboarding_status, route[1]));
+    }
 
     // Deleting this builder cascades (migrations/0045_auctions.sql,
     // seller_builder_id ON DELETE CASCADE) straight through any auction
@@ -3566,17 +3578,30 @@ async function handleSellers(request, env, db, route, url) {
     // succeeded (right after this same claim, never before it), so
     // requiring it too closes the window: a claimed-but-unconfirmed
     // purchase still blocks deletion, the same as a never-claimed one.
-    const { meta } = await db.prepare(`
-      DELETE FROM sellers
-      WHERE seller_id = ?
-        AND NOT EXISTS (
-          SELECT 1 FROM purchases
-          WHERE seller_id = ?
-            AND payment_intent_id IS NOT NULL
-            AND refunded_at IS NULL
-            AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
-        )
-    `).bind(route[1], route[1]).run();
+    const sellerGone = 'NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)';
+    const sellerStatements = [
+      db.prepare(`
+        DELETE FROM sellers
+        WHERE seller_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM purchases
+            WHERE seller_id = ?
+              AND payment_intent_id IS NOT NULL
+              AND refunded_at IS NULL
+              AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
+          )
+      `).bind(route[1], route[1]),
+    ];
+    // #1003: same snapshot-before-losing-the-live-row shape as the builder
+    // DELETE handler above -- see that handler's own comment for why the
+    // Stripe account itself is left untouched here.
+    if (sessionSeller.stripe_account_id) {
+      sellerStatements.push(db.prepare(`
+        INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
+        SELECT ?, 'seller', ?, ?, ? WHERE ${sellerGone}
+      `).bind(crypto.randomUUID(), route[1], sessionSeller.stripe_account_id, sessionSeller.stripe_onboarding_status, route[1]));
+    }
+    const [{ meta }] = await db.batch(sellerStatements);
     if (meta.changes === 0) {
       const stillExists = await db.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(route[1]).first();
       if (!stillExists) throw new HttpError('Seller not found', 404);
