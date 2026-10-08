@@ -966,10 +966,10 @@ async function handleControlRoomTaskCreate(request, env, db) {
       body.session ? labelValue(body.session, 'session') : '',
       postedBy,
       body.tag ? labelValue(body.tag, 'tag') : null,
-      body.url ? labelValue(body.url, 'url') : null,
-      body.prUrl ? labelValue(body.prUrl, 'prUrl') : null,
+      body.url ? urlValue(body.url, 'url') : null,
+      body.prUrl ? urlValue(body.prUrl, 'prUrl') : null,
       waitingOn,
-      body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null,
+      body.imageUrl ? imageUrlValue(body.imageUrl, 'imageUrl') : null,
       body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
       body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')),
       now, now,
@@ -1038,7 +1038,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
     setIfPresent('note_author', body.note ? caller : null);
   }
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
-  if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? labelValue(body.prUrl, 'prUrl') : null);
+  if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? urlValue(body.prUrl, 'prUrl') : null);
   if (body.waitingOn !== undefined) setIfPresent('waiting_on', normalizedIncomingWaitingOn);
   if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
   if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
@@ -1093,7 +1093,7 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
     db.prepare(`
       INSERT INTO control_room_replies (reply_id, task_id, from_caller, text, image_url, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(replyId, taskId, fromCaller, text, body.imageUrl ? labelValue(body.imageUrl, 'imageUrl') : null, now),
+    `).bind(replyId, taskId, fromCaller, text, body.imageUrl ? imageUrlValue(body.imageUrl, 'imageUrl') : null, now),
     // A reply is always fresh activity worth flagging, so it also clears
     // `viewed` -- otherwise a task the owner already reviewed sits with no
     // "New" indicator even though it just got a new reply (AGENTS.md's own
@@ -13835,6 +13835,30 @@ function labelValue(value, field) {
 function optionalLabelValue(value, field) {
   if (!value) return null;
   return labelValue(value, field);
+}
+
+// #1460: the Control Room admin board renders url/prUrl/imageUrl fields as
+// an <a href>/<img src> with only HTML-entity escaping (no scheme check) —
+// labelValue alone let a "javascript:..." value through untouched, since it
+// has no &<>"' characters for escapeHtml to catch. Require an actual
+// http(s) URL for a field meant to be clicked as a link (url/prUrl).
+function urlValue(value, field) {
+  const url = labelValue(value, field);
+  if (!/^https?:\/\//i.test(url)) {
+    throw new HttpError(`${field} must be an http:// or https:// URL`, 400);
+  }
+  return url;
+}
+
+// imageUrl's own real-world values aren't always absolute -- catalog
+// template/avatar images elsewhere in this app (docs/API.md) are routinely a
+// same-origin `/uploads/<key>` reference, e.g. from a real image-upload flow,
+// not a full URL, so urlValue's http(s)-only rule would reject the
+// legitimate case alongside the "javascript:..." one it's meant to catch.
+function imageUrlValue(value, field) {
+  const url = labelValue(value, field);
+  if (/^https?:\/\//i.test(url) || url.startsWith('/uploads/')) return url;
+  throw new HttpError(`${field} must be an http:// or https:// URL, or a /uploads/ path`, 400);
 }
 
 function positiveNumber(value, field) {
