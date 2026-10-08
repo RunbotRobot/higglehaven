@@ -104,6 +104,11 @@ const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 // shape and is just widened for load margin instead.
 await page.waitForTimeout(6000);
 const groundedAfterSequence = await page.evaluate(() => !document.body.classList.contains('shop-flying'));
+// #1495: setShopAvatarOpacity (used by the fade-out/fade-in above) used to
+// leave every material's `transparent` flag stuck true forever once the
+// sequence finished, even back at full opacity -- see that function's own
+// comment for why that's a real (if subtle) rendering bug, not cosmetic.
+const transparentStuckAfterSequence = await page.evaluate(() => window.__testShopAvatarHasTransparentMaterial());
 
 // SHOP_PRESENCE_REPORT_INTERVAL_MS (1500ms) — give the client's own report
 // loop a cycle to actually write the post-teleport position back out, the
@@ -130,6 +135,7 @@ console.log('seed presence B status (should be 200):', seedStatusB);
 console.log('button visible after seeding + reentering (phase 3, should be true):', visibleAfterSeedB);
 console.log('button hidden immediately on click, no countdown (should be true):', hiddenImmediatelyAfterClick);
 console.log('grounded again once the fade/teleport/fade/land sequence finishes (should be true):', groundedAfterSequence);
+console.log('a material is still stuck transparent after the sequence completes (should be false, i.e. NOT stuck):', transparentStuckAfterSequence);
 
 const pass =
   noButtonOnFreshAccount &&
@@ -141,6 +147,7 @@ const pass =
   visibleAfterSeedB &&
   hiddenImmediatelyAfterClick &&
   groundedAfterSequence &&
+  !transparentStuckAfterSequence &&
   !!finalPresence && near(finalPresence.x, targetX) && near(finalPresence.y, targetY) &&
   errors.length === 0;
 
