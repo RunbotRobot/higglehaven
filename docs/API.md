@@ -5953,7 +5953,9 @@ Requires a session (`401` otherwise). Submits a W-9 (US persons) or W-8BEN
 `TAX_ID_ENCRYPTION_KEY` isn't configured on the server — same guarded-secret
 shape as `STRIPE_SECRET_KEY`/`DIDIT_API_KEY` (see "Real-money purchases" and
 "Government-ID verification"), never configured in local dev or the
-automated test suite.
+automated test suite. Rate-limited per user (`TAX_ID_FORM_RATE_LIMIT_MAX`,
+20 per 15-minute window, `429` past that) — same authenticated-mutation
+shape as the other per-account rate limits in this file.
 
 Body:
 
