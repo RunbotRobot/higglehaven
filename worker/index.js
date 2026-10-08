@@ -12956,7 +12956,15 @@ function purchaseFromRow(row) {
 }
 
 function routePath(pathname) {
-  return pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  // #1546: same malformed-percent-escape risk handleUploadedAsset's own
+  // decodeURIComponent already guards for /uploads/* -- without this, a
+  // bad escape here throws an uncaught URIError that falls through to a
+  // generic, logged 500 instead of a clean 400.
+  try {
+    return pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+  } catch {
+    throw new HttpError('Invalid path encoding', 400);
+  }
 }
 
 async function readJson(request) {

@@ -3989,4 +3989,14 @@ describe('Top-level fetch() routing (#1232)', () => {
       expect(response.headers.get('strict-transport-security')).toBe('max-age=63072000; includeSubDomains');
     }
   });
+
+  // #1546: same malformed-percent-escape risk handleUploadedAsset's own
+  // /uploads/%E0%A4%A test (above) already covers — routePath's decode
+  // step used to throw an uncaught URIError here, falling through to a
+  // generic 500 instead of a clean 400.
+  it('rejects a malformed percent-encoded /api/ path with a 400, not a 500', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/api/builders/%E0%A4%A');
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid path encoding' });
+  });
 });
