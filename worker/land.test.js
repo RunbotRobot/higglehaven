@@ -207,6 +207,26 @@ describe('Landlet updates', () => {
     });
   });
 
+  // #1476: the owned branch above got its own rate limit via #1150, but
+  // that issue's comment explicitly scoped itself to "the owned branch
+  // only" -- this fully-unauthenticated unowned/world-gen branch had no
+  // throttle at all, letting anyone flood real D1 writes to any unclaimed
+  // landlet. Synthetic cf-connecting-ip per the unauthenticated-create
+  // rate-limit test's own approach above.
+  it('rate-limits repeated unauthenticated PATCHes to the same unowned landlet', async () => {
+    await createGreenbeltLandlet('unowned-patch-rate-limit-landlet');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+
+    let lastStatus;
+    for (let i = 0; i < 21; i++) {
+      const result = await api('/landlets/unowned-patch-rate-limit-landlet', {
+        method: 'PATCH', headers, body: JSON.stringify({ name: `Unowned Rate Limit Attempt ${i}` }),
+      });
+      lastStatus = result.response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
   // Same "claimed implies non-null owner" invariant as the PUT/PATCH test
   // above (#224), but on the create path instead — an anonymous POST that
   // sets status:'claimed' while simply omitting ownerBuilderId used to sail
