@@ -4334,6 +4334,12 @@ template's own seller once it has one — `403` for anyone else — the same
 PATCH/DELETE handler uses; a template with no seller stays unrestricted,
 since there's no owner to check against.
 
+Both `POST` and `DELETE` are rate-limited (20 per 15-minute window, `429`
+past that) — `POST` per builder (`product-review-create:<builderId>`),
+`DELETE` per seller when the template has one or per client IP otherwise
+(`product-review-delete:<sellerId|IP>`), same bucket shape as other
+per-account/per-IP mutation limits in this file.
+
 `POST` also notifies the template's own seller (#1043) — best-effort,
 fired after the insert succeeds, same "informational, never worth failing
 the write over" convention every other notification source in this file
