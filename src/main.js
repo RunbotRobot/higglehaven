@@ -12433,6 +12433,20 @@ window.__testForceShopProximityCheck = () => {
   positionShopCamera();
   updateShopProximity();
 };
+// #1495: reports whether any material on the current shop avatar is still
+// flagged transparent -- used to confirm setShopAvatarOpacity's "Go to Last
+// Location" fade sequence actually restores this when it completes, rather
+// than leaving it stuck true. Always inert (read-only), same convention as
+// the other window.__test* hooks above.
+window.__testShopAvatarHasTransparentMaterial = () => {
+  let found = false;
+  shopAvatar.group.traverse((object) => {
+    if (object === shopAvatar.afkSprite || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    if (materials.some((material) => material.transparent)) found = true;
+  });
+  return found;
+};
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 
@@ -12713,6 +12727,15 @@ function stopShopSpawnRotationForNavigation() {
   }
 }
 
+// #1495: remembers each material's own transparent flag from just before
+// setShopAvatarOpacity first forces it to true, so restoreShopAvatarTransparency
+// (called once the fade sequence completes) can put it back rather than
+// leaving every material permanently reclassified into Three.js's
+// back-to-front transparent render pass. A WeakMap rather than a plain
+// property so it never needs explicit cleanup when a material is replaced
+// wholesale (re-equip builds fresh materials — see refreshEquippedShopAvatar).
+let shopAvatarOriginalTransparent = new WeakMap();
+
 // #1176: fades every material in the avatar's own group uniformly — used
 // by the "Go to Last Location" sequence's fade-out/fade-in (see
 // updateGoToLastLocation). Skips the AFK sprite: that one already drives
@@ -12724,8 +12747,27 @@ function setShopAvatarOpacity(opacity) {
     if (object === shopAvatar.afkSprite || !object.material) return;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
+      if (!shopAvatarOriginalTransparent.has(material)) {
+        shopAvatarOriginalTransparent.set(material, material.transparent);
+      }
       material.transparent = true;
       material.opacity = opacity;
+    }
+  });
+}
+
+// #1495: restores each material's pre-fade transparent flag once the "Go to
+// Last Location" sequence is fully back to opacity 1 — see
+// shopAvatarOriginalTransparent's own comment above for why setShopAvatarOpacity
+// never resets this on its own.
+function restoreShopAvatarTransparency() {
+  shopAvatar.group.traverse((object) => {
+    if (object === shopAvatar.afkSprite || !object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (shopAvatarOriginalTransparent.has(material)) {
+        material.transparent = shopAvatarOriginalTransparent.get(material);
+      }
     }
   });
 }
@@ -12784,6 +12826,7 @@ function updateGoToLastLocation(dt) {
     setShopAvatarOpacity(t);
     if (t < 1) return;
     shopGoToLastLocationPhase = null;
+    restoreShopAvatarTransparency(); // #1495: see its own comment
     // Auto-begin the descent the instant the fade-in finishes — same
     // landing ramp a manual fly-button tap starts (see toggleShopFlight),
     // just triggered automatically instead of waiting for one.
