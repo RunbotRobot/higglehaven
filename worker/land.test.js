@@ -516,6 +516,31 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(reclaim.response.status).toBe(200);
   });
 
+  // #1494: reassign-owner is the only ownership-change path in the codebase
+  // that didn't notify either affected builder, unlike resolveAuction's
+  // auctionWinnerNotifications/notifyOfNewBid.
+  it('notifies both the previous and new owner of the reassignment', async () => {
+    const original = await signupBuilder('reassign-notify-original-owner');
+    const target = await signupBuilder('reassign-notify-target-owner');
+    await createGreenbeltLandlet('reassign-notify-landlet');
+    await api('/landlets/reassign-notify-landlet/claim', original.session({ method: 'POST' }));
+
+    const reassigned = await api('/landlets/reassign-notify-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(reassigned.response.status).toBe(200);
+
+    const { results: originalNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(original.builderId).all();
+    expect(originalNotifications.some((n) => /reassigned to another builder/.test(n.message))).toBe(true);
+
+    const { results: targetNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(target.builderId).all();
+    expect(targetNotifications.some((n) => /reassigned to you/.test(n.message))).toBe(true);
+  });
+
   it('requires a real admin session', async () => {
     const owner = await signupBuilder('reassign-auth-owner');
     const target = await signupBuilder('reassign-auth-target');

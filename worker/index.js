@@ -9396,6 +9396,15 @@ async function handleLandlets(request, db, route, url) {
     // their own cap is a separate design question (#1281), deliberately
     // left out of this admin-override path.
     await recomputeLandCap(db, newOwnerBuilderId);
+    // Same post-batch, outside-the-atomic-write shape as auctionWinnerNotifications'
+    // own call above (#1122) -- a self-delete race on either recipient must
+    // not roll back the ownership transfer itself.
+    await fireNotifications(db, [
+      { builderId: existing.owner_builder_id,
+        message: `Your lándlet ${route[1]} was reassigned to another builder by an admin.` },
+      { builderId: newOwnerBuilderId,
+        message: `A lándlet (${route[1]}) was reassigned to you by an admin. It's yours to build on now.` },
+    ]);
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });
   }
