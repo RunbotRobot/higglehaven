@@ -7573,8 +7573,11 @@ equipping is a settings/menu action rather than a world/shop action.
 
 `PUT` takes `{ "templateId": "avatar-..." }` (or `{ "templateId": null }`
 to revert to the default) and `403`s if the caller doesn't own that
-template per `owned_avatars`. Both directions respond with the same
-shape, resolving the equipped template's live `model_url`:
+template per `owned_avatars`. Rate-limited per builder
+(`AVATAR_EQUIP_RATE_LIMIT_MAX`, 20 attempts per 15-minute window — same
+shape as every other per-account mutation rate limit in this file). Both
+directions respond with the same shape, resolving the equipped
+template's live `model_url`:
 
 ```json
 { "avatar": { "equippedTemplateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb" } }
