@@ -114,5 +114,6 @@
   "0114_notifications_builder_created_index.sql",
   "0115_migration_drift_alert_state.sql",
   "0116_retained_stripe_accounts.sql",
-  "0117_drop_dead_owned_item_purchase_id_indexes.sql"
+  "0117_drop_dead_owned_item_purchase_id_indexes.sql",
+  "0118_drop_dead_purchases_template_buyer_index.sql"
 ]

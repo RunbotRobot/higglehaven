@@ -1,0 +1,13 @@
+-- #1531: idx_purchases_template_buyer (purchases(template_id, buyer_label))
+-- was added by migration 0061 to serve the product-review eligibility
+-- check's exact `WHERE template_id = ? AND buyer_label = ? COLLATE NOCASE`
+-- query. That check was later replaced -- #761 and the #1113/#1116 fixes it
+-- describes moved eligibility from a free-text buyer_label match to a real
+-- foreign-key check on purchases.buyer_builder_id (migration 0099). No
+-- current query filters on buyer_label anymore (worker/index.js's live
+-- eligibility query at ~line 2136-2141 filters on buyer_builder_id; the
+-- only other template_id-filtered query on this table, ~line 12328-12330,
+-- orders by created_at via the sibling idx_purchases_template_id instead).
+-- Same dead-weight-after-a-superseding-fix shape as 0112/0113 -- dropping
+-- it rather than leaving dead weight on every write.
+DROP INDEX IF EXISTS idx_purchases_template_buyer;
