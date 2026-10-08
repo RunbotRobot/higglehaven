@@ -4493,7 +4493,11 @@ capped at 280 characters when present, same as reviews. The existence
 check and the `INSERT` are folded into one atomic `INSERT ... SELECT ...
 WHERE NOT EXISTS (...)` statement, same check-then-act-race-avoiding idiom
 "Product reviews" above explains in full — `409` on a second attempt for
-the same purchase, never a raw constraint error.
+the same purchase, never a raw constraint error. Creation is rate-limited
+per builder (20 attempts per 15 minutes, the same shared-window bucket
+shape as every other per-account mutation limit in this file) — the same
+eligibility-gate rate limit `#1113`/`#1116` brought to product reviews,
+carried over here.
 
 **Original design (superseded by #1123 above, kept for history):** this
 endpoint originally mirrored "Product reviews"' own pre-#1113 shape —
