@@ -1153,6 +1153,15 @@ describe('Notifications', () => {
     const invalidCursor = await api('/notifications?cursor=not-base64', owner.session());
     expect(invalidCursor.response.status).toBe(400);
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+
+    // #1470: decodeCursor's own empty-string guard -- a well-formed-but-empty
+    // cursor (never produced by encodeCursor itself) used to silently match
+    // nothing on this descending-sort endpoint (`created_at < ''` is false
+    // for every real row) instead of being rejected like any other malformed
+    // cursor.
+    const emptyCursor = await api(`/notifications?cursor=${encodeURIComponent(btoa(JSON.stringify(['', ''])))}`, owner.session());
+    expect(emptyCursor.response.status).toBe(400);
+    expect(emptyCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
   it('rejects listing another builder\'s notifications via a spoofed builderId', async () => {

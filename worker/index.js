@@ -13950,8 +13950,14 @@ function decodeCursor(value) {
   try {
     const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
+    // already have below -- without it, a cursor encoding ["",""] (never
+    // produced by encodeCursor itself) silently matches every row on a
+    // descending-sort endpoint's `created_at < '' OR (... id < '')` check,
+    // returning an empty page instead of the 400 a malformed cursor should get.
     if (!Array.isArray(decoded) || decoded.length !== 2 ||
-        typeof decoded[0] !== 'string' || typeof decoded[1] !== 'string') throw new Error();
+        typeof decoded[0] !== 'string' || decoded[0] === '' ||
+        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
     return { createdAt: decoded[0], id: decoded[1] };
   } catch {
     throw new HttpError('cursor is invalid', 400);
