@@ -332,12 +332,13 @@ describe('Refund revokes animation ownership (mirroring #754/#1033/#801)', () =>
     expect(refunded.response.status).toBe(200);
   });
 
-  // Schema-only change with no app-observable behavior difference (same
-  // reasoning as worker/avatar-ownership.test.js's own #1016 index check)
-  // — the meaningful regression check is that the index actually exists.
-  it('indexes owned_animations.purchase_id', async () => {
+  // #1529: same reasoning as worker/avatar-ownership.test.js's own
+  // idx_owned_avatars_purchase_id check -- idx_owned_animations_purchase_id
+  // was dead from the start (owned_animation_purchases already covered
+  // every purchase_id-filtered query), dropped alongside its sibling.
+  it('does not re-add a dead index on owned_animations.purchase_id', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(owned_animations)').all()).results;
-    expect(indexes.some((idx) => idx.name === 'idx_owned_animations_purchase_id')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_owned_animations_purchase_id')).toBe(false);
   });
 });
 
