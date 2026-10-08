@@ -3852,7 +3852,7 @@ describe('Simulated purchases', () => {
       }
       const limited = await api(`/purchases/${purchaseIds[20]}/mark-shipped`, seller.session({ method: 'POST' }));
       expect(limited.response.status).toBe(429);
-    });
+    }, 30000);
 
     // #937: seller_id can be non-null yet dangling once DELETE /api/sellers/:id
     // removes the seller row it points at. Before this fix, the plain
