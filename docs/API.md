@@ -2936,6 +2936,12 @@ the transfer should instead be *blocked* when the inherited landlet would
 put the new owner over their own land cap — the way a winning auction bid
 atomically is — is an open design question, not yet decided.
 
+Notifies both affected builders once the transfer lands (#1494) — the
+previous owner that the landlet was reassigned away from them, the new
+owner that it's now theirs to build on — fired via `fireNotifications`
+after the write commits, same as `resolveAuction`'s own
+`auctionWinnerNotifications` (#1122).
+
 Errors are:
 
 - `403` without an admin session.
