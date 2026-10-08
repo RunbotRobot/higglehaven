@@ -1523,6 +1523,11 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (ownerSellerIds.size > 0) {
       const sessionSeller = await requireSessionSeller(request, db);
       for (const sellerId of ownerSellerIds) assertOwner(sellerId, sessionSeller.seller_id, 'Not your catalog template');
+      // #1457: the session requirement alone doesn't bound this, same
+      // reasoning as the single-item DELETE sibling's own #1455 fix — up to
+      // 100 owned templateIds can be wiped per call, with no throttle on
+      // how often this authenticated owner can repeat the call.
+      await checkRateLimit(db, `catalog-delete:${sessionSeller.seller_id}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     // At least one template in this batch has no live owning seller to gate
     // it behind a session (same shape as the single-item DELETE below) —
@@ -2027,11 +2032,12 @@ async function handleCatalog(request, db, route, url, models, env) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
       // #1455: the session requirement alone doesn't bound this, same
-      // reasoning as the PATCH handler's own #1329 fix above — this branch
-      // was the one authenticated mutation path on this resource still
-      // missing it (the PATCH comment's claim of parity with "this same
-      // resource's own DELETE sibling, #990/#991" was mistaken: #990/#991
-      // fixed product_reviews' own nested DELETE, not this one).
+      // reasoning as the PATCH handler's own #1329 fix above (the PATCH
+      // comment's claim of parity with "this same resource's own DELETE
+      // sibling, #990/#991" was mistaken: #990/#991 fixed product_reviews'
+      // own nested DELETE, not this one). This batch sibling (DELETE
+      // /catalog/batch, above) had the identical gap on its own owned-seller
+      // path and needed the same fix (#1457).
       await checkRateLimit(db, `catalog-delete:${sessionSeller.seller_id}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     } else {
       // No owning seller to gate this DELETE behind a session (see the

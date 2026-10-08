@@ -633,6 +633,43 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1457: the batch sibling's authenticated all-owned path had the
+  // identical gap as the single-item DELETE's own owned path (#1455) --
+  // checkRateLimit only fired when the batch contained an unowned
+  // template, so a batch of entirely owned templateIds ran unthrottled.
+  // Each attempt uses its own fresh owned template since DELETE consumes
+  // its target.
+  it('rate-limits repeated authenticated batch DELETEs of entirely seller-owned templates', async () => {
+    const seller = await signupSeller('catalog-batch-delete-rl-seller');
+    async function createOwnedTemplate(templateId) {
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId,
+          name: `Owned batch delete rate-limit product ${templateId}`,
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      return templateId;
+    }
+
+    for (let i = 0; i < 20; i++) {
+      const templateId = await createOwnedTemplate(`catalog-batch-delete-owner-rate-limit-${i}`);
+      const attempt = await api('/catalog/batch', seller.session({
+        method: 'DELETE', body: JSON.stringify({ templateIds: [templateId] }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const templateId = await createOwnedTemplate('catalog-batch-delete-owner-rate-limit-final');
+    const limited = await api('/catalog/batch', seller.session({
+      method: 'DELETE', body: JSON.stringify({ templateIds: [templateId] }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #1416: PUT /catalog/batch fires the identical notifyBuildersOfDimension-
   // ChangeBatch fan-out its single-item sibling (PATCH/PUT above) is rate-
   // limited to protect, on a seller-less template with no session required
