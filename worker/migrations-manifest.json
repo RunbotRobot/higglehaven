@@ -112,5 +112,6 @@
   "0112_friendships_sort_indexes.sql",
   "0113_bundles_saved_layouts_sort_indexes.sql",
   "0114_notifications_builder_created_index.sql",
-  "0115_migration_drift_alert_state.sql"
+  "0115_migration_drift_alert_state.sql",
+  "0116_retained_stripe_accounts.sql"
 ]

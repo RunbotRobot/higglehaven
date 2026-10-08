@@ -3386,10 +3386,12 @@ describe('Landlet levels', () => {
       'SELECT * FROM landlet_levels WHERE level_id = ?',
     ).bind('levels-remove-rate-limit-untouched-final').all();
     expect(results).toHaveLength(1);
-  }, 30000); // #978: 40 iterations of a direct DB seed plus a DELETE call
-  // each, late in this file's 121-test run against one shared D1 instance --
-  // reliably finishes in ~2s in isolation but has hit the 20s default once
-  // under CI load already.
+  }, 45000); // #978/#1511: 40 iterations of a direct DB seed plus a DELETE
+  // call each, late in this file's 121-test run against one shared D1
+  // instance -- reliably finishes in ~2s in isolation but has hit the 20s
+  // default, then the 30s override, under CI load already (#1511: bumped
+  // again to 45000, matching worker/commerce.test.js:2621's precedent for a
+  // comparable request volume).
 
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
