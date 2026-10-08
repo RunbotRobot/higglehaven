@@ -193,6 +193,12 @@ function chainEdgesIntoLoop(edges) {
     loop.push(bestFlip ? edge.a : edge.b);
     remaining.splice(bestIndex, 1);
   }
+
+  // A genuinely closed boundary loop's last step reconnects back to its
+  // own start point, which is already loop[0] -- drop that duplicate so
+  // triangulateCap's fan doesn't end on a zero-area (centroid, p, p)
+  // triangle and its centroid doesn't double-count the start vertex.
+  if (loop.length > 2 && loop[0].distanceTo(loop[loop.length - 1]) < 1e-6) loop.pop();
   return loop;
 }
 
