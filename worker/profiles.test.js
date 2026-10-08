@@ -266,6 +266,43 @@ describe('Builders', () => {
     expect(reclaimed.response.status).toBe(200);
   });
 
+  // #1003: deleting a builder with a connected Stripe account used to leave
+  // that acct_... id completely untracked -- the builder row disappears,
+  // nothing anywhere records which account it even was. Owner-approved fix
+  // (issue-1003 comment): the Stripe account itself is left alone, but its
+  // id is snapshotted into retained_stripe_accounts first.
+  it('snapshots a connected Stripe account into retained_stripe_accounts on builder deletion', async () => {
+    const builder = await signupBuilder('retain-stripe-delete-builder');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_retain_test_builder', stripe_onboarding_status = 'complete' WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const retained = await env.DB.prepare(
+      'SELECT * FROM retained_stripe_accounts WHERE source = ? AND source_id = ?',
+    ).bind('builder', builder.builderId).first();
+    expect(retained).toMatchObject({
+      source: 'builder',
+      source_id: builder.builderId,
+      stripe_account_id: 'acct_retain_test_builder',
+      stripe_onboarding_status: 'complete',
+    });
+    expect(retained.deleted_at).toBeTruthy();
+  });
+
+  it('does not snapshot anything on builder deletion when no Stripe account was ever connected', async () => {
+    const builder = await signupBuilder('no-stripe-delete-builder');
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const retained = await env.DB.prepare(
+      'SELECT * FROM retained_stripe_accounts WHERE source = ? AND source_id = ?',
+    ).bind('builder', builder.builderId).first();
+    expect(retained).toBeNull();
+  });
+
   // #879: DELETE /api/builders/:id used to read the builder's claimed
   // landlets once, before its own db.batch() ran, and release exactly that
   // precomputed list — a landlet claimed by this same builder (e.g. a

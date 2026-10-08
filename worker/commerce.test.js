@@ -3685,6 +3685,42 @@ describe('Simulated purchases', () => {
       const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
       expect(deleted.response.status).toBe(200);
     });
+
+    // #1003: same snapshot-before-losing-the-live-row shape as the builder
+    // deletion handler's own test in profiles.test.js -- see that handler's
+    // comment (and the issue-1003 comment it cites) for why the connected
+    // Stripe account itself is left untouched here.
+    it('snapshots a connected Stripe account into retained_stripe_accounts on seller deletion', async () => {
+      const seller = await signupSeller('retain-stripe-delete-seller');
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_retain_test_seller', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+      `).bind(seller.sellerId).run();
+
+      const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const retained = await env.DB.prepare(
+        'SELECT * FROM retained_stripe_accounts WHERE source = ? AND source_id = ?',
+      ).bind('seller', seller.sellerId).first();
+      expect(retained).toMatchObject({
+        source: 'seller',
+        source_id: seller.sellerId,
+        stripe_account_id: 'acct_retain_test_seller',
+        stripe_onboarding_status: 'complete',
+      });
+      expect(retained.deleted_at).toBeTruthy();
+    });
+
+    it('does not snapshot anything on seller deletion when no Stripe account was ever connected', async () => {
+      const seller = await signupSeller('no-stripe-delete-seller');
+      const deleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const retained = await env.DB.prepare(
+        'SELECT * FROM retained_stripe_accounts WHERE source = ? AND source_id = ?',
+      ).bind('seller', seller.sellerId).first();
+      expect(retained).toBeNull();
+    });
   });
 
   // #454: seller payout/cash-out hold policy. Same limitation as the
