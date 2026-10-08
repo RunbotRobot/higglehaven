@@ -6587,8 +6587,13 @@ async function renderSellSettingsSection() {
   }
 }
 
+// #1492: used to build the string manually via a template literal, which
+// never inserts a thousands separator -- unlike formatDollarsForPriceInput
+// below, the one money formatter in this file that already used
+// toLocaleString. A real amount like TAX_REPORTING_THRESHOLD_CENTS
+// ($20,000) rendered as "$20000.00".
 function formatHiggles(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 // A catalog template's own priceCents (docs/API.md's "Catalog templates")
@@ -6598,7 +6603,7 @@ function formatHiggles(cents) {
 // identical, so this stays its own named helper rather than reusing that
 // one.
 function formatPriceCents(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 // N50: the price fields (upload wizard + Seller "Edit Price") let the

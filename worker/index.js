@@ -5762,8 +5762,13 @@ function adminActionLogEntryFromRow(row) {
   };
 }
 
+// #1492: used to build the string manually via a template literal, which
+// never inserts a thousands separator -- unlike formatDollarsForPriceInput
+// (src/main.js), the one money formatter in this app that already used
+// toLocaleString. A real amount like TAX_REPORTING_THRESHOLD_CENTS
+// ($20,000) rendered as "$20000.00".
 function formatCents(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
+  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 // Pure formula shared by the single-auction and batched shaping paths

@@ -518,6 +518,9 @@ describe('Higgles redemption (#625)', () => {
     }));
     expect(got.response.status).toBe(403);
     expect(got.body.error).toMatch(/tax-reporting/i);
+    // #1492: formatCents used to drop the thousands separator, rendering
+    // the $20,000 threshold as "$20000.00" in this exact error message.
+    expect(got.body.error).toContain('$20,000.00');
 
     // Blocked before ever touching the balance.
     const status = await api('/builders/me/redeem', builder.session());
