@@ -21,11 +21,16 @@ export default defineConfig(async () => {
     ],
     test: {
       // src/**/*.test.js is for genuinely dependency-free frontend
-      // modules only — nothing importing three.js or touching the DOM
-      // belongs here, since this pool runs the workerd runtime, not a
-      // browser; that kind of frontend code stays covered by e2e/
-      // (Playwright) or manual verification instead, per this project's
-      // established convention (see docs/API.md). scripts/**/*.test.mjs
+      // modules only — nothing that loads a model via GLTFLoader/fetch,
+      // or otherwise touches WebGL/DOM/network APIs, belongs here, since
+      // this pool runs the workerd runtime, not a browser. Plain three.js
+      // math classes (BufferGeometry, Vector3, ...) run fine under
+      // workerd on their own, as src/meshCrop.test.js (#1463) shows — the
+      // constraint is the browser-side model/rendering pipeline, not
+      // "imports three.js" itself. That kind of frontend code stays
+      // covered by e2e/ (Playwright) or manual verification instead, per
+      // this project's established convention (see docs/API.md).
+      // scripts/**/*.test.mjs
       // (#560) is a third category: standalone Node-side CLI/build
       // scripts (deliberately .mjs, matching those scripts' own
       // extension, since this whole config already runs under Node's
