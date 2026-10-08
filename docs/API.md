@@ -4183,7 +4183,9 @@ place of `post`/`posts` and `eventId` in place of `postId`:
 280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
 `POST` rejected with `400` unless the target instance is currently flagged
 `isCommunityCalendar`, deletion cascades when the instance itself is
-deleted.
+deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
+15-minute window, `429` past that, `#944`) — the same bucket shape as
+other per-account mutation limits in this file.
 
 **`POST` is not open the way sign posts' is.** Requires a session logged
 in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
