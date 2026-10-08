@@ -205,17 +205,36 @@
   // reply was plain text with nowhere to go; this turns it into the same
   // clickable `data-jump-to` chip the "Blocked on #n" pill and sub-issue
   // chips already use (see their own comments above), so tapping it jumps
-  // to that card the same way. Runs on already-escaped HTML — `#`/digits
-  // never appear in escapeHtml's own replacement set, so this can't
-  // reintroduce anything it escaped. Only linkifies a mention that
-  // actually resolves to a loaded task; an unresolved `#N` (a typo, or a
-  // task outside this board's up-to-500-row window) stays plain text.
-  function linkifyMentions(escapedText) {
-    return escapedText.replace(/#(\d+)/g, (match, numStr) => {
-      const target = taskById(Number(numStr));
-      if (!target) return match;
-      return '<span class="chip-jump" data-jump-to="' + numStr + '">' + match + '</span>';
-    });
+  // to that card the same way. Only linkifies a mention that actually
+  // resolves to a loaded task; an unresolved `#N` (a typo, or a task
+  // outside this board's up-to-500-row window) stays plain text.
+  //
+  // Takes the *raw*, unescaped text and does its own escaping of every
+  // segment — found via #1537: an earlier version ran this regex on
+  // escapeHtml's own output instead, on the theory that "`#`/digits never
+  // appear in escapeHtml's own replacement set, so this can't reintroduce
+  // anything it escaped." That reasoning missed that the apostrophe
+  // entity itself, `&#39;`, literally contains the substring `#39` — so
+  // any text with an apostrophe near a loaded task numbered so its digits
+  // lined up after that `#` got its apostrophe corrupted into a bogus
+  // jump-chip. Escaping only the plain-text segments between real `#N`
+  // matches (and the matched text itself) avoids ever running this regex
+  // over escapeHtml's own entity syntax.
+  function linkifyMentions(rawText) {
+    const text = String(rawText == null ? '' : rawText);
+    const regex = /#(\d+)/g;
+    let lastIndex = 0;
+    let html = '';
+    let match;
+    while ((match = regex.exec(text))) {
+      const target = taskById(Number(match[1]));
+      if (!target) continue;
+      html += escapeHtml(text.slice(lastIndex, match.index));
+      html += '<span class="chip-jump" data-jump-to="' + match[1] + '">' + escapeHtml(match[0]) + '</span>';
+      lastIndex = match.index + match[0].length;
+    }
+    html += escapeHtml(text.slice(lastIndex));
+    return html;
   }
 
   // Owner feedback (#ce3d9c55): "make the subtasks listed below a tracking
@@ -324,7 +343,7 @@
       const threadHtml = entries.length
         ? entries.map((e) => (
             '<div class="msg"><div class="msg-head">' + escapeHtml(e.from || '(unknown)') +
-            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + linkifyMentions(escapeHtml(e.text)) + '</div>' +
+            ' · ' + relativeTime(e.at) + '</div><div class="msg-text">' + linkifyMentions(e.text) + '</div>' +
             (e.imageUrl ? '<img class="msg-img" src="' + escapeHtml(e.imageUrl) + '" alt="" />' : '') +
             '</div>'
           )).join('')
