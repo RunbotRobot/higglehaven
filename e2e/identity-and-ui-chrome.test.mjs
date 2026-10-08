@@ -31,7 +31,11 @@ await page.waitForTimeout(300);
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 const sellNavActiveImmediately = await page.locator('.mode-nav-btn[data-mode="sell"]').evaluate((el) => el.classList.contains('active'));
+// #1503: aria-pressed mirrors .active so the current mode is announced to
+// a screen reader, not just styled.
+const sellNavAriaPressedImmediately = await page.locator('.mode-nav-btn[data-mode="sell"]').getAttribute('aria-pressed');
 console.log('Sell nav active immediately on click (should be true):', sellNavActiveImmediately);
+console.log('Sell nav aria-pressed immediately on click (should be "true"):', sellNavAriaPressedImmediately);
 const closeBtnVisible = await page.locator('#auth-close-btn').isVisible();
 console.log('Close button visible on the login wall (should be true):', closeBtnVisible);
 
@@ -40,9 +44,11 @@ await page.click('#auth-close-btn');
 await page.waitForTimeout(500);
 const modalGoneAfterCancel = await page.locator('#auth-modal.visible').count();
 const sellNavActiveAfterCancel = await page.locator('.mode-nav-btn[data-mode="sell"]').evaluate((el) => el.classList.contains('active'));
+const sellNavAriaPressedAfterCancel = await page.locator('.mode-nav-btn[data-mode="sell"]').getAttribute('aria-pressed');
 const sellerModalOpenedAfterCancel = await page.locator('#seller-modal.visible').count();
 console.log('auth modal closed after Cancel (should be 0):', modalGoneAfterCancel);
 console.log('Sell nav no longer stuck active after cancel (should be false):', sellNavActiveAfterCancel);
+console.log('Sell nav aria-pressed no longer stuck true after cancel (should be "false"):', sellNavAriaPressedAfterCancel);
 console.log('seller modal did not open after cancel (should be 0):', sellerModalOpenedAfterCancel);
 
 // --- Re-open, actually sign up this time -> Upload Model lives in Seller modal (#90) ---
@@ -152,8 +158,8 @@ const panelRgb = await page.evaluate(() => getComputedStyle(document.documentEle
 console.log('--pill-rgb (should be the pale green, "214 232 190"):', pillRgb);
 console.log('--panel-rgb (should be the pale yellow, "250 240 199"):', panelRgb);
 
-const pass = sellNavActiveImmediately && closeBtnVisible &&
-  modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellerModalOpenedAfterCancel === 0 &&
+const pass = sellNavActiveImmediately && sellNavAriaPressedImmediately === 'true' && closeBtnVisible &&
+  modalGoneAfterCancel === 0 && !sellNavActiveAfterCancel && sellNavAriaPressedAfterCancel === 'false' && sellerModalOpenedAfterCancel === 0 &&
   uploadBtnInSeller === 1 && sellerCloseIsX && settingsCloseIsX &&
   activeTabInBuildMode === 'build' &&
   hintVisibleBeforePicker && hintTextBeforePicker.includes('Tree') && hintHiddenWhilePickerOpen &&

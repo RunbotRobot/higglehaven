@@ -33,9 +33,15 @@ await page.waitForTimeout(500);
 const manageVisibleInitially = await page.locator('#seller-list').isVisible();
 const listViewHiddenInitially = await page.locator('#seller-list-view').isHidden();
 const manageBtnActiveInitially = await page.locator('.seller-view-btn[data-view="manage"]').evaluate((el) => el.classList.contains('active'));
+// #1503: aria-pressed mirrors .active so the current view is announced to
+// a screen reader, not just styled.
+const manageBtnAriaPressedInitially = await page.locator('.seller-view-btn[data-view="manage"]').getAttribute('aria-pressed');
+const listBtnAriaPressedInitially = await page.locator('.seller-view-btn[data-view="list"]').getAttribute('aria-pressed');
 console.log('Manage view showing on open (should be true):', manageVisibleInitially);
 console.log('List view hidden on open (should be true):', listViewHiddenInitially);
 console.log('Manage toggle button active on open (should be true):', manageBtnActiveInitially);
+console.log('Manage toggle button aria-pressed on open (should be "true"):', manageBtnAriaPressedInitially);
+console.log('List toggle button aria-pressed on open (should be "false"):', listBtnAriaPressedInitially);
 
 await page.click('.seller-view-btn[data-view="list"]');
 await page.waitForTimeout(300);
@@ -43,9 +49,13 @@ await page.waitForTimeout(300);
 const manageHiddenAfterToggle = await page.locator('#seller-list').isHidden();
 const listViewVisibleAfterToggle = await page.locator('#seller-list-view').isVisible();
 const listBtnActiveAfterToggle = await page.locator('.seller-view-btn[data-view="list"]').evaluate((el) => el.classList.contains('active'));
+const listBtnAriaPressedAfterToggle = await page.locator('.seller-view-btn[data-view="list"]').getAttribute('aria-pressed');
+const manageBtnAriaPressedAfterToggle = await page.locator('.seller-view-btn[data-view="manage"]').getAttribute('aria-pressed');
 console.log('Manage view hidden after switching to List view (should be true):', manageHiddenAfterToggle);
 console.log('List view showing after switching (should be true):', listViewVisibleAfterToggle);
 console.log('List toggle button active after switching (should be true):', listBtnActiveAfterToggle);
+console.log('List toggle button aria-pressed after switching (should be "true"):', listBtnAriaPressedAfterToggle);
+console.log('Manage toggle button aria-pressed after switching (should be "false"):', manageBtnAriaPressedAfterToggle);
 
 const card = page.locator('.seller-card').filter({ hasText: PRODUCT_NAME });
 const cardVisible = await card.isVisible();
@@ -83,7 +93,9 @@ const manageActiveAfterReopen = await page.locator('#seller-list').isVisible();
 console.log('Manage view showing again after a close/reopen (should be true):', manageActiveAfterReopen);
 
 const pass = manageVisibleInitially && listViewHiddenInitially && manageBtnActiveInitially &&
+  manageBtnAriaPressedInitially === 'true' && listBtnAriaPressedInitially === 'false' &&
   manageHiddenAfterToggle && listViewVisibleAfterToggle && listBtnActiveAfterToggle &&
+  listBtnAriaPressedAfterToggle === 'true' && manageBtnAriaPressedAfterToggle === 'false' &&
   cardVisible && cardHasThumb === 1 && cardPriceText.includes('Not priced') &&
   backOnManage && manageBtnActiveAfterCardClick && rowExpanded &&
   manageActiveAfterReopen &&
