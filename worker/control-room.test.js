@@ -637,6 +637,18 @@ describe('Control Room tasks (#N31)', () => {
       expect(got.body.error).toMatch(/subIssueSummaries/);
     });
 
+    it('rejects more than 50 subIssueSummaries entries', async () => {
+      const subIssueSummaries = Object.fromEntries(
+        Array.from({ length: 51 }, (_, i) => [String(i + 1), 'Summary']),
+      );
+      const got = await api('/control-room/tasks', keySession({
+        method: 'POST',
+        body: JSON.stringify({ from: 'higglehaven2', title: 'Bad', subIssueSummaries }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/50/);
+    });
+
     it('updates subIssues and subIssueSummaries on an existing task', async () => {
       const task = await createTask({ title: 'Tracking task, updated later' });
       const got = await api(`/control-room/tasks/${task.id}`, keySession({

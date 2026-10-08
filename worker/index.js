@@ -9167,6 +9167,13 @@ const LANDLET_CLAIM_RATE_LIMIT_MAX = 20;
 // #1150: see this constant's own use (PATCH /api/landlets/:id's owned
 // branch) for why this needed adding now.
 const LANDLET_OWNED_PATCH_RATE_LIMIT_MAX = 20;
+// #1476: the owned branch above got its own limit via #1150, but that
+// issue's comment explicitly scoped itself to "the owned branch only" and
+// left this unauthenticated unowned/world-gen branch unthrottled -- the
+// same gap #964 already closed for POST /api/landlets' own unowned branch,
+// and the same shape CATALOG_PATCH_RATE_LIMIT_MAX already covers for both
+// of its branches.
+const LANDLET_UNOWNED_PATCH_RATE_LIMIT_MAX = 20;
 
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
@@ -9500,6 +9507,11 @@ async function handleLandlets(request, db, route, url) {
       // unauthenticated unowned/world-gen branch below has no builder id
       // to bucket by and isn't the path this issue is about.
       await checkRateLimit(db, `landlet-owned-patch:${sessionBuilder.builder_id}`, LANDLET_OWNED_PATCH_RATE_LIMIT_MAX);
+    } else {
+      // #1476: the unowned/world-gen branch above had no throttle at all --
+      // an unbounded, anonymous way to flood real D1 writes to any
+      // unclaimed landlet's status/polygon/metadata.
+      await checkRateLimit(db, `landlet-unowned-patch:${clientIp(request)}`, LANDLET_UNOWNED_PATCH_RATE_LIMIT_MAX);
     }
     const input = await readJson(request);
     // `status` needs the same pinning as `ownerBuilderId` above, for the
@@ -13791,8 +13803,10 @@ function subIssueSummariesValue(value, field) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new HttpError(`${field} must be an object mapping a sub-issue number to a short summary`, 400);
   }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_SUB_ISSUES) throw new HttpError(`${field} must have ${MAX_SUB_ISSUES} entries or fewer`, 400);
   const result = {};
-  for (const [key, summary] of Object.entries(value)) {
+  for (const [key, summary] of entries) {
     if (!/^\d+$/.test(key)) throw new HttpError(`${field} keys must be sub-issue numbers`, 400);
     result[key] = labelValue(summary, field);
   }
@@ -13950,8 +13964,14 @@ function decodeCursor(value) {
   try {
     const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
+    // already have below -- without it, a cursor encoding ["",""] (never
+    // produced by encodeCursor itself) silently matches every row on a
+    // descending-sort endpoint's `created_at < '' OR (... id < '')` check,
+    // returning an empty page instead of the 400 a malformed cursor should get.
     if (!Array.isArray(decoded) || decoded.length !== 2 ||
-        typeof decoded[0] !== 'string' || typeof decoded[1] !== 'string') throw new Error();
+        typeof decoded[0] !== 'string' || decoded[0] === '' ||
+        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
     return { createdAt: decoded[0], id: decoded[1] };
   } catch {
     throw new HttpError('cursor is invalid', 400);

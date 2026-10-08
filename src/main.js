@@ -12394,6 +12394,18 @@ window.__testTeleportShopAvatar = (x, y) => {
   shopAvatarPosition.x = x;
   shopAvatarPosition.y = y;
 };
+// #1479: forces an immediate, synchronous load/unload decision rather than
+// waiting on the next real requestAnimationFrame tick to notice a teleport
+// on its own. window.__testTeleportShopAvatar's own comment above explains
+// why a real tick "should" see the new position promptly -- true most of
+// the time, but under heavy load a backgrounded/throttled RAF loop can
+// stall for a while, and there's no reason to leave that window open when
+// a test can make the decision land exactly when it wants it to. Always
+// inert unless a test calls it, same convention as window.__testAvatarLoadDelayMs.
+window.__testForceShopProximityCheck = () => {
+  positionShopCamera();
+  updateShopProximity();
+};
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 

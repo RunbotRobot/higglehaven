@@ -388,6 +388,20 @@ describe('Didit verification webhook (#589)', () => {
       expect(results).toHaveLength(0);
     });
 
+    it('still cascades a deleted builder into its own friendships via the recipient side', async () => {
+      const requester = await signupBuilder('post-0093-friend-cascade-req-2');
+      const recipient = await signupBuilder('post-0093-friend-cascade-rec-2');
+      const friendshipId = `friendship-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        'INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)',
+      ).bind(friendshipId, requester.builderId, recipient.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(recipient.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).all();
+      expect(results).toHaveLength(0);
+    });
+
     it('still cascades a deleted builder into its own bundles', async () => {
       const builder = await signupBuilder('post-0093-bundles-cascade');
       const bundleId = `bundle-${crypto.randomUUID()}`;

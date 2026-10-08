@@ -29,7 +29,24 @@
 //      window without flaky hand-tuned sleeps -- this drives
 //      shopAvatarPosition directly instead, via src/main.js's own
 //      window.__testTeleportShopAvatar (e2e-only; see its own comment for
-//      why it sets shopAvatarPosition rather than camera.position).
+//      why it sets shopAvatarPosition rather than camera.position), and
+//      (#1479) window.__testForceShopProximityCheck to make the resulting
+//      load/unload decision itself land immediately rather than waiting
+//      on the next real requestAnimationFrame tick to notice.
+//
+// #1479: that "delay window" is itself held open on demand (see
+// releaseModelFetch below) rather than a fixed duration. A fixed
+// MODEL_FETCH_DELAY_MS assumes everything between Shop-mode spawn (which
+// can trigger this landlet's load on its own, before this script ever
+// gets a turn -- see the route-install comment below) and the
+// far-teleport finishes within that window -- not reliable, since
+// Shop-mode's own setup (selector waits, the joystick gesture below) can
+// itself take anywhere from under a second to multiple real seconds under
+// load, and that clock starts at spawn, not at this script's own
+// near-teleport. Holding the route open until the test itself says it's
+// ready removes that race entirely: the fetch simply waits for however
+// long setup actually takes, then resolves the instant it's released,
+// immediately after the far-teleport's own forced supersede.
 //
 // Also needs the world itself to actually be big enough for the shopper to
 // get 90m away from the landlet in the first place: Shop mode clamps the
@@ -204,17 +221,16 @@ const awayDirX = awayDist > 1 ? -landletCenterX / awayDist : 1;
 const awayDirY = awayDist > 1 ? -landletCenterY / awayDist : 0;
 const FAR_DISTANCE_FROM_LANDLET_M = 120; // > SHOP_UNLOAD_RADIUS_M (90m), generous margin
 const NEAR_OFFSET_M = 30; // < SHOP_LOAD_RADIUS_M (60m), generous margin
-// Widened from an initial 2000ms after a local flake run (1/7) landed
-// disposedAfter === disposedBefore despite "fetch started" reading true --
-// the most likely cause is a loaded test-runner machine delaying the next
-// SHOP_PROXIMITY_INTERVAL_MS (400ms) tick that notices the away-teleport
-// past whatever margin a tight delay leaves, the same CI-load-sensitivity
-// class #1436 already hit twice today. 6000ms leaves a much wider gap for
-// that tick to land in than the 400ms it nominally needs.
-const MODEL_FETCH_DELAY_MS = 6000;
 
+// #1479: also forces an immediate, synchronous load/unload decision via
+// window.__testForceShopProximityCheck, rather than relying on the next
+// real requestAnimationFrame tick to notice the new position on its own
+// (see that hook's own comment in src/main.js).
 async function teleportShopAvatar(x, y) {
-  await page.evaluate(([tx, ty]) => window.__testTeleportShopAvatar(tx, ty), [x, y]);
+  await page.evaluate(([tx, ty]) => {
+    window.__testTeleportShopAvatar(tx, ty);
+    window.__testForceShopProximityCheck();
+  }, [x, y]);
 }
 
 function farPoint() {
@@ -237,11 +253,19 @@ const disposedBefore = await page.evaluate(() => window.__shopInstanceDisposedCo
 // order.test.mjs's own header comment found that holding a route open
 // measurably delays *other*, unrelated same-origin requests too, so this
 // stays as narrowly path-scoped as page.route() allows.
+// page.route() handlers run in this Node process, not in the page, so the
+// "delay" can just be a plain Promise this script resolves itself
+// (releaseModelFetch) once it's actually ready, rather than a guessed fixed
+// duration -- see this file's own top comment for why a fixed delay can't
+// be trusted to outlast however long Shop-mode's own setup takes to reach
+// the far-teleport.
 let modelFetchStartedAt = null;
+let releaseModelFetch;
+const modelFetchGate = new Promise((resolve) => { releaseModelFetch = resolve; });
 await page.route('**/uploads/**', async (route) => {
   if (route.request().method() === 'GET') {
     if (modelFetchStartedAt === null) modelFetchStartedAt = Date.now();
-    await new Promise((resolve) => setTimeout(resolve, MODEL_FETCH_DELAY_MS));
+    await modelFetchGate;
   }
   await route.continue();
 });
@@ -277,10 +301,10 @@ await page.waitForTimeout(100);
 // Walks (teleports) into SHOP_LOAD_RADIUS_M -- redundant (a harmless no-op)
 // if the real spawn point already triggered this landlet's load on its
 // own per the comment above, but guarantees the load actually starts
-// regardless of where spawn happened to land. Either way, the next
-// proximity tick's loadShopLandletInstances call (or the one already
-// in flight) is awaiting this never-before-fetched model's GLTF fetch,
-// which the route handler above is now delaying.
+// regardless of where spawn happened to land. Either way, loadShopLandletInstances
+// (the one already in flight, or the one this call's own forced proximity
+// check just started) is now awaiting this never-before-fetched model's
+// GLTF fetch, which the route handler above is holding open.
 await teleportShopAvatar(landletCenterX + NEAR_OFFSET_M, landletCenterY);
 
 // Poll (not a fixed sleep) for the route handler's own deterministic
@@ -292,20 +316,37 @@ while (modelFetchStartedAt === null && Date.now() < fetchStartDeadlineAt) {
 }
 console.log('model fetch actually started before leaving again (should be true):', modelFetchStartedAt !== null);
 
-// Walks back out past SHOP_UNLOAD_RADIUS_M immediately -- well before
-// MODEL_FETCH_DELAY_MS has any chance to resolve, so the next proximity
-// tick's unloadShopLandletInstances bumps entry.loadToken while
-// loadShopLandletInstances is still awaiting that exact delayed fetch.
+// Walks back out past SHOP_UNLOAD_RADIUS_M -- this call's own forced
+// proximity check (see teleportShopAvatar) immediately and deterministically
+// bumps entry.loadToken via unloadShopLandletInstances while
+// loadShopLandletInstances is still awaiting the fetch the route handler is
+// holding open. Only now, with the supersede already in place, is it safe
+// to let that fetch resolve.
 await teleportShopAvatar(...farPoint());
+releaseModelFetch();
 
-// Comfortably past MODEL_FETCH_DELAY_MS (the delayed fetch finally
-// resolving, at which point the superseded branch disposes it) plus a
-// couple of SHOP_PROXIMITY_INTERVAL_MS ticks' worth of slack -- both the
-// load-noticed and the leave-noticed proximity ticks are already
-// structurally guaranteed to land well inside this window (400ms*2 is
-// much less than 2000ms), so this is a flat generous margin, not a tight
-// hand-tuned one.
-await page.waitForTimeout(MODEL_FETCH_DELAY_MS + 2000);
+// Polling (rather than a fixed sleep) for the dispose count to actually
+// change costs nothing on a healthy run (it returns the moment the count
+// changes) but tolerates however long the now-released fetch and the
+// superseded branch's own cleanup actually take, rather than gambling on
+// one fixed number.
+try {
+  await page.waitForFunction(
+    (baseline) => (window.__shopInstanceDisposedCount || 0) > baseline,
+    disposedBefore,
+    { timeout: 10000, polling: 100 },
+  );
+} catch {
+  // Timed out -- fall through to the plain read below so a genuine
+  // (non-timing) failure still reports the real count instead of throwing
+  // an unrelated TimeoutError.
+}
+// Only unrouted now, once the released fetch has had every chance to
+// actually reach its own route.continue() -- calling unroute() too soon
+// after releaseModelFetch() raced that pending continuation in practice
+// ("Route is already handled!"), since the handler was still parked on
+// the gate promise and hadn't reached route.continue() yet when unroute()
+// tore the route down out from under it.
 await page.unroute('**/uploads/**');
 
 const disposedAfter = await page.evaluate(() => window.__shopInstanceDisposedCount || 0);
