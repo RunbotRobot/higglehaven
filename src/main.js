@@ -4940,9 +4940,14 @@ function renderSellerList() {
 // seller's view choice to survive a close/reopen.
 let sellerActiveView = 'manage';
 
+// #1503: the .active class alone communicated "current view" visually but
+// not to a screen reader -- aria-pressed mirrors it so the same state is
+// announced, not just styled.
 function updateSellerViewToggleUI() {
   for (const btn of sellerViewToggleEl.querySelectorAll('.seller-view-btn')) {
-    btn.classList.toggle('active', btn.dataset.view === sellerActiveView);
+    const isActive = btn.dataset.view === sellerActiveView;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 }
 
@@ -15380,8 +15385,15 @@ async function enterSellMode() {
 // bootstrap() dance, so there's exactly one way any mode ever gets entered,
 // not a special no-reload case for Sell alongside the other two.
 const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
+// #1503: same gap as updateSellerViewToggleUI's own fix -- the .active
+// class alone communicated "current mode" visually but not to a screen
+// reader.
 function updateModeNavUI() {
-  for (const btn of modeNavButtons) btn.classList.toggle('active', btn.dataset.mode === currentMode);
+  for (const btn of modeNavButtons) {
+    const isActive = btn.dataset.mode === currentMode;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+  }
 }
 for (const btn of modeNavButtons) {
   btn.addEventListener('click', () => {
