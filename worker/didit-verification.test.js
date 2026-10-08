@@ -373,5 +373,112 @@ describe('Didit verification webhook (#589)', () => {
       expect(row).not.toBeNull();
       expect(row.builder_id).toBeNull();
     });
+
+    it('still cascades a deleted builder into its own friendships', async () => {
+      const requester = await signupBuilder('post-0093-friendships-cascade-requester');
+      const recipient = await signupBuilder('post-0093-friendships-cascade-recipient');
+      const friendshipId = `friendship-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        'INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)',
+      ).bind(friendshipId, requester.builderId, recipient.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(requester.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still cascades a deleted builder into its own bundles', async () => {
+      const builder = await signupBuilder('post-0093-bundles-cascade');
+      const bundleId = `bundle-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        "INSERT INTO bundles (bundle_id, builder_id, name, items_json) VALUES (?, ?, 'Test Bundle', '[]')",
+      ).bind(bundleId, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still cascades a deleted builder into its own saved_level_layouts', async () => {
+      const builder = await signupBuilder('post-0093-saved-layouts-cascade');
+      const savedLayoutId = `layout-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        "INSERT INTO saved_level_layouts (saved_layout_id, builder_id, source_level_index, name) VALUES (?, ?, 0, 'Test Layout')",
+      ).bind(savedLayoutId, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still cascades a deleted builder into its own owned_avatars', async () => {
+      const builder = await signupBuilder('post-0093-owned-avatars-cascade');
+      await env.DB.prepare(
+        "INSERT INTO owned_avatars (builder_id, template_id) VALUES (?, 'test-avatar-template')",
+      ).bind(builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM owned_avatars WHERE builder_id = ?').bind(builder.builderId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still cascades a deleted builder into its own auctions and auction_bids', async () => {
+      const seller = await signupBuilder('post-0093-auctions-cascade-seller');
+      const bidder = await signupBuilder('post-0093-auctions-cascade-bidder');
+      const landletId = `landlet-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        "INSERT INTO landlets (landlet_id, name, status) VALUES (?, 'Test Landlet', 'claimed')",
+      ).bind(landletId).run();
+
+      const auctionId = `auction-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        "INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, ends_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+1 day'))",
+      ).bind(auctionId, landletId, seller.builderId).run();
+
+      const bidId = `bid-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        'INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents) VALUES (?, ?, ?, 100)',
+      ).bind(bidId, auctionId, bidder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(bidder.builderId).run();
+      const bidsAfterBidderDeleted = await env.DB.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).all();
+      expect(bidsAfterBidderDeleted.results).toHaveLength(0);
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(seller.builderId).run();
+      const auctionsAfterSellerDeleted = await env.DB.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).all();
+      expect(auctionsAfterSellerDeleted.results).toHaveLength(0);
+    });
+
+    it('still cascades a deleted builder into its own higgles_earnings_events', async () => {
+      const builder = await signupBuilder('post-0093-earnings-events-cascade');
+      const eventId = `earnings-${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        'INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, 100)',
+      ).bind(eventId, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const { results } = await env.DB.prepare('SELECT * FROM higgles_earnings_events WHERE event_id = ?').bind(eventId).all();
+      expect(results).toHaveLength(0);
+    });
+
+    it('still nulls out higgles_redemptions.builder_id (keeping the redemption row) after the linked builder is deleted', async () => {
+      const builder = await signupBuilder('post-0093-redemptions-set-null');
+      const redemptionId = `redemption-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+        VALUES (?, ?, 100, 'test-transfer', 'test-payout')
+      `).bind(redemptionId, builder.builderId).run();
+
+      await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+      const row = await env.DB.prepare('SELECT * FROM higgles_redemptions WHERE redemption_id = ?').bind(redemptionId).first();
+      expect(row).not.toBeNull();
+      expect(row.builder_id).toBeNull();
+    });
   });
 });
