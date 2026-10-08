@@ -1448,6 +1448,9 @@ function validateGlb(bytes) {
 }
 
 function formatBytes(bytes) {
+  // #1539: MAX_TOTAL_STORAGE_BYTES is 8GB -- without this tier it rendered
+  // as "8192.0MB" in every reserveStorageBudget 507 error.
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   return `${bytes}B`;
