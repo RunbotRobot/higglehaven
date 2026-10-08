@@ -1,7 +1,8 @@
 // Pure Shop-mode flight math, extracted out of src/main.js the same way
-// settings.js already is — no three.js/DOM dependency, so this is directly
-// unit-testable in the workerd test pool (see vitest.config.js's own note
-// on why three.js-importing code can't live there).
+// settings.js already is — no WebGL/DOM/network dependency, so this is
+// directly unit-testable in the workerd test pool (see vitest.config.js's
+// own note on the real constraint: a loaded model/rendering pipeline,
+// not "imports three.js" itself).
 
 // Mirrors THREE.MathUtils.smoothstep(x, 0, 1) exactly (three.js's own
 // implementation: clamp to [0, 1], then the classic 3x² - 2x³ ease).
