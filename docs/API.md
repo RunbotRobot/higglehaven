@@ -585,6 +585,9 @@ the account is already verified. Otherwise issues a brand-new verification
 token (the original one, if the first email never arrived, is left alone
 and still valid — resending never invalidates it) and returns the same
 `{ "verificationEmailSent": ..., "devVerifyUrl"?: ... }` shape signup does.
+Rate-limited per account (5 attempts per 15 minutes, same bucket shape as
+`change-password`/`delete-account` above) so a logged-in user can't loop
+this indefinitely and burn the operator's Resend quota.
 
 ### Testing note
 
@@ -595,7 +598,8 @@ and malformed-input rejection, case-insensitive email matching, identical
 wrong-password/unknown-email responses, the five-attempt lockout, the full
 email-verification lifecycle (valid/invalid/reused token), resending
 verification (requires a session, a no-op once already verified, doesn't
-invalidate the original token), the full password-reset lifecycle
+invalidate the original token, and rate-limits repeated requests — 6th
+attempt is `429`), the full password-reset lifecycle
 (valid/invalid/reused token, old sessions invalidated, old password
 rejected afterward), and rate limiting on signup/request-password-reset
 (the 6th attempt against one email within the window is `429`, a
