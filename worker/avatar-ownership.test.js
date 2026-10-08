@@ -600,12 +600,13 @@ describe('Refund revokes avatar ownership (#754)', () => {
     expect(refunded.response.status).toBe(200);
   });
 
-  // #1016: the refund handler above filters owned_avatars by purchase_id on
-  // every single refund this app processes, not just avatar ones -- schema-
-  // only change with no app-observable behavior difference, so the
-  // meaningful regression check is that the index actually exists.
-  it('indexes owned_avatars.purchase_id', async () => {
+  // #1529: idx_owned_avatars_purchase_id (#1016) was dropped once
+  // migrations/0094's owned_avatar_purchases side table took over every
+  // query that used to filter owned_avatars by purchase_id -- nothing left
+  // in the app does, so re-adding it would just be dead weight on every
+  // write again.
+  it('does not re-add a dead index on owned_avatars.purchase_id', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(owned_avatars)').all()).results;
-    expect(indexes.some((idx) => idx.name === 'idx_owned_avatars_purchase_id')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_owned_avatars_purchase_id')).toBe(false);
   });
 });
