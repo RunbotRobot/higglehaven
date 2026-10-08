@@ -3115,8 +3115,30 @@ async function showUploadDimensionPreview(modelUrl) {
   sun.position.set(2, -3, 4);
   scene.add(sun);
 
+  // #1465: lets an e2e test simulate a slow load deterministically, same
+  // reasoning as window.__testAvatarLoadDelayMs (#982) — modelUrl is
+  // already cached by the time this runs (handleUploadFileStep's own
+  // "Measuring model…" step already fully loaded it via this same
+  // loadModelInstance pipeline), so there's no real network request left
+  // here to delay via page.route(), and #982's own comment on that hook
+  // found route-interception delays unreliable for this anyway. Always
+  // undefined outside of that one test.
+  if (window.__testUploadPreviewLoadDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testUploadPreviewLoadDelayMs));
+  }
   const previewObject = await loadModelInstance(modelUrl);
-  if (myFlowToken !== uploadFlowToken) return; // superseded while loading — a newer/canceled flow owns things now
+  if (myFlowToken !== uploadFlowToken) {
+    // A newer/canceled flow owns things now — this one's just-built object
+    // was never added to any scene disposeUploadDimensionPreview knows
+    // about, so without this it leaks the exact same way #1426/#1427 did
+    // for their own superseded in-flight loads (see showAxisPreview).
+    disposeObject(previewObject);
+    // Exposed purely so an e2e test can confirm the dispose above actually
+    // ran, same reasoning as window.__supersededAvatarDisposals (#1426) and
+    // window.__sellerShowcaseDisposedMeshCount (#1427/#1432).
+    window.__supersededUploadPreviewDisposals = (window.__supersededUploadPreviewDisposals ?? 0) + 1;
+    return;
+  }
   scene.add(previewObject);
 
   // #1162: awaited (unlike the animation detection just below, which is
