@@ -4610,6 +4610,12 @@ due first triggers it for good; every visitor afterward, including the one
 who lost the race, just sees an ordinary past event with `triggeredAt` set
 and no replay.
 
+Rate-limited per client IP (20 attempts per 15-minute window, #1023) — this
+endpoint is deliberately unauthenticated (any shopper can trigger it), the
+one remaining public repeatable mutation that used to have no rate limit at
+all, so the limit matters precisely because of that same unauthenticated
+design.
+
 ### Frontend wiring
 
 The in-world "Add an Event" flow (`#shop-calendar-hint`'s click handler) now
