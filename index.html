@@ -3639,7 +3639,7 @@
   </head>
   <body>
     <canvas id="app"></canvas>
-    <div id="shop-status" class="shop-ui"></div>
+    <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
@@ -3677,7 +3677,7 @@
           <button id="my-lands-btn" type="button">My Lands</button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
-          <div id="account-menu-tax-notice" hidden></div>
+          <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
           <div id="account-menu-landlet-info" hidden></div>
         </div>
       </div>
@@ -3755,7 +3755,7 @@
         <button id="level-build-btn" type="button">Build Level Above</button>
         <button id="level-dig-btn" type="button">Dig Level Below</button>
         <button id="level-remove-btn" type="button" hidden>Remove This Level</button>
-        <div id="level-status"></div>
+        <div id="level-status" role="status" aria-live="polite"></div>
       </div>
     </div>
     <div id="add-item-panel">
@@ -3790,7 +3790,7 @@
         <div id="catalog-prompt-mode" hidden>
           <textarea id="prompt-mode-input" placeholder="Describe what you're looking for…"></textarea>
           <button id="prompt-mode-generate-btn" type="button">Generate</button>
-          <div id="prompt-mode-status" hidden></div>
+          <div id="prompt-mode-status" hidden role="status" aria-live="polite"></div>
           <div id="prompt-mode-grid"></div>
           <div id="prompt-mode-empty" hidden>No similar products found yet — try generating a concept image above.</div>
         </div>
@@ -3859,7 +3859,7 @@
             <input class="upload-dimension-input" data-axis="z" type="number" step="0.01" min="0.01" /><span class="upload-dimension-unit">m</span>
           </label>
         </div>
-        <div id="upload-status"></div>
+        <div id="upload-status" role="status" aria-live="polite"></div>
         <div id="upload-modal-actions">
           <button id="upload-submit-btn" type="button">Add Product</button>
         </div>
@@ -3904,7 +3904,7 @@
         <h2 id="checkout-modal-title">Checkout</h2>
         <div id="checkout-summary"></div>
         <div id="checkout-card-element"></div>
-        <div id="checkout-status"></div>
+        <div id="checkout-status" role="status" aria-live="polite"></div>
         <div id="checkout-modal-actions">
           <button id="checkout-pay-btn" type="button">Pay</button>
         </div>
@@ -3930,7 +3930,7 @@
           </p>
           <div id="verify-card-element"></div>
         </div>
-        <div id="verify-status"></div>
+        <div id="verify-status" role="status" aria-live="polite"></div>
         <div id="verify-modal-actions">
           <button id="verify-continue-btn" type="button">Continue</button>
         </div>
@@ -3966,7 +3966,7 @@
         </div>
         <div id="seller-list"></div>
         <div id="seller-list-view" hidden></div>
-        <div id="seller-status"></div>
+        <div id="seller-status" role="status" aria-live="polite"></div>
       </div>
     </div>
     <div id="notifications-modal" role="dialog" aria-modal="true" tabindex="-1">
@@ -3987,7 +3987,7 @@
           <button id="friends-add-btn" type="button">+ Add Friend</button>
           <button id="friends-map-btn" type="button">Show Map</button>
         </div>
-        <div id="friends-status"></div>
+        <div id="friends-status" role="status" aria-live="polite"></div>
         <h3>Requests</h3>
         <div id="friends-incoming-list"></div>
         <div id="friends-incoming-empty">No pending requests.</div>
@@ -4011,7 +4011,7 @@
       <div id="my-lands-modal-content">
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>My Lands</h2>
-        <div id="my-lands-status"></div>
+        <div id="my-lands-status" role="status" aria-live="polite"></div>
         <div id="my-lands-list"></div>
         <div id="my-lands-empty">You don't own any claimed land yet.</div>
       </div>
@@ -4185,7 +4185,7 @@
           </form>
         </div>
 
-        <div id="auth-status"></div>
+        <div id="auth-status" role="status" aria-live="polite"></div>
       </div>
     </div>
     <div id="claim-modal" role="dialog" aria-modal="true" tabindex="-1">
@@ -4205,7 +4205,7 @@
           <div id="claim-selection-name">No plot selected</div>
           <button id="claim-confirm-btn" type="button" disabled>Claim</button>
         </div>
-        <div id="claim-status"></div>
+        <div id="claim-status" role="status" aria-live="polite"></div>
         <div id="claim-modal-actions">
           <button id="claim-refresh-btn" type="button">Refresh</button>
         </div>
