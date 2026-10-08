@@ -653,13 +653,14 @@
       #account-menu {
         /* Purely to give the absolutely-positioned dropdown panel below
            (and the ::after unread-badge dot) something to anchor to —
-           #topbar-left's own z-index:15 already lifts this whole row
+           #topbar-left's own z-index:21 already lifts this whole row
            above the z-index:10 floating-HUD tier (gizmo-mode-controls,
            product-info, ...), the reason the dropdown needs to clear that
            tier at all (found via e2e/seller-upload-and-resize.test.mjs
            timing out on a click that should have landed). Still below
-           #catalog-picker (16) and every real modal (20+), since a row
-           click always closes this panel before anything else can open. */
+           #catalog-picker (no z-index of its own — inherits #add-item-panel's
+           10) and every real modal (20+), since a row click always closes
+           this panel before anything else can open. */
         position: relative;
       }
       #account-menu-toggle {
