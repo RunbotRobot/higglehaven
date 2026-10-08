@@ -15,6 +15,7 @@ against what's actually live in this account today (`wrangler.jsonc`):
 | Worker script `higglehaven` | Live, deployed via Workers Builds (Git-connected) | Yes (#1137/#1139) |
 | D1 database `higglehaven-db` (`3d9ad5a2-7529-4fd2-9b2f-60604b0499a1`) | Live | Yes (#1139) |
 | R2 bucket `higglehaven-models` | Live | Yes (#1139) |
+| R2 bucket `higglehaven-db-backups` | Live | Yes (#1139) |
 | R2 bucket for Terraform's own remote state | Does not exist yet | Created by #1137, referenced as the backend |
 | Worker Build trigger (Git integration: repo, branch, build command, deploy command) | Live, dashboard-configured; this is the #662 root cause | Yes (#1140) |
 | KV namespace | **None exist** — grep across the repo finds no `kv_namespaces` binding anywhere | Not in scope today; see note below |
