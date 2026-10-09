@@ -10161,6 +10161,7 @@ accountMenuToggle.addEventListener('click', () => {
   const expanding = !accountMenuPanel.classList.contains('expanded');
   accountMenuPanel.classList.toggle('expanded');
   accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
+  accountMenuToggle.setAttribute('aria-expanded', String(expanding));
   if (expanding) {
     refreshAccountMenuLandCap();
     refreshAccountMenuTaxNotice();
@@ -10176,6 +10177,7 @@ for (const row of accountMenuPanel.querySelectorAll('button')) {
   row.addEventListener('click', () => {
     accountMenuPanel.classList.remove('expanded');
     accountMenuToggle.classList.remove('active');
+    accountMenuToggle.setAttribute('aria-expanded', 'false');
   });
 }
 document.addEventListener('click', (event) => {
@@ -10183,6 +10185,7 @@ document.addEventListener('click', (event) => {
   if (event.target === accountMenuToggle || accountMenuPanel.contains(event.target)) return;
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
+  accountMenuToggle.setAttribute('aria-expanded', 'false');
 });
 
 // #1150 (owner request, 2026-10-01, via a live Control Room conversation):
