@@ -6833,6 +6833,14 @@ async function handleDiditVerificationSession(request, env, db) {
       vendor_data: user.user_id,
       callback: `${appBaseUrl(env)}/?diditReturn=1`,
     });
+    // #1563: same response-shape validation generateConceptImageBytes/
+    // fetchTax1099EfilingToken (#1548) already do for their own third-party
+    // JSON -- without it, an unexpected 2xx body binds undefined into
+    // session_id's TEXT PRIMARY KEY below, which D1 throws on synchronously,
+    // surfacing as a generic 500 instead of this clean 502.
+    if (!session?.session_id || !session?.url) {
+      throw new HttpError('Didit session creation failed — please try again', 502);
+    }
     // The reservation's own session_id was only ever a local placeholder --
     // nothing external has referenced it, so overwriting it with Didit's
     // real one (along with the url a reused session needs, #607) is safe.
