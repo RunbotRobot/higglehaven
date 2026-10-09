@@ -2950,6 +2950,11 @@ function setUploadStatus(text, isError) {
 }
 
 function formatBytes(bytes) {
+  // #1571: same GB tier worker/index.js's own copy of this function already
+  // got in #1539/#1540 -- without it, a raw pre-optimization upload over 1GB
+  // rendered as e.g. "1536.0MB" in the model-upload status line instead of
+  // "1.5GB".
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   return `${bytes}B`;
