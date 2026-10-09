@@ -118,6 +118,18 @@ export async function optimizeModelFile(file, onProgress) {
       return;
     }
 
+    // #1552: SimplifyModifier's attribute whitelist doesn't carry skin
+    // binding through edge-collapse, so decimating a SkinnedMesh silently
+    // destroys its skinIndex/skinWeight -- breaking equip/animation
+    // playback with no error surfaced anywhere. Same "optimization is a
+    // nice-to-have, not a requirement" fallback as a thrown simplifier
+    // error (see this function's own caller in main.js): leave a skinned
+    // mesh undecimated rather than risk its rig.
+    if (geometry.attributes.skinIndex || geometry.attributes.skinWeight) {
+      trianglesAfter += triangleCount;
+      return;
+    }
+
     const vertexCount = geometry.attributes.position.count;
     const targetVertexCount = Math.max(3, Math.round(vertexCount * (TARGET_TRIANGLES_PER_MESH / triangleCount)));
     const removeCount = vertexCount - targetVertexCount;
