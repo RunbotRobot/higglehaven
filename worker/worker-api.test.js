@@ -1654,6 +1654,66 @@ describe('Worker API', () => {
     expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
   });
 
+  // #1573: generatedAt/claimableAt went through validateLandlet with no type
+  // check at all, so a non-string value (an object/array) reached a raw D1
+  // bind and crashed with an unhandled 500 instead of a clean 400 -- unlike
+  // every other field in validateLandlet, which is strictly type-checked.
+  it('rejects a non-string generatedAt/claimableAt with a clean 400 rather than crashing', async () => {
+    const badGeneratedAt = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'bad-generated-at-landlet',
+        name: 'Bad generatedAt landlet',
+        areaM2: 1000,
+        center: { x: 5000, y: 1200 },
+        generatedAt: { foo: 1 },
+      }),
+    }));
+    expect(badGeneratedAt.response.status).toBe(400);
+    expect(badGeneratedAt.body.error).toMatch(/generatedAt/);
+
+    const badClaimableAt = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'bad-claimable-at-landlet',
+        name: 'Bad claimableAt landlet',
+        areaM2: 1000,
+        center: { x: 5000, y: 1400 },
+        claimableAt: ['not', 'a', 'date'],
+      }),
+    }));
+    expect(badClaimableAt.response.status).toBe(400);
+    expect(badClaimableAt.body.error).toMatch(/claimableAt/);
+
+    const notADate = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'not-a-date-landlet',
+        name: 'Not a date landlet',
+        areaM2: 1000,
+        center: { x: 5000, y: 1600 },
+        generatedAt: 'not-a-real-date',
+      }),
+    }));
+    expect(notADate.response.status).toBe(400);
+    expect(notADate.body.error).toMatch(/generatedAt/);
+
+    const validDates = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'valid-dates-landlet',
+        name: 'Valid dates landlet',
+        areaM2: 1000,
+        center: { x: 5000, y: 1800 },
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        claimableAt: '2026-01-02T00:00:00.000Z',
+      }),
+    }));
+    expect(validDates.response.status).toBe(201);
+    expect(validDates.body.landlet.generatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(validDates.body.landlet.claimableAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
   it('excludes water landlets from the greenbelt count/ratio but includes them in total', async () => {
     const before = (await api('/world')).body.world.landletCounts;
 

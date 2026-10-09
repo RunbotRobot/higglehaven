@@ -13535,8 +13535,8 @@ function validateLandlet(input, fallbackId) {
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
     landType: landletLandType(input.landType || 'buildable'),
     polygon: validatePolygon(input.polygon || []),
-    generatedAt: input.generatedAt || null,
-    claimableAt: input.claimableAt || null,
+    generatedAt: optionalIsoDateString(input.generatedAt, 'generatedAt'),
+    claimableAt: optionalIsoDateString(input.claimableAt, 'claimableAt'),
     activeVersionId: input.activeVersionId || null,
     metadata: input.metadata || {},
   };
@@ -13938,6 +13938,15 @@ function optionalLabelValue(value, field) {
 function optionalStringValue(value, field) {
   if (!value) return null;
   return stringValue(value, field);
+}
+
+// #1573: same shape as optionalStringValue above, but for a date/time
+// field (validateLandlet's generatedAt/claimableAt) that was passing
+// through with no type check at all, letting a non-string value reach a
+// raw D1 bind and crash with an unhandled 500 instead of a clean 400.
+function optionalIsoDateString(value, field) {
+  if (!value) return null;
+  return isoDateString(value, field);
 }
 
 // #1460: the Control Room admin board renders url/prUrl/imageUrl fields as
