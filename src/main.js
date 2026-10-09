@@ -2661,7 +2661,7 @@ function renderBundlePicker() {
           communityBundles = freshShared;
           renderBundlePicker();
         } catch (err) {
-          console.warn('Could not rename bundle:', err);
+          alert(err.message || 'Could not rename this bundle.');
           renameBtn.disabled = false;
         }
       });
@@ -2696,7 +2696,7 @@ function renderBundlePicker() {
           communityBundles = freshShared;
           renderBundlePicker();
         } catch (err) {
-          console.warn('Could not update bundle sharing:', err);
+          alert(err.message || 'Could not update this bundle\'s sharing.');
           shareToggleBtn.disabled = false;
         }
       });
@@ -2716,7 +2716,7 @@ function renderBundlePicker() {
           communityBundles = communityBundles.filter((b) => b.bundleId !== bundle.bundleId);
           renderBundlePicker();
         } catch (err) {
-          console.warn('Could not delete bundle:', err);
+          alert(err.message || 'Could not delete this bundle.');
         }
       });
       tile.appendChild(deleteTileBtn);
@@ -8379,7 +8379,7 @@ async function renderSignPosts() {
         await deleteSignPost(instanceId, post.postId);
         await renderSignPosts();
       } catch (err) {
-        console.warn('Could not delete post:', err);
+        alert(err.message || 'Could not delete this post.');
         deleteRowBtn.disabled = false;
       }
     });
@@ -8510,7 +8510,7 @@ async function renderCalendarEvents() {
         await deleteCalendarEvent(instanceId, event.eventId);
         await renderCalendarEvents();
       } catch (err) {
-        console.warn('Could not delete event:', err);
+        alert(err.message || 'Could not delete this event.');
         deleteRowBtn.disabled = false;
       }
     });
@@ -9959,7 +9959,8 @@ async function renderFriends() {
         await renderFriends();
         await refreshFriendsBadge();
       } catch (err) {
-        console.warn('Could not accept friend request:', err);
+        friendsStatusEl.textContent = err.message || 'Could not accept this friend request.';
+        friendsStatusEl.classList.add('error');
         acceptBtn.disabled = false;
       }
     });
@@ -9975,7 +9976,8 @@ async function renderFriends() {
         await renderFriends();
         await refreshFriendsBadge();
       } catch (err) {
-        console.warn('Could not decline friend request:', err);
+        friendsStatusEl.textContent = err.message || 'Could not decline this friend request.';
+        friendsStatusEl.classList.add('error');
         declineBtn.disabled = false;
       }
     });
@@ -10007,7 +10009,8 @@ async function renderFriends() {
         await removeFriendship(friendship.friendshipId);
         await renderFriends();
       } catch (err) {
-        console.warn('Could not cancel friend request:', err);
+        friendsStatusEl.textContent = err.message || 'Could not cancel this friend request.';
+        friendsStatusEl.classList.add('error');
         cancelBtn.disabled = false;
       }
     });
@@ -10043,7 +10046,8 @@ async function renderFriends() {
         await removeFriendship(friendship.friendshipId);
         await renderFriends();
       } catch (err) {
-        console.warn('Could not remove friend:', err);
+        friendsStatusEl.textContent = err.message || 'Could not remove this friend.';
+        friendsStatusEl.classList.add('error');
         removeBtn.disabled = false;
       }
     });
