@@ -2465,7 +2465,7 @@ function buildCatalogTemplateTile(template) {
   tile.appendChild(name);
 
   tile.addEventListener('click', () => {
-    catalogPickerEl.classList.remove('visible');
+    closeCatalogPicker();
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
   });
   return { tile, thumb };
@@ -2628,7 +2628,7 @@ function renderBundlePicker() {
     count.textContent = `${bundle.items.length} item${bundle.items.length === 1 ? '' : 's'}`;
     placeBtn.append(name, count);
     placeBtn.addEventListener('click', () => {
-      catalogPickerEl.classList.remove('visible');
+      closeCatalogPicker();
       enterPlacementMode({ type: 'clipboard', items: bundle.items }, `Tap a spot to place "${bundle.name}"`);
     });
     tile.appendChild(placeBtn);
@@ -2755,29 +2755,37 @@ for (const btn of bundleTabButtons) {
     renderBundlePicker();
   });
 }
+// #1554: shared modal keyboard accessibility (#1316) missed this panel —
+// open/close now go through openModalA11y/closeModalA11y like every other
+// real modal dialog in this file.
+function closeCatalogPicker() {
+  catalogPickerEl.classList.remove('visible');
+  closeModalA11y(catalogPickerEl);
+}
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
     cancelPlacementMode();
     return;
   }
   const opening = !catalogPickerEl.classList.contains('visible');
-  catalogPickerEl.classList.toggle('visible');
-  if (opening) {
-    // Fresh search each time the picker opens, rather than carrying over
-    // whatever was last typed (or last scoped to) — the same "reset on
-    // open" pattern the upload modal's own file step uses. #1082 extends
-    // this to the scope toggle: reopening with Bundles-only still
-    // selected would otherwise leave the product grid silently hidden
-    // with no query typed to explain why.
-    catalogSearchInputEl.value = '';
-    catalogSearchScope = 'both';
-    for (const b of searchScopeButtons) b.classList.toggle('active', b.dataset.searchScope === 'both');
-    updateCatalogSearchPanel();
+  if (!opening) {
+    closeCatalogPicker();
+    return;
   }
+  catalogPickerEl.classList.add('visible');
+  // Fresh search each time the picker opens, rather than carrying over
+  // whatever was last typed (or last scoped to) — the same "reset on
+  // open" pattern the upload modal's own file step uses. #1082 extends
+  // this to the scope toggle: reopening with Bundles-only still
+  // selected would otherwise leave the product grid silently hidden
+  // with no query typed to explain why.
+  catalogSearchInputEl.value = '';
+  catalogSearchScope = 'both';
+  for (const b of searchScopeButtons) b.classList.toggle('active', b.dataset.searchScope === 'both');
+  updateCatalogSearchPanel();
+  openModalA11y(catalogPickerEl, closeCatalogPicker);
 });
-catalogPickerCloseBtn.addEventListener('click', () => {
-  catalogPickerEl.classList.remove('visible');
-});
+catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
 
 // Custom product upload: a builder's own model (photogrammetry scan,
 // etc.) becomes a real catalog_templates row via two independent backend
@@ -2984,7 +2992,7 @@ function resetUploadModalToFileStep() {
 }
 
 function openUploadModal() {
-  catalogPickerEl.classList.remove('visible');
+  closeCatalogPicker();
   uploadNameInput.value = '';
   uploadPriceInput.value = '';
   uploadDigitalGoodCheckbox.checked = false;
@@ -8577,7 +8585,7 @@ function selectionPlacementAnchor() {
 let clipboard = null;
 pasteBtn.addEventListener('click', async () => {
   if (!clipboard) return;
-  catalogPickerEl.classList.remove('visible');
+  closeCatalogPicker();
   // Something's already selected — paste right there instead of making the
   // builder tap a second time to say where, the same way pasting next to
   // what you just copied would work in any other editor.
@@ -8771,7 +8779,7 @@ renderer.domElement.addEventListener('click', (event) => {
   // Any genuine tap into the world — whether it selects a product or hits
   // empty ground — means the builder has moved on from the add-item flow,
   // so the catalog picker (if left open) should collapse either way.
-  catalogPickerEl.classList.remove('visible');
+  closeCatalogPicker();
   raycaster.setFromCamera(ndcFromEvent(event), camera);
 
   // #540: Sell mode's showcase array is read-only browsing, not editing —
