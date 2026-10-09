@@ -1107,8 +1107,35 @@ describe('Authentication', () => {
     const listed = asAdmin.body.admins.find((a) => a.userId === adminUserId);
     expect(listed).toBeTruthy();
     expect(listed.email).toBe(admin.email);
-    expect(Object.keys(listed).sort()).toEqual(['createdAt', 'email', 'userId', 'username']);
+    expect(Object.keys(listed).sort()).toEqual(['adminGrantedAt', 'createdAt', 'email', 'userId', 'username']);
     expect(asAdmin.body.admins.some((a) => a.userId === nonAdminUserId)).toBe(false);
+  });
+
+  // #1561: createdAt is the account's signup date, not when admin was
+  // granted -- adminGrantedAt is the real signal, read back from the
+  // admin_action_log row #814/#1074 already write at grant time.
+  it('reports adminGrantedAt from admin_action_log, not the account signup date', async () => {
+    const admin = await signupBuilder('admin-granted-at-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('admin-granted-at-target');
+    // Simulate the real failure scenario: an account that signed up long
+    // before it was ever promoted to admin.
+    await env.DB.prepare('UPDATE users SET created_at = ? WHERE email = ?')
+      .bind('2020-01-01T00:00:00.000Z', target.email).run();
+    const targetCreatedAt = (await api('/auth/me', target.session())).body.user.createdAt;
+    expect(targetCreatedAt).toBe('2020-01-01T00:00:00.000Z');
+
+    await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+
+    const asAdmin = await api('/auth/admins', admin.session());
+    const listed = asAdmin.body.admins.find((a) => a.email === target.email);
+    expect(listed.createdAt).toBe(targetCreatedAt);
+    expect(listed.adminGrantedAt).toBeTruthy();
+    expect(new Date(listed.adminGrantedAt).getTime()).toBeGreaterThan(new Date(targetCreatedAt).getTime());
   });
 
   it('rejects signup with an already-registered email, case-insensitively', async () => {

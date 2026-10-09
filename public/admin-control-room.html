@@ -649,7 +649,7 @@
       adminsListEl.innerHTML = body.admins.map((a) =>
         '<div>' + escapeHtml(a.email) +
           (a.username ? ' (' + escapeHtml(a.username) + ')' : '') +
-          ' <span class="meta">· admin since ' + relativeTime(a.createdAt) + '</span></div>'
+          ' <span class="meta">· admin since ' + relativeTime(a.adminGrantedAt || a.createdAt) + '</span></div>'
       ).join('') || 'No admins found.';
     } catch (error) {
       adminsListEl.textContent = 'Error: ' + error.message;

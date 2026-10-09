@@ -8654,12 +8654,24 @@ async function handleGrantAdmin(request, db) {
 // other admin viewing this roster has no reason to see about a peer.
 async function handleListAdmins(request, db) {
   await requireAdmin(request, db);
-  const { results } = await db.prepare(
-    'SELECT user_id, email, username, created_at FROM users WHERE is_admin = 1 ORDER BY created_at ASC',
-  ).all();
+  // #1561: created_at is the account's signup date, not when is_admin was
+  // set -- admin_action_log already records the exact grant moment (#814/
+  // #1074's own accountability-trail reasoning), so read that back instead
+  // of silently mislabeling a long-dormant account's later promotion as
+  // "admin since" its original signup. Falls back to created_at (via
+  // COALESCE/the client's `||`) for any admin whose grant predates that log.
+  const { results } = await db.prepare(`
+    SELECT users.user_id, users.email, users.username, users.created_at,
+      (SELECT MAX(created_at) FROM admin_action_log
+       WHERE target_type = 'user' AND target_id = users.user_id
+         AND action_type IN ('grant_admin', 'admin_bootstrap')) AS admin_granted_at
+    FROM users WHERE is_admin = 1
+    ORDER BY COALESCE(admin_granted_at, users.created_at) ASC
+  `).all();
   return json({
     admins: results.map((row) => ({
-      userId: row.user_id, email: row.email, username: row.username, createdAt: row.created_at,
+      userId: row.user_id, email: row.email, username: row.username,
+      createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
   });
 }

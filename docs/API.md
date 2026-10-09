@@ -752,10 +752,17 @@ caller. Reusable per target account, same as `admin-bootstrap`.
 Lists every current admin account — `requireAdmin`-gated the same way
 `grant-admin` is (`401`/`403` the same way), so any admin can audit who
 currently holds admin access, not just whoever granted it. Returns
-`{ "admins": [{ "userId", "email", "username", "createdAt" }, ...] }`,
-oldest-admin-first — a deliberately narrow shape (never the full user
-object `userFromRow` returns elsewhere) since one admin has no reason to
-see a peer's trust tier, card funding, or tax form status.
+`{ "admins": [{ "userId", "email", "username", "createdAt", "adminGrantedAt" }, ...] }`,
+ordered oldest-admin-first by `adminGrantedAt` (falling back to `createdAt`
+for an admin whose grant predates `admin_action_log`, #1561) — a
+deliberately narrow shape (never the full user object `userFromRow`
+returns elsewhere) since one admin has no reason to see a peer's trust
+tier, card funding, or tax form status. `adminGrantedAt` is read back from
+the `grant_admin`/`admin_bootstrap` row `admin_action_log` already writes
+at grant time (#814/#1074) — `createdAt` is still the account's original
+signup date, not when it became an admin; `adminGrantedAt` is `null` for an
+admin whose grant predates `admin_action_log` itself, the one case a caller
+should fall back to `createdAt` for.
 
 ## Builders
 
