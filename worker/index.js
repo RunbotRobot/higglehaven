@@ -1040,7 +1040,13 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
   if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? urlValue(body.prUrl, 'prUrl') : null);
   if (body.waitingOn !== undefined) setIfPresent('waiting_on', normalizedIncomingWaitingOn);
-  if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
+  // #1550: settingWaitingOnOwner inserts a real linked reply below (the
+  // reason) -- same reasoning as handleControlRoomReplyCreate's own reset
+  // (#997), so it shouldn't leave a previously-viewed task's "New"
+  // indicator hidden just because that reply arrived through this endpoint
+  // instead of the dedicated POST .../replies one.
+  if (settingWaitingOnOwner) setIfPresent('viewed', 0);
+  else if (body.viewed !== undefined) setIfPresent('viewed', body.viewed ? 1 : 0);
   if (body.awaitingClaude !== undefined) setIfPresent('awaiting_claude', body.awaitingClaude ? 1 : 0);
   if (body.subIssues !== undefined) {
     setIfPresent('sub_issues', body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')));
