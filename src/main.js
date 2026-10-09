@@ -5564,6 +5564,8 @@ async function renderTaxPaperworkField() {
   statusField.appendChild(statusLabel);
   const statusNote = document.createElement('div');
   statusNote.className = 'settings-empty-note';
+  statusNote.setAttribute('role', 'status');
+  statusNote.setAttribute('aria-live', 'polite');
   statusField.appendChild(statusNote);
   settingsSectionEl.appendChild(statusField);
 
@@ -5894,6 +5896,8 @@ async function renderRedeemHigglesField() {
   statusField.appendChild(statusLabel);
   const statusNote = document.createElement('div');
   statusNote.className = 'settings-empty-note';
+  statusNote.setAttribute('role', 'status');
+  statusNote.setAttribute('aria-live', 'polite');
   statusNote.textContent = 'Loading…';
   statusField.appendChild(statusNote);
   settingsSectionEl.appendChild(statusField);
@@ -6450,6 +6454,8 @@ async function renderSellSettingsSection() {
   statusField.appendChild(statusLabel);
   const statusNote = document.createElement('div');
   statusNote.className = 'settings-empty-note';
+  statusNote.setAttribute('role', 'status');
+  statusNote.setAttribute('aria-live', 'polite');
   statusNote.textContent = 'Loading…';
   statusField.appendChild(statusNote);
   settingsSectionEl.appendChild(statusField);
