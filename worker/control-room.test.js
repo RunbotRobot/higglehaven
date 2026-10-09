@@ -767,6 +767,26 @@ describe('Control Room replies (#N31)', () => {
     const after = await api(`/control-room/tasks/${task.id}`, keySession());
     expect(after.body.task.viewed).toBe(false);
   });
+
+  // #1550: the same "sits hidden" failure mode #997 fixed above, reachable
+  // through this endpoint's own separate reply-insertion path (settingWaitingOnOwner
+  // inserting the reason as a real linked reply) instead of the dedicated
+  // POST .../replies one.
+  it('clears the parent task viewed flag when waitingOn is set to owner with a reason', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'owner', viewed: true }),
+    }));
+    const before = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(before.body.task.viewed).toBe(true);
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH',
+      body: JSON.stringify({ caller: 'higglehaven10', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    expect(got.response.status).toBe(200);
+    expect(got.body.task.viewed).toBe(false);
+  });
 });
 
 // N31 option 3 (owner: "I would like to do option 3. Isn't there a way to

@@ -7474,7 +7474,12 @@ sitting at "Waiting on: Owner" with no reply anywhere explaining why. A
 change that doesn't set `waitingOn` to `'owner'` (clearing it, setting it
 to something else, or leaving it already at `'owner'`) needs no `reason`
 — only the specific transition the owner flagged (#610/#616/#653/#659)
-is gated.
+is gated. That same transition also unconditionally clears the task's own
+`viewed` flag back to `false` (#1550), the same reasoning as the dedicated
+reply-create endpoint's own `viewed` reset below (#997) — the `reason` just
+landed as a real linked reply too, so it shouldn't sit hidden just because
+it arrived through this endpoint instead of that one. An explicit `viewed`
+in the same body is only honored when this transition isn't also happening.
 
 ### `GET /api/control-room/tasks/:id/replies`
 
