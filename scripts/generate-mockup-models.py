@@ -70,7 +70,7 @@ POST_WOOD = (120, 92, 61)
 PICKET_WOOD = (163, 133, 97)
 fence_parts = {}
 for i, sign in enumerate([-1, 1]):
-    fence_parts[f'post_{i}'] = box([0.08, 1.1, 0.08], [sign * 0.56, 0, 0], POST_WOOD)
+    fence_parts[f'post_{i}'] = box([0.08, 1.1, 0.08], [sign * 0.56, 0.55, 0], POST_WOOD)
 for i, y in enumerate([0.75, 0.25]):
     fence_parts[f'rail_{i}'] = box([1.2, 0.06, 0.03], [0, y, 0], POST_WOOD)
 n_pickets = 7
