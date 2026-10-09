@@ -191,7 +191,7 @@ Near-term bootstrap: hybrid affiliate-with-permission + selective crowdsourcing,
 
 **Payout timing:**
 - **Higgles credit instantly** to builders on sale completion.
-- **Seller cash withdrawal tiered by trust/track record** (not flat 30-day): new sellers face a standard hold (~14–30 days), trusted sellers with dispute-free history earn progressively faster access.
+- **Seller cash withdrawal (owner decision, built):** no trust/track-record tiering — a digital good pays out instantly (delivered the moment it's bought, so no chargeback window makes a hold necessary), while a physical good holds until whichever comes first: the buyer confirms delivery, or 7 days after the seller marks it shipped (a fallback for when confirmation never happens).
 - **Returns/refunds return real currency, not higgles** — via Stripe Connect's built-in marketplace refund tooling. **Requires a higgle-commission clawback mechanism** (builder's instant commission on a returned sale is deducted, potentially creating a negative balance to settle).
 - **No-returns-policy respected as seller-set default**, within baseline fraud/dispute protections.
 
