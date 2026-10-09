@@ -63,12 +63,22 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchCurrentWaterbodyPolygons({ originLat, originLon, radiusM }) {
-  // A crude degrees-per-meter pad around the origin, generous enough at
-  // this app's regional scale (a few km at most) that it never clips a
-  // waterbody polygon straddling the edge of the query box.
+// A crude degrees-per-meter pad around the origin, generous enough at
+// this app's regional scale (a few km at most) that it never clips a
+// waterbody polygon straddling the edge of the query box. Longitude
+// degrees are narrower than latitude degrees by a factor of cos(latitude)
+// (a degree of longitude is 111,000m only at the equator), so the
+// east-west pad needs its own conversion rather than reusing the
+// latitude pad as-is -- otherwise the real margin shrinks well below the
+// intended 1.5x radius away from the equator (#1566).
+export function computeWaterbodyBbox({ originLat, originLon, radiusM }) {
   const padDeg = (radiusM / 111000) * 1.5;
-  const bbox = [originLon - padDeg, originLat - padDeg, originLon + padDeg, originLat + padDeg].join(',');
+  const padDegLon = padDeg / Math.cos((originLat * Math.PI) / 180);
+  return [originLon - padDegLon, originLat - padDeg, originLon + padDegLon, originLat + padDeg].join(',');
+}
+
+async function fetchCurrentWaterbodyPolygons({ originLat, originLon, radiusM }) {
+  const bbox = computeWaterbodyBbox({ originLat, originLon, radiusM });
   const url = `${NHD_WATERBODY_URL}?geometry=${encodeURIComponent(bbox)}&geometryType=esriGeometryEnvelope&inSR=4326&outFields=gnis_name,ftype&returnGeometry=true&outSR=4326&f=geojson`;
   const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error(`NHD waterbody query failed: ${response.status}`);
@@ -197,7 +207,9 @@ async function main() {
   console.log(`Wrote ${outPath}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
