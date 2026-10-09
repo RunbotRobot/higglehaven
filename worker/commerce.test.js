@@ -1972,6 +1972,54 @@ describe('Prohibited categories and digital goods', () => {
     expect(retrofitted.response.status).toBe(400);
   });
 
+  // #1569: sellerId went through with no type check at all, so a non-string
+  // value (an object/array) reached assertReferenceExists'/
+  // assertReferencesExist's raw D1 bind and crashed with an unhandled 500
+  // instead of a clean, validation-shaped 400 -- unlike every other field in
+  // validateTemplate, which is strictly type-checked before use.
+  it('rejects a non-string sellerId with a clean 400 rather than crashing, on both single and batch create', async () => {
+    const singleObject = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sellerid-object-single',
+        name: 'Bad SellerId Object',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: { foo: 1 },
+      }),
+    });
+    expect(singleObject.response.status).toBe(400);
+    expect(singleObject.body.error).toMatch(/sellerId/);
+
+    const singleArray = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sellerid-array-single',
+        name: 'Bad SellerId Array',
+        color: '#111111',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: [1, 2, 3],
+      }),
+    });
+    expect(singleArray.response.status).toBe(400);
+    expect(singleArray.body.error).toMatch(/sellerId/);
+
+    const batch = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        templates: [{
+          templateId: 'sellerid-object-batch',
+          name: 'Bad SellerId Batch',
+          color: '#111111',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: { foo: 1 },
+        }],
+      }),
+    });
+    expect(batch.response.status).toBe(400);
+    expect(batch.body.error).toMatch(/sellerId/);
+  });
+
   it('lets a digital-good flag be cleared by omitting it from a metadata replace', async () => {
     const modelUrl = await uploadTestModel();
     await api('/catalog', {

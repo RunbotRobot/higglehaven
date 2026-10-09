@@ -13480,7 +13480,7 @@ function validateTemplate(input, fallbackId) {
       height: positiveNumber(dimensions.height, 'dimensions.height'),
     },
     priceCents: optionalInteger(input.priceCents, 'priceCents'),
-    sellerId: input.sellerId || null,
+    sellerId: optionalStringValue(input.sellerId, 'sellerId'),
     modelUrl: input.modelUrl || null,
     // #540: the seller's own "faux lándlet" 3D array paginates by a
     // cumulative model-file-size cap, not a fixed item count — this is the
@@ -13928,6 +13928,16 @@ function labelValue(value, field) {
 function optionalLabelValue(value, field) {
   if (!value) return null;
   return labelValue(value, field);
+}
+
+// #1569: sellerId is optional on catalog-template creation (a system/
+// placeholder template has none), but was accepted with no type check at
+// all when present, letting a non-string value (an object/array) reach
+// assertReferenceExists'/assertReferencesExist's raw D1 bind and crash
+// with an unhandled 500 instead of a clean 400.
+function optionalStringValue(value, field) {
+  if (!value) return null;
+  return stringValue(value, field);
 }
 
 // #1460: the Control Room admin board renders url/prUrl/imageUrl fields as
