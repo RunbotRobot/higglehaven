@@ -6390,7 +6390,10 @@ async function generateConceptImageBytes(env, prompt) {
     body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
   });
   const data = await response.json();
-  if (!response.ok) {
+  // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
+  // already do for their own third-party JSON -- without it, a 200 response with an
+  // unexpected shape throws an uncaught TypeError instead of a clean 502.
+  if (!response.ok || !data?.data?.[0]?.b64_json) {
     console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
     throw new HttpError('Concept-image generation failed — please try again', 502);
   }
