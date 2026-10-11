@@ -3252,6 +3252,9 @@ async function handleUploadFileStep() {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
     return;
   }
+  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
+    return;
+  }
 
   const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
@@ -3480,6 +3483,18 @@ function myProducts() {
   return activeCatalog.filter((template) =>
     template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+// #1600: no hard uniqueness constraint on product names (sellers already
+// disambiguate by seller), but an exact-match duplicate within one seller's
+// OWN catalog is more likely an honest mistake (re-listing, a half-finished
+// rename) than something intentional, so this just confirms rather than
+// blocking. excludeTemplateId lets a rename skip comparing the product
+// against its own pre-rename name.
+function hasDuplicateProductName(name, excludeTemplateId) {
+  const normalized = name.toLowerCase();
+  return myProducts().some((other) =>
+    other.templateId !== excludeTemplateId && other.name.toLowerCase() === normalized);
 }
 
 // #542: shared filtered/sorted product set for Sell mode, independent of
@@ -4368,11 +4383,14 @@ function renderSellerList() {
     renameBtn.addEventListener('click', async () => {
       const next = prompt('Rename this product', template.name);
       if (!next || !next.trim() || next.trim() === template.name) return;
+      const trimmedNext = next.trim();
+      if (hasDuplicateProductName(trimmedNext, template.templateId) &&
+        !confirm(`You already have another product named "${trimmedNext}". Rename anyway?`)) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       renameBtn.disabled = true;
       try {
-        const updated = await updateCatalogTemplate(template.templateId, { name: next.trim() });
+        const updated = await updateCatalogTemplate(template.templateId, { name: trimmedNext });
         Object.assign(template, updated);
         label.textContent = template.name;
         buildCatalogPickerButtons();
