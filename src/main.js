@@ -10231,6 +10231,31 @@ document.addEventListener('click', (event) => {
   accountMenuToggle.setAttribute('aria-expanded', 'false');
 });
 
+// #1602: generic "?" info-tooltip toggle -- reveals a popup of explanatory
+// text next to the control it describes, instead of that text sitting
+// inline and permanently taking up space (the owner's own complaint about
+// #upload-hint/#upload-dimensions-hint). One delegated listener covers
+// every .info-tooltip-btn/.info-tooltip-popup pair (present or future),
+// unlike the one-off #level-menu-toggle/#account-menu-toggle wiring above,
+// since this pattern is meant to be dropped in anywhere, not just at one
+// fixed spot.
+document.addEventListener('click', (event) => {
+  const clickedBtn = event.target.closest('.info-tooltip-btn');
+  document.querySelectorAll('.info-tooltip-btn[aria-expanded="true"]').forEach((openBtn) => {
+    if (openBtn === clickedBtn) return;
+    const openPopup = document.getElementById(openBtn.getAttribute('aria-controls'));
+    if (openPopup?.contains(event.target)) return; // selecting text inside the popup itself shouldn't close it
+    openBtn.setAttribute('aria-expanded', 'false');
+    openPopup?.setAttribute('hidden', '');
+  });
+  if (!clickedBtn) return;
+  const popup = document.getElementById(clickedBtn.getAttribute('aria-controls'));
+  if (!popup) return;
+  const expanding = popup.hasAttribute('hidden');
+  clickedBtn.setAttribute('aria-expanded', String(expanding));
+  popup.toggleAttribute('hidden', !expanding);
+});
+
 // #1150 (owner request, 2026-10-01, via a live Control Room conversation):
 // a land's name/size were visible while standing on it in Shop mode
 // (updateShopLandletInfo above) but nowhere in Build mode at all, and a
