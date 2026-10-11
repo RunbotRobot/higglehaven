@@ -12620,11 +12620,19 @@ function setShopAvatarAnimationState(shopAvatar, state) {
 // Called every frame right after updateShopAvatarPose, whose walk-cycle
 // arm rotations it adds on top of (already ~0 by the time idle sway is
 // actually visible, since walking and idling are mutually exclusive in
-// practice — see moveMagnitude below). Ends the instant real movement
+// practice — see hasActiveInput below). Ends the instant real input
 // resumes (a hard cut, not an ease-out) — a lingering idle sway would read
 // as the avatar fighting the player's own input.
-function updateShopAvatarIdle(moveMagnitude, dt) {
-  if (moveMagnitude > 0) {
+//
+// #1586: hasActiveInput is "any real input," not just movement — an
+// active look-only joystick/mouse-drag used to be invisible here (this
+// used to take moveMagnitude alone), so a shopper who was only looking
+// around still got timed out to AFK despite being clearly at the
+// controls. moveMagnitude itself is no longer needed by this function;
+// the walk-cycle pose that actually depends on it lives in
+// updateShopAvatarPose instead.
+function updateShopAvatarIdle(hasActiveInput, dt) {
+  if (hasActiveInput) {
     shopIdleElapsedS = 0;
     shopIdleBlend = 0;
     shopAfkBlend = 0;
@@ -13207,7 +13215,11 @@ function updateShopMovement(now) {
   // same way stopping on the ground already does, rather than needing a
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
-  updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
+  // #1586: looking around (shopLookX/shopLookY, set above from either
+  // joystick) counts as real input too, even when it's the only input and
+  // moveMagnitude is 0 — a shopper panning the camera is obviously not AFK.
+  const hasActiveInput = moveMagnitude > 0 || shopLookX !== 0 || shopLookY !== 0;
+  updateShopAvatarIdle(hasActiveInput, dt);
   // #682: a custom avatar's own named clips, crossfaded to match the same
   // grounded-idle/grounded-moving/airborne state the procedural pose just
   // above already reflects — see setShopAvatarAnimationState's own
@@ -13245,6 +13257,9 @@ function updateShopMovement(now) {
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
   // rather than staying fixed.
   window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // #1586: same reasoning as window.__shopAvatarOrientation just above —
+  // the AFK sprite's own opacity is otherwise only checkable by eye.
+  window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
