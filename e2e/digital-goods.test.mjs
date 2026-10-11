@@ -39,6 +39,15 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', DIGITAL_PRODUCT);
+// #1599: the disclaimer label's `hidden` attribute was being overridden by
+// #upload-modal-content label's own `display: flex` rule (an ID selector
+// outranks the browser's default [hidden]{display:none} regardless of
+// source order — the same specificity problem documented at
+// .stripe-onboarding-form label[hidden] and #auth-logged-in[hidden] in
+// index.html), so this stayed visible before the checkbox was ever
+// checked.
+const disclaimerLabelVisibleBeforeCheck = await page.locator('#upload-digital-good-disclaimer-label').isVisible();
+console.log('disclaimer picker hidden before the checkbox is checked (should be false):', disclaimerLabelVisibleBeforeCheck);
 await page.check('#upload-digital-good-checkbox');
 const disclaimerLabelVisibleAfterCheck = await page.locator('#upload-digital-good-disclaimer-label').isVisible();
 console.log('disclaimer picker visible once the checkbox is checked (should be true):', disclaimerLabelVisibleAfterCheck);
@@ -123,7 +132,8 @@ const raceTemplate = afterRace.templates.find((t) => t.name === DIGITAL_PRODUCT)
 console.log('after the cross-panel race, metadata.domesticOnly (should be true — not silently reverted):', raceTemplate?.metadata?.domesticOnly);
 console.log('after the cross-panel race, metadata.digitalGoodDisclaimer (should be "gift-card"):', raceTemplate?.metadata?.digitalGoodDisclaimer);
 
-const pass = disclaimerLabelVisibleAfterCheck &&
+const pass = !disclaimerLabelVisibleBeforeCheck &&
+  disclaimerLabelVisibleAfterCheck &&
   digitalGoodRowText.includes('Digital good') && digitalGoodRowText.toLowerCase().includes('gift') &&
   digitalTemplate?.metadata?.digitalGoodDisclaimer === 'gift-card' &&
   checkboxCheckedInPanel &&
