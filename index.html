@@ -575,23 +575,29 @@
          (see bindShopFlyToggle in src/main.js; double-press space does the
          same on desktop). Centered above the hint text, its own row so it
          never collides with the move/look joysticks on either side. */
+      /* #1589: the bird artwork fills the whole pill on a white background
+         now, rather than sitting as a small icon on a green one — padding
+         removed so the image can reach the button's own edge. */
       #shop-fly-btn {
         bottom: 78px;
         left: 50%;
         transform: translateX(-50%);
-        padding: 8px 16px;
-        border-radius: 999px;
+        width: 56px;
+        height: 56px;
+        padding: 0;
+        border-radius: 50%;
         border: none;
-        background: rgb(var(--spring-green-rgb) / 0.85);
+        background: #fff;
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
       }
       #shop-fly-btn-icon {
         display: block;
-        width: 24px;
-        height: 24px;
-        object-fit: contain;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
