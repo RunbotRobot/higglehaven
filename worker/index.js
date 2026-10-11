@@ -7550,6 +7550,13 @@ async function handleVideoGenerationJobStatus(request, env, db, jobId) {
 // the raw body text (not readJson) because the signature is computed
 // over the exact bytes Tripo sent, not this codebase's own
 // re-serialization of a parsed object.
+//
+// #1659: same `t=...,v1=...` scheme as the Stripe webhook below, so it
+// needs the identical timestamp-tolerance check (see
+// STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS' own comment, #872) -- without
+// it, a captured-but-still-valid delivery could be replayed indefinitely.
+const TRIPO_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
+
 async function handleVideoGenerationWebhook(request, env, db) {
   if (!env.TRIPO_WEBHOOK_SECRET) throw new HttpError('Video-to-3D webhook is not configured on this server yet.', 503);
   const rawBody = await request.text();
@@ -7562,6 +7569,9 @@ async function handleVideoGenerationWebhook(request, env, db) {
   );
   const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${rawBody}`))));
   if (!timingSafeEqual(signature, expectedSignature)) {
+    throw new HttpError('Invalid webhook signature', 401);
+  }
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > TRIPO_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     throw new HttpError('Invalid webhook signature', 401);
   }
   let payload;

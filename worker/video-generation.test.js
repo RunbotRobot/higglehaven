@@ -104,14 +104,14 @@ async function signTripoPayload(timestamp, rawBody) {
   return [...signatureBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function postWebhook(payloadObject, { signatureHeader, body } = {}) {
+async function postWebhook(payloadObject, { signatureHeader, body, timestamp } = {}) {
   const rawBody = body !== undefined ? body : JSON.stringify(payloadObject);
   const headers = { 'content-type': 'application/json' };
   if (signatureHeader !== undefined) {
     headers['tripo-webhook-signature'] = signatureHeader;
   } else {
-    const timestamp = Math.floor(Date.now() / 1000);
-    headers['tripo-webhook-signature'] = `t=${timestamp},v1=${await signTripoPayload(timestamp, rawBody)}`;
+    const ts = timestamp !== undefined ? timestamp : Math.floor(Date.now() / 1000);
+    headers['tripo-webhook-signature'] = `t=${ts},v1=${await signTripoPayload(ts, rawBody)}`;
   }
   return SELF.fetch('https://higglehaven.test/api/auth/video-generation-webhook', { method: 'POST', headers, body: rawBody });
 }
@@ -342,6 +342,27 @@ describe('Video-to-3D webhook (#1619)', () => {
       { signatureHeader: `t=${timestamp},v1=${'a'.repeat(64)}` },
     );
     expect(wrong.status).toBe(401);
+  });
+
+  // #1659: same `t=...,v1=...` scheme as the Stripe webhook (stripe-webhook.
+  // test.js's own "too old" case) -- a correctly-signed-but-stale delivery
+  // must still be rejected, not just a wrong/missing signature.
+  it('rejects a webhook whose signature is correctly signed but too old', async () => {
+    const builder = await signupBuilder('video-gen-webhook-stale-timestamp');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const { jobId } = await created.json();
+    const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+
+    const staleTimestamp = Math.floor(Date.now() / 1000) - 10 * 60;
+    const stale = await postWebhook(
+      { data: { task_id: row.provider_task_id, status: 'success', output: { model_url: FAKE_MODEL_DOWNLOAD_URL } } },
+      { timestamp: staleTimestamp },
+    );
+    expect(stale.status).toBe(401);
+
+    const updated = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+    expect(updated.status).toBe('processing');
+    expect(updated.processed_at).toBeNull();
   });
 
   it('is a safe no-op for an unknown task_id', async () => {
