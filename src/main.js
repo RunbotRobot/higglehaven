@@ -13789,11 +13789,18 @@ function rebuildCalendarSprites(calendar) {
   const recent = calendar.events.slice(-SIGN_MAX_VISIBLE_POSTS);
   recent.forEach((event, i) => {
     const sprite = makeSignPostSprite(`${event.authorLabel}: ${event.text}`);
-    sprite.position.set(calendar.mesh.position.x, calendar.mesh.position.y, calendar.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    // #1642: calendar.mesh.position.z is the mesh's own vertical *center*
+    // (createMeshForInstance's ground-rest convention) — see
+    // rebuildSignSprites' own comment just above (#1594) for the full
+    // reasoning this sibling function was missing.
+    sprite.position.set(calendar.mesh.position.x, calendar.mesh.position.y, calendar.mesh.position.z + baseHeight / 2 + 0.4 + i * 0.5);
     sprite.material.opacity = 0;
     calendar.group.add(sprite);
     calendar.sprites.push(sprite);
   });
+  // #1642: same e2e-verification hook as rebuildSignSprites' own
+  // window.__lastSignSpriteDebug (#1594).
+  window.__lastCalendarSpriteDebug = { meshZ: calendar.mesh.position.z, meshHeight: baseHeight, spriteZs: calendar.sprites.map((s) => s.position.z) };
 }
 
 // Called every Shop-mode frame (not throttled like updateShopProximity —
@@ -13882,11 +13889,17 @@ function rebuildReviewSprites(review) {
     const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
     const label = r.text ? `${r.authorLabel} ${stars}: ${r.text}` : `${r.authorLabel} ${stars}`;
     const sprite = makeSignPostSprite(label);
-    sprite.position.set(review.mesh.position.x, review.mesh.position.y, review.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    // #1642: same mesh-center-vs-base fix as rebuildCalendarSprites/
+    // rebuildSignSprites (#1594) just above — review.mesh.position.z is
+    // the mesh's own vertical center, not its base.
+    sprite.position.set(review.mesh.position.x, review.mesh.position.y, review.mesh.position.z + baseHeight / 2 + 0.4 + i * 0.5);
     sprite.material.opacity = 0;
     review.group.add(sprite);
     review.sprites.push(sprite);
   });
+  // #1642: same e2e-verification hook as rebuildSignSprites' own
+  // window.__lastSignSpriteDebug (#1594).
+  window.__lastReviewSpriteDebug = { meshZ: review.mesh.position.z, meshHeight: baseHeight, spriteZs: review.sprites.map((s) => s.position.z) };
 }
 
 // Product reviews' own per-frame fade — identical logic to updateSignFade/
