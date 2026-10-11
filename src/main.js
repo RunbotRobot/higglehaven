@@ -12726,7 +12726,10 @@ const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_FLYING : SHOP_FLY_BTN_ICON_STANDING;
+  // #1589: the icon shows the action a press performs, not the current
+  // state — a standing bird (press to take off) while grounded, a flying
+  // bird (press to land) while flying, i.e. the inverse of `flying`.
+  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than

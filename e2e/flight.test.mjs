@@ -42,11 +42,16 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 
 const isFlyingClassSet = () => page.evaluate(() => document.body.classList.contains('shop-flying'));
 const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-fly-btn').classList.contains('active'));
+// #1589: the icon shows the action a press performs, not the current state
+// — a standing bird (press to take off) while grounded, a flying bird
+// (press to land) while flying.
+const flyBtnIconFile = () => page.evaluate(() => document.getElementById('shop-fly-btn-icon').src.split('/').pop());
 
 // #1175: every spawn (not just a first-ever visit) now spawns already
 // flying, above a random world location — no tap needed at all.
 const flyingOnSpawn = await isFlyingClassSet();
 const flyBtnActiveOnSpawn = await isFlyBtnActive();
+const flyBtnIconOnSpawn = await flyBtnIconFile();
 
 // The rest of this file is about the manual tap-to-toggle takeoff/landing
 // flow, not the spawn-flying behavior above — land the spawn's own flight
@@ -63,6 +68,7 @@ await page.click('#shop-fly-btn');
 // takeoff animation itself — so this should already be true immediately.
 const flyingClassRightAfterTakeoffTap = await isFlyingClassSet();
 const flyBtnActiveRightAfterTakeoffTap = await isFlyBtnActive();
+const flyBtnIconRightAfterTakeoffTap = await flyBtnIconFile();
 const verticalControlsVisibleDuringTakeoff = await page.isVisible('#shop-vertical-controls');
 
 // Wait past SHOP_FLIGHT_TAKEOFF_DURATION_S (1s) so the internal state
@@ -87,6 +93,7 @@ const upBtnActiveAfterRelease = await page.evaluate(() => document.getElementByI
 await page.click('#shop-fly-btn');
 const flyingClassRightAfterLandingTap = await isFlyingClassSet();
 const flyBtnActiveRightAfterLandingTap = await isFlyBtnActive();
+const flyBtnIconRightAfterLandingTap = await flyBtnIconFile();
 
 // Wait past SHOP_FLIGHT_LANDING_DURATION_S (2s) so the internal state
 // machine has actually settled back to 'grounded' before the page closes.
@@ -95,27 +102,33 @@ const groundedAfterLanding = !(await isFlyingClassSet());
 
 console.log('flying immediately on spawn, no tap needed (should be true):', flyingOnSpawn);
 console.log('#shop-fly-btn.active on that same spawn (should be true):', flyBtnActiveOnSpawn);
+console.log('#shop-fly-btn-icon while flying on spawn (should be bird-standing.png, i.e. "press to land"):', flyBtnIconOnSpawn);
 console.log('grounded before any takeoff (should be true):', groundedBeforeTakeoff);
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
 console.log('#shop-fly-btn.active immediately after the takeoff tap (should be true):', flyBtnActiveRightAfterTakeoffTap);
+console.log('#shop-fly-btn-icon right after the takeoff tap (should be bird-standing.png, i.e. "press to land"):', flyBtnIconRightAfterTakeoffTap);
 console.log('#shop-vertical-controls visible during takeoff (should be true):', verticalControlsVisibleDuringTakeoff);
 console.log('#shop-up-btn.active while held (should be true):', upBtnActiveWhileHeld);
 console.log('#shop-up-btn.active after release (should be false):', upBtnActiveAfterRelease);
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
 console.log('#shop-fly-btn.active cleared immediately after the landing tap (should be false):', flyBtnActiveRightAfterLandingTap);
+console.log('#shop-fly-btn-icon right after the landing tap (should be bird-flying.png, i.e. "press to take off"):', flyBtnIconRightAfterLandingTap);
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
 const pass =
   flyingOnSpawn &&
   flyBtnActiveOnSpawn &&
+  flyBtnIconOnSpawn === 'bird-standing.png' &&
   groundedBeforeTakeoff &&
   flyingClassRightAfterTakeoffTap &&
   flyBtnActiveRightAfterTakeoffTap &&
+  flyBtnIconRightAfterTakeoffTap === 'bird-standing.png' &&
   verticalControlsVisibleDuringTakeoff &&
   upBtnActiveWhileHeld &&
   !upBtnActiveAfterRelease &&
   !flyingClassRightAfterLandingTap &&
   !flyBtnActiveRightAfterLandingTap &&
+  flyBtnIconRightAfterLandingTap === 'bird-flying.png' &&
   groundedAfterLanding &&
   errors.length === 0;
 await finish(browser, { pass, label: 'shop-mode flight takeoff/ascend/landing', errors });
