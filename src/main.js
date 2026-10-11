@@ -13680,11 +13680,25 @@ function rebuildSignSprites(sign) {
   const recent = sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS);
   recent.forEach((post, i) => {
     const sprite = makeSignPostSprite(`${post.authorLabel}: ${post.text}`);
-    sprite.position.set(sign.mesh.position.x, sign.mesh.position.y, sign.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    // #1594: sign.mesh.position.z is the mesh's own vertical *center*, per
+    // this codebase's ground-rest convention (createMeshForInstance sets
+    // position.z = height / 2 by default) — the same convention
+    // supportZ/itemZMax elsewhere in this file rely on to find a mesh's top
+    // surface (mesh.position.z + height / 2). This used to add the mesh's
+    // *full* height instead of half of it, overshooting the actual top
+    // surface by another half-height and leaving posts hovering well above
+    // the sign instead of just above its surface.
+    sprite.position.set(sign.mesh.position.x, sign.mesh.position.y, sign.mesh.position.z + baseHeight / 2 + 0.4 + i * 0.5);
     sprite.material.opacity = 0;
     sign.group.add(sprite);
     sign.sprites.push(sprite);
   });
+  // #1594: e2e-only hook (same "expose computed state purely for
+  // verification" convention as window.__shopInstanceDisposedCount) --
+  // lets a test confirm a post sprite's world-space z actually sits just
+  // above the sign mesh's own top surface, without needing visual
+  // inspection of the real 3D render.
+  window.__lastSignSpriteDebug = { meshZ: sign.mesh.position.z, meshHeight: baseHeight, spriteZs: sign.sprites.map((s) => s.position.z) };
 }
 
 // A single line of white-on-dark text baked into a canvas texture — the
