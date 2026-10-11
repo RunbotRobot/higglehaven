@@ -789,12 +789,22 @@
          higglehaven wordmark to increase open screen space" — shares the
          top row with #topbar-left (wordmark + account menu) now
          (top: 10px, same as it), rather than the row below (where
-         #undo-redo-panel moved to instead). */
+         #undo-redo-panel moved to instead).
+
+         z-index (#1596): same 21 as #topbar-left above, for the same reason
+         — every full-viewport action modal (Seller, Notifications, Friends,
+         Auth, ...) sits at z-index 20, so at the old z-index:10 the Seller
+         modal's own overlay sat on top of these buttons and silently ate
+         the click, forcing a close-modal-first detour that #topbar-left's
+         own account menu was already exempted from. Each mode-nav click
+         just triggers location.reload() (see its own handler below), so
+         letting it fire with another modal still open is harmless — no
+         in-modal state to reconcile first, unlike a true in-place close. */
       #mode-nav {
         position: fixed;
         top: 10px;
         right: 8px;
-        z-index: 10;
+        z-index: 21;
         display: flex;
         gap: 6px;
       }
