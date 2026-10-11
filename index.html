@@ -112,6 +112,47 @@
         display: block;
         touch-action: none;
       }
+      /* #1590: covers the raw scene-rebuild flash both at cold app startup
+         (blank page background, then an empty placeholder scene, before
+         the real world/avatar are ready) and at every in-app Shop/Build/
+         Sell mode switch — #mode-nav's own switcher is a real
+         location.reload() (see START_MODE_KEY's own comment in main.js),
+         so a mode switch re-runs this exact same cold-start sequence from
+         scratch. Visible by default in the markup itself (no JS needed for
+         the very first paint).
+
+         z-index: deliberately *below* every real action modal (20 —
+         Auth/Verify/Notifications/Friends/Seller/Upload, up through 40 for
+         settings-modal) — bootstrap()'s own identity gate (Shop's
+         ensureShopperIdentity, Build/Sell's ensureBuilderIdentity/
+         ensureSellerIdentity) can open #auth-modal/#verify-modal as part of
+         this exact same loading window, and that needs to stay reachable:
+         a login/verification prompt is itself part of "ready for input,"
+         not something to hide behind a non-interactive splash. Sitting
+         above the plain 3D canvas and the un-indexed HUD (shop-status,
+         joysticks, product-info, ...) is enough to mask the scene-rebuild
+         flash itself; #topbar-left/#mode-nav's own 21 intentionally shows
+         through on top, same as they already do over the raw scene today
+         (both are "always reachable" persistent chrome per their own
+         comments, never conditionally hidden pre-load). */
+      #loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #eef4e0;
+        opacity: 1;
+        transition: opacity 0.4s ease;
+      }
+      #loading-screen.loading-screen-hidden {
+        opacity: 0;
+      }
+      #loading-screen img {
+        width: min(240px, 60vw);
+        height: auto;
+      }
       /* Wordmark and the account-menu toggle share one fixed top-left row
          (owner request: a cog icon "just to the right of the higglehaven
          wordmark" instead of the menu living in its own row lower down,
@@ -3700,6 +3741,9 @@
   </head>
   <body>
     <canvas id="app"></canvas>
+    <div id="loading-screen" aria-hidden="true">
+      <img src="/wordmark.png" alt="higglehaven" />
+    </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
