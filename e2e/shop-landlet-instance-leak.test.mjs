@@ -211,11 +211,13 @@ const landletCenterY = landlet.center.y;
 // Unit vector pointing from the landlet's own center away from the
 // origin -- walking FAR_DISTANCE_FROM_LANDLET_M along it always lands
 // exactly that far from the landlet (by construction, regardless of where
-// the landlet itself sits), while staying well inside shopMaxRadiusM()'s
-// own clamp (see ensureRoomToWander above): every pre-seeded landlet is
-// within ~57m of the origin, so this point is never more than ~120m from
-// the origin either, comfortably under the ~194m (200 - clearance) the
-// world radius patch allows.
+// the landlet itself sits), while staying well inside the world radius
+// patch's own bound (see ensureRoomToWander above): every pre-seeded
+// landlet is within ~57m of the origin, so this point is never more than
+// ~120m from the origin either, comfortably under the 200m the world
+// radius patch allows (not that it matters here -- this teleports
+// shopAvatarPosition directly, bypassing shopAvatarMaxRadiusM()'s clamp
+// entirely; see #1595).
 const awayDist = Math.hypot(landletCenterX, landletCenterY);
 const awayDirX = awayDist > 1 ? -landletCenterX / awayDist : 1;
 const awayDirY = awayDist > 1 ? -landletCenterY / awayDist : 0;
