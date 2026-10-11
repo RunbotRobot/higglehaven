@@ -256,6 +256,44 @@ describe('Didit verification webhook (#589)', () => {
       expect(second.reservationId).not.toBeNull();
       expect(second.reservationId).not.toBe(first.reservationId);
     });
+
+    // A reservation left behind by a crash between Didit's session-create
+    // call succeeding and the local UPDATE that records its real
+    // session_id (see DIDIT_RESERVATION_TIMEOUT_MS's own comment) never
+    // gets processed_at set -- nothing ever learns the real session_id to
+    // reconcile against. Before this fix, idx_didit_verification_sessions_
+    // one_pending_per_user's own guard meant this blocked the affected
+    // user from ever starting verification again, permanently.
+    it('clears a stale placeholder reservation that never got upgraded past DIDIT_RESERVATION_TIMEOUT_MS, and allows a fresh one', async () => {
+      const builder = await signupBuilder('didit-reserve-stale-placeholder');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const first = await reserveDiditSession(env.DB, userId);
+      expect(first.reservationId.startsWith('pending-')).toBe(true);
+      await env.DB.prepare(`
+        UPDATE didit_verification_sessions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes') WHERE session_id = ?
+      `).bind(first.reservationId).run();
+
+      const second = await reserveDiditSession(env.DB, userId);
+      expect(second.reservationId).not.toBeNull();
+      expect(second.reservationId).not.toBe(first.reservationId);
+
+      // The stale placeholder is actually gone, not just superseded --
+      // exactly one row for this user, and it's the fresh one.
+      const rows = await env.DB.prepare('SELECT * FROM didit_verification_sessions WHERE user_id = ?').bind(userId).all();
+      expect(rows.results).toHaveLength(1);
+      expect(rows.results[0].session_id).toBe(second.reservationId);
+    });
+
+    it('does not clear a still-fresh placeholder reservation -- only one that is actually past the timeout', async () => {
+      const builder = await signupBuilder('didit-reserve-fresh-placeholder');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const first = await reserveDiditSession(env.DB, userId);
+      const second = await reserveDiditSession(env.DB, userId);
+      expect(second.reservationId).toBeNull();
+      expect(second.existing.session_id).toBe(first.reservationId);
+    });
   });
 
   // #1038: handleDiditVerificationSession now reconciles a reused pending
@@ -282,6 +320,42 @@ describe('Didit verification webhook (#589)', () => {
       expect(session.processed_at).toBeNull();
       const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE user_id = ?').bind(userId).first();
       expect(user.trust_tier).toBe('credit_card');
+    });
+
+    // A still-local placeholder session_id (never upgraded to Didit's real
+    // one -- see DIDIT_RESERVATION_TIMEOUT_MS's own comment) was never told
+    // to Didit, so querying Didit about it can only ever fail. Before this
+    // fix, reaching this function with such a row threw an uncaught
+    // exception (Didit's decision endpoint 404ing on an id it never issued)
+    // instead of reporting 'pending' like every other still-in-flight
+    // session. Proven here by temporarily marking Didit as "configured"
+    // (bypassing the `!diditConfigured` short-circuit every other test in
+    // this describe block relies on) without ever supplying a real
+    // DIDIT_API_KEY or network access -- if the placeholder guard didn't
+    // return first, this would instead attempt a real fetch() to Didit's
+    // live API and fail loudly (there's no network mock in this suite, by
+    // design -- see this file's own top comment), so this test fails hard
+    // rather than silently passing if the guard regresses.
+    it('reports a still-local placeholder session as pending without ever querying Didit, even when Didit is configured', async () => {
+      const builder = await signupBuilder('didit-reconcile-placeholder');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+
+      const reservation = await reserveDiditSession(env.DB, userId);
+      const latest = await latestDiditSession(env.DB, userId);
+      expect(latest.session_id).toBe(reservation.reservationId);
+      expect(latest.session_id.startsWith('pending-')).toBe(true);
+
+      env.DIDIT_API_KEY = 'test-didit-api-key';
+      try {
+        const status = await reconcileDiditSession(env, env.DB, latest, userId);
+        expect(status).toBe('pending');
+      } finally {
+        env.DIDIT_API_KEY = undefined;
+      }
+
+      const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(reservation.reservationId).first();
+      expect(session.status).toBe('pending');
+      expect(session.processed_at).toBeNull();
     });
   });
 

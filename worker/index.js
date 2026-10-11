@@ -6935,6 +6935,22 @@ const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
 // one-shot mutations use.
 const DIDIT_STATUS_RATE_LIMIT_MAX = 120;
 
+// If the Worker is interrupted between Didit's session-create call
+// succeeding and the UPDATE that records its real session_id below (an
+// isolate eviction, a network drop mid-await -- anything short of a thrown
+// JS exception, which the try/catch around that sequence already handles),
+// the reservation is left behind forever with only its local placeholder
+// id ('pending-<uuid>') and processed_at still NULL. Every later attempt
+// then reconciles against Didit using that fake id (reconcileDiditSession
+// below), which Didit will never recognize, and
+// idx_didit_verification_sessions_one_pending_per_user blocks a fresh
+// reservation from ever being created for this user again -- a permanent
+// lockout with no self-healing path. Comfortably above how long a Didit
+// session-create call should ever take, matching the reasoning
+// MODEL_UPLOAD_RESERVATION_TIMEOUT_MS already uses for the identical
+// "claimed, then abandoned mid-flight" shape on model uploads.
+const DIDIT_RESERVATION_TIMEOUT_MS = 5 * 60 * 1000;
+
 // Shared by handleDiditVerificationSession (dedup an already-pending
 // session rather than starting a real-cost new one) and
 // handleDiditVerificationStatus (poll the current one) — both need the
@@ -6963,7 +6979,17 @@ async function handleDiditVerificationSession(request, env, db) {
   // started a brand new, real-cost Didit session every time instead of
   // handing back the one still in flight.
   const latest = await latestDiditSession(db, user.user_id);
-  if (latest && latest.processed_at === null) {
+  // A still-local placeholder (session_id still 'pending-<uuid>') was never
+  // actually told to Didit -- reusing it here would hand the client a
+  // sessionId with no real url to open (reconcileDiditSession now reports
+  // it as 'pending' rather than throwing, see its own comment, but that
+  // status alone isn't something this caller can act on the way it can for
+  // a real session). Falling through to reserveDiditSession below is what
+  // actually resolves this: either it's still genuinely in-flight (a
+  // concurrent request already holds it, same race #1039 already handles)
+  // or it's aged out and reserveDiditSession's own cleanup clears the way
+  // for a real fresh reservation.
+  if (latest && latest.processed_at === null && !latest.session_id.startsWith('pending-')) {
     // #1038: a merely locally-pending session can already be dead on
     // Didit's side -- expired, abandoned, or (rarer) actually approved --
     // if the webhook never landed and the builder never returned to
@@ -7033,6 +7059,20 @@ async function handleDiditVerificationSession(request, env, db) {
 // comment), so handleDiditVerificationSession itself always 503s before
 // ever reaching this far through a real HTTP request.
 export async function reserveDiditSession(db, userId) {
+  // DIDIT_RESERVATION_TIMEOUT_MS's own comment above: a placeholder left
+  // behind by a crash between Didit's session-create call succeeding and
+  // the local UPDATE that records its real id never resolves on its own --
+  // nothing ever calls Didit with the right id again to find out it's
+  // done. Clearing out this user's own stale placeholder first (scoped to
+  // them, not a global sweep -- unlike model uploads' shared R2 budget,
+  // one user's stuck row costs nothing but that same user's own ability to
+  // retry) lets the NOT EXISTS guard below admit a genuinely fresh
+  // reservation instead of blocking on a reservation nothing will ever
+  // resolve.
+  await db.prepare(`
+    DELETE FROM didit_verification_sessions
+    WHERE user_id = ? AND processed_at IS NULL AND session_id LIKE 'pending-%' AND created_at < ?
+  `).bind(userId, new Date(Date.now() - DIDIT_RESERVATION_TIMEOUT_MS).toISOString()).run();
   const reservationId = `pending-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO didit_verification_sessions (session_id, user_id, status)
@@ -7084,6 +7124,15 @@ async function applyDiditDecision(db, sessionId, userId, approved) {
 // ('approved'/'declined'/'pending'), or the session's own already-local
 // status unchanged if Didit isn't configured to check.
 export async function reconcileDiditSession(env, db, latest, userId) {
+  // DIDIT_RESERVATION_TIMEOUT_MS's own comment: a session_id that's still
+  // its own local placeholder was never actually told to Didit, so asking
+  // Didit about it can only ever fail (it recognizes no such session) --
+  // every caller reaching this function from a still-pending `latest` row
+  // was treating that failure as an uncaught exception before this guard.
+  // Reported as 'pending' (its own real, current status) rather than
+  // throwing; reserveDiditSession's own stale-placeholder cleanup is what
+  // actually unblocks a genuinely abandoned one, not this function.
+  if (latest.session_id.startsWith('pending-')) return 'pending';
   if (!diditConfigured(env)) return latest.status;
   const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
   const overallStatus = decision.status;
