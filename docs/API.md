@@ -6593,9 +6593,11 @@ swings the camera up and back over the avatar's shoulder; looking up swings
 it down and in toward the avatar's own back — the standard over-the-
 shoulder feel, with no separate collision pass: `clampShopCameraHeight`
 (shared with the avatar's own ground clamp) and the wall-radius clamp
-(`clampShopRadius`, shared between the avatar's position and the camera's)
-still catch the rare look angle that would otherwise dip the camera
-underground or swing it past the world wall.
+(`clampShopRadius`, called for both the camera's position and the
+avatar's — but with each passed its own, deliberately different max
+radius, `shopMaxRadiusM()` vs. `shopAvatarMaxRadiusM()`; see #1595) still
+catch the rare look angle that would otherwise dip the camera underground
+or swing it past the world wall.
 
 ## Frontend-only flight
 
@@ -6657,8 +6659,10 @@ starting altitude (`SHOP_SPAWN_START_ALTITUDE_M`) on **every** Shop-mode
 entry, not just a first-ever visit, skipping the `'takingOff'` ramp
 entirely (that ramp is for a player-initiated toggle mid-session, not this
 spawn). The spawn location is random — a radius drawn uniformly between 0
-and `shopMaxRadiusM()` (the same wall-clearance-bounded max radius
-`clampShopRadius` enforces everywhere else) and a random starting angle —
+and `shopMaxRadiusM()` (the camera's own wall-clearance-bounded max
+radius — not `shopAvatarMaxRadiusM()`, since this is about framing the
+opening orbit shot, the same reasoning that bounds the camera itself; see
+#1595) and a random starting angle —
 and the avatar immediately begins a slow clockwise orbit around the world
 center at that fixed radius, always facing the center as it goes
 (`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The

@@ -12639,23 +12639,35 @@ function clampShopCameraHeight() {
 }
 
 // The world wall (see enterShopMode) is a real boundary, not just a
-// backdrop — pulls (x, y) radially back inside it in place. Shared by the
-// avatar's own ground position (so a builder can never walk past the wall)
-// and the follow camera (so a follow distance long enough to swing the
-// camera past the wall on its own can't peek through it either).
-// Shared with #1175's spawn-location pick (enterShopMode) — both need "how
-// far from center can the avatar actually be" from the same wall-clearance
-// formula, just used in opposite directions (clamping an existing position
-// in here vs. picking a fresh random one there).
+// backdrop — pulls (x, y) radially back inside it in place. This is the
+// *camera's* own clearance (see SHOP_WALL_CLEARANCE_M's comment — a
+// grazing-angle concern that's specific to the follow camera's own offset
+// from the avatar, never meant to also hold the avatar's own position
+// back). Used for the follow camera itself (positionShopCamera) and for
+// #1175's spawn-location pick (enterShopMode), which needs the same "how
+// far from center can the camera-anchored avatar comfortably orbit"
+// formula just used in the opposite direction (picking a fresh random
+// radius there vs. clamping an existing position here).
 function shopMaxRadiusM() {
   if (shopWorldRadiusM === null) return 0;
   const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
   return shopWorldRadiusM - clearance;
 }
 
-function clampShopRadius(position) {
+// #1595: the avatar's own movement used to share shopMaxRadiusM (the
+// camera's much larger grazing-angle clearance) above, which stopped the
+// avatar ~6m short of the actual wall on top of the camera's own separate
+// pull-back when looking toward center — a doubled-up buffer, not two
+// intentional ones. The avatar only needs to stay inside the wall by its
+// own footprint half-width, just enough that it doesn't visually clip
+// through the wall mesh.
+function shopAvatarMaxRadiusM() {
+  if (shopWorldRadiusM === null) return 0;
+  return shopWorldRadiusM - shopAvatarCollisionHalfM();
+}
+
+function clampShopRadius(position, maxRadius) {
   if (shopWorldRadiusM === null) return;
-  const maxRadius = shopMaxRadiusM();
   const distance = Math.hypot(position.x, position.y);
   if (distance > maxRadius) {
     const scale = maxRadius / distance;
@@ -12944,7 +12956,7 @@ function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position);
+  clampShopRadius(camera.position, shopMaxRadiusM());
 }
 
 // Shopper-vs-placed-item collision (docs/SPEC.md §3's "Shopper collision
@@ -13137,7 +13149,7 @@ function updateShopMovement(now) {
       );
       shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
-    clampShopRadius(shopAvatarPosition);
+    clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM());
   }
   // shopFlightAltitudeM is height above *local* ground (unchanged meaning —
   // takeoff/landing, the flight ceiling, and the speed curve all still
