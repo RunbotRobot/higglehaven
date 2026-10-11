@@ -11207,6 +11207,11 @@ const SHOP_SPAWN_START_ALTITUDE_M = 80;
 // a full revolution takes a couple of minutes, plenty of time to take in
 // the view before (or without ever) touching a control.
 const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
+// #1630: how many times pickShopSpawnLocation will reroll a candidate that
+// landed on a water landlet before giving up and using it anyway -- a
+// bound, not a tuned value, purely so a (realistically impossible) world
+// that's entirely water can't spin this loop forever.
+const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 // #1176: the "Go to Last Location" button's own fade in/out — same
 // duration both ways, applied via CSS transition (#shop-last-location-btn
 // in index.html), not JS-driven opacity.
@@ -13403,6 +13408,36 @@ function landletContainsPoint(record, worldX, worldY) {
   return Math.abs(localX) <= half && Math.abs(localY) <= half;
 }
 
+// True if (worldX, worldY) falls inside any currently-known water landlet
+// -- shopLandlets is already fully populated by the time enterShopMode
+// picks a spawn location (built from the same allLandlets fetch, earlier
+// in that same function), so this can check synchronously.
+function isShopLocationOnWater(worldX, worldY) {
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.landType === 'water' && landletContainsPoint(entry.record, worldX, worldY)) return true;
+  }
+  return false;
+}
+
+// #1630: the spawn-orbit's location used to be a uniform Math.random()
+// pick over the whole world circle, with no check against landing on a
+// water landlet. Rerolls (bounded by SHOP_SPAWN_LOCATION_MAX_ATTEMPTS) a
+// candidate radius/angle until it lands outside every water landlet's
+// footprint -- same radius/angle-to-world-position formula
+// updateShopSpawnRotation itself uses for the orbit.
+function pickShopSpawnLocation() {
+  let radiusM = 0;
+  let yaw = 0;
+  for (let attempt = 0; attempt < SHOP_SPAWN_LOCATION_MAX_ATTEMPTS; attempt++) {
+    radiusM = Math.random() * shopMaxRadiusM();
+    yaw = Math.random() * Math.PI * 2;
+    const worldX = radiusM * Math.sin(yaw);
+    const worldY = -radiusM * Math.cos(yaw);
+    if (!isShopLocationOnWater(worldX, worldY)) break;
+  }
+  return { radiusM, yaw };
+}
+
 // Which claimed landlet (if any) the shopper is currently standing on, and
 // who built it — otherwise the world gives a shopper no way to tell whose
 // land they're on at all. shopBuilderLabels is populated once at Shop-mode
@@ -14868,8 +14903,9 @@ async function enterShopMode() {
   // (that's for a player-initiated toggle mid-session, not this spawn),
   // landing in 'flying' directly the same way toggleShopFlight's own
   // takingOff path eventually would.
-  shopSpawnOrbitRadiusM = Math.random() * shopMaxRadiusM();
-  shopYaw = Math.random() * Math.PI * 2;
+  // #1630: pickShopSpawnLocation (not a bare Math.random() pair) so the
+  // spawn location avoids landing on a water landlet.
+  ({ radiusM: shopSpawnOrbitRadiusM, yaw: shopYaw } = pickShopSpawnLocation());
   shopSpawnRotating = true;
   shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
   shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
