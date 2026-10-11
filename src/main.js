@@ -12451,7 +12451,7 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // #1165: same reasoning again — see createCustomShopAvatar's own
   // animationSource comment.
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
-  reportRendererMemoryDiagnostic();
+  await reportRendererMemoryDiagnostic();
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -14423,9 +14423,43 @@ shopBuyHintEl.addEventListener('click', async () => {
 // geometry/texture in these counts from the first frame it's actually drawn
 // until its own `dispose()` fires (it listens for that event internally), so
 // this reflects real live GPU resources, not just "everything ever created."
+//
+// #1591: every caller invokes this synchronously right after scene.add()-ing
+// the incoming avatar, while the outgoing one's geometries/textures have
+// already been synchronously decremented by disposeObject3D's own dispose()
+// calls just above. The incoming avatar's own geometries/textures, though,
+// only get counted once the renderer actually draws them for the first
+// time (see this function's own comment above) — which hasn't happened yet
+// at this exact point in the call stack, only on the *next* animate() frame.
+// Reading renderer.info.memory immediately here caught that gap: the
+// outgoing avatar's resources already gone, the incoming one's not yet
+// counted, undercounting by exactly the incoming avatar's own geometry/
+// texture count until that next frame renders. Deferring the actual read to
+// the frame after this one (double rAF: the first just waits for the next
+// paint to be scheduled, the second runs after it's actually happened) closes
+// that gap without changing what's being measured. Returns a promise so
+// both call sites can await it — otherwise the async swap function they're
+// each the last line of would resolve (and its own caller would move on to
+// reading window.__rendererMemory) before the deferred write above ever
+// lands, trading the original undercount race for an equally real stale-read
+// one.
 function reportRendererMemoryDiagnostic() {
-  window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+      resolve();
+    }));
+  });
 }
+// #1591: same counts as window.__rendererMemory above, but read on demand
+// rather than only at whichever moment refreshEquippedShopAvatar/
+// enterShopMode last happened to call reportRendererMemoryDiagnostic —
+// window.__rendererMemory alone is a frozen snapshot from that one past
+// moment, not a live value, which makes it the wrong thing to compare
+// against once anything else in the scene (e.g. a landlet's own placed
+// instances, still loading asynchronously by proximity) can keep changing
+// in between.
+window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures });
 
 function disposeObject3D(object) {
   object.traverse((child) => {
@@ -14850,7 +14884,7 @@ async function enterShopMode() {
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
-  reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
+  await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
@@ -14901,7 +14935,17 @@ async function enterShopMode() {
   shopGoToLastLocationElapsedS = 0;
   shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
-  shopPitch = -0.12;
+  // #1591: this used to reuse shopPitch's own default grounded value
+  // (-0.12 rad, ~7deg down — a natural "standing and looking slightly
+  // down" neutral), nowhere near enough tilt to actually see the world
+  // below from SHOP_SPAWN_START_ALTITUDE_M. At that near-level angle the
+  // "aerial shot" spent its whole orbit looking at the horizon/wall ring
+  // instead of down at the world it's supposed to be showing off.
+  // SHOP_MAX_PITCH itself — the same "looking well down" extreme normal
+  // free-look is already bounded to (see that constant's own comment) —
+  // is the right pitch here too: the camera is looking down at the whole
+  // world from above, not at a nearby build.
+  shopPitch = -SHOP_MAX_PITCH;
   // shopYaw (set above, the orbit's starting angle) already faces the
   // world center — see updateShopSpawnRotation's own comment on why that
   // single angle does double duty as both the camera's look direction and
