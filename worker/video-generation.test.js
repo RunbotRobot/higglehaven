@@ -445,3 +445,26 @@ describe('Video-to-3D webhook (#1619)', () => {
     }
   });
 });
+
+// #1645: migrations/0119 declared video_generation_jobs.builder_id with no
+// ON DELETE clause at all (D1/SQLite's own restrictive default), the one
+// REFERENCES builders(builder_id) FK in the whole schema still missing an
+// explicit behavior after migrations/0091 and 0093 closed every other one
+// -- DELETE /api/builders/:id threw an unhandled constraint-violation error
+// for any builder who had ever started a video-to-3D job. migrations/0120
+// rebuilt the table with ON DELETE CASCADE; mirrors
+// worker/didit-verification.test.js's own "still cascades a deleted
+// builder into its own X" regression style for the other tables that
+// migration's own sibling migrations (0091/0093) touched.
+describe('video_generation_jobs cascades on builder deletion (#1645)', () => {
+  it('cascades a deleted builder into its own video_generation_jobs', async () => {
+    const builder = await signupBuilder('video-gen-builder-delete-cascade');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const { jobId } = await created.json();
+
+    await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+    const { results } = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(jobId).all();
+    expect(results).toHaveLength(0);
+  });
+});
