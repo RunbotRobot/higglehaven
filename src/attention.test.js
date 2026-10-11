@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attentionDistanceAndDot,
   hasSustainedAttention,
   isWithinAttentionRange,
   nextAttentionElapsedS,
@@ -76,6 +77,52 @@ describe('nextAttentionElapsedS', () => {
 
   it('starts accumulating from 0 on a brand-new target', () => {
     expect(nextAttentionElapsedS('a', null, 0, 0.5)).toBe(0);
+  });
+});
+
+describe('attentionDistanceAndDot', () => {
+  it('measures distance and dot from the given anchor, not the world origin', () => {
+    const anchor = { x: 10, y: 0, z: 0 };
+    const forward = { x: 0, y: 1, z: 0 };
+    const item = { x: 10, y: 3, z: 0 }; // 3m ahead of the anchor along forward
+    const { distanceM, dot } = attentionDistanceAndDot(anchor, forward, item);
+    expect(distanceM).toBeCloseTo(3, 10);
+    expect(dot).toBeCloseTo(1, 10);
+  });
+
+  it('reports a negative dot for an item behind the anchor', () => {
+    const anchor = { x: 0, y: 0, z: 0 };
+    const forward = { x: 0, y: 1, z: 0 };
+    const item = { x: 0, y: -2, z: 0 };
+    const { dot } = attentionDistanceAndDot(anchor, forward, item);
+    expect(dot).toBeCloseTo(-1, 10);
+  });
+
+  it('does not divide by zero for an item exactly at the anchor', () => {
+    const anchor = { x: 1, y: 2, z: 3 };
+    const forward = { x: 0, y: 1, z: 0 };
+    const { distanceM, dot } = attentionDistanceAndDot(anchor, forward, { x: 1, y: 2, z: 3 });
+    expect(distanceM).toBe(0);
+    expect(Number.isFinite(dot)).toBe(true);
+  });
+
+  it('regression (#1592): an item behind the shopper must not register as in view, even though it would from a trailing chase camera\'s own position', () => {
+    const shopperAnchor = { x: 0, y: 0, z: 0 };
+    const forward = { x: 0, y: 1, z: 0 }; // shopper (and camera) facing +y
+    const itemBehindShopper = { x: 0, y: -2, z: 0 }; // 2m behind the shopper
+
+    // Correct: anchored on the shopper's own position.
+    const correct = attentionDistanceAndDot(shopperAnchor, forward, itemBehindShopper);
+    expect(correct.dot).toBeLessThan(0);
+
+    // The bug this replaced: anchoring on a chase camera trailing 4.2m
+    // behind the shopper along `forward` puts the camera at y=-4.2 — from
+    // there, the item at y=-2 is actually *ahead* of the camera (dot > 0),
+    // which is exactly how #1592's "reaches behind himself" symptom
+    // happened.
+    const trailingCameraAnchor = { x: 0, y: -4.2, z: 0 };
+    const fromTrailingCamera = attentionDistanceAndDot(trailingCameraAnchor, forward, itemBehindShopper);
+    expect(fromTrailingCamera.dot).toBeGreaterThan(0);
   });
 });
 
