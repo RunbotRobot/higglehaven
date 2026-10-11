@@ -16061,6 +16061,20 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
   }
 }
 
+// #1590: fades out the cold-start/mode-switch splash (#loading-screen,
+// visible by default in index.html's own markup) once bootstrap() has
+// settled, whichever of Shop/Build/Sell/layoutPreview it resolved into —
+// including the declined-login dead ends (showShopAccessGate), since those
+// are also "nothing left to load," not stuck-mid-load. Tied to both the
+// resolve and reject side of bootstrapPromise below so an unexpected throw
+// still uncovers the app rather than leaving the wordmark stuck forever.
+function hideLoadingScreen() {
+  const el = document.getElementById('loading-screen');
+  if (!el || el.classList.contains('loading-screen-hidden')) return;
+  el.classList.add('loading-screen-hidden');
+  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -16180,3 +16194,4 @@ async function bootstrap() {
 // enterSellMode's own comment covers why it opens the modal directly
 // instead of going through openSellerModal() for that reason.
 const bootstrapPromise = bootstrap();
+bootstrapPromise.then(hideLoadingScreen, hideLoadingScreen);
