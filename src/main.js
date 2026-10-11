@@ -7761,9 +7761,9 @@ let measureMarkerWasDragged = false;
 // *registration* order regardless of capture/bubble (that distinction only
 // applies between an element and its ancestors). Only a capture-phase
 // listener on an ancestor is guaranteed to see the event, and be able to
-// act on it (disabling controls, stopping propagation), before
-// OrbitControls' own listener does — the same ordering problem, and the
-// same fix, as the free-look wheel listener above.
+// act on it (disabling rotate) before OrbitControls' own listener does —
+// the same ordering problem, and the same fix, as the free-look wheel
+// listener above.
 window.addEventListener('pointerdown', (event) => {
   if (!measureMode) return;
   // Reset before the hit test, not after — a plain tap elsewhere (placing
@@ -7778,19 +7778,20 @@ window.addEventListener('pointerdown', (event) => {
   const hit = hitTestMeasureMarkerAt(event);
   if (!hit) return;
   draggingMeasureMarker = hit;
-  // Grabbing an endpoint is not a camera gesture — without this, the same
-  // one-finger drag that's repositioning the marker would simultaneously
-  // free-look (or orbit) the camera underneath it via OrbitControls' own
-  // handling of this identical pointerdown/move sequence. stopPropagation
-  // here keeps every other pointerdown-driven thing (OrbitControls, the
-  // free-look gesture counter, multi-select's swipe tracker) from ever
-  // seeing this press at all, not just this one's worth of camera motion.
-  controls.enabled = false;
-  event.stopPropagation();
+  // Grabbing an endpoint is not a one-finger-rotate gesture, but it must
+  // not block a *two*-finger pan/pinch either (#1593) — so this disables
+  // only OrbitControls' own rotate, the same way multiSelectMode's own
+  // swipe-to-select already does (see multiSelectBtn's handler), rather
+  // than the old `controls.enabled = false` + stopPropagation, which shut
+  // out every camera gesture for the whole drag. Deliberately NOT calling
+  // stopPropagation here (or in the pointermove handler below): OrbitControls
+  // needs to keep seeing this pointer's own down/move events to correctly
+  // recognize a second finger landing as the start of a two-finger pan,
+  // rather than miscounting it as a lone first touch.
+  controls.enableRotate = false;
 }, { capture: true });
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!draggingMeasureMarker) return;
-  event.stopPropagation();
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const point = resolveMeasurePoint();
   if (!point) return;
@@ -7813,7 +7814,7 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 function endMeasureMarkerDrag() {
   if (!draggingMeasureMarker) return;
   draggingMeasureMarker = null;
-  controls.enabled = true;
+  controls.enableRotate = true;
 }
 window.addEventListener('pointerup', endMeasureMarkerDrag);
 window.addEventListener('pointercancel', endMeasureMarkerDrag);
