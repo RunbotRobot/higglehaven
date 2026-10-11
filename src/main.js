@@ -11635,7 +11635,28 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     float totalWeight = 0.0;
     for (int i = 0; i < 4; i++) {
       float footprint = fwidth(p.x) + fwidth(p.y);
-      float fade = 1.0 - smoothstep(0.005, 0.05, footprint);
+      // #1585: #1190's original thresholds (0.005, 0.05) still left a
+      // visible band of sharp-edged, hard-banded streaks (not the soft
+      // "slightly hazier blend" this comment promises) wherever footprint
+      // landed inside that range but hadn't yet grown large enough to
+      // fully fade — confirmed directly: replacing fbm()'s body with a
+      // flat constant (no pseudo-random content at all, same geometry/
+      // camera) rendered a perfectly smooth gradient with zero streaking,
+      // proving the streaks are 100% this noise function's own
+      // undersampling, not a mesh seam or z-fighting (the two alternatives
+      // issue #1585's own report raised). Widening apexFade's own radius
+      // (the pole-proximity cutoff just below) barely changed the result,
+      // so the problem wasn't limited to the literal pole either — it's
+      // this fade engaging too late. Starting the fade an order of
+      // magnitude sooner (0.0005) and finishing it well before the old
+      // lower bound (0.006 vs 0.005) closes that gap: confirmed via the
+      // same direct visual comparison that every previously-streaked
+      // camera angle (near the apex, pitched up and yawed, flying near
+      // the horizon) now renders cleanly, while views with little
+      // foreshortening to begin with (near the wall, moderate pitch)
+      // render identically to before — nothing that wasn't already
+      // aliasing got newly suppressed.
+      float fade = 1.0 - smoothstep(0.0005, 0.006, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
       p *= 2.05;
