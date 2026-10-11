@@ -5,11 +5,23 @@
 // doing this server-side isn't viable on the free tier. The browser has
 // no such limit.
 //
-// Only usable for the direct file-upload path. URL-imports are fetched by
-// the Worker itself (see api.js/importModelFromUrl) specifically so the
-// file never has to pass through the uploading device — optimizing that
-// path would mean routing the bytes back through the browser anyway,
-// defeating the point.
+// #1621: a URL-import mode used to exist (the Worker fetching a link
+// server-side) and would have bypassed this pipeline entirely, since the
+// browser never saw the bytes -- but it was removed outright (see
+// worker/index.js's handleModelUpload, "A URL-import mode ... used to
+// live here too, dropped for now") over SSRF exposure and because few
+// real links were directly fetchable anyway. It's gone, not just unused,
+// so there is no longer any model-ingestion path in this codebase that
+// skips this pipeline: every source -- a direct file pick, an .fbx
+// conversion (convertFbxToGlb below), and the video-to-3D generation
+// pipeline (worker/index.js's storeTripoModelOutput, #1619) -- ends up
+// back in the browser as an ordinary fetchable /uploads/... URL and goes
+// through optimizeModelFile the same way a picked file does (see
+// src/main.js's handleUploadFileStep, which the video-to-3D entry point
+// feeds a synthetic File the same way) before POST /api/models ever sees
+// it. A raw video-to-3D mesh is exactly the "undecimated photogrammetry
+// mesh in the hundreds of thousands [of vertices]" case
+// LARGE_MESH_VERTEX_WARNING_THRESHOLD below already anticipates.
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
