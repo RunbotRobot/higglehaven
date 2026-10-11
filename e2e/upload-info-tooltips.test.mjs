@@ -5,6 +5,9 @@
 // pattern (src/main.js's single delegated click handler). This checks the
 // popup starts hidden, opens on tapping its button, closes when a second
 // tooltip opens (only one shown at a time), and closes on an outside click.
+// Also covers #seller-hint ("My products"), the broader-pass follow-up
+// #1635 (this same issue's first PR) left open — same component, a
+// different modal, so it belongs in this same file rather than a new one.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
@@ -55,12 +58,34 @@ const collapsedAfterOutsideClick = await page.getAttribute('#upload-dimensions-h
 console.log('upload-dimensions-hint hidden after an outside click (should be true):', dimensionsHintHiddenAfterOutsideClick);
 console.log('upload-dimensions-hint-btn aria-expanded after outside click (should be "false"):', collapsedAfterOutsideClick);
 
+// Back to the seller modal to check #seller-hint, the same component
+// applied to a different modal's own heading.
+await page.click('#upload-cancel-btn');
+await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+
+const sellerHintStartsHidden = await page.isHidden('#seller-hint');
+console.log('seller-hint starts hidden (should be true):', sellerHintStartsHidden);
+
+await page.click('#seller-hint-btn');
+await page.waitForTimeout(100);
+const sellerHintVisible = await page.isVisible('#seller-hint');
+const sellerHintExpanded = await page.getAttribute('#seller-hint-btn', 'aria-expanded');
+console.log('seller-hint visible after clicking its "?" button (should be true):', sellerHintVisible);
+console.log('seller-hint-btn aria-expanded after click (should be "true"):', sellerHintExpanded);
+
+await page.mouse.click(10, 10);
+await page.waitForTimeout(100);
+const sellerHintHiddenAfterOutsideClick = await page.isHidden('#seller-hint');
+console.log('seller-hint hidden after an outside click (should be true):', sellerHintHiddenAfterOutsideClick);
+
 const pass = startsHidden && visibleAfterClick && expandedAfterClick === 'true' &&
   dimensionsHintStartsHidden && dimensionsHintVisible &&
   dimensionsHintHiddenAfterOutsideClick && collapsedAfterOutsideClick === 'false' &&
+  sellerHintStartsHidden && sellerHintVisible && sellerHintExpanded === 'true' &&
+  sellerHintHiddenAfterOutsideClick &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Upload wizard info text is tucked behind a "?" tooltip toggle instead of always shown inline (#1602)',
+  label: 'Upload wizard and seller-list info text is tucked behind a "?" tooltip toggle instead of always shown inline (#1602)',
   errors,
 });
