@@ -1358,7 +1358,11 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
       // this same bucket/scheme — a completed video-to-3D job's model has
       // no catalog_templates row yet (that's only created once a human
       // finishes the upload wizard, #1620), so without this it reads as
-      // unreferenced and gets swept within minutes of generation.
+      // unreferenced and gets swept within minutes of generation. #1655:
+      // control_room_tasks/control_room_replies.image_url (migrations/0082)
+      // are a fourth writer into this same bucket/scheme — imageUrlValue
+      // explicitly accepts a /uploads/<key> path for these columns, so a
+      // Control Room screenshot uploaded that way looked unreferenced too.
       const placeholders = modelUrls.map(() => '?').join(', ');
       const referenced = await env.DB.prepare(`
         SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
@@ -1366,7 +1370,11 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
         SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
         UNION
         SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-      `).bind(...modelUrls, ...modelUrls, ...modelUrls).all();
+        UNION
+        SELECT image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
+        UNION
+        SELECT image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
+      `).bind(...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls).all();
       for (const row of referenced.results) referencedUrls.add(row.url);
     }
     let examinedWholePage = true;
@@ -1402,9 +1410,8 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   // whatever is still genuinely unreferenced.
   let toDelete = targets;
   if (targets.length > 0) {
-    // #774/#1644: same model_url-vs-image_url-vs-video_generation_jobs gap
-    // as the scan above — re-checked here too since this query is
-    // independent of it.
+    // #774/#1644/#1655: same reference-check gap as the scan above —
+    // re-checked here too since this query is independent of it.
     const targetUrls = targets.map((object) => `/uploads/${object.key}`);
     const placeholders = targetUrls.map(() => '?').join(', ');
     const stillReferenced = await env.DB.prepare(`
@@ -1413,7 +1420,11 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
       SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
       UNION
       SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-    `).bind(...targetUrls, ...targetUrls, ...targetUrls).all();
+      UNION
+      SELECT image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
+      UNION
+      SELECT image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
+    `).bind(...targetUrls, ...targetUrls, ...targetUrls, ...targetUrls, ...targetUrls).all();
     const rescuedUrls = new Set(stillReferenced.results.map((row) => row.url));
     toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
   }

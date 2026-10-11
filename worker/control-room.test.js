@@ -7,7 +7,8 @@
 // reason landing as a real, linked reply in the same request.
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { api, signupAdmin, signupBuilder } from './test-helpers.js';
+import { cleanupUnreferencedModels } from './index.js';
+import { api, glbFile, signupAdmin, signupBuilder } from './test-helpers.js';
 
 let adminSession;
 const API_KEY = 'test-control-room-key';
@@ -244,6 +245,27 @@ describe('Control Room tasks (#N31)', () => {
   it('accepts a task imageUrl pointing at a same-origin /uploads/ path', async () => {
     const task = await createTask({ imageUrl: '/uploads/e2e-task-thumb.png' });
     expect(task.imageUrl).toBe('/uploads/e2e-task-thumb.png');
+  });
+
+  // #1655: a task's imageUrl can point into the exact same MODELS R2 bucket/
+  // URL scheme catalog_templates.model_url/image_url and video_generation_
+  // jobs.model_url already share (see #774/#1644, the same reference-check
+  // gap fixed twice already in cleanupUnreferencedModels) -- without this,
+  // the next cleanup sweep reads a real, live screenshot as "unreferenced"
+  // and deletes it out from under the task.
+  it("treats a task's imageUrl as still referenced, not an orphan to sweep", async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"controlRoomTaskScreenshot":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    expect(upload.status).toBe(201);
+    const { modelUrl } = await upload.json();
+
+    const task = await createTask({ imageUrl: modelUrl });
+    expect(task.imageUrl).toBe(modelUrl);
+
+    const cleanup = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 0 });
+    expect(cleanup.targetModelUrls).not.toContain(modelUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
   });
 
   // Owner feedback (control room notes 9461ee39/96d6d08c, 2026-09-28): a
@@ -735,6 +757,29 @@ describe('Control Room replies (#N31)', () => {
     }));
     expect(got.response.status).toBe(201);
     expect(got.body.reply.imageUrl).toBe('/uploads/e2e-reply-attachment.png');
+  });
+
+  // #1655: same gap as the task-imageUrl regression test above, for
+  // control_room_replies.image_url -- a second, independent writer into
+  // the same bucket/scheme that cleanupUnreferencedModels also needs to
+  // check.
+  it("treats a reply's imageUrl as still referenced, not an orphan to sweep", async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"controlRoomReplyScreenshot":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    expect(upload.status).toBe(201);
+    const { modelUrl } = await upload.json();
+
+    const task = await createTask();
+    const reply = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST',
+      body: JSON.stringify({ from: 'higglehaven2', text: 'Hi', imageUrl: modelUrl }),
+    }));
+    expect(reply.response.status).toBe(201);
+
+    const cleanup = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 0 });
+    expect(cleanup.targetModelUrls).not.toContain(modelUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
   });
 
   it('404s replying to a task that does not exist', async () => {
