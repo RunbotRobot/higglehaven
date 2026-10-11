@@ -7236,6 +7236,7 @@ set of keys — never freeform seller text, matching the spec's own "clear
 | `gift-card` | "This is a digital gift card to a real business, delivered as a code — not a physical item." |
 | `art-file` | "This is a digital art or print file, delivered as a download — not a physical item." |
 | `software-tool` | "This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item." |
+| `avatar-model` | "This is an avatar model, delivered as an equippable item — not a physical item." |
 
 `assertValidDigitalGoodDisclaimer` (also called from inside `validateTemplate`)
 rejects any other value with `400`. It also enforces requirement (a) from
