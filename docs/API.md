@@ -6361,13 +6361,14 @@ Seed data includes:
 Every request — pages, every `/api/*` route, `/uploads/*` — can optionally be
 gated behind a single shared passphrase, entirely at the top of the Worker's
 `fetch` handler in `worker/index.js`, before any of the routing described
-above ever runs. The two exceptions are `POST /api/auth/stripe-webhook` and
-`POST /api/auth/didit-webhook`: Stripe's and Didit's servers deliver these
-directly and can never present the gate's cookie, so both are exempted from
-the gate itself and instead verify their own signature/HMAC on every request
-(see "Authentication" above) — exempting them doesn't weaken the gate for
-real users, since a request to either path still can't do anything without
-passing that check.
+above ever runs. The three exceptions are `POST /api/auth/stripe-webhook`,
+`POST /api/auth/didit-webhook`, and `POST /api/auth/video-generation-webhook`:
+Stripe's, Didit's, and Tripo's servers deliver these directly and can never
+present the gate's cookie, so all three are exempted from the gate itself and
+instead verify their own signature/HMAC on every request (see "Authentication"
+and "Video-to-3D generation" below) — exempting them doesn't weaken the gate
+for real users, since a request to any of these paths still can't do
+anything without passing that check.
 
 Configure it by setting the `ACCESS_PASSPHRASE` secret:
 
@@ -6593,9 +6594,11 @@ swings the camera up and back over the avatar's shoulder; looking up swings
 it down and in toward the avatar's own back — the standard over-the-
 shoulder feel, with no separate collision pass: `clampShopCameraHeight`
 (shared with the avatar's own ground clamp) and the wall-radius clamp
-(`clampShopRadius`, shared between the avatar's position and the camera's)
-still catch the rare look angle that would otherwise dip the camera
-underground or swing it past the world wall.
+(`clampShopRadius`, called for both the camera's position and the
+avatar's — but with each passed its own, deliberately different max
+radius, `shopMaxRadiusM()` vs. `shopAvatarMaxRadiusM()`; see #1595) still
+catch the rare look angle that would otherwise dip the camera underground
+or swing it past the world wall.
 
 ## Frontend-only flight
 
@@ -6657,14 +6660,19 @@ starting altitude (`SHOP_SPAWN_START_ALTITUDE_M`) on **every** Shop-mode
 entry, not just a first-ever visit, skipping the `'takingOff'` ramp
 entirely (that ramp is for a player-initiated toggle mid-session, not this
 spawn). The spawn location is random — a radius drawn uniformly between 0
-and `shopMaxRadiusM()` (the same wall-clearance-bounded max radius
-`clampShopRadius` enforces everywhere else) and a random starting angle —
+and `shopMaxRadiusM()` (the camera's own wall-clearance-bounded max
+radius — not `shopAvatarMaxRadiusM()`, since this is about framing the
+opening orbit shot, the same reasoning that bounds the camera itself; see
+#1595) and a random starting angle —
 and the avatar immediately begins a slow clockwise orbit around the world
 center at that fixed radius, always facing the center as it goes
 (`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The
 camera's own look direction (`shopYaw`) doubles as the orbit's angle
 throughout, since "facing the center" and "the orbit position" are the
-same angle at every point on the circle. The orbit ends the instant the
+same angle at every point on the circle. The camera's pitch is set to
+`-SHOP_MAX_PITCH` for this shot (see #1591 — the default grounded pitch,
+~7deg down, left the camera looking at the horizon/wall ring rather than
+down at the world from `SHOP_SPAWN_START_ALTITUDE_M`). The orbit ends the instant the
 shopper gives any navigation input — a joystick deflection, a vertical
 flight button, or a fly-button tap (`stopShopSpawnRotationForNavigation`,
 checked every frame in `updateShopMovement` and once directly in
@@ -7109,6 +7117,99 @@ the built-in catalog:
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
+## Video-to-3D generation
+
+#1619 (sub-issue of #1616 — "In-app video-to-3D model generation", docs/SPEC.md):
+backend async job handling for turning a seller's walkaround-video stills
+into a real, placeable `.glb` model, via [Tripo3D](https://developers.tripo3d.com/)'s
+V3 multiview-to-model API. The frontend is responsible for extracting a
+handful of still frames from the seller's recorded video client-side (no
+provider #1617's own research evaluated accepts raw video directly, and
+Cloudflare Workers has no video-decoding capability to do this
+server-side) and submitting them to the endpoint below; turning a finished
+job's `modelUrl` into a placeable catalog product is the pipeline-wiring
+sub-issue's own job, the same way `POST /api/catalog/concept-image` above
+only ever turns a prompt into a stored image URL and leaves placement to
+the frontend.
+
+### `POST /api/video-generation-jobs`, `GET /api/video-generation-jobs/:jobId`, `POST /api/auth/video-generation-webhook`
+
+`POST /api/video-generation-jobs` is session-gated (`requireSessionBuilder`,
+`401`/`403` without a verified session) and kicks off an async Tripo
+generation job for the requesting builder. Request body is
+`multipart/form-data` with up to four fields named `front`, `left`, `back`,
+and `right` — each an image file (PNG, JPEG, or WebP, 10MB cap per image),
+one per view Tripo's multiview model accepts. `front` is required and at
+least one other view must also be present (`400` otherwise — Tripo itself
+rejects a job with fewer than 2 images). Each provided image is uploaded to
+Tripo's own file-upload endpoint to obtain a `file_token`, then a single
+`POST /v3/generation/multiview-to-model` call kicks off the real job pinned
+to Tripo's `v3.0-20250812` model version (pinned rather than "latest" so a
+provider-side default change can't silently alter output quality/cost out
+from under this integration). Response (`201`):
+
+```json
+{ "jobId": "job-<uuid>", "status": "processing" }
+```
+
+`503` if Tripo isn't configured on this deployment (`TRIPO_API_KEY` unset).
+Rate-limited per builder (real, non-trivial per-call cost, ~$0.20-0.30/
+generation per #1617's own research) — same reasoning as
+`POST /api/auth/didit-verification-session` above. Two concurrent requests
+from the same builder (a double-click, two open tabs) can never both reach
+Tripo's own billed task-create call — an atomic reservation
+(`idx_video_generation_jobs_one_pending_per_builder`, migrations/0119)
+ensures only the winner calls out; the loser is simply handed back the
+winner's already-in-flight job (same `{ jobId, status }` shape, `200`).
+
+`GET /api/video-generation-jobs/:jobId` is session-gated and returns the
+current state of one of the requesting builder's own jobs (`404` if the
+job doesn't exist, `403` if it belongs to a different builder):
+
+```json
+{ "jobId": "job-<uuid>", "status": "processing", "modelUrl": null, "error": null }
+```
+
+`status` is `"pending"` (reserved locally, not yet confirmed with Tripo —
+only possible if the create call died mid-flight), `"processing"`,
+`"complete"` (`modelUrl` populated, in the same `/uploads/models/<sha256>.glb`
+shape `POST /api/models` produces — see "Custom model uploads" above), or
+`"failed"` (`error` populated with a human-readable reason). While still
+`processing`, this reconciles directly against Tripo's own task-status
+endpoint (rather than only trusting the webhook below to have already
+landed), so a builder isn't stuck reading "processing" if the webhook is
+slow or never arrives — the same `GET .../didit-verification-status`
+reconcile-on-poll pattern above. Rate-limited per-builder while a job is
+still processing, generously sized around the frontend's own poll cadence
+across one generation attempt (which can take up to ~2 minutes per #1617).
+On a successful reconcile, the resulting model is downloaded from Tripo's
+own (third-party, time-limited) output URL and re-stored content-addressed
+in the same `MODELS` R2 bucket `POST /api/models` writes into, counting
+against the same `MAX_TOTAL_STORAGE_BYTES` cap via the same
+`reserveStorageBudget`.
+
+`POST /api/auth/video-generation-webhook` is Tripo's own server-to-server
+delivery of a job result (`task.completed`/`task.failed`) — unauthenticated
+(no session cookie to check), verified instead via an HMAC-SHA256 signature
+over `${t}.${rawBody}` (`Tripo-Webhook-Signature` header, formatted
+`t=<unix>,v1=<hex>`, keyed by `TRIPO_WEBHOOK_SECRET`), `401` on a missing or
+wrong signature. `503` if `TRIPO_WEBHOOK_SECRET` isn't configured.
+Idempotent against a repeat delivery for the same job — only the first
+delivery (webhook or a status poll, whichever gets there first) applies the
+resulting `status`/`modelUrl`.
+
+#### Testing note
+
+Same shape as `STRIPE_SECRET_KEY`/`DIDIT_API_KEY`/`OPENAI_API_KEY` elsewhere
+in this file: `TRIPO_API_KEY`/`TRIPO_WEBHOOK_SECRET` are Worker secrets never
+configured in local dev or the automated test suite, so a real Tripo call is
+never attempted during tests — covered up to the `503` these endpoints
+return when unconfigured, not beyond it. The exact Tripo request/response
+field names above come from https://developers.tripo3d.com/ (not
+independently exercised against a live account by this change) — worth a
+smoke test against a real `TRIPO_API_KEY` once one is configured for this
+deployment.
+
 ### Placed-instance tilt (`rotationX` / `rotationY`)
 
 `placed_instances` (and its snapshot mirror `version_instances`, added by the
@@ -7242,6 +7343,7 @@ set of keys — never freeform seller text, matching the spec's own "clear
 | `gift-card` | "This is a digital gift card to a real business, delivered as a code — not a physical item." |
 | `art-file` | "This is a digital art or print file, delivered as a download — not a physical item." |
 | `software-tool` | "This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item." |
+| `avatar-model` | "This is an avatar model, delivered as an equippable item — not a physical item." |
 
 `assertValidDigitalGoodDisclaimer` (also called from inside `validateTemplate`)
 rejects any other value with `400`. It also enforces requirement (a) from

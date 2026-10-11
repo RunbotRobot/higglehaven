@@ -785,6 +785,39 @@ export async function removeFriendship(friendshipId) {
   await requestJson(`/friendships/${encodeURIComponent(friendshipId)}`, { method: 'DELETE' });
 }
 
+// Direct messages (#1637, see migrations/0120_direct_messages.sql) — a
+// thread with one other builder, gated server-side on both sides being
+// trust_tier === 'id_verified' and an existing accepted friendship. No
+// builderId param on any of these — the server derives "who's sending/
+// reading" from the session cookie, same as notifications/friendships.
+export async function fetchDirectMessages(withBuilderId, { cursor = null } = {}) {
+  const query = new URLSearchParams({ withBuilderId });
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/direct-messages?${query.toString()}`);
+}
+
+export async function fetchUnreadDirectMessageCount() {
+  const { count } = await requestJson('/direct-messages/unread-count');
+  return count;
+}
+
+export async function sendDirectMessage(recipientBuilderId, text) {
+  const { message } = await requestJson('/direct-messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ recipientBuilderId, text }),
+  });
+  return message;
+}
+
+export async function markDirectMessagesRead(withBuilderId) {
+  await requestJson('/direct-messages/mark-read', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ withBuilderId }),
+  });
+}
+
 // Landlet versions (see docs/API.md's "Landlet drafts"/"Landlet versions") —
 // immutable snapshots of a landlet's placed instances, separate from the
 // mutable placed_instances rows a builder is actively editing. A landlet's

@@ -222,9 +222,11 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // auth modal it opens can already be showing before this function ever
   // clicks anything. Skip the click entirely in that case: clicking the
   // mode-nav button for the mode already active is a no-op on its own
-  // (see its click handler's own `if (target === currentMode) return`),
-  // and the click would otherwise fail outright anyway, since the modal
-  // overlay already sits on top of it intercepting pointer events.
+  // (see its click handler's own `if (target === currentMode) return`) —
+  // skipping it is just avoiding a pointless click, not working around an
+  // unclickable button; #1596 raised #mode-nav above every modal's own
+  // z-index, the same tier #auth-modal sits at, so this click would now
+  // actually land either way.
   const authModalAlreadyShown = (await page.locator('#auth-modal.visible').count()) > 0;
   if (!authModalAlreadyShown) {
     await page.click(`.mode-nav-btn[data-mode="${mode}"]`);

@@ -76,6 +76,9 @@ import {
   sendFriendRequest,
   acceptFriendRequest,
   removeFriendship,
+  fetchDirectMessages,
+  sendDirectMessage,
+  markDirectMessagesRead,
   fetchLandletVersions,
   saveLandletVersion,
   fetchLandletVersion,
@@ -124,7 +127,7 @@ import {
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
@@ -3252,6 +3255,9 @@ async function handleUploadFileStep() {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
     return;
   }
+  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
+    return;
+  }
 
   const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
@@ -3483,6 +3489,18 @@ function myProducts() {
   return activeCatalog.filter((template) =>
     template.sellerId === sellerId ||
     (template.sellerId === null && template.modelUrl?.startsWith('/uploads/')));
+}
+
+// #1600: no hard uniqueness constraint on product names (sellers already
+// disambiguate by seller), but an exact-match duplicate within one seller's
+// OWN catalog is more likely an honest mistake (re-listing, a half-finished
+// rename) than something intentional, so this just confirms rather than
+// blocking. excludeTemplateId lets a rename skip comparing the product
+// against its own pre-rename name.
+function hasDuplicateProductName(name, excludeTemplateId) {
+  const normalized = name.toLowerCase();
+  return myProducts().some((other) =>
+    other.templateId !== excludeTemplateId && other.name.toLowerCase() === normalized);
 }
 
 // #542: shared filtered/sorted product set for Sell mode, independent of
@@ -4371,11 +4389,14 @@ function renderSellerList() {
     renameBtn.addEventListener('click', async () => {
       const next = prompt('Rename this product', template.name);
       if (!next || !next.trim() || next.trim() === template.name) return;
+      const trimmedNext = next.trim();
+      if (hasDuplicateProductName(trimmedNext, template.templateId) &&
+        !confirm(`You already have another product named "${trimmedNext}". Rename anyway?`)) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       renameBtn.disabled = true;
       try {
-        const updated = await updateCatalogTemplate(template.templateId, { name: next.trim() });
+        const updated = await updateCatalogTemplate(template.templateId, { name: trimmedNext });
         Object.assign(template, updated);
         label.textContent = template.name;
         buildCatalogPickerButtons();
@@ -6681,6 +6702,7 @@ const DIGITAL_GOOD_DISCLAIMER_TEXT = {
   'gift-card': 'This is a digital gift card to a real business, delivered as a code — not a physical item.',
   'art-file': 'This is a digital art or print file, delivered as a download — not a physical item.',
   'software-tool': 'This is a higglehaven-ecosystem software tool, delivered as a download or activation — not a physical item.',
+  'avatar-model': 'This is an avatar model, delivered as an equippable item — not a physical item.',
 };
 
 function formatAuctionTimeRemaining(isoString) {
@@ -7763,9 +7785,9 @@ let measureMarkerWasDragged = false;
 // *registration* order regardless of capture/bubble (that distinction only
 // applies between an element and its ancestors). Only a capture-phase
 // listener on an ancestor is guaranteed to see the event, and be able to
-// act on it (disabling controls, stopping propagation), before
-// OrbitControls' own listener does — the same ordering problem, and the
-// same fix, as the free-look wheel listener above.
+// act on it (disabling rotate) before OrbitControls' own listener does —
+// the same ordering problem, and the same fix, as the free-look wheel
+// listener above.
 window.addEventListener('pointerdown', (event) => {
   if (!measureMode) return;
   // Reset before the hit test, not after — a plain tap elsewhere (placing
@@ -7780,19 +7802,20 @@ window.addEventListener('pointerdown', (event) => {
   const hit = hitTestMeasureMarkerAt(event);
   if (!hit) return;
   draggingMeasureMarker = hit;
-  // Grabbing an endpoint is not a camera gesture — without this, the same
-  // one-finger drag that's repositioning the marker would simultaneously
-  // free-look (or orbit) the camera underneath it via OrbitControls' own
-  // handling of this identical pointerdown/move sequence. stopPropagation
-  // here keeps every other pointerdown-driven thing (OrbitControls, the
-  // free-look gesture counter, multi-select's swipe tracker) from ever
-  // seeing this press at all, not just this one's worth of camera motion.
-  controls.enabled = false;
-  event.stopPropagation();
+  // Grabbing an endpoint is not a one-finger-rotate gesture, but it must
+  // not block a *two*-finger pan/pinch either (#1593) — so this disables
+  // only OrbitControls' own rotate, the same way multiSelectMode's own
+  // swipe-to-select already does (see multiSelectBtn's handler), rather
+  // than the old `controls.enabled = false` + stopPropagation, which shut
+  // out every camera gesture for the whole drag. Deliberately NOT calling
+  // stopPropagation here (or in the pointermove handler below): OrbitControls
+  // needs to keep seeing this pointer's own down/move events to correctly
+  // recognize a second finger landing as the start of a two-finger pan,
+  // rather than miscounting it as a lone first touch.
+  controls.enableRotate = false;
 }, { capture: true });
 renderer.domElement.addEventListener('pointermove', (event) => {
   if (!draggingMeasureMarker) return;
-  event.stopPropagation();
   raycaster.setFromCamera(ndcFromEvent(event), camera);
   const point = resolveMeasurePoint();
   if (!point) return;
@@ -7815,7 +7838,7 @@ renderer.domElement.addEventListener('pointermove', (event) => {
 function endMeasureMarkerDrag() {
   if (!draggingMeasureMarker) return;
   draggingMeasureMarker = null;
-  controls.enabled = true;
+  controls.enableRotate = true;
 }
 window.addEventListener('pointerup', endMeasureMarkerDrag);
 window.addEventListener('pointercancel', endMeasureMarkerDrag);
@@ -9884,6 +9907,113 @@ const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
 const friendsMapCanvas = document.getElementById('friends-map-canvas');
 const friendsMapEmptyEl = document.getElementById('friends-map-empty');
 
+// Direct messages (#1637) — a thread with one other builder, reached only
+// via each accepted friend's own "Message" button below, same "swaps
+// places with #friends-modal" idiom friends-map-modal already uses rather
+// than stacking as a second modal layer.
+const dmModalEl = document.getElementById('dm-modal');
+const dmCloseBtn = document.getElementById('dm-close-btn');
+const dmModalTitleEl = document.getElementById('dm-modal-title');
+const dmStatusEl = document.getElementById('dm-status');
+const dmListEl = document.getElementById('dm-list');
+const dmEmptyEl = document.getElementById('dm-empty');
+const dmComposeForm = document.getElementById('dm-compose-form');
+const dmComposeInput = document.getElementById('dm-compose-input');
+const dmSendBtn = document.getElementById('dm-send-btn');
+let dmOtherBuilderId = null;
+let dmOtherLabel = '';
+// Same missing-re-entrancy-guard shape as friendsLoadToken just above —
+// opening a thread, sending a message, and the mark-read call each await
+// before touching the DOM, so a stale response landing after a fresher one
+// (e.g. the modal reopened against a different friend in between) would
+// otherwise append that friend's messages into the wrong thread.
+let dmLoadToken = 0;
+
+async function renderDmThread() {
+  const myLoadToken = ++dmLoadToken;
+  dmListEl.innerHTML = '';
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
+  if (!dmOtherBuilderId) return;
+  let messages;
+  try {
+    const { messages: page } = await fetchDirectMessages(dmOtherBuilderId);
+    messages = page;
+  } catch (err) {
+    if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
+    dmStatusEl.textContent = err.message || 'Could not load messages.';
+    dmStatusEl.classList.add('error');
+    return;
+  }
+  if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
+  dmEmptyEl.hidden = messages.length > 0;
+  // Newest-first from the server (same shape as notifications) — reversed
+  // here so the thread reads chronologically top-to-bottom, like any chat.
+  for (const message of [...messages].reverse()) {
+    const row = document.createElement('div');
+    row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
+    const text = document.createElement('div');
+    text.textContent = message.text;
+    row.appendChild(text);
+    const time = document.createElement('div');
+    time.className = 'dm-row-time';
+    time.textContent = formatNotificationTime(message.createdAt);
+    row.appendChild(time);
+    dmListEl.appendChild(row);
+  }
+  dmListEl.scrollTop = dmListEl.scrollHeight;
+  // Best-effort — opening the thread is "reading" it, same as notifications'
+  // own read-on-click idiom, just for the whole thread at once rather than
+  // one row at a time.
+  try {
+    await markDirectMessagesRead(dmOtherBuilderId);
+  } catch (err) {
+    console.warn('Could not mark messages read:', err);
+  }
+}
+
+function closeDmModal() {
+  dmModalEl.classList.remove('visible');
+  closeModalA11y(dmModalEl);
+}
+
+function openDmModal(otherBuilderId, otherLabel) {
+  dmOtherBuilderId = otherBuilderId;
+  dmOtherLabel = otherLabel;
+  dmModalTitleEl.textContent = `Messages: ${otherLabel}`;
+  dmComposeInput.value = '';
+  friendsModalEl.classList.remove('visible');
+  closeModalA11y(friendsModalEl);
+  dmModalEl.classList.add('visible');
+  openModalA11y(dmModalEl, closeDmModal);
+  renderDmThread();
+}
+
+dmCloseBtn.addEventListener('click', () => {
+  closeDmModal();
+  friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
+});
+
+dmComposeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = dmComposeInput.value.trim();
+  if (!text || !dmOtherBuilderId) return;
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
+  dmSendBtn.disabled = true;
+  try {
+    await sendDirectMessage(dmOtherBuilderId, text);
+    dmComposeInput.value = '';
+    await renderDmThread();
+  } catch (err) {
+    dmStatusEl.textContent = err.message || 'Could not send this message.';
+    dmStatusEl.classList.add('error');
+  } finally {
+    dmSendBtn.disabled = false;
+  }
+});
+
 async function refreshFriendsBadge() {
   if (!builderId) return;
   try {
@@ -10039,6 +10169,17 @@ async function renderFriends() {
     row.appendChild(body);
     const actions = document.createElement('div');
     actions.className = 'friend-row-actions';
+    // #1637: DM requires BOTH sides to be trust_tier === 'id_verified' —
+    // only this viewer's own tier is known client-side, so the button is
+    // gated on that alone; if the other side isn't id_verified, sending
+    // still fails with the server's own clear error, shown in dmStatusEl.
+    if (currentAuthUser?.trustTier === 'id_verified') {
+      const messageBtn = document.createElement('button');
+      messageBtn.type = 'button';
+      messageBtn.textContent = 'Message';
+      messageBtn.addEventListener('click', () => openDmModal(friendship.otherBuilderId, friendship.otherLabel));
+      actions.appendChild(messageBtn);
+    }
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'danger';
@@ -10212,6 +10353,31 @@ document.addEventListener('click', (event) => {
   accountMenuPanel.classList.remove('expanded');
   accountMenuToggle.classList.remove('active');
   accountMenuToggle.setAttribute('aria-expanded', 'false');
+});
+
+// #1602: generic "?" info-tooltip toggle -- reveals a popup of explanatory
+// text next to the control it describes, instead of that text sitting
+// inline and permanently taking up space (the owner's own complaint about
+// #upload-hint/#upload-dimensions-hint). One delegated listener covers
+// every .info-tooltip-btn/.info-tooltip-popup pair (present or future),
+// unlike the one-off #level-menu-toggle/#account-menu-toggle wiring above,
+// since this pattern is meant to be dropped in anywhere, not just at one
+// fixed spot.
+document.addEventListener('click', (event) => {
+  const clickedBtn = event.target.closest('.info-tooltip-btn');
+  document.querySelectorAll('.info-tooltip-btn[aria-expanded="true"]').forEach((openBtn) => {
+    if (openBtn === clickedBtn) return;
+    const openPopup = document.getElementById(openBtn.getAttribute('aria-controls'));
+    if (openPopup?.contains(event.target)) return; // selecting text inside the popup itself shouldn't close it
+    openBtn.setAttribute('aria-expanded', 'false');
+    openPopup?.setAttribute('hidden', '');
+  });
+  if (!clickedBtn) return;
+  const popup = document.getElementById(clickedBtn.getAttribute('aria-controls'));
+  if (!popup) return;
+  const expanding = popup.hasAttribute('hidden');
+  clickedBtn.setAttribute('aria-expanded', String(expanding));
+  popup.toggleAttribute('hidden', !expanding);
 });
 
 // #1150 (owner request, 2026-10-01, via a live Control Room conversation):
@@ -11190,6 +11356,11 @@ const SHOP_SPAWN_START_ALTITUDE_M = 80;
 // a full revolution takes a couple of minutes, plenty of time to take in
 // the view before (or without ever) touching a control.
 const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
+// #1630: how many times pickShopSpawnLocation will reroll a candidate that
+// landed on a water landlet before giving up and using it anyway -- a
+// bound, not a tuned value, purely so a (realistically impossible) world
+// that's entirely water can't spin this loop forever.
+const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 // #1176: the "Go to Last Location" button's own fade in/out — same
 // duration both ways, applied via CSS transition (#shop-last-location-btn
 // in index.html), not JS-driven opacity.
@@ -11613,7 +11784,28 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     float totalWeight = 0.0;
     for (int i = 0; i < 4; i++) {
       float footprint = fwidth(p.x) + fwidth(p.y);
-      float fade = 1.0 - smoothstep(0.005, 0.05, footprint);
+      // #1585: #1190's original thresholds (0.005, 0.05) still left a
+      // visible band of sharp-edged, hard-banded streaks (not the soft
+      // "slightly hazier blend" this comment promises) wherever footprint
+      // landed inside that range but hadn't yet grown large enough to
+      // fully fade — confirmed directly: replacing fbm()'s body with a
+      // flat constant (no pseudo-random content at all, same geometry/
+      // camera) rendered a perfectly smooth gradient with zero streaking,
+      // proving the streaks are 100% this noise function's own
+      // undersampling, not a mesh seam or z-fighting (the two alternatives
+      // issue #1585's own report raised). Widening apexFade's own radius
+      // (the pole-proximity cutoff just below) barely changed the result,
+      // so the problem wasn't limited to the literal pole either — it's
+      // this fade engaging too late. Starting the fade an order of
+      // magnitude sooner (0.0005) and finishing it well before the old
+      // lower bound (0.006 vs 0.005) closes that gap: confirmed via the
+      // same direct visual comparison that every previously-streaked
+      // camera angle (near the apex, pitched up and yawed, flying near
+      // the horizon) now renders cleanly, while views with little
+      // foreshortening to begin with (near the wall, moderate pitch)
+      // render identically to before — nothing that wasn't already
+      // aliasing got newly suppressed.
+      float fade = 1.0 - smoothstep(0.0005, 0.006, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
       p *= 2.05;
@@ -11842,7 +12034,6 @@ const SHOP_ATTENTION_DWELL_S = 1.5; // how long a target must hold attention bef
 let shopAttentionTarget = null; // mesh currently accumulating attention, or null
 let shopAttentionElapsedS = 0; // seconds shopAttentionTarget has held it, continuously — reset the instant the target changes
 const scratchAttentionWorldPos = new THREE.Vector3();
-const scratchAttentionToItem = new THREE.Vector3();
 const scratchAttentionForward = new THREE.Vector3();
 
 // Item-handling animations (#216, sub-issue of #207 — docs/SPEC.md §2:
@@ -12111,6 +12302,39 @@ const shopViewDirection = new THREE.Vector3();
 const shopMoveDir = new THREE.Vector3();
 const shopCameraAnchor = new THREE.Vector3();
 
+// #1587 (owner feedback): the original "AFK" label was a full-size
+// makeSignPostSprite — the same dark nameplate treatment used for
+// community sign posts, floating well above the avatar's head on its own
+// sign-post. Too garish, and the wrong shape for what's meant to be a
+// small shoulder badge, not a sign. Rebuilt as a small on-brand pill:
+// same rounded-rect-on-canvas technique makeDimensionLabelSprite already
+// established in this file, using this app's actual pill colors
+// (index.html's --pill-rgb/--ink-rgb) rather than inventing new ones, and
+// lowercase "afk" to match the lowercase higglehaven wordmark convention.
+function makeAfkBadgeSprite() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 104;
+  canvas.height = 44;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(214, 232, 190, 0.92)'; // --pill-rgb
+  ctx.beginPath();
+  ctx.roundRect(2, 2, canvas.width - 4, canvas.height - 4, (canvas.height - 4) / 2);
+  ctx.fill();
+  ctx.fillStyle = '#16240a'; // --ink-rgb
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('afk', canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  // Much smaller than makeSignPostSprite's own 0.012 world-units-per-px —
+  // a shoulder badge, not a sign meant to read from across a landlet.
+  const WORLD_UNITS_PER_PX = 0.0022;
+  sprite.scale.set(canvas.width * WORLD_UNITS_PER_PX, canvas.height * WORLD_UNITS_PER_PX, 1);
+  return sprite;
+}
+
 // The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
 // non-gendered avatar assigned instantly at registration"). No character
 // asset/rig exists yet, so this is a plain, neutral placeholder built from
@@ -12210,12 +12434,15 @@ function createShopAvatar() {
   group.add(headPivot);
 
   // On `group` rather than `headPivot` so idle's own head-turn sway
-  // (updateShopAvatarIdle) doesn't drag the label along with it — a sprite
+  // (updateShopAvatarIdle) doesn't drag the badge along with it — a sprite
   // always faces the camera regardless of parent rotation anyway, but its
   // *position* still would inherit headPivot's yaw if parented there.
   // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = headPivot.position.z + SHOP_AVATAR_HEAD_RADIUS_M + 0.3;
+  // #1587: shoulder-mounted (the right shoulder joint's own x/z, reused
+  // from armPivotR's position just above) rather than floating above the
+  // head on a sign-post.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M * 1.15, 0, shoulderZ + SHOP_AVATAR_TORSO_RADIUS_M * 0.5);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
@@ -12268,8 +12495,13 @@ async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
   const group = new THREE.Group();
   group.add(container);
 
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = height + 0.3;
+  // #1587: shoulder-mounted rather than floating above the head. A custom
+  // model has no known shoulder joint to anchor to (unlike the procedural
+  // body above), so this approximates one from its measured bounding box:
+  // roughly shoulder-height up the model's own height, offset to one side
+  // by a fraction of its own horizontal footprint.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(horizontalHalfM * 0.6, 0, height * 0.82);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
@@ -12435,7 +12667,7 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // #1165: same reasoning again — see createCustomShopAvatar's own
   // animationSource comment.
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
-  reportRendererMemoryDiagnostic();
+  await reportRendererMemoryDiagnostic();
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -12481,6 +12713,19 @@ window.__testShopAvatarHasTransparentMaterial = () => {
   });
   return found;
 };
+// #1583: the normal upload flow always runs a selected file through
+// optimizeModelFile first (handleUploadFileStep), and GLTFExporter
+// unconditionally wraps whatever Group it's given in one new top-level
+// node on export -- so by the time rescaleModelFile itself ever sees a
+// file via that flow, any originally-multi-root model has already been
+// collapsed to a single root one level up, and a test driving the real
+// upload wizard UI can't reach the multi-root branch rescaleModelFile's
+// own scene.children loop exists to handle. Exposing the function directly
+// lets a test feed it a genuinely multi-root buffer and inspect the result,
+// without needing to defeat (or rely on the absence of) that optimization
+// step. Always inert unless a test calls it, same convention as the other
+// window.__test* hooks above.
+window.__rescaleModelFileForTests = rescaleModelFile;
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 
@@ -12591,11 +12836,19 @@ function setShopAvatarAnimationState(shopAvatar, state) {
 // Called every frame right after updateShopAvatarPose, whose walk-cycle
 // arm rotations it adds on top of (already ~0 by the time idle sway is
 // actually visible, since walking and idling are mutually exclusive in
-// practice — see moveMagnitude below). Ends the instant real movement
+// practice — see hasActiveInput below). Ends the instant real input
 // resumes (a hard cut, not an ease-out) — a lingering idle sway would read
 // as the avatar fighting the player's own input.
-function updateShopAvatarIdle(moveMagnitude, dt) {
-  if (moveMagnitude > 0) {
+//
+// #1586: hasActiveInput is "any real input," not just movement — an
+// active look-only joystick/mouse-drag used to be invisible here (this
+// used to take moveMagnitude alone), so a shopper who was only looking
+// around still got timed out to AFK despite being clearly at the
+// controls. moveMagnitude itself is no longer needed by this function;
+// the walk-cycle pose that actually depends on it lives in
+// updateShopAvatarPose instead.
+function updateShopAvatarIdle(hasActiveInput, dt) {
+  if (hasActiveInput) {
     shopIdleElapsedS = 0;
     shopIdleBlend = 0;
     shopAfkBlend = 0;
@@ -12636,29 +12889,53 @@ function updateShopAvatarIdle(moveMagnitude, dt) {
 // this. The dome's own apex can grow over the course of a session (see
 // growShopDomeIfNeeded), so this is recomputed fresh each call rather than
 // cached.
+//
+// #1631: unlike shopFlightAltitudeM (an *altitude* above local ground,
+// converted to world z via shopAvatarPosition.z's own -curvatureDropM(...)
+// term), camera.position.z is already a world z value — so the bound here
+// needs the dome's actual world-z apex directly (SHOP_WALL_HEIGHT_M sagged
+// by curvatureDropM(shopWorldRadiusM), the same wallGroundDropM term
+// enterShopMode bakes into shopDomeMesh.position.z/wall.position.z, plus
+// shopDomeRiseM), not shopMaxFlightAltitudeM's altitude-domain value
+// (which still needs its own +curvatureDropM(avatar distance) term to
+// correctly cancel out once *that* value gets converted to world z) --
+// reusing it here directly would double-count the correction instead of
+// cancelling it.
 function clampShopCameraHeight() {
-  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M - curvatureDropM(shopWorldRadiusM);
   camera.position.z = THREE.MathUtils.clamp(camera.position.z, SHOP_MIN_HEIGHT_M, maxHeight);
 }
 
 // The world wall (see enterShopMode) is a real boundary, not just a
-// backdrop — pulls (x, y) radially back inside it in place. Shared by the
-// avatar's own ground position (so a builder can never walk past the wall)
-// and the follow camera (so a follow distance long enough to swing the
-// camera past the wall on its own can't peek through it either).
-// Shared with #1175's spawn-location pick (enterShopMode) — both need "how
-// far from center can the avatar actually be" from the same wall-clearance
-// formula, just used in opposite directions (clamping an existing position
-// in here vs. picking a fresh random one there).
+// backdrop — pulls (x, y) radially back inside it in place. This is the
+// *camera's* own clearance (see SHOP_WALL_CLEARANCE_M's comment — a
+// grazing-angle concern that's specific to the follow camera's own offset
+// from the avatar, never meant to also hold the avatar's own position
+// back). Used for the follow camera itself (positionShopCamera) and for
+// #1175's spawn-location pick (enterShopMode), which needs the same "how
+// far from center can the camera-anchored avatar comfortably orbit"
+// formula just used in the opposite direction (picking a fresh random
+// radius there vs. clamping an existing position here).
 function shopMaxRadiusM() {
   if (shopWorldRadiusM === null) return 0;
   const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
   return shopWorldRadiusM - clearance;
 }
 
-function clampShopRadius(position) {
+// #1595: the avatar's own movement used to share shopMaxRadiusM (the
+// camera's much larger grazing-angle clearance) above, which stopped the
+// avatar ~6m short of the actual wall on top of the camera's own separate
+// pull-back when looking toward center — a doubled-up buffer, not two
+// intentional ones. The avatar only needs to stay inside the wall by its
+// own footprint half-width, just enough that it doesn't visually clip
+// through the wall mesh.
+function shopAvatarMaxRadiusM() {
+  if (shopWorldRadiusM === null) return 0;
+  return shopWorldRadiusM - shopAvatarCollisionHalfM();
+}
+
+function clampShopRadius(position, maxRadius) {
   if (shopWorldRadiusM === null) return;
-  const maxRadius = shopMaxRadiusM();
   const distance = Math.hypot(position.x, position.y);
   if (distance > maxRadius) {
     const scale = maxRadius / distance;
@@ -12698,7 +12975,10 @@ const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
-  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_FLYING : SHOP_FLY_BTN_ICON_STANDING;
+  // #1589: the icon shows the action a press performs, not the current
+  // state — a standing bird (press to take off) while grounded, a flying
+  // bird (press to land) while flying, i.e. the inverse of `flying`.
+  shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
@@ -12926,9 +13206,32 @@ function updateShopFlight(dt) {
     if (shopVerticalInput !== 0) {
       shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
     }
-    const maxAltitudeM = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+    const maxAltitudeM = shopMaxFlightAltitudeM();
     shopFlightAltitudeM = THREE.MathUtils.clamp(shopFlightAltitudeM, SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5, maxAltitudeM);
   }
+}
+
+// #1631: the dome/wall's own world-z position sags below SHOP_WALL_HEIGHT_M
+// by curvatureDropM(shopWorldRadiusM) -- the same ground-curvature term
+// enterShopMode bakes into shopDomeMesh.position.z/wall.position.z when it
+// builds them (see wallGroundDropM there), evaluated at the *wall's* own
+// distance from the origin since the wall/dome sit at a fixed radius. But
+// "altitude" here is relative to *local* ground at the avatar's own (x, y)
+// -- shopAvatarPosition.z's own comment -- which sags by only
+// curvatureDropM(avatar's own distance from origin), strictly less than the
+// wall's sag for anywhere inside the wall. The old maxAltitudeM/maxHeight
+// formula used by updateShopFlight/clampShopCameraHeight ignored this
+// difference entirely, so it clamped altitude as if local ground were as
+// low as the wall's ground -- letting the avatar (and the camera that
+// follows it) climb to a world z genuinely above the dome's real apex by
+// up to that whole gap, worst a world center where the avatar's own sag is
+// zero. Correcting for it (adding back the avatar's own, smaller sag, after
+// removing the wall's) keeps the clamp pinned to the dome's actual surface
+// regardless of how large the world has grown.
+function shopMaxFlightAltitudeM() {
+  const avatarDistanceFromOriginM = Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y);
+  return SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M
+    - curvatureDropM(shopWorldRadiusM) + curvatureDropM(avatarDistanceFromOriginM);
 }
 
 // The classic over-the-shoulder third-person rig: orbits the camera around
@@ -12947,7 +13250,18 @@ function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position);
+  clampShopRadius(camera.position, shopMaxRadiusM());
+  // #1631: e2e-only hook (same "expose computed state purely for
+  // verification" convention as window.__shopInstanceDisposedCount) --
+  // lets a test confirm the avatar/camera's real world z stays under the
+  // dome's own real world-space apex (independently recomputed here from
+  // shopDomeMesh itself, not from the clamp formula under test) regardless
+  // of how large the world has grown, without needing visual inspection.
+  window.__shopFlightCeilingDebug = {
+    avatarZ: shopAvatarPosition.z,
+    cameraZ: camera.position.z,
+    domeApexWorldZ: (shopDomeMesh?.position.z ?? 0) + shopDomeRiseM,
+  };
 }
 
 // Shopper-vs-placed-item collision (docs/SPEC.md §3's "Shopper collision
@@ -13140,7 +13454,7 @@ function updateShopMovement(now) {
       );
       shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
-    clampShopRadius(shopAvatarPosition);
+    clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM());
   }
   // shopFlightAltitudeM is height above *local* ground (unchanged meaning —
   // takeoff/landing, the flight ceiling, and the speed curve all still
@@ -13163,7 +13477,11 @@ function updateShopMovement(now) {
   // same way stopping on the ground already does, rather than needing a
   // separate code path.
   updateShopAvatarPose(airborne ? 0 : moveMagnitude, dt);
-  updateShopAvatarIdle(airborne ? 0 : moveMagnitude, dt);
+  // #1586: looking around (shopLookX/shopLookY, set above from either
+  // joystick) counts as real input too, even when it's the only input and
+  // moveMagnitude is 0 — a shopper panning the camera is obviously not AFK.
+  const hasActiveInput = moveMagnitude > 0 || shopLookX !== 0 || shopLookY !== 0;
+  updateShopAvatarIdle(hasActiveInput, dt);
   // #682: a custom avatar's own named clips, crossfaded to match the same
   // grounded-idle/grounded-moving/airborne state the procedural pose just
   // above already reflects — see setShopAvatarAnimationState's own
@@ -13201,6 +13519,9 @@ function updateShopMovement(now) {
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
   // rather than staying fixed.
   window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // #1586: same reasoning as window.__shopAvatarOrientation just above —
+  // the AFK sprite's own opacity is otherwise only checkable by eye.
+  window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
   shopAvatar.group.position.copy(shopAvatarPosition);
   positionShopCamera();
 
@@ -13231,11 +13552,19 @@ function updateShopMovement(now) {
 // it's continuously held that spot — see shopAttentionTarget's own comment
 // above for why this is separate from updateShopProximity/updateXFade's
 // nearest-in-range-only pattern. "In view" is a plain FOV cone test (the
-// vector from the camera to the item's world position falls within
-// SHOP_ATTENTION_FOV_COS of the camera's own forward direction), not a
-// real occlusion/raycast check — deliberately cheap, and good enough for
-// "is the shopper roughly looking this way," which is all sustained
-// attention actually needs.
+// vector from the shopper's own head anchor to the item's world position
+// falls within SHOP_ATTENTION_FOV_COS of the camera's own forward
+// direction), not a real occlusion/raycast check — deliberately cheap, and
+// good enough for "is the shopper roughly looking this way," which is all
+// sustained attention actually needs.
+//
+// #1592: anchored on shopCameraAnchor (the shopper's own head position,
+// already refreshed for this frame by positionShopCamera() just above in
+// updateShopMovement), not camera.position — Shop mode's camera is a chase
+// camera trailing SHOP_CAMERA_FOLLOW_DISTANCE_M *behind* that anchor, and
+// using the camera's own, further-back position here let an item sitting
+// just behind the shopper still register as "ahead" of the camera. See
+// attention.js's own attentionDistanceAndDot comment for the full math.
 function updateShopAttention(dt) {
   camera.getWorldDirection(scratchAttentionForward);
   const candidates = [];
@@ -13243,10 +13572,9 @@ function updateShopAttention(dt) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
       const world = mesh.getWorldPosition(scratchAttentionWorldPos);
-      const distanceM = world.distanceTo(camera.position);
-      if (distanceM > SHOP_ATTENTION_RADIUS_M) continue; // cheap reject before the normalize/dot below
-      scratchAttentionToItem.copy(world).sub(camera.position).normalize();
-      candidates.push({ id: mesh, distanceM, dot: scratchAttentionToItem.dot(scratchAttentionForward) });
+      const { distanceM, dot } = attentionDistanceAndDot(shopCameraAnchor, scratchAttentionForward, world);
+      if (distanceM > SHOP_ATTENTION_RADIUS_M) continue;
+      candidates.push({ id: mesh, distanceM, dot });
     }
   }
   const candidateId = pickNearestInRange(candidates, { radiusM: SHOP_ATTENTION_RADIUS_M, fovCos: SHOP_ATTENTION_FOV_COS });
@@ -13335,6 +13663,36 @@ function landletContainsPoint(record, worldX, worldY) {
   if (record.polygon && record.polygon.length >= 3) return pointInPolygonXY(localX, localY, record.polygon);
   const half = Math.sqrt(record.areaM2) / 2;
   return Math.abs(localX) <= half && Math.abs(localY) <= half;
+}
+
+// True if (worldX, worldY) falls inside any currently-known water landlet
+// -- shopLandlets is already fully populated by the time enterShopMode
+// picks a spawn location (built from the same allLandlets fetch, earlier
+// in that same function), so this can check synchronously.
+function isShopLocationOnWater(worldX, worldY) {
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.landType === 'water' && landletContainsPoint(entry.record, worldX, worldY)) return true;
+  }
+  return false;
+}
+
+// #1630: the spawn-orbit's location used to be a uniform Math.random()
+// pick over the whole world circle, with no check against landing on a
+// water landlet. Rerolls (bounded by SHOP_SPAWN_LOCATION_MAX_ATTEMPTS) a
+// candidate radius/angle until it lands outside every water landlet's
+// footprint -- same radius/angle-to-world-position formula
+// updateShopSpawnRotation itself uses for the orbit.
+function pickShopSpawnLocation() {
+  let radiusM = 0;
+  let yaw = 0;
+  for (let attempt = 0; attempt < SHOP_SPAWN_LOCATION_MAX_ATTEMPTS; attempt++) {
+    radiusM = Math.random() * shopMaxRadiusM();
+    yaw = Math.random() * Math.PI * 2;
+    const worldX = radiusM * Math.sin(yaw);
+    const worldY = -radiusM * Math.cos(yaw);
+    if (!isShopLocationOnWater(worldX, worldY)) break;
+  }
+  return { radiusM, yaw };
 }
 
 // Which claimed landlet (if any) the shopper is currently standing on, and
@@ -13643,11 +14001,25 @@ function rebuildSignSprites(sign) {
   const recent = sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS);
   recent.forEach((post, i) => {
     const sprite = makeSignPostSprite(`${post.authorLabel}: ${post.text}`);
-    sprite.position.set(sign.mesh.position.x, sign.mesh.position.y, sign.mesh.position.z + baseHeight + 0.4 + i * 0.5);
+    // #1594: sign.mesh.position.z is the mesh's own vertical *center*, per
+    // this codebase's ground-rest convention (createMeshForInstance sets
+    // position.z = height / 2 by default) — the same convention
+    // supportZ/itemZMax elsewhere in this file rely on to find a mesh's top
+    // surface (mesh.position.z + height / 2). This used to add the mesh's
+    // *full* height instead of half of it, overshooting the actual top
+    // surface by another half-height and leaving posts hovering well above
+    // the sign instead of just above its surface.
+    sprite.position.set(sign.mesh.position.x, sign.mesh.position.y, sign.mesh.position.z + baseHeight / 2 + 0.4 + i * 0.5);
     sprite.material.opacity = 0;
     sign.group.add(sprite);
     sign.sprites.push(sprite);
   });
+  // #1594: e2e-only hook (same "expose computed state purely for
+  // verification" convention as window.__shopInstanceDisposedCount) --
+  // lets a test confirm a post sprite's world-space z actually sits just
+  // above the sign mesh's own top surface, without needing visual
+  // inspection of the real 3D render.
+  window.__lastSignSpriteDebug = { meshZ: sign.mesh.position.z, meshHeight: baseHeight, spriteZs: sign.sprites.map((s) => s.position.z) };
 }
 
 // A single line of white-on-dark text baked into a canvas texture — the
@@ -14343,9 +14715,43 @@ shopBuyHintEl.addEventListener('click', async () => {
 // geometry/texture in these counts from the first frame it's actually drawn
 // until its own `dispose()` fires (it listens for that event internally), so
 // this reflects real live GPU resources, not just "everything ever created."
+//
+// #1591: every caller invokes this synchronously right after scene.add()-ing
+// the incoming avatar, while the outgoing one's geometries/textures have
+// already been synchronously decremented by disposeObject3D's own dispose()
+// calls just above. The incoming avatar's own geometries/textures, though,
+// only get counted once the renderer actually draws them for the first
+// time (see this function's own comment above) — which hasn't happened yet
+// at this exact point in the call stack, only on the *next* animate() frame.
+// Reading renderer.info.memory immediately here caught that gap: the
+// outgoing avatar's resources already gone, the incoming one's not yet
+// counted, undercounting by exactly the incoming avatar's own geometry/
+// texture count until that next frame renders. Deferring the actual read to
+// the frame after this one (double rAF: the first just waits for the next
+// paint to be scheduled, the second runs after it's actually happened) closes
+// that gap without changing what's being measured. Returns a promise so
+// both call sites can await it — otherwise the async swap function they're
+// each the last line of would resolve (and its own caller would move on to
+// reading window.__rendererMemory) before the deferred write above ever
+// lands, trading the original undercount race for an equally real stale-read
+// one.
 function reportRendererMemoryDiagnostic() {
-  window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+      resolve();
+    }));
+  });
 }
+// #1591: same counts as window.__rendererMemory above, but read on demand
+// rather than only at whichever moment refreshEquippedShopAvatar/
+// enterShopMode last happened to call reportRendererMemoryDiagnostic —
+// window.__rendererMemory alone is a frozen snapshot from that one past
+// moment, not a live value, which makes it the wrong thing to compare
+// against once anything else in the scene (e.g. a landlet's own placed
+// instances, still loading asynchronously by proximity) can keep changing
+// in between.
+window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures });
 
 function disposeObject3D(object) {
   object.traverse((child) => {
@@ -14770,7 +15176,7 @@ async function enterShopMode() {
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
-  reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
+  await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
@@ -14788,8 +15194,9 @@ async function enterShopMode() {
   // (that's for a player-initiated toggle mid-session, not this spawn),
   // landing in 'flying' directly the same way toggleShopFlight's own
   // takingOff path eventually would.
-  shopSpawnOrbitRadiusM = Math.random() * shopMaxRadiusM();
-  shopYaw = Math.random() * Math.PI * 2;
+  // #1630: pickShopSpawnLocation (not a bare Math.random() pair) so the
+  // spawn location avoids landing on a water landlet.
+  ({ radiusM: shopSpawnOrbitRadiusM, yaw: shopYaw } = pickShopSpawnLocation());
   shopSpawnRotating = true;
   shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
   shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
@@ -14821,7 +15228,17 @@ async function enterShopMode() {
   shopGoToLastLocationElapsedS = 0;
   shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
-  shopPitch = -0.12;
+  // #1591: this used to reuse shopPitch's own default grounded value
+  // (-0.12 rad, ~7deg down — a natural "standing and looking slightly
+  // down" neutral), nowhere near enough tilt to actually see the world
+  // below from SHOP_SPAWN_START_ALTITUDE_M. At that near-level angle the
+  // "aerial shot" spent its whole orbit looking at the horizon/wall ring
+  // instead of down at the world it's supposed to be showing off.
+  // SHOP_MAX_PITCH itself — the same "looking well down" extreme normal
+  // free-look is already bounded to (see that constant's own comment) —
+  // is the right pitch here too: the camera is looking down at the whole
+  // world from above, not at a nearby build.
+  shopPitch = -SHOP_MAX_PITCH;
   // shopYaw (set above, the orbit's starting angle) already faces the
   // world center — see updateShopSpawnRotation's own comment on why that
   // single angle does double duty as both the camera's look direction and
@@ -16010,6 +16427,20 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
   }
 }
 
+// #1590: fades out the cold-start/mode-switch splash (#loading-screen,
+// visible by default in index.html's own markup) once bootstrap() has
+// settled, whichever of Shop/Build/Sell/layoutPreview it resolved into —
+// including the declined-login dead ends (showShopAccessGate), since those
+// are also "nothing left to load," not stuck-mid-load. Tied to both the
+// resolve and reject side of bootstrapPromise below so an unexpected throw
+// still uncovers the app rather than leaving the wordmark stuck forever.
+function hideLoadingScreen() {
+  const el = document.getElementById('loading-screen');
+  if (!el || el.classList.contains('loading-screen-hidden')) return;
+  el.classList.add('loading-screen-hidden');
+  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -16129,3 +16560,4 @@ async function bootstrap() {
 // enterSellMode's own comment covers why it opens the modal directly
 // instead of going through openSellerModal() for that reason.
 const bootstrapPromise = bootstrap();
+bootstrapPromise.then(hideLoadingScreen, hideLoadingScreen);
