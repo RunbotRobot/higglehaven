@@ -124,7 +124,7 @@ import {
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
@@ -11858,7 +11858,6 @@ const SHOP_ATTENTION_DWELL_S = 1.5; // how long a target must hold attention bef
 let shopAttentionTarget = null; // mesh currently accumulating attention, or null
 let shopAttentionElapsedS = 0; // seconds shopAttentionTarget has held it, continuously — reset the instant the target changes
 const scratchAttentionWorldPos = new THREE.Vector3();
-const scratchAttentionToItem = new THREE.Vector3();
 const scratchAttentionForward = new THREE.Vector3();
 
 // Item-handling animations (#216, sub-issue of #207 — docs/SPEC.md §2:
@@ -13262,11 +13261,19 @@ function updateShopMovement(now) {
 // it's continuously held that spot — see shopAttentionTarget's own comment
 // above for why this is separate from updateShopProximity/updateXFade's
 // nearest-in-range-only pattern. "In view" is a plain FOV cone test (the
-// vector from the camera to the item's world position falls within
-// SHOP_ATTENTION_FOV_COS of the camera's own forward direction), not a
-// real occlusion/raycast check — deliberately cheap, and good enough for
-// "is the shopper roughly looking this way," which is all sustained
-// attention actually needs.
+// vector from the shopper's own head anchor to the item's world position
+// falls within SHOP_ATTENTION_FOV_COS of the camera's own forward
+// direction), not a real occlusion/raycast check — deliberately cheap, and
+// good enough for "is the shopper roughly looking this way," which is all
+// sustained attention actually needs.
+//
+// #1592: anchored on shopCameraAnchor (the shopper's own head position,
+// already refreshed for this frame by positionShopCamera() just above in
+// updateShopMovement), not camera.position — Shop mode's camera is a chase
+// camera trailing SHOP_CAMERA_FOLLOW_DISTANCE_M *behind* that anchor, and
+// using the camera's own, further-back position here let an item sitting
+// just behind the shopper still register as "ahead" of the camera. See
+// attention.js's own attentionDistanceAndDot comment for the full math.
 function updateShopAttention(dt) {
   camera.getWorldDirection(scratchAttentionForward);
   const candidates = [];
@@ -13274,10 +13281,9 @@ function updateShopAttention(dt) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
       const world = mesh.getWorldPosition(scratchAttentionWorldPos);
-      const distanceM = world.distanceTo(camera.position);
-      if (distanceM > SHOP_ATTENTION_RADIUS_M) continue; // cheap reject before the normalize/dot below
-      scratchAttentionToItem.copy(world).sub(camera.position).normalize();
-      candidates.push({ id: mesh, distanceM, dot: scratchAttentionToItem.dot(scratchAttentionForward) });
+      const { distanceM, dot } = attentionDistanceAndDot(shopCameraAnchor, scratchAttentionForward, world);
+      if (distanceM > SHOP_ATTENTION_RADIUS_M) continue;
+      candidates.push({ id: mesh, distanceM, dot });
     }
   }
   const candidateId = pickNearestInRange(candidates, { radiusM: SHOP_ATTENTION_RADIUS_M, fovCos: SHOP_ATTENTION_FOV_COS });

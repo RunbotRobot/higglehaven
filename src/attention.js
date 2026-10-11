@@ -8,11 +8,34 @@
 // tested directly instead of only through a live three.js scene.
 
 // True if a single candidate — already reduced to its distance from the
-// camera and the dot product of (camera → candidate) with the camera's own
-// forward direction — is both close enough and roughly centered enough in
-// view to count as a plausible attention target this frame.
+// observation point and the dot product of (observation point → candidate)
+// with the viewer's own forward direction — is both close enough and
+// roughly centered enough in view to count as a plausible attention target
+// this frame.
 export function isWithinAttentionRange(distanceM, dot, { radiusM, fovCos }) {
   return distanceM <= radiusM && dot >= fovCos;
+}
+
+// #1592: owner report — the "inspect product" animation played with the
+// avatar facing AWAY from the product. Root cause: main.js's own per-frame
+// loop used to measure distanceM/dot from `camera.position`, but Shop
+// mode's camera is a chase camera trailing SHOP_CAMERA_FOLLOW_DISTANCE_M
+// *behind* the shopper's own head anchor (positionShopCamera) — not
+// colocated with it. That trailing offset means a product sitting just
+// behind the shopper can still be further *ahead* of the camera's own,
+// even-further-back position, and so register as "in view" from the
+// camera even though it's behind the shopper who's supposedly reaching for
+// it. Anchoring this math on the shopper's own head position (whatever
+// main.js passes as `anchor` — the camera's trailing offset never enters
+// into it) instead of the camera's own position avoids that: an item
+// behind the shopper always reports a negative dot, full stop.
+export function attentionDistanceAndDot(anchor, forward, itemWorldPosition) {
+  const dx = itemWorldPosition.x - anchor.x;
+  const dy = itemWorldPosition.y - anchor.y;
+  const dz = itemWorldPosition.z - anchor.z;
+  const distanceM = Math.hypot(dx, dy, dz);
+  const dot = distanceM > 0 ? (dx * forward.x + dy * forward.y + dz * forward.z) / distanceM : 1;
+  return { distanceM, dot };
 }
 
 // Picks the nearest in-range-and-in-view candidate, or null if none
