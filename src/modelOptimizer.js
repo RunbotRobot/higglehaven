@@ -180,6 +180,12 @@ export async function rescaleModelFile(file, scaleFactor) {
   const arrayBuffer = await file.arrayBuffer();
   const gltf = await gltfLoader.parseAsync(arrayBuffer, '');
   for (const child of gltf.scene.children) {
+    // #1583: scaling only .scale is correct for a single root (anchored at
+    // its own local origin), but leaves multiple sibling roots' relative
+    // offsets fixed instead of scaling with them — a multi-part model (or
+    // a Mixamo-style rig, whose Armature/SkinnedMesh are separate sibling
+    // roots) would drift apart or overlap instead of scaling as a whole.
+    child.position.multiplyScalar(scaleFactor);
     child.scale.multiplyScalar(scaleFactor);
   }
   const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true });
