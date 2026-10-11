@@ -3352,19 +3352,22 @@ async function handleUploadDimensionsStep() {
     setUploadStatus('Enter a positive size for each dimension.', true);
     return;
   }
-  // Price is genuinely optional — a blank field means "no price set" (null),
-  // not zero, mirroring priceCents' own null-means-unset convention
-  // everywhere else (docs/API.md's "Catalog templates").
+  // #1601: price is required at upload time — a free digital good is
+  // entered as an explicit $0, not left blank. priceCents can still end up
+  // null later via the separate "Edit Price" panel (docs/API.md's "Seller-
+  // side: setting a price"), which keeps its own null-means-unset
+  // convention; this is just the one-time creation step.
   const priceInput = uploadPriceInput.value.trim();
-  let priceCents = null;
-  if (priceInput) {
-    const dollars = parsePriceInputDollars(priceInput);
-    if (!Number.isFinite(dollars) || dollars < 0) {
-      setUploadStatus('Price must be a non-negative number, or left blank.', true);
-      return;
-    }
-    priceCents = Math.round(dollars * 100);
+  if (!priceInput) {
+    setUploadStatus('Enter a price — use 0 for a free product.', true);
+    return;
   }
+  const dollars = parsePriceInputDollars(priceInput);
+  if (!Number.isFinite(dollars) || dollars < 0) {
+    setUploadStatus('Price must be a non-negative number.', true);
+    return;
+  }
+  const priceCents = Math.round(dollars * 100);
 
   // #423: same uploadFlowToken idiom as handleUploadFileStep above — this
   // step's own await chain (rescale/upload/create) is just as cancelable

@@ -7235,12 +7235,18 @@ migration needed).
 
 ### Seller-side: setting a price
 
-The upload wizard's first step (name + `.glb` file) gains an optional
-"Price" field, right after Name. A blank field means `priceCents: null`
-("no price set"), not `0` — mirroring `priceCents`' own null-means-unset
-convention everywhere else in this file. Entered as dollars, converted to
-cents (`Math.round(dollars * 100)`) before the `POST /api/catalog` call
-that actually creates the template.
+The upload wizard's first step (name + `.glb` file) gains a "Price" field,
+right after Name. Entered as dollars, converted to cents
+(`Math.round(dollars * 100)`) before the `POST /api/catalog` call that
+actually creates the template.
+
+#1601: price is required at upload time — a free digital product is
+entered as an explicit `0`, not left blank; a blank field is rejected
+client-side with no request sent. `priceCents` itself stays nullable in
+the schema/API (a template created before this requirement, or by a
+direct API call outside this wizard, can still have `priceCents: null`),
+and the separate Edit Price panel just below keeps its own older
+null-means-unset convention for exactly that case.
 
 For a product that's already been created (uploaded before this feature
 existed, or a seller who skipped the price at upload time), each row in
