@@ -12127,6 +12127,39 @@ const shopViewDirection = new THREE.Vector3();
 const shopMoveDir = new THREE.Vector3();
 const shopCameraAnchor = new THREE.Vector3();
 
+// #1587 (owner feedback): the original "AFK" label was a full-size
+// makeSignPostSprite — the same dark nameplate treatment used for
+// community sign posts, floating well above the avatar's head on its own
+// sign-post. Too garish, and the wrong shape for what's meant to be a
+// small shoulder badge, not a sign. Rebuilt as a small on-brand pill:
+// same rounded-rect-on-canvas technique makeDimensionLabelSprite already
+// established in this file, using this app's actual pill colors
+// (index.html's --pill-rgb/--ink-rgb) rather than inventing new ones, and
+// lowercase "afk" to match the lowercase higglehaven wordmark convention.
+function makeAfkBadgeSprite() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 104;
+  canvas.height = 44;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(214, 232, 190, 0.92)'; // --pill-rgb
+  ctx.beginPath();
+  ctx.roundRect(2, 2, canvas.width - 4, canvas.height - 4, (canvas.height - 4) / 2);
+  ctx.fill();
+  ctx.fillStyle = '#16240a'; // --ink-rgb
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('afk', canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  // Much smaller than makeSignPostSprite's own 0.012 world-units-per-px —
+  // a shoulder badge, not a sign meant to read from across a landlet.
+  const WORLD_UNITS_PER_PX = 0.0022;
+  sprite.scale.set(canvas.width * WORLD_UNITS_PER_PX, canvas.height * WORLD_UNITS_PER_PX, 1);
+  return sprite;
+}
+
 // The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
 // non-gendered avatar assigned instantly at registration"). No character
 // asset/rig exists yet, so this is a plain, neutral placeholder built from
@@ -12226,12 +12259,15 @@ function createShopAvatar() {
   group.add(headPivot);
 
   // On `group` rather than `headPivot` so idle's own head-turn sway
-  // (updateShopAvatarIdle) doesn't drag the label along with it — a sprite
+  // (updateShopAvatarIdle) doesn't drag the badge along with it — a sprite
   // always faces the camera regardless of parent rotation anyway, but its
   // *position* still would inherit headPivot's yaw if parented there.
   // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = headPivot.position.z + SHOP_AVATAR_HEAD_RADIUS_M + 0.3;
+  // #1587: shoulder-mounted (the right shoulder joint's own x/z, reused
+  // from armPivotR's position just above) rather than floating above the
+  // head on a sign-post.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M * 1.15, 0, shoulderZ + SHOP_AVATAR_TORSO_RADIUS_M * 0.5);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
@@ -12284,8 +12320,13 @@ async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
   const group = new THREE.Group();
   group.add(container);
 
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = height + 0.3;
+  // #1587: shoulder-mounted rather than floating above the head. A custom
+  // model has no known shoulder joint to anchor to (unlike the procedural
+  // body above), so this approximates one from its measured bounding box:
+  // roughly shoulder-height up the model's own height, offset to one side
+  // by a fraction of its own horizontal footprint.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(horizontalHalfM * 0.6, 0, height * 0.82);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
