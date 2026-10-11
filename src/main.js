@@ -12765,8 +12765,20 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
 // this. The dome's own apex can grow over the course of a session (see
 // growShopDomeIfNeeded), so this is recomputed fresh each call rather than
 // cached.
+//
+// #1631: unlike shopFlightAltitudeM (an *altitude* above local ground,
+// converted to world z via shopAvatarPosition.z's own -curvatureDropM(...)
+// term), camera.position.z is already a world z value — so the bound here
+// needs the dome's actual world-z apex directly (SHOP_WALL_HEIGHT_M sagged
+// by curvatureDropM(shopWorldRadiusM), the same wallGroundDropM term
+// enterShopMode bakes into shopDomeMesh.position.z/wall.position.z, plus
+// shopDomeRiseM), not shopMaxFlightAltitudeM's altitude-domain value
+// (which still needs its own +curvatureDropM(avatar distance) term to
+// correctly cancel out once *that* value gets converted to world z) --
+// reusing it here directly would double-count the correction instead of
+// cancelling it.
 function clampShopCameraHeight() {
-  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M - curvatureDropM(shopWorldRadiusM);
   camera.position.z = THREE.MathUtils.clamp(camera.position.z, SHOP_MIN_HEIGHT_M, maxHeight);
 }
 
@@ -13070,9 +13082,32 @@ function updateShopFlight(dt) {
     if (shopVerticalInput !== 0) {
       shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
     }
-    const maxAltitudeM = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M;
+    const maxAltitudeM = shopMaxFlightAltitudeM();
     shopFlightAltitudeM = THREE.MathUtils.clamp(shopFlightAltitudeM, SHOP_FLIGHT_HOVER_START_ALTITUDE_M * 0.5, maxAltitudeM);
   }
+}
+
+// #1631: the dome/wall's own world-z position sags below SHOP_WALL_HEIGHT_M
+// by curvatureDropM(shopWorldRadiusM) -- the same ground-curvature term
+// enterShopMode bakes into shopDomeMesh.position.z/wall.position.z when it
+// builds them (see wallGroundDropM there), evaluated at the *wall's* own
+// distance from the origin since the wall/dome sit at a fixed radius. But
+// "altitude" here is relative to *local* ground at the avatar's own (x, y)
+// -- shopAvatarPosition.z's own comment -- which sags by only
+// curvatureDropM(avatar's own distance from origin), strictly less than the
+// wall's sag for anywhere inside the wall. The old maxAltitudeM/maxHeight
+// formula used by updateShopFlight/clampShopCameraHeight ignored this
+// difference entirely, so it clamped altitude as if local ground were as
+// low as the wall's ground -- letting the avatar (and the camera that
+// follows it) climb to a world z genuinely above the dome's real apex by
+// up to that whole gap, worst a world center where the avatar's own sag is
+// zero. Correcting for it (adding back the avatar's own, smaller sag, after
+// removing the wall's) keeps the clamp pinned to the dome's actual surface
+// regardless of how large the world has grown.
+function shopMaxFlightAltitudeM() {
+  const avatarDistanceFromOriginM = Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y);
+  return SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M
+    - curvatureDropM(shopWorldRadiusM) + curvatureDropM(avatarDistanceFromOriginM);
 }
 
 // The classic over-the-shoulder third-person rig: orbits the camera around
@@ -13092,6 +13127,17 @@ function positionShopCamera() {
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
   clampShopRadius(camera.position, shopMaxRadiusM());
+  // #1631: e2e-only hook (same "expose computed state purely for
+  // verification" convention as window.__shopInstanceDisposedCount) --
+  // lets a test confirm the avatar/camera's real world z stays under the
+  // dome's own real world-space apex (independently recomputed here from
+  // shopDomeMesh itself, not from the clamp formula under test) regardless
+  // of how large the world has grown, without needing visual inspection.
+  window.__shopFlightCeilingDebug = {
+    avatarZ: shopAvatarPosition.z,
+    cameraZ: camera.position.z,
+    domeApexWorldZ: (shopDomeMesh?.position.z ?? 0) + shopDomeRiseM,
+  };
 }
 
 // Shopper-vs-placed-item collision (docs/SPEC.md §3's "Shopper collision
