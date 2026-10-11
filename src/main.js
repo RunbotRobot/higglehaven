@@ -2902,8 +2902,9 @@ uploadPriceInput.addEventListener('blur', () => {
   }
 });
 const uploadFileInput = document.getElementById('upload-file-input');
-const uploadFileLabelEl = document.getElementById('upload-file-label');
+const uploadFileFieldRowEl = document.getElementById('upload-file-field-row');
 const uploadHintEl = document.getElementById('upload-hint');
+const uploadHintBtn = document.getElementById('upload-hint-btn');
 const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
@@ -2995,10 +2996,16 @@ function disposeUploadDimensionPreview() {
 }
 
 // Switches step 'file' between its two mutually-exclusive input methods.
+// #1602's info-tooltip popups (upload-hint, upload-video-hint) are
+// siblings of their own field row, not nested inside it, so each one is
+// force-collapsed here rather than relying on hiding the row above it to
+// also hide the popup -- video mode's own hint lives inside
+// uploadVideoSectionEl and so is already covered by that toggle alone.
 function setUploadFileMode(mode) {
   uploadFileMode = mode;
-  uploadFileLabelEl.hidden = mode !== 'file';
-  uploadHintEl.hidden = mode !== 'file';
+  uploadFileFieldRowEl.hidden = mode !== 'file';
+  uploadHintEl.hidden = true;
+  uploadHintBtn.setAttribute('aria-expanded', 'false');
   uploadModeVideoBtn.hidden = mode !== 'file';
   uploadVideoSectionEl.hidden = mode !== 'video';
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
@@ -10429,6 +10436,31 @@ document.addEventListener('click', (event) => {
   accountMenuToggle.setAttribute('aria-expanded', 'false');
 });
 
+// #1602: generic "?" info-tooltip toggle -- reveals a popup of explanatory
+// text next to the control it describes, instead of that text sitting
+// inline and permanently taking up space (the owner's own complaint about
+// #upload-hint/#upload-dimensions-hint). One delegated listener covers
+// every .info-tooltip-btn/.info-tooltip-popup pair (present or future),
+// unlike the one-off #level-menu-toggle/#account-menu-toggle wiring above,
+// since this pattern is meant to be dropped in anywhere, not just at one
+// fixed spot.
+document.addEventListener('click', (event) => {
+  const clickedBtn = event.target.closest('.info-tooltip-btn');
+  document.querySelectorAll('.info-tooltip-btn[aria-expanded="true"]').forEach((openBtn) => {
+    if (openBtn === clickedBtn) return;
+    const openPopup = document.getElementById(openBtn.getAttribute('aria-controls'));
+    if (openPopup?.contains(event.target)) return; // selecting text inside the popup itself shouldn't close it
+    openBtn.setAttribute('aria-expanded', 'false');
+    openPopup?.setAttribute('hidden', '');
+  });
+  if (!clickedBtn) return;
+  const popup = document.getElementById(clickedBtn.getAttribute('aria-controls'));
+  if (!popup) return;
+  const expanding = popup.hasAttribute('hidden');
+  clickedBtn.setAttribute('aria-expanded', String(expanding));
+  popup.toggleAttribute('hidden', !expanding);
+});
+
 // #1150 (owner request, 2026-10-01, via a live Control Room conversation):
 // a land's name/size were visible while standing on it in Shop mode
 // (updateShopLandletInfo above) but nowhere in Build mode at all, and a
@@ -11405,6 +11437,11 @@ const SHOP_SPAWN_START_ALTITUDE_M = 80;
 // a full revolution takes a couple of minutes, plenty of time to take in
 // the view before (or without ever) touching a control.
 const SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S = 0.05;
+// #1630: how many times pickShopSpawnLocation will reroll a candidate that
+// landed on a water landlet before giving up and using it anyway -- a
+// bound, not a tuned value, purely so a (realistically impossible) world
+// that's entirely water can't spin this loop forever.
+const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 // #1176: the "Go to Last Location" button's own fade in/out — same
 // duration both ways, applied via CSS transition (#shop-last-location-btn
 // in index.html), not JS-driven opacity.
@@ -11828,7 +11865,28 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     float totalWeight = 0.0;
     for (int i = 0; i < 4; i++) {
       float footprint = fwidth(p.x) + fwidth(p.y);
-      float fade = 1.0 - smoothstep(0.005, 0.05, footprint);
+      // #1585: #1190's original thresholds (0.005, 0.05) still left a
+      // visible band of sharp-edged, hard-banded streaks (not the soft
+      // "slightly hazier blend" this comment promises) wherever footprint
+      // landed inside that range but hadn't yet grown large enough to
+      // fully fade — confirmed directly: replacing fbm()'s body with a
+      // flat constant (no pseudo-random content at all, same geometry/
+      // camera) rendered a perfectly smooth gradient with zero streaking,
+      // proving the streaks are 100% this noise function's own
+      // undersampling, not a mesh seam or z-fighting (the two alternatives
+      // issue #1585's own report raised). Widening apexFade's own radius
+      // (the pole-proximity cutoff just below) barely changed the result,
+      // so the problem wasn't limited to the literal pole either — it's
+      // this fade engaging too late. Starting the fade an order of
+      // magnitude sooner (0.0005) and finishing it well before the old
+      // lower bound (0.006 vs 0.005) closes that gap: confirmed via the
+      // same direct visual comparison that every previously-streaked
+      // camera angle (near the apex, pitched up and yawed, flying near
+      // the horizon) now renders cleanly, while views with little
+      // foreshortening to begin with (near the wall, moderate pitch)
+      // render identically to before — nothing that wasn't already
+      // aliasing got newly suppressed.
+      float fade = 1.0 - smoothstep(0.0005, 0.006, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
       p *= 2.05;
@@ -12325,6 +12383,39 @@ const shopViewDirection = new THREE.Vector3();
 const shopMoveDir = new THREE.Vector3();
 const shopCameraAnchor = new THREE.Vector3();
 
+// #1587 (owner feedback): the original "AFK" label was a full-size
+// makeSignPostSprite — the same dark nameplate treatment used for
+// community sign posts, floating well above the avatar's head on its own
+// sign-post. Too garish, and the wrong shape for what's meant to be a
+// small shoulder badge, not a sign. Rebuilt as a small on-brand pill:
+// same rounded-rect-on-canvas technique makeDimensionLabelSprite already
+// established in this file, using this app's actual pill colors
+// (index.html's --pill-rgb/--ink-rgb) rather than inventing new ones, and
+// lowercase "afk" to match the lowercase higglehaven wordmark convention.
+function makeAfkBadgeSprite() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 104;
+  canvas.height = 44;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(214, 232, 190, 0.92)'; // --pill-rgb
+  ctx.beginPath();
+  ctx.roundRect(2, 2, canvas.width - 4, canvas.height - 4, (canvas.height - 4) / 2);
+  ctx.fill();
+  ctx.fillStyle = '#16240a'; // --ink-rgb
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('afk', canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  // Much smaller than makeSignPostSprite's own 0.012 world-units-per-px —
+  // a shoulder badge, not a sign meant to read from across a landlet.
+  const WORLD_UNITS_PER_PX = 0.0022;
+  sprite.scale.set(canvas.width * WORLD_UNITS_PER_PX, canvas.height * WORLD_UNITS_PER_PX, 1);
+  return sprite;
+}
+
 // The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
 // non-gendered avatar assigned instantly at registration"). No character
 // asset/rig exists yet, so this is a plain, neutral placeholder built from
@@ -12424,12 +12515,15 @@ function createShopAvatar() {
   group.add(headPivot);
 
   // On `group` rather than `headPivot` so idle's own head-turn sway
-  // (updateShopAvatarIdle) doesn't drag the label along with it — a sprite
+  // (updateShopAvatarIdle) doesn't drag the badge along with it — a sprite
   // always faces the camera regardless of parent rotation anyway, but its
   // *position* still would inherit headPivot's yaw if parented there.
   // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = headPivot.position.z + SHOP_AVATAR_HEAD_RADIUS_M + 0.3;
+  // #1587: shoulder-mounted (the right shoulder joint's own x/z, reused
+  // from armPivotR's position just above) rather than floating above the
+  // head on a sign-post.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M * 1.15, 0, shoulderZ + SHOP_AVATAR_TORSO_RADIUS_M * 0.5);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
@@ -12482,8 +12576,13 @@ async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
   const group = new THREE.Group();
   group.add(container);
 
-  const afkSprite = makeSignPostSprite('AFK');
-  afkSprite.position.z = height + 0.3;
+  // #1587: shoulder-mounted rather than floating above the head. A custom
+  // model has no known shoulder joint to anchor to (unlike the procedural
+  // body above), so this approximates one from its measured bounding box:
+  // roughly shoulder-height up the model's own height, offset to one side
+  // by a fraction of its own horizontal footprint.
+  const afkSprite = makeAfkBadgeSprite();
+  afkSprite.position.set(horizontalHalfM * 0.6, 0, height * 0.82);
   afkSprite.material.opacity = 0;
   group.add(afkSprite);
 
@@ -12649,7 +12748,7 @@ async function refreshEquippedShopAvatar(modelUrl) {
   // #1165: same reasoning again — see createCustomShopAvatar's own
   // animationSource comment.
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
-  reportRendererMemoryDiagnostic();
+  await reportRendererMemoryDiagnostic();
 }
 
 const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
@@ -13599,6 +13698,36 @@ function landletContainsPoint(record, worldX, worldY) {
   if (record.polygon && record.polygon.length >= 3) return pointInPolygonXY(localX, localY, record.polygon);
   const half = Math.sqrt(record.areaM2) / 2;
   return Math.abs(localX) <= half && Math.abs(localY) <= half;
+}
+
+// True if (worldX, worldY) falls inside any currently-known water landlet
+// -- shopLandlets is already fully populated by the time enterShopMode
+// picks a spawn location (built from the same allLandlets fetch, earlier
+// in that same function), so this can check synchronously.
+function isShopLocationOnWater(worldX, worldY) {
+  for (const entry of shopLandlets.values()) {
+    if (entry.record.landType === 'water' && landletContainsPoint(entry.record, worldX, worldY)) return true;
+  }
+  return false;
+}
+
+// #1630: the spawn-orbit's location used to be a uniform Math.random()
+// pick over the whole world circle, with no check against landing on a
+// water landlet. Rerolls (bounded by SHOP_SPAWN_LOCATION_MAX_ATTEMPTS) a
+// candidate radius/angle until it lands outside every water landlet's
+// footprint -- same radius/angle-to-world-position formula
+// updateShopSpawnRotation itself uses for the orbit.
+function pickShopSpawnLocation() {
+  let radiusM = 0;
+  let yaw = 0;
+  for (let attempt = 0; attempt < SHOP_SPAWN_LOCATION_MAX_ATTEMPTS; attempt++) {
+    radiusM = Math.random() * shopMaxRadiusM();
+    yaw = Math.random() * Math.PI * 2;
+    const worldX = radiusM * Math.sin(yaw);
+    const worldY = -radiusM * Math.cos(yaw);
+    if (!isShopLocationOnWater(worldX, worldY)) break;
+  }
+  return { radiusM, yaw };
 }
 
 // Which claimed landlet (if any) the shopper is currently standing on, and
@@ -14621,9 +14750,43 @@ shopBuyHintEl.addEventListener('click', async () => {
 // geometry/texture in these counts from the first frame it's actually drawn
 // until its own `dispose()` fires (it listens for that event internally), so
 // this reflects real live GPU resources, not just "everything ever created."
+//
+// #1591: every caller invokes this synchronously right after scene.add()-ing
+// the incoming avatar, while the outgoing one's geometries/textures have
+// already been synchronously decremented by disposeObject3D's own dispose()
+// calls just above. The incoming avatar's own geometries/textures, though,
+// only get counted once the renderer actually draws them for the first
+// time (see this function's own comment above) — which hasn't happened yet
+// at this exact point in the call stack, only on the *next* animate() frame.
+// Reading renderer.info.memory immediately here caught that gap: the
+// outgoing avatar's resources already gone, the incoming one's not yet
+// counted, undercounting by exactly the incoming avatar's own geometry/
+// texture count until that next frame renders. Deferring the actual read to
+// the frame after this one (double rAF: the first just waits for the next
+// paint to be scheduled, the second runs after it's actually happened) closes
+// that gap without changing what's being measured. Returns a promise so
+// both call sites can await it — otherwise the async swap function they're
+// each the last line of would resolve (and its own caller would move on to
+// reading window.__rendererMemory) before the deferred write above ever
+// lands, trading the original undercount race for an equally real stale-read
+// one.
 function reportRendererMemoryDiagnostic() {
-  window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+      resolve();
+    }));
+  });
 }
+// #1591: same counts as window.__rendererMemory above, but read on demand
+// rather than only at whichever moment refreshEquippedShopAvatar/
+// enterShopMode last happened to call reportRendererMemoryDiagnostic —
+// window.__rendererMemory alone is a frozen snapshot from that one past
+// moment, not a live value, which makes it the wrong thing to compare
+// against once anything else in the scene (e.g. a landlet's own placed
+// instances, still loading asynchronously by proximity) can keep changing
+// in between.
+window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures });
 
 function disposeObject3D(object) {
   object.traverse((child) => {
@@ -15048,7 +15211,7 @@ async function enterShopMode() {
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
-  reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
+  await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
   shopAvatarSwing = 0;
   shopAvatarWalkPhase = 0;
   shopIdleElapsedS = 0;
@@ -15066,8 +15229,9 @@ async function enterShopMode() {
   // (that's for a player-initiated toggle mid-session, not this spawn),
   // landing in 'flying' directly the same way toggleShopFlight's own
   // takingOff path eventually would.
-  shopSpawnOrbitRadiusM = Math.random() * shopMaxRadiusM();
-  shopYaw = Math.random() * Math.PI * 2;
+  // #1630: pickShopSpawnLocation (not a bare Math.random() pair) so the
+  // spawn location avoids landing on a water landlet.
+  ({ radiusM: shopSpawnOrbitRadiusM, yaw: shopYaw } = pickShopSpawnLocation());
   shopSpawnRotating = true;
   shopAvatarPosition.x = shopSpawnOrbitRadiusM * Math.sin(shopYaw);
   shopAvatarPosition.y = -shopSpawnOrbitRadiusM * Math.cos(shopYaw);
@@ -15099,7 +15263,17 @@ async function enterShopMode() {
   shopGoToLastLocationElapsedS = 0;
   shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
-  shopPitch = -0.12;
+  // #1591: this used to reuse shopPitch's own default grounded value
+  // (-0.12 rad, ~7deg down — a natural "standing and looking slightly
+  // down" neutral), nowhere near enough tilt to actually see the world
+  // below from SHOP_SPAWN_START_ALTITUDE_M. At that near-level angle the
+  // "aerial shot" spent its whole orbit looking at the horizon/wall ring
+  // instead of down at the world it's supposed to be showing off.
+  // SHOP_MAX_PITCH itself — the same "looking well down" extreme normal
+  // free-look is already bounded to (see that constant's own comment) —
+  // is the right pitch here too: the camera is looking down at the whole
+  // world from above, not at a nearby build.
+  shopPitch = -SHOP_MAX_PITCH;
   // shopYaw (set above, the orbit's starting angle) already faces the
   // world center — see updateShopSpawnRotation's own comment on why that
   // single angle does double duty as both the camera's look direction and
@@ -16288,6 +16462,20 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
   }
 }
 
+// #1590: fades out the cold-start/mode-switch splash (#loading-screen,
+// visible by default in index.html's own markup) once bootstrap() has
+// settled, whichever of Shop/Build/Sell/layoutPreview it resolved into —
+// including the declined-login dead ends (showShopAccessGate), since those
+// are also "nothing left to load," not stuck-mid-load. Tied to both the
+// resolve and reject side of bootstrapPromise below so an unexpected throw
+// still uncovers the app rather than leaving the wordmark stuck forever.
+function hideLoadingScreen() {
+  const el = document.getElementById('loading-screen');
+  if (!el || el.classList.contains('loading-screen-hidden')) return;
+  el.classList.add('loading-screen-hidden');
+  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+}
+
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
 // either fetch fails. Catalog and instances are fetched together with a
@@ -16407,3 +16595,4 @@ async function bootstrap() {
 // enterSellMode's own comment covers why it opens the modal directly
 // instead of going through openSellerModal() for that reason.
 const bootstrapPromise = bootstrap();
+bootstrapPromise.then(hideLoadingScreen, hideLoadingScreen);

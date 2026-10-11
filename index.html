@@ -3,6 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // #1603: owner reported the post-email-verification confirmation
+      // modal rendering tiny/unreadable, suspected Gmail-link-specific.
+      // Most likely cause: #1504/#1509 (merged 3 days earlier) deliberately
+      // stopped locking the whole document to initial-scale=1.0 (it used to
+      // carry user-scalable=no/maximum-scale=1.0 site-wide, which blocked
+      // pinch-zoom on every text-heavy modal for a legitimate a11y reason —
+      // see that issue). Several mobile in-app browsers, including
+      // WKWebView-based link viewers like Gmail's on iOS, carry a tab's
+      // existing pinch-zoom level into a fresh same-origin navigation
+      // instead of resetting to the new page's own initial-scale — so a
+      // page reached via an emailed link can land already zoomed out if
+      // that browser tab had been pinch-zoomed at some earlier point.
+      // Rewriting the viewport meta's content on load (even back to the
+      // same value) forces the browser to recompute the effective scale
+      // from initial-scale=1.0 instead of whatever it inherited, without
+      // re-disabling pinch-zoom for the rest of the session.
+      (function () {
+        var viewport = document.querySelector('meta[name="viewport"]');
+        if (!viewport) return;
+        var original = viewport.getAttribute('content');
+        viewport.setAttribute('content', original + ', maximum-scale=1');
+        requestAnimationFrame(function () {
+          viewport.setAttribute('content', original);
+        });
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>higglehaven (dev)</title>
     <style>
@@ -84,6 +111,47 @@
         height: 100vh;
         display: block;
         touch-action: none;
+      }
+      /* #1590: covers the raw scene-rebuild flash both at cold app startup
+         (blank page background, then an empty placeholder scene, before
+         the real world/avatar are ready) and at every in-app Shop/Build/
+         Sell mode switch — #mode-nav's own switcher is a real
+         location.reload() (see START_MODE_KEY's own comment in main.js),
+         so a mode switch re-runs this exact same cold-start sequence from
+         scratch. Visible by default in the markup itself (no JS needed for
+         the very first paint).
+
+         z-index: deliberately *below* every real action modal (20 —
+         Auth/Verify/Notifications/Friends/Seller/Upload, up through 40 for
+         settings-modal) — bootstrap()'s own identity gate (Shop's
+         ensureShopperIdentity, Build/Sell's ensureBuilderIdentity/
+         ensureSellerIdentity) can open #auth-modal/#verify-modal as part of
+         this exact same loading window, and that needs to stay reachable:
+         a login/verification prompt is itself part of "ready for input,"
+         not something to hide behind a non-interactive splash. Sitting
+         above the plain 3D canvas and the un-indexed HUD (shop-status,
+         joysticks, product-info, ...) is enough to mask the scene-rebuild
+         flash itself; #topbar-left/#mode-nav's own 21 intentionally shows
+         through on top, same as they already do over the raw scene today
+         (both are "always reachable" persistent chrome per their own
+         comments, never conditionally hidden pre-load). */
+      #loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #eef4e0;
+        opacity: 1;
+        transition: opacity 0.4s ease;
+      }
+      #loading-screen.loading-screen-hidden {
+        opacity: 0;
+      }
+      #loading-screen img {
+        width: min(240px, 60vw);
+        height: auto;
       }
       /* Wordmark and the account-menu toggle share one fixed top-left row
          (owner request: a cog icon "just to the right of the higglehaven
@@ -1605,13 +1673,42 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
-      #upload-hint {
+      /* #1602: a small "?" button that reveals a popup of explanatory text
+         next to the control it describes, instead of that text sitting
+         inline and permanently taking up space. Generic/reusable (scoped
+         by class, not an id) so it isn't tied to the upload modal alone --
+         see src/main.js's single delegated click handler for the toggle
+         behavior shared by every instance. */
+      .info-tooltip-btn {
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid rgb(var(--ink-rgb) / 0.35);
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: rgb(var(--ink-rgb) / 0.75);
+        font: 11px/1 sans-serif;
+        cursor: pointer;
+        padding: 0;
+      }
+      .info-tooltip-popup {
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
-      #upload-video-hint {
-        font-size: 12px;
-        color: rgb(var(--ink-rgb) / 0.65);
+      .field-with-tooltip {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .field-with-tooltip > label {
+        flex: 1 1 auto;
+      }
+      .upload-step-heading {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
       }
       /* Digital goods (docs/SPEC.md §4) — a checkbox (row layout, unlike
          the column layout every other #upload-modal-content label uses for
@@ -1636,10 +1733,6 @@
       }
       #upload-status.error {
         color: #b3402c;
-      }
-      #upload-dimensions-hint {
-        font-size: 12px;
-        color: rgb(var(--ink-rgb) / 0.65);
       }
       #upload-dimensions-preview {
         width: 100%;
@@ -3677,6 +3770,9 @@
   </head>
   <body>
     <canvas id="app"></canvas>
+    <div id="loading-screen" aria-hidden="true">
+      <img src="/wordmark.png" alt="higglehaven" />
+    </div>
     <div id="shop-status" class="shop-ui" role="status" aria-live="polite"></div>
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
@@ -3860,11 +3956,14 @@
               <option value="avatar-model">Avatar model</option>
             </select>
           </label>
-          <label id="upload-file-label">
-            .glb or .fbx file
-            <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
-          </label>
-          <div id="upload-hint">
+          <div id="upload-file-field-row" class="field-with-tooltip">
+            <label id="upload-file-label">
+              .glb or .fbx file
+              <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
+            </label>
+            <button id="upload-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-hint" aria-label="More info about file uploads">?</button>
+          </div>
+          <div id="upload-hint" class="info-tooltip-popup" hidden>
             We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
             80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster. A .fbx file is converted
             to .glb right in your browser first — nothing but the converted file ever gets uploaded.
@@ -3873,11 +3972,14 @@
             &#128249; Or generate a model from a video instead
           </button>
           <div id="upload-video-section" hidden>
-            <label id="upload-video-label">
-              Short video of the object
-              <input id="upload-video-input" type="file" accept="video/*" capture="environment" />
-            </label>
-            <div id="upload-video-hint">
+            <div class="field-with-tooltip">
+              <label id="upload-video-label">
+                Short video of the object
+                <input id="upload-video-input" type="file" accept="video/*" capture="environment" />
+              </label>
+              <button id="upload-video-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-video-hint" aria-label="More info about video generation">?</button>
+            </div>
+            <div id="upload-video-hint" class="info-tooltip-popup" hidden>
               Works best for a single, well-lit object on its own — walk slowly all the way around it for a few
               seconds. Cluttered or busy scenes often come out poorly. Generation runs in the background and can
               take a couple of minutes.
@@ -3886,7 +3988,11 @@
           </div>
         </div>
         <div id="upload-step-dimensions" hidden>
-          <div id="upload-dimensions-hint">
+          <div class="upload-step-heading">
+            <span>Dimensions</span>
+            <button id="upload-dimensions-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-dimensions-hint" aria-label="More info about dimensions">?</button>
+          </div>
+          <div id="upload-dimensions-hint" class="info-tooltip-popup" hidden>
             Third-party models are often imported at the wrong real-world size. Set this product's actual
             dimensions below — changing one adjusts the other two to keep its proportions.
           </div>
