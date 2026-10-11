@@ -5282,6 +5282,30 @@ function renderShopSettingsSection() {
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
+  // #1588: opt-in free-look-recenters-on-facing. Off by default — the
+  // existing free-look/facing independence (see updateShopMovement's own
+  // comment on this) is the baseline behavior, not something this toggle
+  // should change for anyone who hasn't asked for it.
+  const cameraLockField = document.createElement('div');
+  cameraLockField.className = 'settings-field';
+  const cameraLockLabel = document.createElement('span');
+  cameraLockLabel.textContent = 'Camera';
+  cameraLockField.appendChild(cameraLockLabel);
+  const cameraLockRow = document.createElement('div');
+  cameraLockRow.className = 'settings-radio-row';
+  const cameraLockLabelEl = document.createElement('label');
+  const cameraLockCheckbox = document.createElement('input');
+  cameraLockCheckbox.type = 'checkbox';
+  cameraLockCheckbox.checked = getShopCameraLockToFacing();
+  cameraLockCheckbox.addEventListener('change', () => {
+    setShopCameraLockToFacing(cameraLockCheckbox.checked);
+  });
+  cameraLockLabelEl.appendChild(cameraLockCheckbox);
+  cameraLockLabelEl.appendChild(document.createTextNode("Ease the camera back to face the way I'm walking"));
+  cameraLockRow.appendChild(cameraLockLabelEl);
+  cameraLockField.appendChild(cameraLockRow);
+  settingsSectionEl.appendChild(cameraLockField);
+
   // #1340: My Animations' own compatibility badges are a function of
   // whichever avatar is currently equipped -- without wiring the two
   // together, re-equipping via My Avatars left My Animations rendering
@@ -11281,6 +11305,23 @@ const SHOP_AVATAR_HEIGHT_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH
 // instant, similar to every other "ease toward a target per second"
 // treatment in this file (e.g. SHOP_AVATAR_SWING_EASE_PER_S).
 const SHOP_AVATAR_TURN_EASE_PER_S = 12;
+// #1588: opt-in setting — when on, free-look (shopYaw) eases back toward
+// the avatar's own facing (shopAvatarFacing) whenever the shopper isn't
+// actively steering the right stick, instead of the two staying fully
+// independent forever. Deliberately much slower than
+// SHOP_AVATAR_TURN_EASE_PER_S's near-instant body turn: the owner's own
+// requirement was that this read as a smooth re-center (Dysmantle cited
+// as the UX precedent), never a snap.
+const SHOP_CAMERA_LOCK_TO_FACING_KEY = 'higglehaven.shopCameraLockToFacing';
+const SHOP_CAMERA_LOCK_TO_FACING_EASE_PER_S = 3;
+
+function getShopCameraLockToFacing() {
+  return localStorage.getItem(SHOP_CAMERA_LOCK_TO_FACING_KEY) === '1';
+}
+
+function setShopCameraLockToFacing(enabled) {
+  localStorage.setItem(SHOP_CAMERA_LOCK_TO_FACING_KEY, enabled ? '1' : '0');
+}
 // Where the third-person camera orbits around — roughly head height, not
 // the very top of the head, so looking straight ahead frames the avatar
 // low in frame rather than staring at the back of its skull.
@@ -13194,6 +13235,22 @@ function updateShopMovement(now) {
     }
     clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM());
   }
+
+  // #1588: with the setting on, and only while the shopper isn't actively
+  // free-looking this frame (shopLookX/shopLookY both 0 — the block above
+  // already owns shopYaw whenever that's not true), ease shopYaw toward
+  // shopAvatarFacing instead of leaving the camera wherever free-look last
+  // pointed it.
+  if (!shopGoToLastLocationPhase && shopLookX === 0 && shopLookY === 0 && getShopCameraLockToFacing()) {
+    const cameraFacingDelta = Math.atan2(
+      Math.sin(shopAvatarFacing - shopYaw),
+      Math.cos(shopAvatarFacing - shopYaw),
+    );
+    if (Math.abs(cameraFacingDelta) > 1e-4) {
+      shopYaw += cameraFacingDelta * Math.min(1, SHOP_CAMERA_LOCK_TO_FACING_EASE_PER_S * dt);
+      applyShopCameraOrientation();
+    }
+  }
   // shopFlightAltitudeM is height above *local* ground (unchanged meaning —
   // takeoff/landing, the flight ceiling, and the speed curve all still
   // reason in these terms); the ground itself already sags below the flat
@@ -13257,6 +13314,11 @@ function updateShopMovement(now) {
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
   // rather than staying fixed.
   window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // #1588: same reasoning as window.__shopAvatarOrientation above — shopYaw
+  // (the free-look camera's own heading) has no other way for a test to
+  // read it, and the camera-lock-to-facing setting needs to confirm it
+  // actually moves (or doesn't) relative to shopAvatarFacing.
+  window.__shopCameraYaw = shopYaw;
   // #1586: same reasoning as window.__shopAvatarOrientation just above —
   // the AFK sprite's own opacity is otherwise only checkable by eye.
   window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
