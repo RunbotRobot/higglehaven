@@ -35,7 +35,7 @@ await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 
 // Before toggling: the manual file row is visible, the video row is not.
-const fileRowVisibleInitially = await page.isVisible('#upload-file-label');
+const fileRowVisibleInitially = await page.isVisible('#upload-file-field-row');
 const videoSectionHiddenInitially = await page.evaluate(() => document.getElementById('upload-video-section').hidden);
 console.log('manual file row visible before toggling (should be true):', fileRowVisibleInitially);
 console.log('video section hidden before toggling (should be true):', videoSectionHiddenInitially);
@@ -44,7 +44,7 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.click('#upload-mode-video-btn');
 
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
-const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-label').hidden);
+const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden);
 const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
 console.log('manual file row hidden after toggling (should be true):', fileRowHiddenAfterToggle);
@@ -79,9 +79,9 @@ console.log('submit button re-enabled after the failure (should be true):', subm
 
 await page.click('#upload-mode-file-btn');
 const backToFileMode = await page.evaluate(() => {
-  const fileLabel = document.getElementById('upload-file-label');
+  const fileFieldRow = document.getElementById('upload-file-field-row');
   const videoSection = document.getElementById('upload-video-section');
-  return !fileLabel.hidden && videoSection.hidden;
+  return !fileFieldRow.hidden && videoSection.hidden;
 });
 console.log('"Back to manual file upload" restores the file-pick row (should be true):', backToFileMode);
 
