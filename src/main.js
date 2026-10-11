@@ -12496,6 +12496,19 @@ window.__testShopAvatarHasTransparentMaterial = () => {
   });
   return found;
 };
+// #1583: the normal upload flow always runs a selected file through
+// optimizeModelFile first (handleUploadFileStep), and GLTFExporter
+// unconditionally wraps whatever Group it's given in one new top-level
+// node on export -- so by the time rescaleModelFile itself ever sees a
+// file via that flow, any originally-multi-root model has already been
+// collapsed to a single root one level up, and a test driving the real
+// upload wizard UI can't reach the multi-root branch rescaleModelFile's
+// own scene.children loop exists to handle. Exposing the function directly
+// lets a test feed it a genuinely multi-root buffer and inspect the result,
+// without needing to defeat (or rely on the absence of) that optimization
+// step. Always inert unless a test calls it, same convention as the other
+// window.__test* hooks above.
+window.__rescaleModelFileForTests = rescaleModelFile;
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 
