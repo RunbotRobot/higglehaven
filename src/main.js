@@ -14830,7 +14830,17 @@ async function enterShopMode() {
   shopGoToLastLocationElapsedS = 0;
   shopLastLocationBtn.classList.toggle('visible', !!shopLastLocation);
 
-  shopPitch = -0.12;
+  // #1591: this used to reuse shopPitch's own default grounded value
+  // (-0.12 rad, ~7deg down — a natural "standing and looking slightly
+  // down" neutral), nowhere near enough tilt to actually see the world
+  // below from SHOP_SPAWN_START_ALTITUDE_M. At that near-level angle the
+  // "aerial shot" spent its whole orbit looking at the horizon/wall ring
+  // instead of down at the world it's supposed to be showing off.
+  // SHOP_MAX_PITCH itself — the same "looking well down" extreme normal
+  // free-look is already bounded to (see that constant's own comment) —
+  // is the right pitch here too: the camera is looking down at the whole
+  // world from above, not at a nearby build.
+  shopPitch = -SHOP_MAX_PITCH;
   // shopYaw (set above, the orbit's starting angle) already faces the
   // world center — see updateShopSpawnRotation's own comment on why that
   // single angle does double duty as both the camera's look direction and

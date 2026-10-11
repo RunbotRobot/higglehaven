@@ -6668,7 +6668,10 @@ center at that fixed radius, always facing the center as it goes
 (`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The
 camera's own look direction (`shopYaw`) doubles as the orbit's angle
 throughout, since "facing the center" and "the orbit position" are the
-same angle at every point on the circle. The orbit ends the instant the
+same angle at every point on the circle. The camera's pitch is set to
+`-SHOP_MAX_PITCH` for this shot (see #1591 — the default grounded pitch,
+~7deg down, left the camera looking at the horizon/wall ring rather than
+down at the world from `SHOP_SPAWN_START_ALTITUDE_M`). The orbit ends the instant the
 shopper gives any navigation input — a joystick deflection, a vertical
 flight button, or a fly-button tap (`stopShopSpawnRotationForNavigation`,
 checked every frame in `updateShopMovement` and once directly in
