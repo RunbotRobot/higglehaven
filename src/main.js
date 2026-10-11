@@ -76,6 +76,9 @@ import {
   sendFriendRequest,
   acceptFriendRequest,
   removeFriendship,
+  fetchDirectMessages,
+  sendDirectMessage,
+  markDirectMessagesRead,
   fetchLandletVersions,
   saveLandletVersion,
   fetchLandletVersion,
@@ -9901,6 +9904,113 @@ const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
 const friendsMapCanvas = document.getElementById('friends-map-canvas');
 const friendsMapEmptyEl = document.getElementById('friends-map-empty');
 
+// Direct messages (#1637) — a thread with one other builder, reached only
+// via each accepted friend's own "Message" button below, same "swaps
+// places with #friends-modal" idiom friends-map-modal already uses rather
+// than stacking as a second modal layer.
+const dmModalEl = document.getElementById('dm-modal');
+const dmCloseBtn = document.getElementById('dm-close-btn');
+const dmModalTitleEl = document.getElementById('dm-modal-title');
+const dmStatusEl = document.getElementById('dm-status');
+const dmListEl = document.getElementById('dm-list');
+const dmEmptyEl = document.getElementById('dm-empty');
+const dmComposeForm = document.getElementById('dm-compose-form');
+const dmComposeInput = document.getElementById('dm-compose-input');
+const dmSendBtn = document.getElementById('dm-send-btn');
+let dmOtherBuilderId = null;
+let dmOtherLabel = '';
+// Same missing-re-entrancy-guard shape as friendsLoadToken just above —
+// opening a thread, sending a message, and the mark-read call each await
+// before touching the DOM, so a stale response landing after a fresher one
+// (e.g. the modal reopened against a different friend in between) would
+// otherwise append that friend's messages into the wrong thread.
+let dmLoadToken = 0;
+
+async function renderDmThread() {
+  const myLoadToken = ++dmLoadToken;
+  dmListEl.innerHTML = '';
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
+  if (!dmOtherBuilderId) return;
+  let messages;
+  try {
+    const { messages: page } = await fetchDirectMessages(dmOtherBuilderId);
+    messages = page;
+  } catch (err) {
+    if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
+    dmStatusEl.textContent = err.message || 'Could not load messages.';
+    dmStatusEl.classList.add('error');
+    return;
+  }
+  if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
+  dmEmptyEl.hidden = messages.length > 0;
+  // Newest-first from the server (same shape as notifications) — reversed
+  // here so the thread reads chronologically top-to-bottom, like any chat.
+  for (const message of [...messages].reverse()) {
+    const row = document.createElement('div');
+    row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
+    const text = document.createElement('div');
+    text.textContent = message.text;
+    row.appendChild(text);
+    const time = document.createElement('div');
+    time.className = 'dm-row-time';
+    time.textContent = formatNotificationTime(message.createdAt);
+    row.appendChild(time);
+    dmListEl.appendChild(row);
+  }
+  dmListEl.scrollTop = dmListEl.scrollHeight;
+  // Best-effort — opening the thread is "reading" it, same as notifications'
+  // own read-on-click idiom, just for the whole thread at once rather than
+  // one row at a time.
+  try {
+    await markDirectMessagesRead(dmOtherBuilderId);
+  } catch (err) {
+    console.warn('Could not mark messages read:', err);
+  }
+}
+
+function closeDmModal() {
+  dmModalEl.classList.remove('visible');
+  closeModalA11y(dmModalEl);
+}
+
+function openDmModal(otherBuilderId, otherLabel) {
+  dmOtherBuilderId = otherBuilderId;
+  dmOtherLabel = otherLabel;
+  dmModalTitleEl.textContent = `Messages: ${otherLabel}`;
+  dmComposeInput.value = '';
+  friendsModalEl.classList.remove('visible');
+  closeModalA11y(friendsModalEl);
+  dmModalEl.classList.add('visible');
+  openModalA11y(dmModalEl, closeDmModal);
+  renderDmThread();
+}
+
+dmCloseBtn.addEventListener('click', () => {
+  closeDmModal();
+  friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
+});
+
+dmComposeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = dmComposeInput.value.trim();
+  if (!text || !dmOtherBuilderId) return;
+  dmStatusEl.textContent = '';
+  dmStatusEl.classList.remove('error');
+  dmSendBtn.disabled = true;
+  try {
+    await sendDirectMessage(dmOtherBuilderId, text);
+    dmComposeInput.value = '';
+    await renderDmThread();
+  } catch (err) {
+    dmStatusEl.textContent = err.message || 'Could not send this message.';
+    dmStatusEl.classList.add('error');
+  } finally {
+    dmSendBtn.disabled = false;
+  }
+});
+
 async function refreshFriendsBadge() {
   if (!builderId) return;
   try {
@@ -10056,6 +10166,17 @@ async function renderFriends() {
     row.appendChild(body);
     const actions = document.createElement('div');
     actions.className = 'friend-row-actions';
+    // #1637: DM requires BOTH sides to be trust_tier === 'id_verified' —
+    // only this viewer's own tier is known client-side, so the button is
+    // gated on that alone; if the other side isn't id_verified, sending
+    // still fails with the server's own clear error, shown in dmStatusEl.
+    if (currentAuthUser?.trustTier === 'id_verified') {
+      const messageBtn = document.createElement('button');
+      messageBtn.type = 'button';
+      messageBtn.textContent = 'Message';
+      messageBtn.addEventListener('click', () => openDmModal(friendship.otherBuilderId, friendship.otherLabel));
+      actions.appendChild(messageBtn);
+    }
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'danger';
