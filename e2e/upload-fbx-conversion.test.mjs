@@ -38,6 +38,7 @@ const fileLabelText = await page.textContent('#upload-file-label');
 console.log('file step label mentions .fbx (should be true):', fileLabelText.includes('.fbx'));
 
 await page.fill('#upload-name', PRODUCT_NAME);
+await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', FBX_FIXTURE_PATH);
 await page.click('#upload-submit-btn');
 

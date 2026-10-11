@@ -39,6 +39,7 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', DIGITAL_PRODUCT);
+await page.fill('#upload-price', '5');
 await page.check('#upload-digital-good-checkbox');
 const disclaimerLabelVisibleAfterCheck = await page.locator('#upload-digital-good-disclaimer-label').isVisible();
 console.log('disclaimer picker visible once the checkbox is checked (should be true):', disclaimerLabelVisibleAfterCheck);
