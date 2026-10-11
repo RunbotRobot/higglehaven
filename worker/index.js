@@ -895,7 +895,7 @@ async function handleControlRoomTaskCreate(request, env, db) {
   const body = await readJson(request);
   const postedBy = labelValue(body.from, 'from (caller name)');
   const title = controlRoomTextValue(body.title, 'title (message text)');
-  const taskId = body.id ? labelValue(body.id, 'id') : `note-${crypto.randomUUID()}`;
+  const taskId = body.id ? controlRoomTaskIdValue(body.id, 'id') : `note-${crypto.randomUUID()}`;
   const existing = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   if (existing) throw new HttpError('A task with this id already exists', 409);
 
@@ -13919,6 +13919,20 @@ function labelValue(value, field) {
     throw new HttpError(`${field} must be ${MAX_LABEL_LENGTH} characters or fewer`, 400);
   }
   return label;
+}
+
+// #1584: task_id is a client-supplied value with no character restriction
+// (labelValue alone only checks length), and it's interpolated unescaped
+// into several HTML attributes on the Control Room admin board -- every real
+// id in use (issue-N, pr-N, note-<uuid>, feedback-<id>) already fits a plain
+// alphanumeric/hyphen/underscore charset, so restrict it to that rather than
+// relying solely on the rendering side to escape it correctly everywhere.
+function controlRoomTaskIdValue(value, field) {
+  const id = labelValue(value, field);
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new HttpError(`${field} may only contain letters, numbers, hyphens, and underscores`, 400);
+  }
+  return id;
 }
 
 // Same null-passthrough shape as optionalInteger below, for a free-text

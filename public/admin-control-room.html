@@ -333,6 +333,12 @@
   function renderCard(task) {
     const isOpen = expanded.has(task.id);
     const replies = repliesCache.get(task.id);
+    // #1584: task.id is a caller-supplied field (POST /api/control-room/tasks'
+    // `id`) with no character restriction server-side, unlike every other
+    // field rendered in this template -- escape it once here rather than at
+    // each of the many HTML-attribute interpolation sites below, which all
+    // use this escaped copy (JS Map lookups below still key off the raw id).
+    const safeId = escapeHtml(task.id);
     const linkTitle = task.url
       ? '<a href="' + escapeHtml(task.url) + '" target="_blank" rel="noopener">' + escapeHtml(task.title) + '</a>'
       : escapeHtml(task.title);
@@ -352,29 +358,29 @@
       body = '<div class="body">' +
         '<div class="thread">' + (replies === undefined ? '<div class="meta">Loading thread…</div>' : threadHtml) + '</div>' +
         '<div class="actions">' +
-          '<button class="secondary" data-action="status" data-value="in_progress" data-task="' + task.id + '">In progress</button>' +
-          '<button class="secondary" data-action="status" data-value="queued" data-task="' + task.id + '">Requeue</button>' +
-          '<button class="secondary" data-action="status" data-value="done" data-task="' + task.id + '">Mark done</button>' +
-          '<button class="secondary" data-action="waitingClaude" data-task="' + task.id + '">Ready for Claude</button>' +
+          '<button class="secondary" data-action="status" data-value="in_progress" data-task="' + safeId + '">In progress</button>' +
+          '<button class="secondary" data-action="status" data-value="queued" data-task="' + safeId + '">Requeue</button>' +
+          '<button class="secondary" data-action="status" data-value="done" data-task="' + safeId + '">Mark done</button>' +
+          '<button class="secondary" data-action="waitingClaude" data-task="' + safeId + '">Ready for Claude</button>' +
           (task.subIssues && task.subIssues.length
-            ? '<button class="secondary" data-action="waitingSubtasks" data-task="' + task.id + '">Waiting on: Subtasks</button>'
+            ? '<button class="secondary" data-action="waitingSubtasks" data-task="' + safeId + '">Waiting on: Subtasks</button>'
             : '') +
-          '<button class="secondary" data-action="waitingOwner" data-task="' + task.id + '">Waiting on: Owner…</button>' +
-          '<button class="secondary" data-action="toggleViewed" data-task="' + task.id + '">' +
+          '<button class="secondary" data-action="waitingOwner" data-task="' + safeId + '">Waiting on: Owner…</button>' +
+          '<button class="secondary" data-action="toggleViewed" data-task="' + safeId + '">' +
             (task.viewed ? 'Mark unviewed' : 'Mark viewed') +
           '</button>' +
-          (task.tag ? '<button class="secondary" data-action="clearTag" data-task="' + task.id + '">Clear tag</button>' : '') +
+          (task.tag ? '<button class="secondary" data-action="clearTag" data-task="' + safeId + '">Clear tag</button>' : '') +
         '</div>' +
         '<div class="reply-row">' +
-          '<input name="replyFrom" data-reply-from="' + task.id + '" value="' + escapeHtml(fromDrafts.get(task.id) || 'owner') + '" />' +
-          '<textarea placeholder="Reply…" data-reply-text="' + task.id + '">' + escapeHtml(drafts.get(task.id) || '') + '</textarea>' +
-          '<button data-action="reply" data-task="' + task.id + '">Send</button>' +
+          '<input name="replyFrom" data-reply-from="' + safeId + '" value="' + escapeHtml(fromDrafts.get(task.id) || 'owner') + '" />' +
+          '<textarea placeholder="Reply…" data-reply-text="' + safeId + '">' + escapeHtml(drafts.get(task.id) || '') + '</textarea>' +
+          '<button data-action="reply" data-task="' + safeId + '">Send</button>' +
         '</div>' +
       '</div>';
     }
 
-    return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + task.id + '">' +
-      '<div class="card-head" data-toggle="' + task.id + '">' +
+    return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + safeId + '">' +
+      '<div class="card-head" data-toggle="' + safeId + '">' +
         (taskNumberLabel(task) ? '<span class="chip">' + escapeHtml(taskNumberLabel(task)) + '</span>' : '') +
         (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
         (task.imageUrl ? '<img class="card-thumb" src="' + escapeHtml(task.imageUrl) + '" alt="" />' : '') +

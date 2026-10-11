@@ -293,6 +293,19 @@ describe('Control Room tasks (#N31)', () => {
     expect(dupe.response.status).toBe(409);
   });
 
+  // #1584: an explicit id with no character restriction was interpolated
+  // unescaped into the admin board's HTML attributes -- rejecting anything
+  // outside a plain alphanumeric/hyphen/underscore charset here closes that
+  // off at the source rather than relying solely on the rendering side.
+  it('rejects an explicit id containing HTML-breakout characters', async () => {
+    const got = await api('/control-room/tasks', keySession({
+      method: 'POST',
+      body: JSON.stringify({ id: '"><img src=x onerror=alert(1)>', from: 'attacker', title: 'XSS attempt' }),
+    }));
+    expect(got.response.status).toBe(400);
+    expect(got.body.error).toMatch(/id/);
+  });
+
   it('lists and fetches a task by id', async () => {
     const task = await createTask();
     const list = await api('/control-room/tasks', keySession());
