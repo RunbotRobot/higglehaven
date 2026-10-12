@@ -10540,6 +10540,18 @@ async function handleLiveLandlet(db, landletId) {
   });
 }
 
+// #1726: mirrors purchaseIdempotencyKey's pattern (#473) for this
+// endpoint's own auto-version side effect — the client mints+persists a
+// key across a retry of what it considers the same save (most importantly
+// one whose response never arrived), and a missing/malformed key degrades
+// to no idempotency protection rather than failing the save outright.
+// Namespaced with landletId and the owner's builder_id so a key can never
+// collide across a different landlet or a since-transferred owner.
+function landletVersionIdempotencyKey(landletId, ownerBuilderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `landlet-draft-version:${landletId}:${ownerBuilderId}:${rawKey}`;
+}
+
 async function handleLandletDraft(request, db, landletId) {
   const landlet = await requireLandlet(db, landletId);
 
@@ -10609,7 +10621,10 @@ async function handleLandletDraft(request, db, landletId) {
     });
     await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
 
-    const versionId = crypto.randomUUID();
+    // #1726: a deterministic versionId (from the client's own idempotency
+    // key, when present and valid) lets a retry's INSERT below no-op via
+    // ON CONFLICT instead of minting a second, fully duplicate version.
+    const versionId = landletVersionIdempotencyKey(landletId, landlet.owner_builder_id, input.idempotencyKey) || crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
     const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
@@ -10680,6 +10695,9 @@ async function handleLandletDraft(request, db, landletId) {
           FROM landlet_versions WHERE landlet_id = ?
         )
         WHERE ${ownerGuard}
+        -- #1726: a retry bearing the same idempotency-derived versionId
+        -- no-ops here instead of racing a second version_number for it.
+        ON CONFLICT(version_id) DO NOTHING
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
@@ -10687,6 +10705,9 @@ async function handleLandletDraft(request, db, landletId) {
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
           AND ${ownerGuard}
+        -- #1726: same no-op-on-retry reasoning as the INSERT above — this
+        -- table's PK is (version_id, source_instance_id).
+        ON CONFLICT(version_id, source_instance_id) DO NOTHING
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (batchResults[0].meta.changes === 0) {
@@ -12296,6 +12317,21 @@ const SIGN_POST_RATE_LIMIT_MAX = 20;
 // gated CRUD DELETEs (friendship-mutate, bundle-mutate).
 const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
 
+// #1718: same "a lost response looks, from here, identical to the request
+// never having reached us at all" protection as calendarEventIdempotencyKey
+// above (#1716) / the purchase flow's own purchaseIdempotencyKey (#473) — a
+// dropped POST response and the innocent manual retry it invites would
+// otherwise create a second, fully duplicate sign_posts row with the same
+// authorLabel/text. Namespaced with instanceId only, not a builder id like
+// those two siblings -- posting to a sign is anonymous (authorLabel is free
+// text, no account backs it), so there's no builder id to fold in. A
+// missing or malformed key degrades to no idempotency protection for this
+// one request rather than failing the post outright.
+function signPostIdempotencyKey(instanceId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `post:${instanceId}:${rawKey}`;
+}
+
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
 
@@ -12331,7 +12367,15 @@ async function handleSignPosts(request, db, route) {
     const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    const postId = `post-${crypto.randomUUID()}`;
+    // #1718: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // inserting a second, fully duplicate post.
+    const idempotencyKey = signPostIdempotencyKey(instanceId, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(idempotencyKey, instanceId).first();
+      if (existing) return json({ post: signPostFromRow(existing) });
+    }
+    const postId = idempotencyKey || `post-${crypto.randomUUID()}`;
     // #1327: the is_community_sign check above is a point-in-time read, and
     // readJson is a real awaited gap after it -- without re-checking here,
     // a concurrent PATCH unflagging this instance (whose own #1022 cleanup
