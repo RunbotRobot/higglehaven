@@ -12154,10 +12154,26 @@ async function handleInstances(request, env, route, url) {
       WHERE instance_id = ?
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(instanceId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
-    if (batchResults.some((result) => result.meta.changes === 0)) {
+    // #1773: sibling of #1772's own fix — a batch can span multiple
+    // landlets (requireOwnedLandlets above explicitly supports that), and
+    // db.batch() has no atomic rollback on a WHERE-guard mismatch (same D1
+    // semantics the single-instance PATCH handler below's own #1022
+    // comment documents): a guard failing for one instance's landlet
+    // doesn't undo another instance's own delete in the same batch.
+    // Throwing a blanket 409 here used to claim the whole request failed
+    // even when some of these deletes were already durable -- real rows on
+    // a still-owned landlet, genuinely gone from the DB, while the client
+    // (believing nothing happened) never prunes them locally. Only when
+    // literally nothing was deleted is it safe to report a clean,
+    // fully-retryable failure; otherwise report exactly which instanceIds
+    // were rejected so the caller can reconcile instead of being lied to.
+    const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
+    if (rejectedInstanceIds.length === instanceIds.length) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
-    return json({ deletedInstanceIds: instanceIds });
+    const rejectedSet = new Set(rejectedInstanceIds);
+    const deletedInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
+    return json({ deletedInstanceIds, rejectedInstanceIds });
   }
 
   if ((request.method === 'POST' || request.method === 'PUT') && route.length === 2 && route[1] === 'batch') {
@@ -12236,8 +12252,7 @@ async function handleInstances(request, env, route, url) {
     ` : '';
     // #456: same reasoning as the single-create endpoint above — fold the
     // ownership re-check into each write instead of trusting the
-    // point-in-time requireOwnedLandlets check above alone, and reject the
-    // whole batch if any one instance's guard didn't hold at write time.
+    // point-in-time requireOwnedLandlets check above alone.
     const batchResults = await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
         (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
@@ -12245,9 +12260,24 @@ async function handleInstances(request, env, route, url) {
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       ${conflictClause}
     `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id)));
-    if (batchResults.some((result) => result.meta.changes === 0)) {
+    // #1772: a batch can span multiple landlets (requireOwnedLandlets above
+    // explicitly supports that), and db.batch() has no atomic rollback on a
+    // WHERE-guard mismatch (same D1 semantics the single-instance PATCH
+    // handler below's own #1022 comment documents) -- a guard failing for
+    // one instance's landlet doesn't undo another instance's own write in
+    // the same batch. Throwing a blanket 409 here used to claim the whole
+    // request failed even when some of these writes were already durable.
+    // Only when literally nothing landed is it safe to report a clean,
+    // fully-retryable failure; otherwise report exactly which instanceIds
+    // were rejected so the caller can reconcile instead of being lied to.
+    const rejectedInstanceIds = instances
+      .filter((_, i) => batchResults[i].meta.changes === 0)
+      .map((instance) => instance.instanceId);
+    if (rejectedInstanceIds.length === instances.length) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    const rejectedSet = new Set(rejectedInstanceIds);
+    const succeededInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
     // #1675: the single-instance PATCH handler below has its own #1022
     // cleanup for exactly this transition -- this sibling batch endpoint
     // (what a multi-item group move or an undo/redo snapshot restore uses)
@@ -12256,7 +12286,11 @@ async function handleInstances(request, env, route, url) {
     // invisible-but-persistent, same resurrection risk #1022 fixed for the
     // single-instance path. existingInstances (built above, before the
     // write) already has each instance's prior flag value to diff against.
+    // Skips any instance in rejectedSet -- its write above never actually
+    // landed, so its stored flag value didn't change and this cleanup must
+    // not run for it either.
     for (const instance of instances) {
+      if (rejectedSet.has(instance.instanceId)) continue;
       const existing = existingInstances.get(instance.instanceId);
       if (existing?.isCommunitySign && !instance.isCommunitySign) {
         await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(instance.instanceId).run();
@@ -12265,8 +12299,11 @@ async function handleInstances(request, env, route, url) {
         await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instance.instanceId).run();
       }
     }
-    const stored = await getInstancesById(db, instanceIds);
-    return json({ instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, request.method === 'POST' ? 201 : 200);
+    const stored = await getInstancesById(db, succeededInstanceIds);
+    return json({
+      instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),
+      rejectedInstanceIds,
+    }, request.method === 'POST' ? 201 : 200);
   }
 
   if (request.method === 'GET' && route.length === 1) {
