@@ -10653,6 +10653,19 @@ async function handleLandlets(request, db, route, url) {
     // additional landlets. Pinned unconditionally now, matching
     // ownerBuilderId's own unconditional pin just above.
     input.status = existing.status;
+    // #1786: areaM2/landClass need the exact same pin as status just above
+    // -- a landlet's real buildable footprint is always the fixed
+    // LANDLET_AREA_M2 constant, independent of this area_m2 column; that
+    // column only exists as recomputeLandCap's own SUM(area_m2) input for
+    // the land-cap check. Without this, an owning builder could shrink
+    // their own claimed landlet's areaM2 down toward zero through this
+    // generic PUT/PATCH, making every later land-cap check believe they
+    // own almost nothing while every landlet they hold keeps its full,
+    // unchanged buildable square -- unlimited free land. #1703/#1766
+    // already closed this exact gap on the claim/self-claim-create
+    // endpoints; this one was missed.
+    input.areaM2 = existing.area_m2;
+    input.landClass = existing.landlet_class;
     const landlet = validateLandlet(
       { ...landletFromRow(existing), ...input, landletId: route[1], ownerBuilderId: existing.owner_builder_id },
       route[1],
