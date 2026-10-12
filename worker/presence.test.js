@@ -111,6 +111,26 @@ describe('Avatar presence (#1095)', () => {
       for (let i = 0; i < 200; i += 1) expect(returnedIds.has(otherBuilderIds[i])).toBe(true);
       for (let i = 200; i < 205; i += 1) expect(returnedIds.has(otherBuilderIds[i])).toBe(false);
     });
+
+    // #1767: this GET had no rate limit at all, unlike its own POST
+    // sibling (worker/avatar-presence.test.js's own "rate-limits repeated
+    // position reports" test) -- same direct-table-seeding shortcut that
+    // test already uses, for the same reason (looping real HTTP calls to
+    // exhaust the window would be needlessly slow).
+    it('rate-limits repeated nearby-avatar polls from the same builder', async () => {
+      const viewer = await signupBuilder('presence-nearby-rate-limit');
+      const bucketKey = `presence-nearby:${viewer.builderId}`;
+      const now = Date.now();
+      await env.DB.batch(Array.from({ length: 599 }, () => env.DB.prepare(
+        'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+      ).bind(bucketKey, now)));
+
+      const atLimit = await api('/presence?landletId=presence-nearby-rate-limit-landlet', viewer.session());
+      expect(atLimit.response.status).toBe(200);
+
+      const limited = await api('/presence?landletId=presence-nearby-rate-limit-landlet', viewer.session());
+      expect(limited.response.status).toBe(429);
+    });
   });
 
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
