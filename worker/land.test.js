@@ -4118,7 +4118,9 @@ describe('Landlet levels', () => {
       }
       const limited = await api(`/saved-layouts/${savedLayoutIds[20]}`, owner.session({ method: 'DELETE' }));
       expect(limited.response.status).toBe(429);
-    });
+    }, 30000); // #1759: same cumulative-D1-state-under-CI-load shape as #978/
+    // #1224/#1511 -- 20 sequential real HTTP DELETEs, comparable to #1511's
+    // own ~20-request loop, which got the same 30000ms override.
 
     // #1441: GET /api/builders/me/saved-layouts sorts by
     // `created_at DESC, saved_layout_id DESC`, but the old builder_id index
