@@ -81,6 +81,7 @@ import {
   fetchDirectMessages,
   sendDirectMessage,
   markDirectMessagesRead,
+  fetchUnreadDirectMessageCount,
   fetchLandletVersions,
   saveLandletVersion,
   fetchLandletVersion,
@@ -10096,6 +10097,12 @@ async function refreshAccountMenuTaxNotice() {
 // pending incoming requests rather than unread notices.
 const friendsBtn = document.getElementById('friends-btn');
 const friendsBadgeEl = document.getElementById('friends-badge');
+// #1661: shares friends-btn with friendsBadgeEl above but counts something
+// different (unread direct messages, not pending incoming requests) —
+// messaging has no top-level entry point of its own (openDmModal is only
+// reached per-friend from inside the Friends panel), so this rides the
+// one button that leads there.
+const dmBadgeEl = document.getElementById('dm-badge');
 const friendsModalEl = document.getElementById('friends-modal');
 const friendsCloseBtn = document.getElementById('friends-close-btn');
 const friendsAddBtn = document.getElementById('friends-add-btn');
@@ -10172,6 +10179,10 @@ async function renderDmThread() {
   // one row at a time.
   try {
     await markDirectMessagesRead(dmOtherBuilderId);
+    // #1661: the just-read thread's own messages no longer count toward
+    // the unread total — reflect that promptly rather than waiting for
+    // some unrelated later refresh to catch up.
+    refreshDmBadge();
   } catch (err) {
     console.warn('Could not mark messages read:', err);
   }
@@ -10228,6 +10239,23 @@ async function refreshFriendsBadge() {
     friendsBadgeEl.hidden = incoming.length === 0;
   } catch (err) {
     console.warn('Could not refresh friends badge:', err);
+  }
+}
+
+// #1661: same shape as refreshFriendsBadge/refreshNotificationsBadge just
+// above — fetchUnreadDirectMessageCount already existed (and the backend
+// endpoint/index behind it), just never had a caller. Same id_verified gate
+// the "Message" button itself uses (see its own #1637 comment above) --
+// the endpoint is requireIdVerifiedSessionBuilder-gated server-side, so
+// calling it for a non-id_verified account would just always 403.
+async function refreshDmBadge() {
+  if (!builderId || currentAuthUser?.trustTier !== 'id_verified') return;
+  try {
+    const count = await fetchUnreadDirectMessageCount();
+    dmBadgeEl.textContent = String(count);
+    dmBadgeEl.hidden = count === 0;
+  } catch (err) {
+    console.warn('Could not refresh DM badge:', err);
   }
 }
 
@@ -11412,6 +11440,10 @@ const authInitPromise = (async () => {
 function closeFriendsModal() {
   friendsModalEl.classList.remove('visible');
   refreshFriendsBadge();
+  // #1661: openDmModal is only reached from inside this panel, so this is
+  // also a natural point to re-sync the DM badge for anyone who read a
+  // thread and is now backing out to the top-level menu.
+  refreshDmBadge();
   closeModalA11y(friendsModalEl);
 }
 friendsBtn.addEventListener('click', () => {
@@ -16011,6 +16043,7 @@ async function enterSellMode() {
   builderId = await ensureBuilderIdentity();
   refreshNotificationsBadge();
   refreshFriendsBadge();
+  refreshDmBadge();
 
   try {
     activeCatalog = await fetchCatalog();
@@ -16729,6 +16762,7 @@ async function bootstrap() {
   }
   refreshNotificationsBadge();
   refreshFriendsBadge();
+  refreshDmBadge();
   let instances;
   try {
     currentLandletId = await resolveLandletId();
