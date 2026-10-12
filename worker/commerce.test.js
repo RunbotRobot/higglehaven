@@ -176,13 +176,16 @@ describe('Auctions', () => {
 
   // #1790: the list endpoint runs the same resolve-sweep as the single-item
   // GET/POST .../resolve branches above (just batched over up to
-  // AUCTION_SWEEP_LIMIT auctions instead of one), but was missing this
-  // shared bucket's guard.
+  // AUCTION_SWEEP_LIMIT auctions instead of one), but was missing a guard —
+  // its own separate, more generous bucket/limit (auction-list, not
+  // auction-resolve), since it's hit on every full Settings redraw while
+  // the Build tab's auction section is showing, not just a rare explicit
+  // resolve trigger.
   it('rate-limits repeated list calls from the same IP', async () => {
     const ip = `test-${crypto.randomUUID()}`;
-    const bucketKey = `auction-resolve:${ip}`;
+    const bucketKey = `auction-list:${ip}`;
     const now = Date.now();
-    await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
+    await env.DB.batch(Array.from({ length: 199 }, () => env.DB.prepare(
       'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
     ).bind(bucketKey, now)));
 

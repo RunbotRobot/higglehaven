@@ -4869,6 +4869,20 @@ const AUCTION_BID_RATE_LIMIT_MAX = 20;
 // name in its own comment) already has.
 const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 
+// #1790: the list branch below triggers the same resolveDueAuctions sweep,
+// but — unlike the single-item GET/POST .../resolve above, each a rare,
+// deliberate action — it's hit on every full Settings redraw while the
+// Build tab's auction section is showing (renderAuctionSection in
+// src/main.js), the same "full renderSettingsSection() redraw after each
+// mutation" idiom this file's own comments describe elsewhere. A single
+// ordinary e2e session exercising one auction's bidding/bid-history UI
+// already issues ~20 of these GETs, so sharing AUCTION_RESOLVE_RATE_LIMIT_MAX's
+// tight budget (sized for a rare single-auction trigger) starved real
+// interactive use — confirmed by a 429 on exactly this GET during CI.
+// Its own separate, more generous bucket keeps the original unauthenticated-
+// sweep protection without that false positive.
+const AUCTION_LIST_RATE_LIMIT_MAX = 200;
+
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
   const landlet = await requireLandlet(db, landletId);
@@ -5421,8 +5435,10 @@ async function handleAuctions(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     // #1790: resolveDueAuctions below does the same resolve-sweep as the
     // two rate-limited branches further down (#1741), just batched over up
-    // to AUCTION_SWEEP_LIMIT auctions instead of one — same guard needed.
-    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
+    // to AUCTION_SWEEP_LIMIT auctions instead of one — same guard needed,
+    // but its own separate, more generous bucket (see AUCTION_LIST_RATE_LIMIT_MAX's
+    // own comment for why it can't share auction-resolve's tight budget).
+    await checkRateLimit(db, `auction-list:${clientIp(request)}`, AUCTION_LIST_RATE_LIMIT_MAX);
     await resolveDueAuctions(db);
     const status = url.searchParams.get('status');
     if (status !== null && !['active', 'ended'].includes(status)) {
