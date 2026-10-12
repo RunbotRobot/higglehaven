@@ -810,6 +810,59 @@ describe('Community signs', () => {
     expect(list.body.posts).toHaveLength(0);
   });
 
+  // #1695: same #1022/#1675 cleanup, the third sibling sharing this same
+  // upsert's own is_community_sign flip -- PUT /landlets/:id/draft (Build
+  // mode's whole-draft save, resending every instance on the landlet) never
+  // got it either. A dedicated builder+landlet, not signsBuilder/signsLandlet
+  // above, for two reasons: a builder can only ever own one claimed landlet
+  // at a time (claimLandlet would 409 "already owns a claimed landlet" for
+  // signsBuilder, who already owns signsLandlet), and this endpoint
+  // atomically *replaces* a landlet's entire draft, so resending just one
+  // instance against the shared landlet would wipe out every other test's
+  // own instances placed on it.
+  it('clears old sign posts when unflagged via a landlet draft save, so a later reflag does not resurrect them', async () => {
+    const draftBuilder = await signupBuilder('sign-draft-unflag-reflag-builder');
+    const draftLandlet = 'sign-draft-unflag-reflag-landlet';
+    await createGreenbeltLandlet(draftLandlet);
+    const claimed = await api(`/landlets/${draftLandlet}/claim`, draftBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const draftInstance = {
+      instanceId: 'sign-draft-unflag-reflag-instance',
+      landletId: draftLandlet,
+      templateId: 'placeholder-tree',
+      x: 5,
+      y: 5,
+      isCommunitySign: true,
+    };
+    const createdDraft = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: [draftInstance] }),
+    }));
+    expect(createdDraft.response.status).toBe(200);
+    const posted = await api('/instances/sign-draft-unflag-reflag-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Draft-path post' }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    const unflagged = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: [{ ...draftInstance, isCommunitySign: false }] }),
+    }));
+    expect(unflagged.response.status).toBe(200);
+    expect(unflagged.body.instances[0].isCommunitySign).toBe(false);
+
+    const reflagged = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: [{ ...draftInstance, isCommunitySign: true }] }),
+    }));
+    expect(reflagged.response.status).toBe(200);
+    expect(reflagged.body.instances[0].isCommunitySign).toBe(true);
+
+    const list = await api('/instances/sign-draft-unflag-reflag-instance/posts');
+    expect(list.body.posts).toHaveLength(0);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).

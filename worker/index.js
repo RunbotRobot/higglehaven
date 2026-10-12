@@ -10527,6 +10527,20 @@ async function handleLandletDraft(request, db, landletId) {
     if (batchResults[0].meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #1695: same #1022/#1675 cleanup, the third call site sharing this
+    // upsert's own is_community_sign/is_community_calendar flip --
+    // existingInstances (fetched above for the crop/scale/XY re-validation)
+    // already has each instance's prior flag value to diff against, same
+    // as #1675's own loop over the batch endpoint.
+    for (const instance of instances) {
+      const existing = existingInstances.get(instance.instanceId);
+      if (existing?.isCommunitySign && !instance.isCommunitySign) {
+        await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(instance.instanceId).run();
+      }
+      if (existing?.isCommunityCalendar && !instance.isCommunityCalendar) {
+        await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instance.instanceId).run();
+      }
+    }
 
     const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
     const version = await getVersion(db, landletId, versionId);
