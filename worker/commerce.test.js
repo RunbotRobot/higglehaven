@@ -1728,6 +1728,63 @@ describe('Bundles', () => {
     expect(rejectedRename.response.status).toBe(400);
   });
 
+  // #1720: createBundle (src/api.js) always sends a stable idempotencyKey
+  // it keeps reusing until the save actually succeeds — same "network
+  // blip, then a retry with the same key" scenario the purchase flow's own
+  // idempotencyKey (#473/#877) already handles.
+  it('does not create a duplicate bundle when the same idempotencyKey is retried', async () => {
+    const builder = await signupBuilder('bundle-idempotency');
+
+    const first = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.bundle.bundleId).toBe(first.body.bundle.bundleId);
+
+    const bundleCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM bundles WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(bundleCount.n).toBe(1);
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // bundle, still created normally — this isn't a dedup-everything guard,
+    // only same-key retries.
+    const separate = await api('/bundles', builder.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.bundle.bundleId).not.toBe(first.body.bundle.bundleId);
+  });
+
+  // #974-style cross-account guard, applied to bundles' own idempotency key:
+  // two different builders submitting the same client-supplied key (e.g. a
+  // stale localStorage value surviving on a shared browser) must never
+  // collide on one shared bundle row.
+  it('does not let two different builders collide on the same client-supplied idempotencyKey', async () => {
+    const builderA = await signupBuilder('bundle-idempotency-cross-a');
+    const builderB = await signupBuilder('bundle-idempotency-cross-b');
+    const sharedKey = 'shared-stale-key';
+
+    const createdByA = await api('/bundles', builderA.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(createdByA.response.status).toBe(201);
+
+    const createdByB = await api('/bundles', builderB.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(createdByB.response.status).toBe(201);
+    expect(createdByB.body.bundle.bundleId).not.toBe(createdByA.body.bundle.bundleId);
+
+    const retriedByA = await api('/bundles', builderA.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(retriedByA.response.status).toBe(200);
+    expect(retriedByA.body.bundle.bundleId).toBe(createdByA.body.bundle.bundleId);
+  });
+
   it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {
     const owner = await signupBuilder('bundle-list-owner');
     const other = await signupBuilder('bundle-list-other');

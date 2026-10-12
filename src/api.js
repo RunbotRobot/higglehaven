@@ -918,12 +918,52 @@ export async function fetchBundles() {
   }
 }
 
+// #1720: same shape as purchaseIdempotencyKey above (#473/#974) — persist
+// a key across a retry of what the caller considers the same save attempt
+// (most commonly a dropped response after the server's INSERT already
+// landed, leading to a second "Save Bundle" click with the same content).
+// There's no pre-existing id to key the storage entry off of the way
+// purchaseIdempotencyKey keys off instanceId (a bundle doesn't exist yet
+// at the point this key is minted), so the exact content being saved
+// (name + items) is the stable anchor instead — distinguishing a genuine
+// retry of this save from an unrelated, differently-named/shaped one. A
+// short TTL, not purchase's 30 minutes: an abandoned-then-resumed checkout
+// tab is a real scenario this reuses the pattern from, but there's no
+// equivalent "came back to finish this later" case for a bundle save, so
+// this only needs to outlive an immediate retry, not a long gap.
+const BUNDLE_IDEMPOTENCY_TTL_MS = 2 * 60 * 1000;
+
+function bundleIdempotencyStorageKey(name, items) {
+  return `higglehaven-bundle-idempotency-${name}:${JSON.stringify(items)}`;
+}
+
+function bundleIdempotencyKey(name, items) {
+  const storageKey = bundleIdempotencyStorageKey(name, items);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < BUNDLE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a bundle save actually succeeds (see src/main.js's Save
+// Bundle handler) so a later, genuinely new bundle that happens to reuse
+// the same name+items doesn't collide with this already-completed one.
+export function clearBundleIdempotencyKey(name, items) {
+  try { localStorage.removeItem(bundleIdempotencyStorageKey(name, items)); } catch (e) { /* ignore */ }
+}
+
 export async function createBundle({ name, items, shared }) {
   const { bundle } = await requestJson('/bundles', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, items, shared }),
+    body: JSON.stringify({ name, items, shared, idempotencyKey: bundleIdempotencyKey(name, items) }),
   });
+  clearBundleIdempotencyKey(name, items);
   return bundle;
 }
 
