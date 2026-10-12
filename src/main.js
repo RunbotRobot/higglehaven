@@ -9785,7 +9785,13 @@ function openVerifyModal(user) {
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
   setVerifyStatus('');
   verifyModalEl.classList.add('visible');
-  openModalA11y(verifyModalEl, closeVerifyModal);
+  // #1731: no `closeFn` here, deliberately — see this modal's own "no
+  // escape" design comment above. Passing one would wire the shared
+  // Escape handler to close this modal like any other, which is exactly
+  // the bug: the only way out is verifyLogoutBtn (logging out), not
+  // Escape. Tab-focus-trapping is unaffected since it only depends on
+  // activeModalEl, not activeModalCloseFn.
+  openModalA11y(verifyModalEl, null);
   if (!user.ageAttested) {
     verifyAgeStepEl.hidden = false;
     verifyContinueBtn.textContent = 'Continue';
@@ -10955,9 +10961,23 @@ function refreshAccountAuthUI() {
   }
 }
 
+// #1730: armed each time the modal opens, disarmed by a login/signup
+// success path right before its own closeAuthModal() call (see those
+// handlers below) so this doesn't resolve pendingAuthResolvers with null
+// just ahead of the real notifyAuthResult(currentAuthUser) call that
+// follows. Everywhere else (Escape, the explicit × button, requireLogin's
+// own post-wait close, logout) wants exactly this null-resolution, the same
+// one authCloseBtn's handler used to perform by itself -- Escape never did,
+// leaving waitForAuthResult() permanently unsettled and wedging every
+// subsequent ensureBuilderIdentity/ensureSellerIdentity call for the rest
+// of the session. Same fix shape #1679 already applied to the Friends-map/
+// DM modal's own Escape gap.
+let notifyNullOnAuthModalClose = true;
+
 function openAuthModal(view = 'login') {
   if (!currentAuthUser) showAuthView(view);
   setAuthStatus('');
+  notifyNullOnAuthModalClose = true;
   authModalEl.classList.add('visible');
   openModalA11y(authModalEl, closeAuthModal);
 }
@@ -10965,6 +10985,7 @@ function openAuthModal(view = 'login') {
 function closeAuthModal() {
   authModalEl.classList.remove('visible');
   closeModalA11y(authModalEl);
+  if (notifyNullOnAuthModalClose) notifyAuthResult(null);
 }
 
 async function refreshCurrentUser() {
@@ -10992,10 +11013,7 @@ accountAuthBtn.addEventListener('click', () => {
   if (currentAuthUser) refreshAccountAuthUI();
   openAuthModal('login');
 });
-authCloseBtn.addEventListener('click', () => {
-  closeAuthModal();
-  notifyAuthResult(null);
-});
+authCloseBtn.addEventListener('click', closeAuthModal);
 for (const btn of authTabBtns) {
   btn.addEventListener('click', () => showAuthView(btn.dataset.authView));
 }
@@ -11058,6 +11076,10 @@ authForms.login.addEventListener('submit', async (event) => {
   try {
     currentAuthUser = await logIn({ email, password });
     refreshAccountAuthUI();
+    // #1730: disarm before closing -- notifyAuthResult(currentAuthUser)
+    // below must be what resolves pendingAuthResolvers, not closeAuthModal's
+    // own null-resolution.
+    notifyNullOnAuthModalClose = false;
     closeAuthModal();
     authForms.login.reset();
     notifyAuthResult(currentAuthUser);
@@ -11092,6 +11114,10 @@ authForms.signup.addEventListener('submit', async (event) => {
       // modal as if the email had gone out.
       setAuthStatus('Account created, but the verification email failed to send — use "Resend verification email" from your account menu.', 'error');
     } else {
+      // #1730: same disarm as the login handler above -- the real
+      // notifyAuthResult(currentAuthUser) call just below must be what
+      // resolves pendingAuthResolvers.
+      notifyNullOnAuthModalClose = false;
       closeAuthModal();
     }
     // Notified regardless of whether the modal itself just closed —
@@ -14935,13 +14961,28 @@ function loadStripeJs() {
 }
 
 let checkoutCardElement = null;
+let rejectCheckoutFlow = null;
 
+// #1730: this used to only hide the modal -- registered as the modal's own
+// Escape handler via openModalA11y below, but runCheckoutFlow's own promise
+// contract (see its comment just below) says this modal can only be left by
+// resolving or rejecting that promise. Escape skipped that step entirely,
+// leaving the promise permanently unsettled (and the caller's own `finally`
+// never running) if the shopper dismissed with Escape instead of the
+// Cancel button. Now shares the same reject call checkoutCancelBtn's own
+// handler uses, so Escape and Cancel behave identically -- same fix shape
+// #1679 already applied to the Friends-map/DM modal's own Escape gap.
 function closeCheckoutModal() {
   checkoutModalEl.classList.remove('visible');
   closeModalA11y(checkoutModalEl);
   if (checkoutCardElement) {
     checkoutCardElement.unmount();
     checkoutCardElement = null;
+  }
+  if (rejectCheckoutFlow) {
+    const reject = rejectCheckoutFlow;
+    rejectCheckoutFlow = null;
+    reject(new Error('Checkout cancelled.'));
   }
 }
 
@@ -14963,12 +15004,14 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutPayBtn.disabled = true;
     checkoutCancelBtn.disabled = false;
     checkoutModalEl.classList.add('visible');
+    // #1730: closeCheckoutModal itself now rejects (see its own comment)
+    // once rejectCheckoutFlow is armed here, so Escape (wired to it via
+    // openModalA11y) and the explicit Cancel button settle this promise
+    // identically.
+    rejectCheckoutFlow = reject;
     openModalA11y(checkoutModalEl, closeCheckoutModal);
 
-    checkoutCancelBtn.onclick = () => {
-      closeCheckoutModal();
-      reject(new Error('Checkout cancelled.'));
-    };
+    checkoutCancelBtn.onclick = closeCheckoutModal;
 
     loadStripeJs().then((Stripe) => {
       const stripe = Stripe(publishableKey);
@@ -14993,6 +15036,11 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
           const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
           if (result.error) throw new Error(result.error.message || 'Payment failed.');
           const finalized = await finalizePurchase(paymentIntentId);
+          // Disarm before closing -- closeCheckoutModal's own reject must
+          // not fire after a genuinely completed purchase (a settled
+          // promise's second settle attempt is a silent no-op, but relying
+          // on that would be fragile and misleading to read).
+          rejectCheckoutFlow = null;
           closeCheckoutModal();
           resolve(finalized);
         } catch (err) {

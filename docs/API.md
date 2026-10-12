@@ -4982,7 +4982,14 @@ above), so an expired-but-not-yet-resolved auction never appears in an
 ### `GET /api/auctions/:auctionId`
 
 A single auction, resolving it first if it's due. `404` if it doesn't
-exist.
+exist. Unauthenticated, so rate-limited per IP (`429` past
+`AUCTION_RESOLVE_RATE_LIMIT_MAX`, 20 per window — #1741: resolving can
+credit a real higgles balance, transfer land ownership, and fire
+notifications to both parties the first time an ended auction is observed,
+the same risk class `POST .../resolve` below shares; repeated calls after
+that first resolution are harmless no-ops, but the endpoint itself had no
+limit at all before this). Shares its rate-limit bucket with `POST
+.../resolve` below — both ultimately call the same `resolveAuctionIfDue`.
 
 ### `GET /api/auctions/:auctionId/bids`
 
@@ -5055,7 +5062,9 @@ Resolves this auction if it's currently due (`ends_at` has passed);
 otherwise `409`. Calling it again on an already-ended auction is a
 harmless no-op — `200` with the same (unchanged) already-ended state, not
 an error, matching ordinary idempotent-action expectations rather than
-penalizing a redundant call.
+penalizing a redundant call. Unauthenticated, so rate-limited per IP the
+same way as the single-item `GET` above (`429` past
+`AUCTION_RESOLVE_RATE_LIMIT_MAX`, 20 per window, shared bucket — #1741).
 
 ### Resolution
 

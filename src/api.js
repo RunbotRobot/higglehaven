@@ -649,12 +649,49 @@ export async function fetchVideoGenerationJobStatus(jobId) {
   return requestJson(`/video-generation-jobs/${encodeURIComponent(jobId)}`); // { jobId, status, modelUrl, error }
 }
 
+// #1728: unlike purchaseIdempotencyKey above (scoped by an existing
+// instanceId), a brand-new catalog template has no pre-existing resource
+// id to scope by -- the closest stable value known before the create
+// call is the model the seller already uploaded (modelUrl). The server
+// additionally folds in the creating seller's own id (see
+// catalogTemplateIdempotencyKey in worker/index.js) the same way #974
+// folded buyerBuilderId into the purchase key above, so this only needs
+// to vary per modelUrl, not per seller, on this end.
+const CATALOG_TEMPLATE_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function catalogTemplateIdempotencyStorageKey(modelUrl) {
+  return `higglehaven-catalog-template-idempotency-${modelUrl || 'none'}`;
+}
+
+function catalogTemplateIdempotencyKey(modelUrl) {
+  const storageKey = catalogTemplateIdempotencyStorageKey(modelUrl);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < CATALOG_TEMPLATE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a create actually succeeds, so a later, genuinely separate
+// creation that happens to reuse the same modelUrl (e.g. the "Duplicate"
+// button in src/main.js, or two unrelated products built from the same
+// uploaded file) mints its own fresh key instead of colliding with this
+// completed one.
+export function clearCatalogTemplateIdempotencyKey(modelUrl) {
+  try { localStorage.removeItem(catalogTemplateIdempotencyStorageKey(modelUrl)); } catch (e) { /* ignore */ }
+}
+
 export async function createCatalogTemplate(template) {
   const { template: created } = await requestJson('/catalog', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(template),
+    body: JSON.stringify({ ...template, idempotencyKey: catalogTemplateIdempotencyKey(template.modelUrl) }),
   });
+  clearCatalogTemplateIdempotencyKey(template.modelUrl);
   return created;
 }
 
@@ -986,12 +1023,52 @@ export async function fetchBundles() {
   }
 }
 
+// #1720: same shape as purchaseIdempotencyKey above (#473/#974) — persist
+// a key across a retry of what the caller considers the same save attempt
+// (most commonly a dropped response after the server's INSERT already
+// landed, leading to a second "Save Bundle" click with the same content).
+// There's no pre-existing id to key the storage entry off of the way
+// purchaseIdempotencyKey keys off instanceId (a bundle doesn't exist yet
+// at the point this key is minted), so the exact content being saved
+// (name + items) is the stable anchor instead — distinguishing a genuine
+// retry of this save from an unrelated, differently-named/shaped one. A
+// short TTL, not purchase's 30 minutes: an abandoned-then-resumed checkout
+// tab is a real scenario this reuses the pattern from, but there's no
+// equivalent "came back to finish this later" case for a bundle save, so
+// this only needs to outlive an immediate retry, not a long gap.
+const BUNDLE_IDEMPOTENCY_TTL_MS = 2 * 60 * 1000;
+
+function bundleIdempotencyStorageKey(name, items) {
+  return `higglehaven-bundle-idempotency-${name}:${JSON.stringify(items)}`;
+}
+
+function bundleIdempotencyKey(name, items) {
+  const storageKey = bundleIdempotencyStorageKey(name, items);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < BUNDLE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a bundle save actually succeeds (see src/main.js's Save
+// Bundle handler) so a later, genuinely new bundle that happens to reuse
+// the same name+items doesn't collide with this already-completed one.
+export function clearBundleIdempotencyKey(name, items) {
+  try { localStorage.removeItem(bundleIdempotencyStorageKey(name, items)); } catch (e) { /* ignore */ }
+}
+
 export async function createBundle({ name, items, shared }) {
   const { bundle } = await requestJson('/bundles', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, items, shared }),
+    body: JSON.stringify({ name, items, shared, idempotencyKey: bundleIdempotencyKey(name, items) }),
   });
+  clearBundleIdempotencyKey(name, items);
   return bundle;
 }
 

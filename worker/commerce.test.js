@@ -137,6 +137,43 @@ describe('Auctions', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1741: unlike every other write-triggering endpoint on this resource
+  // (auction-start above, bids above), the single-item GET and POST
+  // .../resolve had no rate limit at all, despite resolveAuctionIfDue being
+  // able to credit a real higgles balance, transfer land ownership, and fire
+  // notifications to both parties the first time an ended auction is
+  // observed. Both branches are unauthenticated, so this is IP-keyed (same
+  // shape as EVENT_TRIGGER_RATE_LIMIT_MAX's own bucket) rather than
+  // builder-keyed like auction-start/bids above — same pre-seeded-table
+  // approach those tests use.
+  it('rate-limits repeated single-item GET and POST .../resolve calls from the same IP', async () => {
+    const owner = await signupBuilder('auction-resolve-rate-limit-owner');
+    await createGreenbeltLandlet('auction-resolve-rate-limit-landlet');
+    await claim('auction-resolve-rate-limit-landlet', owner);
+    const started = await api('/landlets/auction-resolve-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `auction-resolve:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api(`/auctions/${auctionId}`, { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(200);
+
+    const limitedGet = await api(`/auctions/${auctionId}`, { headers: { 'cf-connecting-ip': ip } });
+    expect(limitedGet.response.status).toBe(429);
+
+    const limitedResolve = await api(`/auctions/${auctionId}/resolve`, {
+      method: 'POST', headers: { 'cf-connecting-ip': ip },
+    });
+    expect(limitedResolve.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');
@@ -1726,6 +1763,63 @@ describe('Bundles', () => {
       method: 'PATCH', body: JSON.stringify({ name: 'x'.repeat(101) }),
     }));
     expect(rejectedRename.response.status).toBe(400);
+  });
+
+  // #1720: createBundle (src/api.js) always sends a stable idempotencyKey
+  // it keeps reusing until the save actually succeeds — same "network
+  // blip, then a retry with the same key" scenario the purchase flow's own
+  // idempotencyKey (#473/#877) already handles.
+  it('does not create a duplicate bundle when the same idempotencyKey is retried', async () => {
+    const builder = await signupBuilder('bundle-idempotency');
+
+    const first = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.bundle.bundleId).toBe(first.body.bundle.bundleId);
+
+    const bundleCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM bundles WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(bundleCount.n).toBe(1);
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // bundle, still created normally — this isn't a dedup-everything guard,
+    // only same-key retries.
+    const separate = await api('/bundles', builder.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.bundle.bundleId).not.toBe(first.body.bundle.bundleId);
+  });
+
+  // #974-style cross-account guard, applied to bundles' own idempotency key:
+  // two different builders submitting the same client-supplied key (e.g. a
+  // stale localStorage value surviving on a shared browser) must never
+  // collide on one shared bundle row.
+  it('does not let two different builders collide on the same client-supplied idempotencyKey', async () => {
+    const builderA = await signupBuilder('bundle-idempotency-cross-a');
+    const builderB = await signupBuilder('bundle-idempotency-cross-b');
+    const sharedKey = 'shared-stale-key';
+
+    const createdByA = await api('/bundles', builderA.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(createdByA.response.status).toBe(201);
+
+    const createdByB = await api('/bundles', builderB.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(createdByB.response.status).toBe(201);
+    expect(createdByB.body.bundle.bundleId).not.toBe(createdByA.body.bundle.bundleId);
+
+    const retriedByA = await api('/bundles', builderA.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), idempotencyKey: sharedKey }),
+    }));
+    expect(retriedByA.response.status).toBe(200);
+    expect(retriedByA.body.bundle.bundleId).toBe(createdByA.body.bundle.bundleId);
   });
 
   it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {

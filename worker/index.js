@@ -1686,7 +1686,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
-      SELECT template_id, seller_id, width_m, depth_m, height_m FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
+      SELECT template_id, seller_id, width_m, depth_m, height_m, metadata_json FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
     // sellerIds (the templates' own requested sellerId values) already went
     // through assertReferencesExist above, so they're live by construction.
@@ -1755,8 +1755,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
         [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
+      const oldMetadataById = new Map(existingOwnerRows.results.map((row) =>
+        [row.template_id, JSON.parse(row.metadata_json || '{}')]));
       const dimensionChangeCandidates = templates
-        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId) }))
+        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId), oldMetadata: oldMetadataById.get(template.templateId) }))
         .filter(({ oldDimensions }) => oldDimensions);
       await notifyBuildersOfDimensionChangeBatch(db, dimensionChangeCandidates);
     }
@@ -2063,7 +2065,19 @@ async function handleCatalog(request, db, route, url, models, env) {
   // seeding use.
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const template = validateTemplate(input, crypto.randomUUID());
+    // #1728: a lost response (network drop after the INSERT below already
+    // landed) looks, client-side, identical to the request never having
+    // reached us, and invites an innocent retry of what the real upload
+    // wizard considers the same submit -- previously minted a fresh
+    // crypto.randomUUID() every time, so that retry silently created a
+    // second, fully duplicate listing. See catalogTemplateIdempotencyKey
+    // just below for why this is hashed rather than used verbatim.
+    const idempotencyKey = await catalogTemplateIdempotencyKey(input.sellerId, input.modelUrl, input.idempotencyKey);
+    const template = validateTemplate(input, idempotencyKey || crypto.randomUUID());
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
+      if (existing) return json({ template: templateFromRow(existing) });
+    }
     if (template.sellerId) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
       const sessionSeller = await requireSessionSeller(request, db);
@@ -2125,12 +2139,54 @@ async function handleCatalog(request, db, route, url, models, env) {
     // null seller_id" promise for that case.
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
     await assertUploadedModelExists(models, template.modelUrl);
+    // #1742: same lost-update race #468 already fixed for bundles -- two
+    // concurrent partial PATCHes to *different* fields (a price change and
+    // a separate dimension resize, say) each merged their write from this
+    // same stale pre-race `existing` snapshot above, so whichever UPDATE
+    // landed second silently reverted the field the first request changed,
+    // even though its own input never touched that field. `template` above
+    // is still the full merged-and-validated object (dimensions/metadata
+    // invariants need the complete picture to check), but the actual
+    // columns written below are now gated on whether `input` itself
+    // provided each one, resolved atomically against the live row via
+    // COALESCE/CASE at the SQL level instead of the stale JS merge.
+    // `category`/`color`/dimensions are never legitimately null once
+    // provided (labelValue/positiveNumber reject it), so a plain COALESCE
+    // sentinel is unambiguous there; `subcategory`/`priceCents`/`modelUrl`/
+    // `modelSizeBytes`/`skeletonSignature` can legitimately be set to null
+    // (clearing the field), so those use an explicit presence flag instead
+    // of COALESCE -- a bare null sentinel would be indistinguishable from
+    // "clear this field" and silently fail to clear it. `dimensions` is
+    // provided (or not) as one atomic group, same as validateTemplate's own
+    // all-or-nothing handling of it. `seller_id`/`metadata_json` are
+    // intentionally excluded (see this handler's own seller_id/#424
+    // comments) and keep being written unconditionally.
     const result = await db.prepare(`
       UPDATE catalog_templates
-      SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, skeleton_signature = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET name = COALESCE(?, name), category = COALESCE(?, category),
+          subcategory = CASE WHEN ? = 1 THEN ? ELSE subcategory END, color = COALESCE(?, color),
+          width_m = COALESCE(?, width_m), depth_m = COALESCE(?, depth_m), height_m = COALESCE(?, height_m),
+          price_cents = CASE WHEN ? = 1 THEN ? ELSE price_cents END, seller_id = ?,
+          model_url = CASE WHEN ? = 1 THEN ? ELSE model_url END,
+          model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
+          skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
+          metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(
+      input.name === undefined ? null : template.name,
+      input.category === undefined ? null : template.category,
+      input.subcategory === undefined ? 0 : 1, template.subcategory,
+      input.color === undefined ? null : template.color,
+      input.dimensions === undefined ? null : template.dimensions.width,
+      input.dimensions === undefined ? null : template.dimensions.depth,
+      input.dimensions === undefined ? null : template.dimensions.height,
+      input.priceCents === undefined ? 0 : 1, template.priceCents,
+      template.sellerId,
+      input.modelUrl === undefined ? 0 : 1, template.modelUrl,
+      input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
+      input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
+      JSON.stringify(template.metadata), route[1],
+    ).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships
     // PATCH), this one never checked whether its own UPDATE actually
@@ -2143,7 +2199,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       width: existing.width_m,
       depth: existing.depth_m,
       height: existing.height_m,
-    });
+    }, JSON.parse(existing.metadata_json || '{}'));
     // #976: same reasoning as the POST handler above -- re-select and map
     // through templateFromRow instead of the locally-constructed `template`
     // object, so imageUrl/imageEmbedding/createdAt/updatedAt come back
@@ -2374,6 +2430,40 @@ function reviewFromRow(row) {
   };
 }
 
+function dimensionsDiffer(a, b) {
+  return Math.abs(a.width - b.width) > 1e-4 ||
+    Math.abs(a.depth - b.depth) > 1e-4 ||
+    Math.abs(a.height - b.height) > 1e-4;
+}
+
+// #1734: metadata.extensible[axis].minM can tighten (or an axis's own
+// extensibility can be removed entirely) and metadata.flooring can be
+// toggled through the same PATCH/batch-upsert that resizes a template,
+// independently of width/depth/height — assertValidExtensible only
+// requires 0 < minM < the CURRENT max length, never that minM stayed the
+// same as before. Both are exactly as placement-relevant as an outright
+// dimension change: a tightened minM can leave an already-set crop below
+// the new floor (assertCropWithinTemplateBounds rejects it the next time
+// that instance is touched, per #338), and flooring changes meshDimensions'
+// own live footprint (src/main.js) for every existing placed copy. Treated
+// as its own "changed" reason, not folded into dimensionsDiffer, so the
+// notification wording below can say which actually happened.
+function extensibleMinMByAxis(metadata) {
+  const extensible = metadata?.extensible;
+  if (!extensible || typeof extensible !== 'object') return {};
+  return Object.fromEntries(Object.entries(extensible).map(([axis, entry]) => [axis, entry?.minM]));
+}
+
+function placementRelevantMetadataChanged(oldMetadata, newMetadata) {
+  const oldMinMByAxis = extensibleMinMByAxis(oldMetadata);
+  const newMinMByAxis = extensibleMinMByAxis(newMetadata);
+  const axes = new Set([...Object.keys(oldMinMByAxis), ...Object.keys(newMinMByAxis)]);
+  for (const axis of axes) {
+    if (oldMinMByAxis[axis] !== newMinMByAxis[axis]) return true;
+  }
+  return !!oldMetadata?.flooring !== !!newMetadata?.flooring;
+}
+
 // A seller changing a product's real-world size after it's already been
 // placed somewhere leaves every existing instance still looking like the
 // old size (createMeshForInstance never re-scales an already-placed
@@ -2381,12 +2471,10 @@ function reviewFromRow(row) {
 // landlet. Rather than try to auto-fix placements the seller never
 // touched, this just tells every builder who has one so they can decide
 // what to do about it themselves.
-async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
+async function notifyBuildersOfDimensionChange(db, template, oldDimensions, oldMetadata) {
   const { width, depth, height } = template.dimensions;
-  const changed = Math.abs(width - oldDimensions.width) > 1e-4 ||
-    Math.abs(depth - oldDimensions.depth) > 1e-4 ||
-    Math.abs(height - oldDimensions.height) > 1e-4;
-  if (!changed) return;
+  const dimensionsChanged = dimensionsDiffer(template.dimensions, oldDimensions);
+  if (!dimensionsChanged && !placementRelevantMetadataChanged(oldMetadata, template.metadata)) return;
 
   // #920: grouping (rather than SELECT DISTINCT) gets a real per-builder
   // count, so a builder with several placed copies of the resized template
@@ -2402,9 +2490,12 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
   if (results.length === 0) return;
 
   const fmt = (m) => `${m.toFixed(2)}m`;
+  const describeChange = dimensionsChanged
+    ? `was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)}`
+    : 'had its placement rules changed by its seller';
   await fireNotifications(db, results.map((row) => ({
     builderId: row.builderId,
-    message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+    message: `"${template.name}" ${describeChange} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
     templateId: template.templateId,
   })));
 }
@@ -2421,12 +2512,13 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
 // function's own early-return) happens here, in-memory, so the grouped
 // query below only ever asks about templates genuinely worth notifying on.
 async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
-  const changed = candidates.filter(({ template, oldDimensions }) => {
-    const { width, depth, height } = template.dimensions;
-    return Math.abs(width - oldDimensions.width) > 1e-4 ||
-      Math.abs(depth - oldDimensions.depth) > 1e-4 ||
-      Math.abs(height - oldDimensions.height) > 1e-4;
-  });
+  const changed = candidates
+    .map(({ template, oldDimensions, oldMetadata }) => ({
+      template,
+      dimensionsChanged: dimensionsDiffer(template.dimensions, oldDimensions),
+      metadataChanged: placementRelevantMetadataChanged(oldMetadata, template.metadata),
+    }))
+    .filter(({ dimensionsChanged, metadataChanged }) => dimensionsChanged || metadataChanged);
   if (changed.length === 0) return;
 
   const templateIds = changed.map(({ template }) => template.templateId);
@@ -2444,14 +2536,17 @@ async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
   `).bind(...templateIds).all();
   if (results.length === 0) return;
 
-  const templateById = new Map(changed.map(({ template }) => [template.templateId, template]));
+  const changedById = new Map(changed.map((c) => [c.template.templateId, c]));
   const fmt = (m) => `${m.toFixed(2)}m`;
   await fireNotifications(db, results.map((row) => {
-    const template = templateById.get(row.templateId);
+    const { template, dimensionsChanged } = changedById.get(row.templateId);
     const { width, depth, height } = template.dimensions;
+    const describeChange = dimensionsChanged
+      ? `was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)}`
+      : 'had its placement rules changed by its seller';
     return {
       builderId: row.builderId,
-      message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+      message: `"${template.name}" ${describeChange} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
       templateId: row.templateId,
     };
   }));
@@ -4533,6 +4628,20 @@ const BUNDLE_CREATE_RATE_LIMIT_MAX = 20;
 // bundle" actions, not two independently-abusable surfaces.
 const BUNDLE_MUTATE_RATE_LIMIT_MAX = 20;
 
+// #1720: same shape as purchaseIdempotencyKey (#473/#974) — the client
+// mints+persists a key across a retry of what it considers the same save
+// attempt (most commonly a dropped response after the INSERT already
+// landed), and the server dedupes on it before inserting, reusing the key
+// as the row's own primary key the same way writePurchaseRow does. Folded
+// into builderId so one builder's own stale/retried key can never collide
+// with an unrelated builder's bundle, the same cross-account guard #974
+// added for purchases. A missing or malformed key just degrades to no
+// idempotency protection for that one request, same as purchases.
+function bundleIdempotencyKey(builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `bundle:${builderId}:${rawKey}`;
+}
+
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const limit = queryLimit(url.searchParams.get('limit'), 100);
@@ -4597,7 +4706,12 @@ async function handleBundles(request, db, route, url) {
     const items = validateBundleItems(input.items);
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
-    const bundleId = `bundle-${crypto.randomUUID()}`;
+    const idempotencyKey = bundleIdempotencyKey(builderId, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(idempotencyKey).first();
+      if (existing) return json({ bundle: bundleFromRow(existing) });
+    }
+    const bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
@@ -4710,6 +4824,16 @@ const AUCTION_START_RATE_LIMIT_MAX = 20;
 // FRIENDSHIP_MUTATE_RATE_LIMIT_MAX/BUNDLE_MUTATE_RATE_LIMIT_MAX/
 // CATALOG_PATCH_RATE_LIMIT_MAX were each already added to guard against.
 const AUCTION_BID_RATE_LIMIT_MAX = 20;
+// #1741: resolveAuctionIfDue's underlying resolveAuction can credit a real
+// higgles balance, transfer land ownership, and fire notifications to both
+// parties the first time an ended auction is observed — reachable
+// unauthenticated via both the single-item GET below and POST .../resolve.
+// Repeated hits after the first are harmless no-ops (resolveAuction's own
+// `WHERE status = 'active'` guard), but this was still the one endpoint in
+// this resolve/trigger shape without the IP-keyed rate limit its own sibling
+// (EVENT_TRIGGER_RATE_LIMIT_MAX, which explicitly calls out this endpoint by
+// name in its own comment) already has.
+const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
@@ -5298,6 +5422,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     return json({ auction: await auctionFromRow(db, resolved) });
@@ -5308,6 +5433,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'resolve') {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     if (resolved.status === 'active') {
@@ -14489,6 +14615,30 @@ export function cosineSimilarity(a, b) {
   }
   const denominator = Math.sqrt(normA) * Math.sqrt(normB);
   return denominator === 0 ? 0 : dot / denominator;
+}
+
+// #1728: unlike purchases (purchaseIdempotencyKey above, namespaced by an
+// existing instanceId+buyerBuilderId) or sign posts/calendar events
+// (namespaced by an existing instanceId), a brand-new catalog template
+// has no pre-existing resource id to namespace a client-sent key by --
+// it's creating something from scratch. The closest stable value known
+// to the client before the create call is the model it already uploaded
+// (modelUrl), scoped by the creating seller so two different sellers who
+// happen to reuse the exact same model file can't collide. Unlike those
+// other namespace components, modelUrl itself contains slashes
+// (`/uploads/models/<hash>.glb`) and the result here is used as
+// template_id, which doubles as a literal URL path segment elsewhere in
+// this file (GET/PUT/PATCH/DELETE /catalog/:templateId and its
+// /thumbnail, /reviews siblings) -- so the namespaced value is hashed
+// down to a flat hex string, the same way storeTripoModelOutput already
+// content-addresses a model's own bytes in this file, rather than being
+// used as the id verbatim the way the simpler single-id namespaces above
+// can be.
+async function catalogTemplateIdempotencyKey(sellerId, modelUrl, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  const namespace = `${sellerId || 'anon'}:${modelUrl || 'none'}:${rawKey}`;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespace)));
+  return `template-${bytesToHex(digest)}`;
 }
 
 function validateTemplate(input, fallbackId) {
