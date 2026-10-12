@@ -526,6 +526,71 @@ describe('Worker API', () => {
     expect(thumbnail.body).toEqual({ error: 'Catalog template not found' });
   });
 
+  // #1728: a lost response after the INSERT below already landed looks,
+  // client-side, identical to the request never having reached the
+  // server at all -- the real upload wizard's own retry would then
+  // silently create a second, fully duplicate listing, since POST
+  // /catalog always minted a fresh crypto.randomUUID() with no way to
+  // detect a retry of the same attempt. Mirrors the already-established
+  // purchaseIdempotencyKey/writePurchaseRow dedup shape (#473/#877).
+  it('dedupes a same-key retry of POST /catalog instead of creating a duplicate listing', async () => {
+    const owner = await signupSeller('catalog-idempotency-owner');
+    const form = new FormData();
+    form.set('file', glbFile());
+    const uploaded = await (await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form })).json();
+
+    const payload = {
+      name: 'Idempotency test product',
+      color: '#123456',
+      dimensions: { width: 1, depth: 1, height: 1 },
+      modelUrl: uploaded.modelUrl,
+      sellerId: owner.sellerId,
+      idempotencyKey: 'retry-key-1',
+    };
+    const first = await api('/catalog', owner.session({ method: 'POST', body: JSON.stringify(payload) }));
+    expect(first.response.status).toBe(201);
+
+    // Same idempotencyKey, same sellerId/modelUrl -- the real "lost
+    // response, client retries" case. Returns the SAME row (200, not
+    // 201) rather than inserting a second one.
+    const retry = await api('/catalog', owner.session({ method: 'POST', body: JSON.stringify(payload) }));
+    expect(retry.response.status).toBe(200);
+    expect(retry.body.template.templateId).toBe(first.body.template.templateId);
+    expect(retry.body.template.name).toBe(first.body.template.name);
+
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM catalog_templates WHERE seller_id = ? AND model_url = ?'
+    ).bind(owner.sellerId, uploaded.modelUrl).first();
+    expect(count.count).toBe(1);
+
+    // A genuinely different submission (a different idempotencyKey — the
+    // "Duplicate" button's own flow in src/main.js, or simply a second
+    // real product built from the same uploaded file) still creates a
+    // real, separate row rather than being swallowed by the same dedup.
+    const second = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ ...payload, name: 'Second idempotency test product', idempotencyKey: 'retry-key-2' }),
+    }));
+    expect(second.response.status).toBe(201);
+    expect(second.body.template.templateId).not.toBe(first.body.template.templateId);
+
+    // Omitting idempotencyKey entirely still works exactly as before (no
+    // dedup protection requested, none applied) — every pre-existing
+    // catalog-creation test/fixture in this file relies on this.
+    const noKey = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ ...payload, name: 'No key product', idempotencyKey: undefined }),
+    }));
+    expect(noKey.response.status).toBe(201);
+    expect(noKey.body.template.templateId).not.toBe(first.body.template.templateId);
+    expect(noKey.body.template.templateId).not.toBe(second.body.template.templateId);
+
+    const totalCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM catalog_templates WHERE seller_id = ? AND model_url = ?'
+    ).bind(owner.sellerId, uploaded.modelUrl).first();
+    expect(totalCount.count).toBe(3);
+  });
+
   // #540: the seller's own "faux lándlet" 3D array paginates by a
   // cumulative model-file-size cap — this is the field that makes that
   // possible, previously computed by POST /api/models but discarded by
