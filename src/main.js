@@ -10242,6 +10242,8 @@ async function renderDmThread() {
 function closeDmModal() {
   dmModalEl.classList.remove('visible');
   closeModalA11y(dmModalEl);
+  friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
 }
 
 function openDmModal(otherBuilderId, otherLabel) {
@@ -10256,11 +10258,7 @@ function openDmModal(otherBuilderId, otherLabel) {
   renderDmThread();
 }
 
-dmCloseBtn.addEventListener('click', () => {
-  closeDmModal();
-  friendsModalEl.classList.add('visible');
-  openModalA11y(friendsModalEl, closeFriendsModal);
-});
+dmCloseBtn.addEventListener('click', closeDmModal);
 
 dmComposeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -10584,6 +10582,8 @@ async function drawFriendsMap() {
 function closeFriendsMapModal() {
   friendsMapModalEl.classList.remove('visible');
   closeModalA11y(friendsMapModalEl);
+  friendsModalEl.classList.add('visible');
+  openModalA11y(friendsModalEl, closeFriendsModal);
 }
 friendsMapBtn.addEventListener('click', () => {
   friendsModalEl.classList.remove('visible');
@@ -10592,11 +10592,7 @@ friendsMapBtn.addEventListener('click', () => {
   openModalA11y(friendsMapModalEl, closeFriendsMapModal);
   drawFriendsMap();
 });
-friendsMapCloseBtn.addEventListener('click', () => {
-  closeFriendsMapModal();
-  friendsModalEl.classList.add('visible');
-  openModalA11y(friendsModalEl, closeFriendsModal);
-});
+friendsMapCloseBtn.addEventListener('click', closeFriendsMapModal);
 
 // Account menu (docs/API.md's "Frontend-only account menu") — the
 // Log In/Notices/Friends/Settings buttons above are unchanged in every
