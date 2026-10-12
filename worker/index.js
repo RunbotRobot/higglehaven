@@ -2965,7 +2965,20 @@ async function handleBuilders(request, env, db, route, url) {
           AND NOT EXISTS (
             SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
           )
-      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
+          -- #1702: same "real, in-flight, billed external operation" shape
+          -- as the higgles_redemptions guard just above, just for a video-
+          -- to-3D generation job (migrations/0119) instead of a payout —
+          -- processed_at IS NULL means Tripo is still working (and still
+          -- billing) on this job right now. video_generation_jobs.builder_id
+          -- is ON DELETE CASCADE (migrations/0121, #1645), so without this
+          -- guard the job row -- and the only record of a real, already-
+          -- paid-for generation -- would simply vanish out from under the
+          -- in-flight request, with the eventual webhook finding nothing
+          -- to apply its result to and silently no-opping.
+          AND NOT EXISTS (
+            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
+          )
+      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       // #879: each of these is scoped by ${ownedLandletsSql}/its own live
       // WHERE, not a landlet-id list computed before this batch started —
       // see the comment above ownedLandletsSql's definition for why that
@@ -3054,6 +3067,12 @@ async function handleBuilders(request, env, db, route, url) {
       `).bind(route[1]).first();
       if (redemptionInFlight) {
         throw new HttpError('Cannot delete this builder while a higgles redemption is still being paid out', 409);
+      }
+      const videoJobInFlight = await db.prepare(`
+        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL LIMIT 1
+      `).bind(route[1]).first();
+      if (videoJobInFlight) {
+        throw new HttpError('Cannot delete this builder while a video-to-3D generation job is still running', 409);
       }
       throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
     }
