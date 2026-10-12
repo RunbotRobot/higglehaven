@@ -200,4 +200,70 @@ describe('Direct messages (#1637)', () => {
     expect(aliceThread.body.messages).toHaveLength(2);
     expect(aliceThread.body.messages.map((m) => m.text).sort()).toEqual(['from alice', 'from bob']);
   });
+
+  // #1719: the frontend (sendDirectMessage in src/api.js) sends a stable
+  // idempotencyKey it keeps reusing until a send actually succeeds --
+  // exactly the "network blip, then a retry with the same key" scenario
+  // writePurchaseRow's own idempotency check (#473) already handles for
+  // purchases.
+  it('does not deliver the same text twice when the same idempotencyKey is retried', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-idempotency-alice');
+    const bob = await signupIdVerifiedBuilder('dm-idempotency-bob');
+    await becomeFriends(alice, bob);
+
+    const first = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'hello', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'hello', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.message.messageId).toBe(first.body.message.messageId);
+
+    const thread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(thread.body.messages).toHaveLength(1);
+    const bobUnread = await api('/direct-messages/unread-count', bob.session());
+    expect(bobUnread.body.count).toBe(1); // the retry's own notification must not have fired a second time
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // message, still delivered normally — this isn't a dedup-everything
+    // guard, only same-key retries.
+    const separate = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'a second message' }),
+    }));
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.message.messageId).not.toBe(first.body.message.messageId);
+    const threadAfter = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(threadAfter.body.messages).toHaveLength(2);
+  });
+
+  // #974 (the purchase-flow equivalent) already fixed this same class of
+  // bug for a stale localStorage-cached key reused by a second account on
+  // the same browser -- directMessageIdempotencyKey folds in both builder
+  // ids for the same reason purchaseIdempotencyKey does.
+  it('does not let two different senders collide on the same client-supplied idempotencyKey', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-idempotency-cross-sender-alice');
+    const bob = await signupIdVerifiedBuilder('dm-idempotency-cross-sender-bob');
+    const carol = await signupIdVerifiedBuilder('dm-idempotency-cross-sender-carol');
+    await becomeFriends(alice, bob);
+    await becomeFriends(carol, bob);
+
+    const sharedKey = 'shared-stale-key';
+    const fromAlice = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'from alice', idempotencyKey: sharedKey }),
+    }));
+    expect(fromAlice.response.status).toBe(201);
+
+    const fromCarol = await api('/direct-messages', carol.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'from carol', idempotencyKey: sharedKey }),
+    }));
+    expect(fromCarol.response.status).toBe(201);
+    expect(fromCarol.body.message.messageId).not.toBe(fromAlice.body.message.messageId);
+    expect(fromCarol.body.message.text).toBe('from carol');
+
+    const bobUnread = await api('/direct-messages/unread-count', bob.session());
+    expect(bobUnread.body.count).toBe(2);
+  });
 });

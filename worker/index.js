@@ -4290,6 +4290,20 @@ async function requireIdVerifiedSessionBuilder(request, db) {
   return getOrCreateBuilderForUser(db, user);
 }
 
+// #1719: same "client mints+persists a key across a retry of what it
+// considers the same attempt" pattern as purchaseIdempotencyKey/#473 —
+// a dropped response after the message already landed server-side looks,
+// client-side, identical to the send never reaching us at all, and
+// dmComposeInput's text isn't cleared on error, inviting an innocent
+// resubmit of the exact same text. Namespaced with both builder ids so a
+// key can never collide across two different senders or threads. A
+// missing or malformed key degrades to no idempotency protection for
+// this one request, same defense-in-depth reasoning as the purchase path.
+function directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `message:${senderBuilderId}:${recipientBuilderId}:${rawKey}`;
+}
+
 // No existing isFriendsWith-style helper covers a single pair×status
 // check — every other friendship need in this file is answered by the
 // generic list endpoint. Mirrors the exact unordered-pair shape
@@ -4374,7 +4388,16 @@ async function handleDirectMessages(request, db, route, url) {
       throw new HttpError('The recipient must be ID-verified to receive direct messages', 403, { idVerificationRequired: true });
     }
     await assertAcceptedFriendship(db, senderBuilderId, recipientBuilderId);
-    const messageId = `message-${crypto.randomUUID()}`;
+    // #1719: a retry (network blip after this exact write already landed)
+    // finds it here instead of delivering the same text twice — mirrors
+    // writePurchaseRow's own idempotency check, keyed off message_id
+    // itself the same way.
+    const idempotencyKey = directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
+      if (existing) return json({ message: directMessageFromRow(existing) });
+    }
+    const messageId = idempotencyKey || `message-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
     `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();
