@@ -166,4 +166,38 @@ describe('Direct messages (#1637)', () => {
     }));
     expect(rejected.response.status).toBe(403);
   });
+
+  // #1690: sender_builder_id/recipient_builder_id used to be a real FK with
+  // ON DELETE CASCADE (migrations/0120) -- DELETE /api/builders/:id
+  // ("Reset your builder profile", an ordinary self-service action, not
+  // full account deletion) destroyed every direct_messages row either
+  // party appeared in, including the surviving party's own copy of
+  // messages that had nothing to do with the deleting party's action.
+  // migrations/0122 drops the FK entirely (same shape purchases.seller_id
+  // already uses) so this now survives, exactly like the unfriend case
+  // just above.
+  it('still shows message history on the surviving party\'s side after the other builder resets their profile', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-selfdelete-alice');
+    const bob = await signupIdVerifiedBuilder('dm-selfdelete-bob');
+    await becomeFriends(alice, bob);
+
+    const aliceToBob = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'from alice' }),
+    }));
+    expect(aliceToBob.response.status).toBe(201);
+    const bobToAlice = await api('/direct-messages', bob.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: alice.builderId, text: 'from bob' }),
+    }));
+    expect(bobToAlice.response.status).toBe(201);
+
+    const deleted = await api(`/builders/${bob.builderId}`, bob.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    // Alice never acted -- her side of the thread (both messages she sent
+    // and received) must still be there, keyed by the same withBuilderId
+    // as before deletion.
+    const aliceThread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(aliceThread.body.messages).toHaveLength(2);
+    expect(aliceThread.body.messages.map((m) => m.text).sort()).toEqual(['from alice', 'from bob']);
+  });
 });

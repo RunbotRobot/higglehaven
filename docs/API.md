@@ -3833,7 +3833,11 @@ friendship gate, self-send rejection, unknown-recipient rejection, the
 280-character cap, the send/notify/appears-on-both-sides/mark-read-
 clears-unread happy path, and that message history survives the
 friendship ending (a new send no longer allowed, but nothing already
-sent disappears). `e2e/direct-messages-gating.test.mjs` covers what only
+sent disappears) or either side resetting their builder profile (#1690
+— `sender_builder_id`/`recipient_builder_id` are plain, non-FK columns,
+same shape `purchases.seller_id` already uses, specifically so the
+surviving party's own copy of a thread is never destroyed by an action
+only the other party took). `e2e/direct-messages-gating.test.mjs` covers what only
 a real browser can show: since this deployment never configures
 `DIDIT_API_KEY` (same constraint `e2e/didit-verification.test.mjs`
 documents for itself), no e2e session can actually reach
