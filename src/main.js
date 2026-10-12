@@ -9779,7 +9779,13 @@ function openVerifyModal(user) {
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
   setVerifyStatus('');
   verifyModalEl.classList.add('visible');
-  openModalA11y(verifyModalEl, closeVerifyModal);
+  // #1731: no `closeFn` here, deliberately — see this modal's own "no
+  // escape" design comment above. Passing one would wire the shared
+  // Escape handler to close this modal like any other, which is exactly
+  // the bug: the only way out is verifyLogoutBtn (logging out), not
+  // Escape. Tab-focus-trapping is unaffected since it only depends on
+  // activeModalEl, not activeModalCloseFn.
+  openModalA11y(verifyModalEl, null);
   if (!user.ageAttested) {
     verifyAgeStepEl.hidden = false;
     verifyContinueBtn.textContent = 'Continue';
