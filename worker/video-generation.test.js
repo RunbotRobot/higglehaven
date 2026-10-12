@@ -21,13 +21,29 @@ const FAKE_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/model.glb';
 // that test doesn't depend on mutating FAKE_MODEL_DOWNLOAD_URL's own
 // response out from under any other test file sharing this isolate.
 const BROKEN_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/expired.glb';
+// #1755: a distinct download URL whose response is larger than
+// MAX_MODEL_BYTES, so storeTripoModelOutput's own size check can be
+// exercised the same isolated way #1673's BROKEN_MODEL_DOWNLOAD_URL
+// exercises the download-failure path above.
+const OVERSIZED_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/oversized.glb';
+const MAX_MODEL_BYTES_FOR_TEST = 20 * 1024 * 1024;
 let nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
 const originalFetch = globalThis.fetch;
 
 function minimalGlbBytes() {
+  return glbBytesOfAtLeast(0);
+}
+
+// #1755: same minimal-but-genuinely-valid GLB shape as minimalGlbBytes
+// above, just padded (with trailing whitespace inside the JSON chunk --
+// trimEnd'd off before JSON.parse, same as minimalGlbBytes' own padding)
+// to at least minSize bytes, so the oversized-model test below exercises
+// storeTripoModelOutput's own size check specifically, not validateGlb
+// rejecting a malformed file for an unrelated reason.
+function glbBytesOfAtLeast(minSize) {
   const payload = JSON.stringify({ asset: { version: '2.0' } });
   const encoded = new TextEncoder().encode(payload);
-  const chunkLength = Math.ceil(encoded.length / 4) * 4;
+  const chunkLength = Math.max(Math.ceil(encoded.length / 4) * 4, Math.ceil(Math.max(0, minSize - 20) / 4) * 4);
   const bytes = new Uint8Array(20 + chunkLength);
   const view = new DataView(bytes.buffer);
   view.setUint32(0, 0x46546c67, true);
@@ -77,6 +93,9 @@ beforeAll(async () => {
     }
     if (url === BROKEN_MODEL_DOWNLOAD_URL) {
       return new Response('Gone', { status: 404 });
+    }
+    if (url === OVERSIZED_MODEL_DOWNLOAD_URL) {
+      return new Response(glbBytesOfAtLeast(MAX_MODEL_BYTES_FOR_TEST + 1), { status: 200 });
     }
     return originalFetch(input, init);
   };
@@ -249,6 +268,31 @@ describe('Video-to-3D job creation (#1619)', () => {
 
       const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');
+      expect(row.processed_at).not.toBeNull();
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  // #1755: storeTripoModelOutput used to buffer and store a generated
+  // model of any size -- no check against the same MAX_MODEL_BYTES cap
+  // every direct upload is held to. Mirrors #1673's broken-download test
+  // above, just for the oversized-output case.
+  it('#1755: fails the job when the generated model exceeds MAX_MODEL_BYTES', async () => {
+    const builder = await signupBuilder('video-gen-oversized-model');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = OVERSIZED_MODEL_DOWNLOAD_URL;
+    try {
+      const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(status.body.status).toBe('failed');
+      expect(status.body.error).toMatch(/retrieve the generated model/);
+
+      const row = await env.DB.prepare('SELECT status, model_url, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(row.status).toBe('failed');
+      expect(row.model_url).toBeNull();
       expect(row.processed_at).not.toBeNull();
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;

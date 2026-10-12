@@ -7634,6 +7634,16 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
     throw new HttpError('Failed to download the generated model from the video-to-3D provider', 502);
   }
   const bytes = await response.arrayBuffer();
+  // #1755: every other writer into MODELS enforces this same per-file cap
+  // before trusting the bytes any further (handleModelUpload checks
+  // file.size, modelSizeBytes validation bounds itself against the same
+  // constant) -- this path never did, so a generated model could land in
+  // R2 well over the limit the rest of the app assumes every model is
+  // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
+  // budget below ever checked.
+  if (bytes.byteLength > MAX_MODEL_BYTES) {
+    throw new HttpError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 502);
+  }
   validateGlb(bytes);
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
