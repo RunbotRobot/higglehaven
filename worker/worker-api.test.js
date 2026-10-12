@@ -228,7 +228,7 @@ describe('Worker API', () => {
 
     const referenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(referenced.status).toBe(409);
-    expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced by a catalog template' });
+    expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
     const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
@@ -414,6 +414,64 @@ describe('Worker API', () => {
     expect(cleanup.response.status).toBe(200);
     expect(cleanup.body.targetModelUrls).not.toContain(imageUrl);
     expect((await SELF.fetch(`https://higglehaven.test${imageUrl}`)).status).toBe(200);
+  });
+
+  // #1696: handleModelListing/handleUploadedAsset's DELETE branch only ever
+  // checked catalog_templates (model_url/image_url) for references, unlike
+  // cleanupUnreferencedModels's own two queries, which already also check
+  // video_generation_jobs.model_url (#1644) and control_room_tasks/
+  // control_room_replies.image_url (#1655) -- a model only referenced by one
+  // of those three used to read back here as deletable:true with an empty
+  // reference list, and the raw admin delete would actually succeed on it.
+  it('treats a video-generation job\'s model_url as still referenced (listing and raw delete)', async () => {
+    const builder = await signupBuilder('video-job-reference-builder');
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"videoJobReference":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const { modelUrl } = await upload.json();
+
+    await env.DB.prepare(`
+      INSERT INTO video_generation_jobs (job_id, builder_id, provider_task_id, status, model_url)
+      VALUES (?, ?, ?, 'complete', ?)
+    `).bind('video-job-reference-job', builder.builderId, 'video-job-reference-task', modelUrl).run();
+
+    const listing = await api('/models?limit=100', adminSession());
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl,
+      referencedByVideoJobIds: ['video-job-reference-job'],
+      deletable: false,
+    }));
+
+    const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(directDelete.status).toBe(409);
+    expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+  });
+
+  // Same gap as directly above, for the other two sibling writers into this
+  // bucket/scheme (#1655) -- a Control Room screenshot referenced only via
+  // control_room_tasks/control_room_replies.image_url.
+  it('treats a Control Room task/reply imageUrl as still referenced (listing and raw delete)', async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"controlRoomReference":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const { modelUrl } = await upload.json();
+
+    await env.DB.prepare(`
+      INSERT INTO control_room_tasks (task_id, kind, title, image_url) VALUES (?, 'feedback', 'A test task', ?)
+    `).bind('control-room-reference-task', modelUrl).run();
+
+    const listing = await api('/models?limit=100', adminSession());
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl,
+      referencedByControlRoomIds: ['control-room-reference-task'],
+      deletable: false,
+    }));
+
+    const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(directDelete.status).toBe(409);
+    expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
   });
 
   // #936: same gap #932 fixed on this resource's PATCH/PUT sibling -- this
