@@ -5419,6 +5419,10 @@ async function handleSavedLayouts(request, db, route) {
 
 async function handleAuctions(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
+    // #1790: resolveDueAuctions below does the same resolve-sweep as the
+    // two rate-limited branches further down (#1741), just batched over up
+    // to AUCTION_SWEEP_LIMIT auctions instead of one — same guard needed.
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     await resolveDueAuctions(db);
     const status = url.searchParams.get('status');
     if (status !== null && !['active', 'ended'].includes(status)) {
