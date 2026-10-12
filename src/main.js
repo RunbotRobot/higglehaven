@@ -83,6 +83,7 @@ import {
   fetchUnreadDirectMessageCount,
   fetchLandletVersions,
   saveLandletVersion,
+  clearVersionIdempotencyKey,
   fetchLandletVersion,
   activateLandletVersion,
   replaceLandletDraft,
@@ -6709,6 +6710,7 @@ function renderBuildSettingsSection() {
     publishStatus.classList.remove('error');
     try {
       const version = await saveLandletVersion(landletId, {});
+      clearVersionIdempotencyKey(landletId);
       await activateLandletVersion(landletId, version.versionId);
       publishStatus.textContent = `Published as "${version.name}" — shoppers now see this.`;
       renderVersionHistory();

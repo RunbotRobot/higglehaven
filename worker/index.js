@@ -2489,6 +2489,18 @@ async function assertUploadedModelExists(bucket, modelUrl) {
 // this can be a plain per-owner ceiling like those siblings.
 const LANDLET_VERSION_RATE_LIMIT_MAX = 20;
 
+// #1721: same #473 pattern as purchaseIdempotencyKey -- the version-number
+// computation below is a fresh MAX+1 read inside the batch itself, so a
+// dropped-response retry isn't even caught by a uniqueness constraint the
+// way a literal duplicate INSERT would be; it lands as a whole new, fully
+// duplicate version one number higher than the first. Namespaced with
+// landletId (and the calling builder, same collision reasoning as #974)
+// so a key can never collide across two different landlets or builders.
+function versionIdempotencyKey(landletId, builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `version:${landletId}:${builderId}:${rawKey}`;
+}
+
 async function handleLandletVersions(request, db, route, url) {
   const landletId = route[1];
 
@@ -2521,7 +2533,16 @@ async function handleLandletVersions(request, db, route, url) {
     assertOwner(landlet.owner_builder_id, sessionBuilder.builder_id, 'Not your landlet');
     await checkRateLimit(db, `landlet-version:${sessionBuilder.builder_id}`, LANDLET_VERSION_RATE_LIMIT_MAX);
     const input = await readJson(request);
-    const versionId = crypto.randomUUID();
+    // #1721: reusing version_id itself as the dedup key, same idiom as
+    // writePurchaseRow's purchase_id -- a missing/malformed key just
+    // degrades to no idempotency protection for this one request, same as
+    // purchaseIdempotencyKey's own "degrades to no protection" behavior.
+    const idempotencyKey = versionIdempotencyKey(landletId, sessionBuilder.builder_id, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await getVersion(db, landletId, idempotencyKey);
+      if (existing) return json({ version: existing });
+    }
+    const versionId = idempotencyKey || crypto.randomUUID();
     // #480: same "optional user-facing short label, no upper bound" gap
     // #337/#358 already closed elsewhere — optionalLabelValue caps it
     // whenever a real value is given, same as absent-or-capped fields

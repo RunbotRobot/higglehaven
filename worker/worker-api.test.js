@@ -2278,6 +2278,53 @@ describe('Worker API', () => {
     expect(versions.body.versions[0].versionId).toBe(versionId);
   });
 
+  // #1721: next_version_number is a fresh MAX+1 read inside the save's own
+  // batch, so a dropped-response retry used to land as a whole new, fully
+  // duplicate version one number higher than the first -- not even caught
+  // by a uniqueness constraint the way a literal duplicate INSERT would be.
+  it('dedupes a retried landlet version save sharing the same idempotency key', async () => {
+    const builder = await signupBuilder('version-idempotency-builder');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'version-idempotency-landlet', name: 'Version idempotency landlet', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5500, y: 1400 },
+      }),
+    }));
+    await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'version-idempotency-tree', landletId: 'version-idempotency-landlet',
+        templateId: 'placeholder-tree', x: 1, y: 1, z: 0,
+      }),
+    }));
+
+    const first = await api('/landlets/version-idempotency-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'First attempt', idempotencyKey: 'retry-key-1' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/landlets/version-idempotency-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'First attempt', idempotencyKey: 'retry-key-1' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.version.versionId).toBe(first.body.version.versionId);
+    expect(retried.body.version.versionNumber).toBe(first.body.version.versionNumber);
+
+    const { results: rows } = await env.DB.prepare('SELECT * FROM landlet_versions WHERE landlet_id = ?')
+      .bind('version-idempotency-landlet').all();
+    expect(rows).toHaveLength(1);
+
+    // A genuinely different key (a later, separate Publish) still creates
+    // its own new version rather than deduping against the first.
+    const second = await api('/landlets/version-idempotency-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'Second attempt', idempotencyKey: 'retry-key-2' }),
+    }));
+    expect(second.response.status).toBe(201);
+    expect(second.body.version.versionId).not.toBe(first.body.version.versionId);
+    expect(second.body.version.versionNumber).toBe(2);
+  });
+
   // #796: neither version-creating write path (this POST, nor the
   // auto-version side effect of PUT .../draft below) had a rate limit at
   // all, unlike every other authenticated per-owner repeatable write in

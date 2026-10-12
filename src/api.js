@@ -850,6 +850,40 @@ export async function fetchLandletVersions(landletId, { limit, cursor } = {}) {
   return requestJson(`/landlets/${encodeURIComponent(landletId)}/versions${qs ? `?${qs}` : ''}`);
 }
 
+// #1721: same #473 pattern as purchaseIdempotencyKey above -- a lost
+// response after this POST already landed (a network drop, not a
+// double-click: the Publish button already disables itself for the
+// duration, same as every other owner-gated save in this file) looks,
+// from here, identical to the request never having reached the server at
+// all, and naturally invites clicking Publish again. Persisting one key
+// per landlet means that retry reuses the same key the server dedupes on
+// (see versionIdempotencyKey in worker/index.js), while a genuinely later
+// Publish of the same landlet still gets its own fresh one, since
+// clearVersionIdempotencyKey below is called once a save actually
+// succeeds.
+const VERSION_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function versionIdempotencyStorageKey(landletId) {
+  return `higglehaven-version-idempotency-${landletId}`;
+}
+
+function versionIdempotencyKey(landletId) {
+  const storageKey = versionIdempotencyStorageKey(landletId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < VERSION_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+export function clearVersionIdempotencyKey(landletId) {
+  try { localStorage.removeItem(versionIdempotencyStorageKey(landletId)); } catch (e) { /* ignore */ }
+}
+
 // Snapshots the landlet's *current* live instances as a new immutable
 // version — this alone doesn't change what shoppers see (see
 // activateLandletVersion); "Publish" in the UI does both in sequence.
@@ -857,7 +891,7 @@ export async function saveLandletVersion(landletId, { name, metadata } = {}) {
   const { version } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/versions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, metadata }),
+    body: JSON.stringify({ name, metadata, idempotencyKey: versionIdempotencyKey(landletId) }),
   });
   return version;
 }
