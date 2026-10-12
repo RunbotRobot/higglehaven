@@ -266,4 +266,36 @@ describe('Direct messages (#1637)', () => {
     const bobUnread = await api('/direct-messages/unread-count', bob.session());
     expect(bobUnread.body.count).toBe(2);
   });
+
+  // #1750: directMessageIdempotencyKey is only cleared client-side on a
+  // successful send (src/main.js's compose handler) -- a dropped response
+  // after the first message already landed, followed by a genuinely
+  // different second message to the same recipient within the TTL, reuses
+  // the same stale key. That must still deliver the second message rather
+  // than silently returning the first one's row as if it were a legitimate
+  // retry hit.
+  it('does deliver a second, different message even when it reuses the same idempotencyKey as an earlier one', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-idempotency-stale-key-alice');
+    const bob = await signupIdVerifiedBuilder('dm-idempotency-stale-key-bob');
+    await becomeFriends(alice, bob);
+
+    const staleKey = 'stale-key-reused-for-different-text';
+    const first = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'message A', idempotencyKey: staleKey }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const second = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'message B', idempotencyKey: staleKey }),
+    }));
+    expect(second.response.status).toBe(201);
+    expect(second.body.message.text).toBe('message B');
+    expect(second.body.message.messageId).not.toBe(first.body.message.messageId);
+
+    const thread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(thread.body.messages).toHaveLength(2);
+    expect(thread.body.messages.map((m) => m.text).sort()).toEqual(['message A', 'message B']);
+    const bobUnread = await api('/direct-messages/unread-count', bob.session());
+    expect(bobUnread.body.count).toBe(2); // both messages notified -- the second was never treated as a dedup hit
+  });
 });
