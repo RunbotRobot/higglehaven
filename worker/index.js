@@ -4080,6 +4080,15 @@ const PRESENCE_NEARBY_LIMIT = 200;
 // other checkRateLimit call in this file already accepts.
 const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 
+// #1767: the "who's nearby" GET below had no rate limit at all, unlike its
+// own POST sibling above and every other poll-while-something-is-live GET
+// in this file (DIDIT_STATUS_RATE_LIMIT_MAX, VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX).
+// The client polls this at the same ~1/s cadence as its own presence
+// report (SHOP_PRESENCE_POLL_INTERVAL_MS in src/main.js), so it shares
+// PRESENCE_REPORT_RATE_LIMIT_MAX's own budget rather than the slower
+// ~120/window peers, which poll a much less frequent async job status.
+const PRESENCE_NEARBY_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+
 async function handlePresence(request, db, route, url) {
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
   // the caller's own last-reported row, unfiltered by staleness or
@@ -4095,6 +4104,7 @@ async function handlePresence(request, db, route, url) {
 
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `presence-nearby:${sessionBuilder.builder_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
     const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
     const { results } = await db.prepare(`
