@@ -3972,6 +3972,28 @@ describe('Landlet levels', () => {
       expect(deleted.body.error).not.toMatch(/still in use/);
     });
 
+    it('blocks deleting a template still actually placed on a landlet, with a distinct message (#1706)', async () => {
+      const templateId = await createTemplate('template-1706-placed');
+      const owner = await signupBuilder('template-1706-placed-owner');
+      const landletId = 'template-1706-placed-landlet';
+      await createGreenbeltLandletWithArea(landletId, 1000);
+      await claim(landletId, owner);
+      const placed = await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: `${landletId}-inst`, landletId, templateId, x: 1, y: 1, z: 0 }),
+      }));
+      expect(placed.response.status).toBe(201);
+
+      const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(deleted.response.status).toBe(409);
+      expect(deleted.body.error).toMatch(/still placed on a landlet/);
+      expect(deleted.body.error).not.toMatch(/still in use/);
+
+      const { results: stillExists } = await env.DB.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?')
+        .bind(templateId).all();
+      expect(stillExists).toHaveLength(1);
+    });
+
     it('deletes a template cleanly once its only saved-layout reference is gone', async () => {
       const templateId = await createTemplate('template-729-cleared');
       const owner = await signupBuilder('template-729-cleared-owner');
