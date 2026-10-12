@@ -76,8 +76,8 @@ coding, and check the commit's status (or the Actions tab) once it's
 useful to know, rather than waiting on `npm run test:e2e` synchronously
 every time. It needs no repository secrets: unit tests get a fixed test
 secret straight from `vitest.config.js`, and the e2e job recreates the
-one value its own `.dev.vars` needs inline (see that job's own comment for
-why that's not a real secret).
+values its own `.dev.vars` needs inline (see that job's own comment for
+why none of them are a real secret).
 
 ## Deployment
 

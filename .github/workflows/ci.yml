@@ -157,6 +157,11 @@ jobs:
       - run: |
           echo "APP_BASE_URL=http://127.0.0.1:8787" > .dev.vars
           echo "ADMIN_BOOTSTRAP_SECRET=local-dev-admin-secret" >> .dev.vars
+          # #1231: not a real secret -- a dev-only test seam flag (see
+          # worker/index.js's handleInstancePurchase, where this is read)
+          # that only ever does anything when STRIPE_SECRET_KEY is also
+          # unset, which is already always true in this job.
+          echo "E2E_SIMULATE_PAID_PURCHASES=true" >> .dev.vars
       # Retries the whole shard once on failure. Confirmed (via captured
       # wrangler dev server output — see e2e/run-all.mjs's own comment on
       # that capture) that occasional failures here are GitHub's shared
