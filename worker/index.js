@@ -2074,9 +2074,21 @@ async function handleCatalog(request, db, route, url, models, env) {
     // just below for why this is hashed rather than used verbatim.
     const idempotencyKey = await catalogTemplateIdempotencyKey(input.sellerId, input.modelUrl, input.idempotencyKey);
     const template = validateTemplate(input, idempotencyKey || crypto.randomUUID());
-    if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
-      if (existing) return json({ template: templateFromRow(existing) });
+    // #1758: unlike purchases/sign-posts (pinned to a fixed instance), the
+    // real upload wizard reads name/price fresh off still-editable inputs
+    // on every submit and never clears this key on failure -- a seller
+    // who edits the name/price and resubmits after a lost response would
+    // otherwise get the STALE row back as a fabricated success, silently
+    // dropping their edit. Only honor the dedup hit when the content
+    // actually matches; on a mismatch this is a genuinely new attempt, so
+    // mint a fresh id rather than reusing the idempotency-derived one,
+    // which the stale row already occupies.
+    const existing = idempotencyKey
+      ? await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first()
+      : null;
+    if (existing) {
+      if (templateContentMatches(existing, template)) return json({ template: templateFromRow(existing) });
+      template.templateId = `template-${crypto.randomUUID()}`;
     }
     if (template.sellerId) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
@@ -14818,6 +14830,26 @@ function validateCropShape(input) {
 
 function templateParams(template) {
   return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
+}
+
+// #1758: compares an existing row (raw DB shape) against a freshly
+// validated template (camelCase shape) across every field the real
+// upload wizard's still-editable inputs could legitimately change between
+// a lost-response attempt and a resubmit -- name/category/subcategory/
+// color/dimensions/priceCents/metadata. modelUrl/sellerId are deliberately
+// excluded: they're already baked into the idempotency key's own
+// namespace (see catalogTemplateIdempotencyKey), so two rows reaching this
+// comparison under the same key already share them.
+function templateContentMatches(existingRow, template) {
+  return existingRow.name === template.name
+    && existingRow.category === template.category
+    && existingRow.subcategory === template.subcategory
+    && existingRow.color === template.color
+    && existingRow.width_m === template.dimensions.width
+    && existingRow.depth_m === template.dimensions.depth
+    && existingRow.height_m === template.dimensions.height
+    && existingRow.price_cents === template.priceCents
+    && existingRow.metadata_json === JSON.stringify(template.metadata);
 }
 
 function instanceParams(instance) {

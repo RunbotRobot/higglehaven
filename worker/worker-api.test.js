@@ -591,6 +591,53 @@ describe('Worker API', () => {
     expect(totalCount.count).toBe(3);
   });
 
+  // #1758: the real upload wizard reads name/price fresh off still-
+  // editable inputs on every submit and never clears this key on failure
+  // -- a seller who edits the name/price after a lost response and
+  // resubmits with the same key must get their EDITED content stored, not
+  // the stale row silently handed back as a fabricated success.
+  it('treats a same-key resubmit with different content as a genuinely new template', async () => {
+    const owner = await signupSeller('catalog-idempotency-edited-owner');
+    const form = new FormData();
+    form.set('file', glbFile());
+    const uploaded = await (await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form })).json();
+
+    const payload = {
+      name: 'Chair',
+      color: '#123456',
+      dimensions: { width: 1, depth: 1, height: 1 },
+      modelUrl: uploaded.modelUrl,
+      sellerId: owner.sellerId,
+      priceCents: 500,
+      idempotencyKey: 'edited-retry-key',
+    };
+    const first = await api('/catalog', owner.session({ method: 'POST', body: JSON.stringify(payload) }));
+    expect(first.response.status).toBe(201);
+
+    // Same key, but the seller edited the price (and name) before
+    // resubmitting -- must land as a real, separate row with the NEW
+    // content, not the stale "Chair"/500 row handed back as success.
+    const edited = await api('/catalog', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ ...payload, name: 'Table', priceCents: 1000, idempotencyKey: 'edited-retry-key' }),
+    }));
+    expect(edited.response.status).toBe(201);
+    expect(edited.body.template.templateId).not.toBe(first.body.template.templateId);
+    expect(edited.body.template.name).toBe('Table');
+    expect(edited.body.template.priceCents).toBe(1000);
+
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM catalog_templates WHERE seller_id = ? AND model_url = ?'
+    ).bind(owner.sellerId, uploaded.modelUrl).first();
+    expect(count.count).toBe(2);
+
+    // The original, unedited content's own key is still honored as a
+    // genuine retry.
+    const unedited = await api('/catalog', owner.session({ method: 'POST', body: JSON.stringify(payload) }));
+    expect(unedited.response.status).toBe(200);
+    expect(unedited.body.template.templateId).toBe(first.body.template.templateId);
+  });
+
   // #540: the seller's own "faux lándlet" 3D array paginates by a
   // cumulative model-file-size cap — this is the field that makes that
   // possible, previously computed by POST /api/models but discarded by
