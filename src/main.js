@@ -13072,6 +13072,14 @@ window.__testShopAvatarHasTransparentMaterial = () => {
 // step. Always inert unless a test calls it, same convention as the other
 // window.__test* hooks above.
 window.__rescaleModelFileForTests = rescaleModelFile;
+// #1682: same reasoning as __rescaleModelFileForTests above -- driving the
+// real upload wizard UI with a constructed fixture can't isolate
+// optimizeModelFile's own decimation math from everything else the wizard
+// does around it (FBX conversion, dimension measurement, the actual
+// network upload). Exposing it directly lets a test feed it a raw file
+// and inspect trianglesAfter/the re-exported geometry on their own. Always
+// inert unless a test calls it.
+window.__optimizeModelFileForTests = optimizeModelFile;
 let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
 let shopAvatarWalkPhase = 0;
 

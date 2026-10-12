@@ -32,6 +32,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 // decimation too; see git history for the version of this file that
 // instead detected and skipped simplifying those meshes entirely.
 import { SimplifyModifier } from './vendor/SimplifyModifierExtraUV.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Real-time web/mobile products should be tiny (see catalog.js's own
 // comments) — a few thousand triangles is already generous detail for
@@ -142,7 +143,18 @@ export async function optimizeModelFile(file, onProgress) {
       return;
     }
 
-    const vertexCount = geometry.attributes.position.count;
+    // #1682: removeCount must land in the same units simplifier.modify()
+    // actually operates on. It always merges duplicate vertices internally
+    // before collapsing (SimplifyModifierExtraUV.js's own mergeVertices
+    // call) -- a no-op for an already-indexed mesh, but a non-indexed one
+    // (one vertex per triangle corner, no sharing) has a raw
+    // position.count far larger than its real unique-vertex working set.
+    // Without this, removeCount is computed against that inflated raw
+    // count and can vastly overshoot the actual mergeable vertices,
+    // decimating the mesh down to nothing instead of ~TARGET_TRIANGLES_PER_MESH.
+    const mergedForCount = mergeVertices(geometry);
+    const vertexCount = mergedForCount.attributes.position.count;
+    mergedForCount.dispose();
     const targetVertexCount = Math.max(3, Math.round(vertexCount * (TARGET_TRIANGLES_PER_MESH / triangleCount)));
     const removeCount = vertexCount - targetVertexCount;
     if (removeCount <= 0) {
