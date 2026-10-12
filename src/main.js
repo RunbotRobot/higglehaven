@@ -2913,6 +2913,7 @@ const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
 const uploadVideoInput = document.getElementById('upload-video-input');
+const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
@@ -2947,6 +2948,18 @@ let uploadDimensionPreview = null;
 // sharing the same name/price/digital-good fields and the same eventual
 // handoff into step 'dimensions'.
 let uploadFileMode = 'file';
+// #1622 (sub-issue of #1616): which path produced the model currently
+// showing in step 'dimensions' -- 'video' only while finishVideoGeneration
+// is mid-handoff into handleUploadFileStep, reset to 'file' the moment
+// that step is left any other way (resetUploadModalToFileStep). Drives
+// uploadRetryVideoBtn's visibility: a seller who generated from video, but
+// isn't happy with the result once they can actually see it in the
+// dimensions-step preview, gets a one-click way back into video mode
+// without losing the name/price they already typed -- the issue's own
+// "post-generation review step... decide to retry" ask. A manually picked
+// file has no equivalent need (nothing asynchronous or variable-quality
+// about it), so this button only ever shows for the video path.
+let uploadModelSource = 'file';
 
 // handleUploadFileStep runs a long async chain (optimize -> upload ->
 // measure -> showUploadDimensionPreview) before committing to the shared
@@ -3017,7 +3030,11 @@ function setUploadFileMode(mode) {
 uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
 uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
 
-function resetUploadModalToFileStep() {
+// mode lets a caller land back on step 'file' already in video mode
+// (uploadRetryVideoBtn below) rather than always defaulting to the plain
+// file picker -- every other caller (closing/opening the modal) wants the
+// plain 'file' default.
+function resetUploadModalToFileStep(mode = 'file') {
   uploadFlowToken++; // invalidate any in-flight handleUploadFileStep/startVideoGeneration call
   stopVideoGenPoll();
   uploadStep = 'file';
@@ -3025,14 +3042,21 @@ function resetUploadModalToFileStep() {
   uploadModelSizeBytes = null;
   uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
+  uploadModelSource = 'file';
   uploadAvatarCategoryCheckbox.checked = false;
   uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
   uploadStepDimensionsEl.hidden = true;
-  setUploadFileMode('file');
+  setUploadFileMode(mode);
 }
+// #1622: "Not quite right? Generate from a different video" -- visible
+// only once a video-generated model is actually showing in the dimensions
+// preview (toggled in handleUploadFileStep below). Keeps whatever
+// name/price/digital-good state the seller already entered, unlike
+// closing and reopening the whole modal.
+uploadRetryVideoBtn.addEventListener('click', () => resetUploadModalToFileStep('video'));
 
 function openUploadModal() {
   closeCatalogPicker();
@@ -3361,6 +3385,7 @@ async function handleUploadFileStep() {
     uploadStepFileEl.hidden = true;
     uploadStepDimensionsEl.hidden = false;
     uploadSubmitBtn.textContent = 'Create Product';
+    uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
     setUploadStatus('');
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
@@ -3455,6 +3480,9 @@ async function finishVideoGeneration(modelUrl) {
   const dataTransfer = new DataTransfer();
   dataTransfer.items.add(file);
   uploadFileInput.files = dataTransfer.files;
+  // Read by handleUploadFileStep once it reaches step 'dimensions', to
+  // decide whether uploadRetryVideoBtn should show (#1622).
+  uploadModelSource = 'video';
   await handleUploadFileStep();
 }
 
@@ -5493,6 +5521,30 @@ function renderShopSettingsSection() {
   note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
+
+  // #1588: opt-in free-look-recenters-on-facing. Off by default — the
+  // existing free-look/facing independence (see updateShopMovement's own
+  // comment on this) is the baseline behavior, not something this toggle
+  // should change for anyone who hasn't asked for it.
+  const cameraLockField = document.createElement('div');
+  cameraLockField.className = 'settings-field';
+  const cameraLockLabel = document.createElement('span');
+  cameraLockLabel.textContent = 'Camera';
+  cameraLockField.appendChild(cameraLockLabel);
+  const cameraLockRow = document.createElement('div');
+  cameraLockRow.className = 'settings-radio-row';
+  const cameraLockLabelEl = document.createElement('label');
+  const cameraLockCheckbox = document.createElement('input');
+  cameraLockCheckbox.type = 'checkbox';
+  cameraLockCheckbox.checked = getShopCameraLockToFacing();
+  cameraLockCheckbox.addEventListener('change', () => {
+    setShopCameraLockToFacing(cameraLockCheckbox.checked);
+  });
+  cameraLockLabelEl.appendChild(cameraLockCheckbox);
+  cameraLockLabelEl.appendChild(document.createTextNode("Ease the camera back to face the way I'm walking"));
+  cameraLockRow.appendChild(cameraLockLabelEl);
+  cameraLockField.appendChild(cameraLockRow);
+  settingsSectionEl.appendChild(cameraLockField);
 
   // #1340: My Animations' own compatibility badges are a function of
   // whichever avatar is currently equipped -- without wiring the two
@@ -11672,6 +11724,23 @@ const SHOP_AVATAR_HEIGHT_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH
 // instant, similar to every other "ease toward a target per second"
 // treatment in this file (e.g. SHOP_AVATAR_SWING_EASE_PER_S).
 const SHOP_AVATAR_TURN_EASE_PER_S = 12;
+// #1588: opt-in setting — when on, free-look (shopYaw) eases back toward
+// the avatar's own facing (shopAvatarFacing) whenever the shopper isn't
+// actively steering the right stick, instead of the two staying fully
+// independent forever. Deliberately much slower than
+// SHOP_AVATAR_TURN_EASE_PER_S's near-instant body turn: the owner's own
+// requirement was that this read as a smooth re-center (Dysmantle cited
+// as the UX precedent), never a snap.
+const SHOP_CAMERA_LOCK_TO_FACING_KEY = 'higglehaven.shopCameraLockToFacing';
+const SHOP_CAMERA_LOCK_TO_FACING_EASE_PER_S = 3;
+
+function getShopCameraLockToFacing() {
+  return localStorage.getItem(SHOP_CAMERA_LOCK_TO_FACING_KEY) === '1';
+}
+
+function setShopCameraLockToFacing(enabled) {
+  localStorage.setItem(SHOP_CAMERA_LOCK_TO_FACING_KEY, enabled ? '1' : '0');
+}
 // Where the third-person camera orbits around — roughly head height, not
 // the very top of the head, so looking straight ahead frames the avatar
 // low in frame rather than staring at the back of its skull.
@@ -13693,6 +13762,22 @@ function updateShopMovement(now) {
     }
     clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM());
   }
+
+  // #1588: with the setting on, and only while the shopper isn't actively
+  // free-looking this frame (shopLookX/shopLookY both 0 — the block above
+  // already owns shopYaw whenever that's not true), ease shopYaw toward
+  // shopAvatarFacing instead of leaving the camera wherever free-look last
+  // pointed it.
+  if (!shopGoToLastLocationPhase && shopLookX === 0 && shopLookY === 0 && getShopCameraLockToFacing()) {
+    const cameraFacingDelta = Math.atan2(
+      Math.sin(shopAvatarFacing - shopYaw),
+      Math.cos(shopAvatarFacing - shopYaw),
+    );
+    if (Math.abs(cameraFacingDelta) > 1e-4) {
+      shopYaw += cameraFacingDelta * Math.min(1, SHOP_CAMERA_LOCK_TO_FACING_EASE_PER_S * dt);
+      applyShopCameraOrientation();
+    }
+  }
   // shopFlightAltitudeM is height above *local* ground (unchanged meaning —
   // takeoff/landing, the flight ceiling, and the speed curve all still
   // reason in these terms); the ground itself already sags below the flat
@@ -13756,6 +13841,11 @@ function updateShopMovement(now) {
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
   // rather than staying fixed.
   window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // #1588: same reasoning as window.__shopAvatarOrientation above — shopYaw
+  // (the free-look camera's own heading) has no other way for a test to
+  // read it, and the camera-lock-to-facing setting needs to confirm it
+  // actually moves (or doesn't) relative to shopAvatarFacing.
+  window.__shopCameraYaw = shopYaw;
   // #1586: same reasoning as window.__shopAvatarOrientation just above —
   // the AFK sprite's own opacity is otherwise only checkable by eye.
   window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
