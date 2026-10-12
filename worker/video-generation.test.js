@@ -88,8 +88,22 @@ afterAll(() => {
   env.TRIPO_WEBHOOK_SECRET = undefined;
 });
 
+// #1713: real view-image uploads now get their magic bytes checked, not
+// just the claimed Content-Type -- so a fake all-zero-byte "image" (what
+// this helper produced before #1713) would fail the happy-path tests below
+// for the wrong reason. Stamping the real signature for the given type
+// keeps every existing caller producing a genuinely valid file by default.
+const IMAGE_SIGNATURE_BYTES = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+  'image/webp': [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50],
+};
+
 function frameFile(name = 'frame.png', type = 'image/png', size = 16) {
-  return new File([new Uint8Array(size)], name, { type });
+  const bytes = new Uint8Array(size);
+  const signature = IMAGE_SIGNATURE_BYTES[type];
+  if (signature) bytes.set(signature.slice(0, size));
+  return new File([bytes], name, { type });
 }
 
 function jobCreateForm({ front = frameFile(), left = frameFile(), back, right } = {}) {
@@ -165,6 +179,28 @@ describe('Video-to-3D job creation (#1619)', () => {
       { headers: { cookie: `hh_session=${builder.sessionToken}` } },
     );
     expect(rejected.status).toBe(415);
+  });
+
+  it('rejects a view image whose bytes do not match its claimed content type (#1713)', async () => {
+    const builder = await signupBuilder('video-gen-fake-signature');
+    const fakeImage = new File([new Uint8Array(16)], 'front.png', { type: 'image/png' });
+    const rejected = await postJobCreate(
+      jobCreateForm({ front: fakeImage }),
+      { headers: { cookie: `hh_session=${builder.sessionToken}` } },
+    );
+    expect(rejected.status).toBe(415);
+  });
+
+  it('accepts a real JPEG and a real WebP view image', async () => {
+    const builder = await signupBuilder('video-gen-jpeg-webp');
+    const created = await postJobCreate(
+      jobCreateForm({
+        front: frameFile('front.jpg', 'image/jpeg'),
+        left: frameFile('left.webp', 'image/webp'),
+      }),
+      { headers: { cookie: `hh_session=${builder.sessionToken}` } },
+    );
+    expect(created.status).toBe(201);
   });
 
   it('kicks off a real job and the status endpoint reconciles it to complete', async () => {
