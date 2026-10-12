@@ -3011,6 +3011,14 @@ async function handleBuilders(request, env, db, route, url) {
       db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
       db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
       db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
+      // #1704: still-active auctions of this builder's own are explicitly
+      // cleaned up here now that seller_builder_id no longer cascades
+      // (migrations/0124) -- the #279 guard above already guarantees any
+      // such auction has zero bids, so there's nothing to protect and
+      // nothing left pointing at it worth keeping around (unlike an ended
+      // auction, which may have real, resolved bid history and is
+      // deliberately left alone below).
+      db.prepare(`DELETE FROM auctions WHERE seller_builder_id = ? AND status = 'active' AND ${builderGone}`).bind(route[1], route[1]),
       // RETURNING landlet_id: the response below used to report a
       // precomputed id list — #879's fix means there's no such list to
       // report anymore, since what actually gets released is only known
@@ -3039,12 +3047,20 @@ async function handleBuilders(request, env, db, route, url) {
       `).bind(crypto.randomUUID(), route[1], sessionBuilder.stripe_account_id, sessionBuilder.stripe_onboarding_status, route[1]));
     }
 
-    // Deleting this builder cascades (migrations/0045_auctions.sql,
-    // seller_builder_id ON DELETE CASCADE) straight through any auction
-    // where they're the seller. The #279 guard above guarantees any such
-    // auction still active at delete time has zero bids — there's no one
-    // to notify, and nothing more to do beyond letting the cascade take it
-    // (and its now-nonexistent auction_bids rows) away.
+    // #1704: auctions.seller_builder_id (and auction_bids.bidder_builder_id,
+    // #1691) are no longer a cascading FK (migrations/0124/0123) -- this
+    // used to rely on the cascade to clean up any auction where this
+    // builder is the seller, but that silently destroyed the ENTIRE
+    // auction (and, via auction_bids' own cascade off auction_id, every
+    // bid on it) the moment the #279/payout-pending guards above cleared,
+    // for every other party who'd bid on it. The still-active, zero-bid
+    // case (nothing worth protecting) is now cleaned up explicitly above
+    // instead; an already-ended auction is left alone entirely and simply
+    // keeps its own dangling seller_builder_id, same as purchases.seller_id's
+    // established "survive the other party leaving" shape -- the #279
+    // guard above still blocks deletion while that auction is active with
+    // bids or its payout is still pending; once resolved, this builder's
+    // own departure no longer costs anyone else their history.
     const batchResults = await db.batch(statements);
     const deleted = batchResults[0];
     const released = batchResults[batchResults.length - 1];

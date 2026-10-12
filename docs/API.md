@@ -953,27 +953,36 @@ product's seller's) sales-history record too, so it survives; see
 If this builder is the seller on an active auction that already has at
 least one bid, deletion is rejected outright (`409`) — per policy, once an
 auction has bids that decision can't be revoked, including by deleting the
-account to back out of it. Without this, `auctions.seller_builder_id`'s
-`ON DELETE CASCADE` (`migrations/0045_auctions.sql`) would silently remove
-that auction row and every bid on it, releasing the land back to
-`greenbelt` (re-claimable, including by the same person again under a
-fresh auto-provisioned builder profile) at zero cost to the seller. An
-active auction the builder is selling with **no** bids yet is unaffected —
-it cascades away exactly as before, with the land released the normal way.
+account to back out of it. Releasing the land back to `greenbelt`
+(re-claimable, including by the same person again under a fresh
+auto-provisioned builder profile) at zero cost to the seller would
+otherwise let them walk back a listing others have already committed to.
+An active auction the builder is selling with **no** bids yet is unaffected
+— nothing to protect, so it's explicitly deleted as part of the same
+request, with the land released the normal way. Neither
+`auctions.seller_builder_id` nor `auction_bids.bidder_builder_id`
+(`migrations/0045_auctions.sql`, `0124`/`0123`) is a foreign key anymore —
+a *resolved* auction this builder sold, win or lose, is left alone entirely
+and simply keeps the now-dangling `sellerBuilderId`/`bidderBuilderId`
+string(s) it already had, the same "survive the other party's account
+later going away" shape `purchases.sellerId` uses — so a seller
+self-deleting after their own auction has already ended no longer destroys
+that auction or any bidder's bid history (#1704; before that fix, the
+cascading FK did exactly that the moment the payout-pending guard below
+cleared).
 
 If this builder currently holds the *highest* bid on someone else's
-still-active auction, deletion is likewise rejected (`409`) —
-`auction_bids.bidder_builder_id`'s own `ON DELETE CASCADE` would otherwise
-silently erase that bid. A leading bid actively deters every other bidder
-from bidding (a new bid must strictly exceed it) for as long as it stands,
-so letting it vanish via self-deletion — at zero cost, since a fresh
-builder profile is auto-provisioned for the same logged-in user on their
-next request — would let a bidder walk back a commitment that already
-shaped how others bid. There's no bid-withdrawal feature, so a placed bid
-is exactly as binding as it already implicitly is for a builder who
-doesn't delete their account. A bid that's since been outbid, or that was
-on an auction which has already ended (whether or not it won), doesn't
-block deletion.
+still-active auction, deletion is likewise rejected (`409`) — a leading bid
+actively deters every other bidder from bidding (a new bid must strictly
+exceed it) for as long as it stands, so letting it disappear via
+self-deletion — at zero cost, since a fresh builder profile is
+auto-provisioned for the same logged-in user on their next request — would
+let a bidder walk back a commitment that already shaped how others bid.
+There's no bid-withdrawal feature, so a placed bid is exactly as binding as
+it already implicitly is for a builder who doesn't delete their account. A
+bid that's since been outbid, or that was on an auction which has already
+ended (whether or not it won), doesn't block deletion (#1691) — same
+reasoning as the seller case above.
 
 `friendships.requester_builder_id`/`recipient_builder_id` are both `ON
 DELETE CASCADE` (migrations/0093), so every friendship involving this
