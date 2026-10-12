@@ -139,4 +139,58 @@ describe('checkMigrationDrift (#561)', () => {
     ).first();
     expect(cleared.alerted_at).toBeNull();
   });
+
+  // #1688: the claim above (alerted_at set) used to commit independently of
+  // whether the send itself actually succeeds — a transient Resend failure
+  // left the guard permanently claimed for the rest of the drift episode,
+  // with no further alert ever going out. RESEND_API_KEY must be
+  // temporarily configured (same approach as worker/reviews-auth.test.js's
+  // "still returns a session when the verification email's fetch rejects
+  // outright") to make sendEmail actually attempt its fetch instead of
+  // short-circuiting the way every other test in this file relies on.
+  it('#1688: re-arms (rather than permanently silencing) when the alert email send itself fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const originalFetch = globalThis.fetch;
+    env.RESEND_API_KEY = 'test-resend-api-key';
+    globalThis.fetch = async (input, ...rest) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.resend.com/emails') throw new TypeError('network error');
+      return originalFetch(input, ...rest);
+    };
+    const row = await env.DB.prepare('SELECT name FROM d1_migrations ORDER BY id DESC LIMIT 1').first();
+    await env.DB.prepare('DELETE FROM d1_migrations WHERE name = ?').bind(row.name).run();
+    const envWithAlert = { ...env, OPS_ALERT_EMAIL: 'ops@example.com' };
+    try {
+      await checkMigrationDrift(envWithAlert);
+      const afterFailedSend = await env.DB.prepare(
+        'SELECT alerted_at FROM migration_drift_alert_state WHERE id = 1',
+      ).first();
+      expect(afterFailedSend.alerted_at).toBeNull();
+
+      // Drift is still present and unresolved — a real fix would have
+      // sendEmail succeed on the retry (the point of re-arming at all).
+      // Mocked as a successful Resend response rather than restoring the
+      // real fetch, since this test-pool-workers environment has no real
+      // network access to actually reach api.resend.com.
+      globalThis.fetch = async (input, ...rest) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url === 'https://api.resend.com/emails') return new Response(JSON.stringify({ id: 'test-email-id' }), { status: 200 });
+        return originalFetch(input, ...rest);
+      };
+      await checkMigrationDrift(envWithAlert);
+      const afterRetry = await env.DB.prepare(
+        'SELECT alerted_at FROM migration_drift_alert_state WHERE id = 1',
+      ).first();
+      expect(afterRetry.alerted_at).not.toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.RESEND_API_KEY = undefined;
+      await env.DB.prepare(
+        'INSERT INTO d1_migrations (name, applied_at) VALUES (?, ?)',
+      ).bind(row.name, new Date().toISOString()).run();
+      await env.DB.prepare(
+        `UPDATE migration_drift_alert_state SET alerted_at = NULL WHERE id = 1`,
+      ).run();
+    }
+  });
 });

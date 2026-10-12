@@ -482,12 +482,31 @@ export async function checkMigrationDrift(env) {
        WHERE id = 1 AND alerted_at IS NULL`,
     ).run();
     if (claimed.meta.changes > 0) {
-      await sendEmail(env, {
+      // sendEmail (#1283) never rejects — it swallows its own fetch/HTTP
+      // failures and resolves to false instead — so checking its return
+      // value, not a .catch(), is what actually detects a failed send here.
+      const sent = await sendEmail(env, {
         to: env.OPS_ALERT_EMAIL,
         subject: 'higglehaven: production D1 migration drift detected',
         text: message,
         html: `<p>${message}</p>`,
-      }).catch((error) => console.error('checkMigrationDrift: failed to send alert email', error));
+      });
+      // #1688: the claim above committed independently of whether the send
+      // actually succeeds — without re-arming it on a genuine failure, one
+      // transient Resend hiccup would permanently silence every alert for
+      // the rest of this drift episode (potentially multi-day, per #488's
+      // own history), since the only other re-arm path is the drift
+      // resolving. Same self-correcting idiom as that resolved-drift
+      // branch above, just applied to this failure path too. Gated on
+      // env.RESEND_API_KEY so a deliberately-unconfigured key (the same
+      // dev-mode-friendly fallback sendEmail itself documents) isn't
+      // treated as a retryable failure — that would just recreate #1452's
+      // every-10-minutes spam, since an absent key never resolves itself.
+      if (!sent && env.RESEND_API_KEY) {
+        await env.DB.prepare(
+          `UPDATE migration_drift_alert_state SET alerted_at = NULL WHERE id = 1`,
+        ).run();
+      }
     }
   }
 }
