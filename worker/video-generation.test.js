@@ -414,6 +414,43 @@ describe('reserveVideoGenerationJob (#1619)', () => {
     expect(second.reservationId).not.toBeNull();
     expect(second.reservationId).not.toBe(first.reservationId);
   });
+
+  // #1782: a reservation left behind by a crash between this INSERT and
+  // handleVideoGenerationJobCreate either flipping it to 'processing' or
+  // its own catch block deleting it outright (a CPU-limit kill, isolate
+  // eviction -- not a thrown JS exception) never gets processed_at set --
+  // nothing else ever revisits a 'pending' row (expireStaleVideoGeneration
+  // Jobs' own cron sweep only ever scans 'processing'). Before this fix,
+  // idx_video_generation_jobs_one_pending_per_builder's own guard meant
+  // this blocked the affected builder from ever starting a new video-to-3D
+  // job again (and, per #1702, from self-deleting their own account).
+  it('clears a stale pending reservation that never progressed past VIDEO_GENERATION_RESERVATION_TIMEOUT_MS, and allows a fresh one', async () => {
+    const builder = await signupBuilder('video-gen-reserve-stale-placeholder');
+
+    const first = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    await env.DB.prepare(`
+      UPDATE video_generation_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes') WHERE job_id = ?
+    `).bind(first.reservationId).run();
+
+    const second = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    expect(second.reservationId).not.toBeNull();
+    expect(second.reservationId).not.toBe(first.reservationId);
+
+    // The stale placeholder is actually gone, not just superseded --
+    // exactly one row for this builder, and it's the fresh one.
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0].job_id).toBe(second.reservationId);
+  });
+
+  it('does not clear a still-fresh pending reservation -- only one that is actually past the timeout', async () => {
+    const builder = await signupBuilder('video-gen-reserve-fresh-placeholder');
+
+    const first = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    const second = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    expect(second.reservationId).toBeNull();
+    expect(second.existing.job_id).toBe(first.reservationId);
+  });
 });
 
 describe('Video-to-3D job status polling (#1619)', () => {
