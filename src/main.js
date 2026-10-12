@@ -11413,9 +11413,13 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   const submitBtn = authDeleteAccountForm.querySelector('button[type="submit"]');
   submitBtn.disabled = true;
   setAuthStatus('Deleting your account…');
+  // #1771: set before the await, not after -- see hasVerifiedSession's own
+  // comment for why.
+  accountSessionEnding = true;
   try {
     await deleteAccount(password);
   } catch (err) {
+    accountSessionEnding = false;
     submitBtn.disabled = false;
     setAuthStatus(err.message || 'Could not delete your account.', 'error');
     return;
@@ -14145,8 +14149,16 @@ function updateShopLandletInfo() {
 // server-side (worker/index.js: age_attested_at set, trust_tier !== 'none')
 // — mirrors the existing ageAttested/trustTier idiom requireCurrentUser's
 // own caller (ensureBuilderIdentity) already uses client-side.
+// #1771: set true as the delete-account submit handler's first line, before
+// its own await -- the account is deleted server-side well before that
+// await resolves client-side (a real network round-trip, many render-loop
+// ticks), and currentAuthUser itself isn't nulled until after it resolves.
+// Without this, a presence report/poll tick firing in that window still
+// passes this guard and 401s against a session that's already gone.
+let accountSessionEnding = false;
+
 function hasVerifiedSession() {
-  return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none';
+  return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none' && !accountSessionEnding;
 }
 
 // #1100: the client-side half of #1098's own throttling split — the POST
