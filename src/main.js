@@ -7859,9 +7859,15 @@ function updateTrimLengthInput() {
 let currentGizmoMode = 'translate';
 function setGizmoMode(mode) {
   currentGizmoMode = mode;
+  // #1503: aria-pressed mirrors .active so the current tool is announced to
+  // a screen reader, not just styled -- same idiom as updateSellerViewToggleUI
+  // and updateModeNavUI's own toggle groups.
   modeMoveBtn.classList.toggle('active', mode === 'translate');
+  modeMoveBtn.setAttribute('aria-pressed', String(mode === 'translate'));
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
+  modeRotateBtn.setAttribute('aria-pressed', String(mode === 'rotate'));
   modeTrimBtn.classList.toggle('active', mode === 'trim');
+  modeTrimBtn.setAttribute('aria-pressed', String(mode === 'trim'));
   translateControls.detach();
   rotateControls.detach();
   trimControls.detach();
@@ -8369,8 +8375,11 @@ function updateSelectionUI() {
     // turns multi-select off itself (see their handlers below) and
     // reattaches the gizmo to whatever's already selected here.
     modeMoveBtn.classList.remove('active');
+    modeMoveBtn.setAttribute('aria-pressed', 'false');
     modeRotateBtn.classList.remove('active');
+    modeRotateBtn.setAttribute('aria-pressed', 'false');
     modeTrimBtn.classList.remove('active');
+    modeTrimBtn.setAttribute('aria-pressed', 'false');
     trimLengthControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
