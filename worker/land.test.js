@@ -1783,6 +1783,45 @@ describe('Community calendar', () => {
     expect(countAfterSeparate.n).toBe(2);
   });
 
+  // #1751: calendarEventIdempotencyKey caches one key per instanceId for a
+  // TTL, not per attempt -- reusing a stale key for a genuinely different
+  // second event (instead of a true retry of the same one) used to silently
+  // return the FIRST event's content as if it were the new post, dropping
+  // the second event entirely with no error.
+  it('creates a genuinely new event, not a silent dupe of the stale one, when the same idempotencyKey is reused for different content', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-idempotency-mismatch-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 9,
+        y: 9,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    const first = await api('/instances/calendar-idempotency-mismatch-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!', idempotencyKey: 'mismatch-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    // Same cached key, but genuinely different text -- the stale key must
+    // not cause this to be silently swallowed as the first event.
+    const second = await api('/instances/calendar-idempotency-mismatch-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Actually, market day instead!', idempotencyKey: 'mismatch-test-key' }),
+    }));
+    expect(second.response.status).toBe(201);
+    expect(second.body.event.eventId).not.toBe(first.body.event.eventId);
+    expect(second.body.event.text).toBe('Actually, market day instead!');
+
+    const events = await api('/instances/calendar-idempotency-mismatch-instance/events');
+    expect(events.body.events).toHaveLength(2);
+    expect(events.body.events.map((e) => e.text)).toEqual(['Bonfire night, Friday 8pm!', 'Actually, market day instead!']);
+  });
+
   it('cascades event deletion when the calendar instance itself is deleted', async () => {
     await api('/instances', calendarBuilder.session({
       method: 'POST',
