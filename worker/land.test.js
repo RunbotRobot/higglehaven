@@ -615,6 +615,54 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
   });
 
+  // #1705: the guarded ownership-transfer UPDATE and the build-content
+  // cleanup deletes used to be batched together in one db.batch() call --
+  // D1 runs every statement in a batch regardless of an earlier one's row
+  // count, so a rejected reassignment (the invariant guard above failing to
+  // match) still permanently wiped the existing owner's build content, even
+  // though the response correctly reported the transfer itself as rejected.
+  it('does not delete the existing owner\'s build content when the reassignment itself is rejected', async () => {
+    const owner = await signupBuilder('reassign-rejected-cleanup-owner');
+    const alreadyOwning = await signupBuilder('reassign-rejected-cleanup-already-owning');
+    await createGreenbeltLandlet('reassign-rejected-cleanup-source-landlet');
+    await api('/landlets/reassign-rejected-cleanup-source-landlet/claim', owner.session({ method: 'POST' }));
+    await createGreenbeltLandlet('reassign-rejected-cleanup-other-landlet');
+    await api('/landlets/reassign-rejected-cleanup-other-landlet/claim', alreadyOwning.session({ method: 'POST' }));
+
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'reassign-rejected-cleanup-instance', landletId: 'reassign-rejected-cleanup-source-landlet', templateId: 'placeholder-tree', x: 1, y: 1,
+      }),
+    }));
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('reassign-rejected-cleanup-level', 'reassign-rejected-cleanup-source-landlet', 1, 1000).run();
+    await env.DB.prepare(`
+      INSERT INTO landlet_versions (version_id, landlet_id, version_number, name) VALUES (?, ?, ?, ?)
+    `).bind('reassign-rejected-cleanup-version', 'reassign-rejected-cleanup-source-landlet', 1, 'Version 1').run();
+
+    const result = await api('/landlets/reassign-rejected-cleanup-source-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: alreadyOwning.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+
+    const instances = await env.DB.prepare('SELECT * FROM placed_instances WHERE landlet_id = ?')
+      .bind('reassign-rejected-cleanup-source-landlet').all();
+    const levels = await env.DB.prepare('SELECT * FROM landlet_levels WHERE landlet_id = ?')
+      .bind('reassign-rejected-cleanup-source-landlet').all();
+    const versions = await env.DB.prepare('SELECT * FROM landlet_versions WHERE landlet_id = ?')
+      .bind('reassign-rejected-cleanup-source-landlet').all();
+    expect(instances.results).toHaveLength(1);
+    expect(levels.results).toHaveLength(1);
+    expect(versions.results).toHaveLength(1);
+
+    const log = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('reassign_landlet_owner', 'reassign-rejected-cleanup-source-landlet').first();
+    expect(log).toBeNull();
+  });
+
   // #1280: every other ownership-change path (builder deletion,
   // resolveAuction's winner-transfer and $0/no-bid-release branches) clears
   // placed_instances/landlet_versions/landlet_levels so a new owner never

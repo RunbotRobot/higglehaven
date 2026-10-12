@@ -10110,23 +10110,39 @@ async function handleLandlets(request, db, route, url) {
     // auction/reassignment landing in between can't be silently clobbered
     // or bypassed.
     //
-    // #1280: the three deletes below match the ones builder-deletion
+    // #1705: this guarded UPDATE must run standalone, checked, before the
+    // three deletes below -- D1's db.batch can't skip later statements
+    // based on an earlier one's row count within the same call (same fact
+    // resolveAuction's own comment states), so batching them together let
+    // this guard's 0-row "nothing happened" outcome still permanently wipe
+    // the previous owner's build content and levels. Mirrors
+    // resolveAuction's own split: the guarded transfer runs and is
+    // confirmed first, and only then is the cleanup batch built/sent.
+    const result = await db.prepare(`
+      UPDATE landlets
+      SET owner_builder_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM landlets AS owned
+          WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+            AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+        )
+    `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId).run();
+    if (result.meta.changes === 0) {
+      const current = await requireLandlet(db, route[1]);
+      if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      }
+      throw new HttpError('Target builder already owns a claimed landlet', 409);
+    }
+    // #1280: these three deletes match the ones builder-deletion
     // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
     // branches already run, closing the one ownership-change path that
     // left a new owner inheriting the previous owner's build content and
     // levels (docs/API.md's "Ownership-change cleanup" section states this
     // as a blanket invariant, not something scoped to just those paths).
-    const result = await db.batch([
-      db.prepare(`
-        UPDATE landlets
-        SET owner_builder_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?
-          AND NOT EXISTS (
-            SELECT 1 FROM landlets AS owned
-            WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
-              AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
-          )
-      `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId),
+    // Safe to batch together now that the transfer above is confirmed.
+    await db.batch([
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
@@ -10134,13 +10150,6 @@ async function handleLandlets(request, db, route, url) {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
       }),
     ]);
-    if (result[0].meta.changes === 0) {
-      const current = await requireLandlet(db, route[1]);
-      if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-      }
-      throw new HttpError('Target builder already owns a claimed landlet', 409);
-    }
     // Non-blocking, like handleLandletLevels' own post-write calls: this
     // only corrects the new owner's displayed land cap/owned area right
     // away, instead of leaving it stale until some unrelated later action
