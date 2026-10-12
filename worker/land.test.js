@@ -1348,6 +1348,43 @@ describe('Community signs', () => {
     expect(countAfterSeparate.n).toBe(2);
   });
 
+  // #1778: signPostIdempotencyKey caches one key per instanceId for a TTL,
+  // not per attempt -- reusing a stale key for a genuinely different second
+  // note (instead of a true retry of the same one) used to silently return
+  // the FIRST post's content as if it were the new one, dropping the second
+  // note entirely with no error.
+  it('creates a genuinely new post, not a silent dupe of the stale one, when the same idempotencyKey is reused for different content', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-post-idempotency-mismatch-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 9,
+        y: 9,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const first = await api('/instances/sign-post-idempotency-mismatch-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'mismatch-test-key' }),
+    });
+    expect(first.response.status).toBe(201);
+
+    // Same cached key, but genuinely different text -- the stale key must
+    // not cause this to be silently swallowed as the first post.
+    const second = await api('/instances/sign-post-idempotency-mismatch-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Actually, sale ends tonight!', idempotencyKey: 'mismatch-test-key' }),
+    });
+    expect(second.response.status).toBe(201);
+    expect(second.body.post.postId).not.toBe(first.body.post.postId);
+    expect(second.body.post.text).toBe('Actually, sale ends tonight!');
+
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM sign_posts WHERE instance_id = ?')
+      .bind('sign-post-idempotency-mismatch-instance').first();
+    expect(count.n).toBe(2);
+  });
+
   // #827: unlike almost every other authenticated write in this file,
   // placed_instances creates/updates/deletes (single and batch alike) had no
   // checkRateLimit call at all. INSTANCE_WRITE_RATE_LIMIT_MAX is deliberately
