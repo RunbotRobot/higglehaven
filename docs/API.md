@@ -5889,6 +5889,33 @@ trip against Stripe's real API — including the "Orphaned real-money
 purchases" fallback above, which only runs after that round trip — is not
 covered by any automated test in this repo.
 
+**`E2E_SIMULATE_PAID_PURCHASES` test seam (#1231).** The post-purchase
+shipping/delivery-confirmation flow ("Mark purchase shipped"/"Purchase
+delivery confirmation" above) only ever applies to a purchase with a real
+`paymentIntentId` set — which, until #1231, no `e2e/*.test.mjs` purchase
+ever had, since this simulated endpoint always wrote `null` and driving an
+actual Stripe checkout isn't possible in this suite either
+(`STRIPE_SECRET_KEY` is never configured here). `POST
+/api/instances/:instanceId/purchase` accepts an additional
+`simulatePaidPurchaseForTests: true` body field that mints a synthetic
+`test-pi-...` `paymentIntentId` instead of `null`, exercising
+`writePurchaseRow`'s real-money branch (including the
+`deliveryConfirmUrl` it returns) with no Stripe call anywhere in the path.
+Gated on both this flag being `true` **and** `stripeConfigured(env)` being
+`false` — not a real secret (see `.dev.vars`/`.github/workflows/ci.yml`'s
+own comment on the `E2E_SIMULATE_PAID_PURCHASES` Worker var), and
+structurally incapable of affecting a real deployment: once the owner sets
+`STRIPE_SECRET_KEY`, a connected seller's purchases already route through
+`createPurchaseCheckout` above instead, so this branch becomes permanently
+unreachable regardless of the var's value. `e2e/purchase-shipping.test.mjs`
+uses it to cover the Sales panel's "Mark shipped" button and the
+`?confirmDelivery=` link (including a same-link revisit, which is
+idempotent — see "Purchase delivery confirmation" above) through the real
+UI; the invalid/expired-token rejection path isn't covered there for the
+same `errors.length === 0` reason "Refunds" below gives for skipping its
+own no-returns rejection path — see `worker/commerce.test.js`'s own
+mark-shipped/confirm-delivery tests instead.
+
 ### Refunds
 
 docs/SPEC.md §5: "Returns/refunds return real currency, not higgles ...

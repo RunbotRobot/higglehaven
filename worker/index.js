@@ -12935,13 +12935,33 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
+  // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
+  // direct D1 access the way worker/commerce.test.js's own mark-shipped/
+  // confirm-delivery tests use), so it had no way to produce a purchase
+  // with a real paymentIntentId at all -- the ship button and the
+  // ?confirmDelivery= link (src/main.js) both only apply to one. Driving an
+  // actual Stripe checkout isn't an option either (STRIPE_SECRET_KEY is
+  // never configured in this suite). This seam mints a synthetic
+  // paymentIntentId so e2e can reach writePurchaseRow's real-money branch
+  // through the ordinary, already-authenticated purchase endpoint, with no
+  // Stripe call involved anywhere. Double-gated so it can never fire against
+  // a real deployment or be mistaken for an actual charge: E2E_SIMULATE_PAID_PURCHASES
+  // is never a real secret (only ever set in a throwaway .dev.vars/CI
+  // config, see that var's own comment there), AND stripeConfigured(env)
+  // must be false -- once the owner sets STRIPE_SECRET_KEY, a connected
+  // seller's purchases already route through createPurchaseCheckout above
+  // instead, making this branch permanently unreachable regardless of the
+  // env var's value.
+  const simulatedPaymentIntentId = (env.E2E_SIMULATE_PAID_PURCHASES === 'true' && !stripeConfigured(env) && input.simulatePaidPurchaseForTests === true)
+    ? `test-pi-${crypto.randomUUID()}`
+    : null;
   return writePurchaseRow(
     env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label),
     // #888: unlike the real-money checkout->finalize path, there's no time
     // gap here between reading template and writing the purchase — template
     // is already fresh in this same request, so deriving isAvatarCategory
     // from it directly (rather than a locked-in snapshot) is correct here.
-    null, false, buyerBuilder.builder_id, template.category === 'avatar',
+    simulatedPaymentIntentId, false, buyerBuilder.builder_id, template.category === 'avatar',
     // #877: the client already mints and sends this (see purchaseInstance
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
