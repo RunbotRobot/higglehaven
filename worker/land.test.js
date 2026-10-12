@@ -362,6 +362,27 @@ describe('Landlet updates', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1794: the DELETE branch below is the third anonymous, unowned-only
+  // landlet mutation in this handler (alongside the create/#964 and
+  // unowned-patch/#1476 branches just above) and never got the same guard.
+  // Each DELETE actually consumes its target row, so this seeds 21 distinct
+  // unowned landlets up front (via the admin session, which doesn't count
+  // against this bucket) rather than reusing a single one the way the
+  // unowned-patch test above does.
+  it('rate-limits repeated unauthenticated DELETEs of distinct unowned landlets from the same client', async () => {
+    for (let i = 0; i < 21; i++) {
+      await createGreenbeltLandlet(`unowned-delete-rate-limit-${i}`);
+    }
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+
+    let lastStatus;
+    for (let i = 0; i < 21; i++) {
+      const attempt = await api(`/landlets/unowned-delete-rate-limit-${i}`, { method: 'DELETE', headers });
+      lastStatus = attempt.response.status;
+    }
+    expect(lastStatus).toBe(429);
+  });
+
   // #799: the self-owned branch of POST /api/landlets grants the exact same
   // fully-buildable outcome as POST .../claim (requireOwnedLandlet only
   // ever checks owner_builder_id, never status) — but until this fix it
