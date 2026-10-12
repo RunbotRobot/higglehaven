@@ -3726,6 +3726,123 @@ session's own identity name needed `page.removeAllListeners('dialog')` to
 swap in a one-off handler, since `helpers.mjs`'s own dialog handler answers
 every prompt in a session with one fixed string.
 
+## Direct messages
+
+docs/SPEC.md's "Voice" bullet: "Direct messaging requires the higher
+(ID-verified) trust tier on both sides, plus an existing accepted
+friendship between them (#1637)." #1002's own go-ahead, 2026-10-11. One
+`direct_messages` row (see `migrations/0120_direct_messages.sql`) per
+message, not per thread — a "thread" is just every row between the same
+two `builderId`s, computed on read the same way "Friend requests" above
+computes its own per-caller fields. Gated on two independent conditions,
+both re-checked on every send (never just read once and trusted):
+`trust_tier === 'id_verified'` for the calling builder's own account
+(`requireIdVerifiedSessionBuilder`/`assertIdVerified`, `403` with
+`{ idVerificationRequired: true }`) and for the recipient's (`403`, a
+different message, no `idVerificationRequired` flag since there's
+nothing the caller's own account can do about someone else's
+verification), and an existing `accepted` friendship between the two
+(`assertAcceptedFriendship`, `403` — the same unordered-pair friendship
+check "Friend requests" above describes for its own duplicate-request
+guard). Unlike the one-time verified-builder-list check "Friend
+requests" never needed, the ID-verification check here is deliberately
+its own assert (`assertIdVerified`, not the laxer `trust_tier !== 'none'`
+`assertVerified` used elsewhere) — #1002's own requirement is the
+higher, government-ID tier specifically for both sides, not just any
+verification.
+
+### Message object
+
+```json
+{
+  "messageId": "message-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "senderBuilderId": "builder-alice",
+  "recipientBuilderId": "builder-bob",
+  "text": "hey!",
+  "createdAt": "2026-10-11T00:00:00.000Z",
+  "readAt": null
+}
+```
+
+### `GET /api/direct-messages?withBuilderId=X`
+
+Requires an ID-verified session. Lists every message either sent to or
+received from `withBuilderId`, newest first, cursor-paginated the same
+way as `GET /api/friendships` — `limit` (default and max 100) and
+`cursor`/`nextCursor`, ordered `created_at DESC, message_id DESC`. No
+friendship check on read — once sent, a message stays visible in history
+the same way email/chat history survives an unfriend; only a new send
+(`POST` below) is gated on a *currently* accepted friendship.
+
+### `GET /api/direct-messages/unread-count`
+
+Requires an ID-verified session. Returns `{ "count": N }`, the number of
+the caller's own received messages with `readAt` still `null` — the
+badge count behind `#dm-badge` (#1661).
+
+### `POST /api/direct-messages`
+
+Requires an ID-verified session.
+
+```json
+{ "recipientBuilderId": "...", "text": "..." }
+```
+
+`400` if `recipientBuilderId` is the caller's own builder, doesn't
+reference an existing builder, or `text` is missing or over 280
+characters. `403` if the recipient isn't ID-verified, or if no accepted
+friendship exists between the two builders. `429` after 20 requests per
+15 minutes from the same calling builder (see "Rate limiting" above).
+Returns `201` with the new message. Notifies `recipientBuilderId` (the
+generic notification system above, the same "no passive way to find out"
+fix #319 already applied to friend requests) — there's no dedicated
+"new DM" push channel, so the existing Notices panel is what actually
+tells the recipient a message arrived.
+
+### `POST /api/direct-messages/mark-read`
+
+Requires an ID-verified session.
+
+```json
+{ "withBuilderId": "..." }
+```
+
+Marks every one of the caller's own received-and-unread messages from
+`withBuilderId` as read in one call (`withBuilderId` always comes from
+the request body here, unlike a single-row `PATCH` by id, since this
+marks a whole thread at once) — mirrors `POST
+/api/notifications/mark-all-read`'s own bulk shape. Always returns
+`{ "ok": true }`, even if nothing was unread. `429` after 20 calls per
+15 minutes from the same calling builder, under its own bucket separate
+from the send endpoint's.
+
+### Frontend wiring
+
+Reached only from an accepted friend's own row in the Friends modal (no
+top-level nav entry of its own) — a "Message" button next to Remove
+opens `#dm-modal` (`openDmModal`), which lists the thread and lets the
+caller compose a reply. `#dm-badge`, next to `#friends-badge` on the
+account-menu toggle, shows the unread count from `GET
+/api/direct-messages/unread-count` (#1661).
+
+### Testing note
+
+`worker/direct-messages.test.js` owns the backend contract: both
+verification-tier gates (sender and recipient, independently), the
+friendship gate, self-send rejection, unknown-recipient rejection, the
+280-character cap, the send/notify/appears-on-both-sides/mark-read-
+clears-unread happy path, and that message history survives the
+friendship ending (a new send no longer allowed, but nothing already
+sent disappears). `e2e/direct-messages-gating.test.mjs` covers what only
+a real browser can show: since this deployment never configures
+`DIDIT_API_KEY` (same constraint `e2e/didit-verification.test.mjs`
+documents for itself), no e2e session can actually reach
+`trust_tier === 'id_verified'` — so this test instead confirms the
+"Message" button stays hidden for two accepted, credit-card-only
+(not id-verified) friends, and that a direct `POST
+/api/direct-messages` against the real dev server still gets rejected
+even bypassing that button entirely.
+
 ## Avatar presence
 
 Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars

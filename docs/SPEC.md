@@ -86,7 +86,7 @@
 
 **Collision (crowding) — confirmed numbers:** a **2-foot-diameter hard barrier** (avatars cannot overlap closer than this) surrounded by a **1-foot-diameter zone of increasing push-back resistance** as an avatar moves further into it — soft at the outer edge, firmer approaching the hard barrier. (~0.6m hard barrier + ~0.3m soft zone in the platform's internal meter-based units.)
 
-**Voice — confirmed numbers:** **100 feet (~30m) of complete silence** as the outer range, with volume ramping up gradually as avatars get closer — not a hard cutoff, and not full volume at max range either. Deliberately balances realism (a crowded area shouldn't be eerily silent) against practicality (avoiding overwhelming noise in dense areas). Text chat available as an alternative. Group voice channels for friends regardless of proximity. Direct messaging requires the higher (ID-verified) trust tier.
+**Voice — confirmed numbers:** **100 feet (~30m) of complete silence** as the outer range, with volume ramping up gradually as avatars get closer — not a hard cutoff, and not full volume at max range either. Deliberately balances realism (a crowded area shouldn't be eerily silent) against practicality (avoiding overwhelming noise in dense areas). Text chat available as an alternative. Group voice channels for friends regardless of proximity. Direct messaging requires the higher (ID-verified) trust tier on both sides, plus an existing accepted friendship between them (#1637) — see docs/API.md's "Direct messages."
 
 **Social presence signals:** sustained attention on an item emits a subtle "engaged" signal to nearby avatars. Stationary-too-long triggers an AFK indicator.
 
