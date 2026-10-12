@@ -13804,10 +13804,18 @@ async function assertReferencesExist(db, table, column, values, field) {
 // gets a message pointing at the actual (often invisible to them — a
 // stranger's saved layout, or an old version of a landlet they don't own)
 // blocker instead of the generic "still in use".
+// #1706: placed_instances.template_id (migrations/0001) is ON DELETE
+// RESTRICT too, the same as the other two — but was never checked here at
+// all, so the single most common blocker (a template still actually placed
+// somewhere) fell straight through to the same generic 409 this function
+// otherwise exists to avoid.
 async function assertCatalogTemplatesDeletable(db, templateIds) {
   const uniqueValues = [...new Set(templateIds)];
   const placeholders = uniqueValues.map(() => '?').join(', ');
-  const [inSavedLayouts, inVersions] = await Promise.all([
+  const [inPlacedInstances, inSavedLayouts, inVersions] = await Promise.all([
+    db.prepare(
+      `SELECT DISTINCT template_id FROM placed_instances WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
     db.prepare(
       `SELECT DISTINCT template_id FROM saved_layout_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
@@ -13815,9 +13823,17 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
       `SELECT DISTINCT template_id FROM version_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
   ]);
+  const blockedByPlacedInstance = new Set(inPlacedInstances.results.map((row) => row.template_id));
   const blockedBySavedLayout = new Set(inSavedLayouts.results.map((row) => row.template_id));
   const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
   for (const templateId of uniqueValues) {
+    if (blockedByPlacedInstance.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still placed on a landlet `
+        + '(remove every placed instance of it first)',
+        409,
+      );
+    }
     if (blockedBySavedLayout.has(templateId)) {
       throw new HttpError(
         `Catalog template "${templateId}" cannot be deleted: it is still referenced by a saved layout `
