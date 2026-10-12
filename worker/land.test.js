@@ -4087,6 +4087,73 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #1742: same lost-update race #468 already fixed for bundles -- the old
+  // code merged whichever field a PATCH omitted in from a snapshot read at
+  // the top of the request, so two concurrent partial PATCHes to different
+  // fields each overwrote the other's just-written field with a stale
+  // value once their own UPDATE landed.
+  describe('Catalog template PATCH concurrent-edit race (#1742)', () => {
+    it('does not let a concurrent rename and price change clobber each other', async () => {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'template-1742-race',
+          name: 'Race template',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 100,
+        }),
+      });
+      expect(created.response.status).toBe(201);
+
+      const [renamed, priced] = await Promise.all([
+        api('/catalog/template-1742-race', { method: 'PATCH', body: JSON.stringify({ name: 'Raced rename' }) }),
+        api('/catalog/template-1742-race', { method: 'PATCH', body: JSON.stringify({ priceCents: 500 }) }),
+      ]);
+      expect(renamed.response.status).toBe(200);
+      expect(priced.response.status).toBe(200);
+
+      const row = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?')
+        .bind('template-1742-race').first();
+      expect(row.name).toBe('Raced rename');
+      expect(row.price_cents).toBe(500);
+    });
+
+    // A bare `null` sentinel in the UPDATE's own COALESCE would be
+    // indistinguishable from "this field was omitted" -- these fields use
+    // an explicit presence flag instead specifically so an omitted field
+    // (left alone) and an explicitly-nulled one (cleared) stay distinguishable.
+    it('still allows explicitly clearing subcategory/priceCents to null, and leaves them alone when genuinely omitted', async () => {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'template-1742-clear',
+          name: 'Clear template',
+          subcategory: 'chairs',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 100,
+        }),
+      });
+      expect(created.response.status).toBe(201);
+      expect(created.body.template.subcategory).toBe('chairs');
+
+      const cleared = await api('/catalog/template-1742-clear', {
+        method: 'PATCH', body: JSON.stringify({ subcategory: null, priceCents: null }),
+      });
+      expect(cleared.response.status).toBe(200);
+      expect(cleared.body.template.subcategory).toBeNull();
+      expect(cleared.body.template.priceCents).toBeNull();
+
+      const untouched = await api('/catalog/template-1742-clear', {
+        method: 'PATCH', body: JSON.stringify({ name: 'Still clear template' }),
+      });
+      expect(untouched.response.status).toBe(200);
+      expect(untouched.body.template.subcategory).toBeNull();
+      expect(untouched.body.template.priceCents).toBeNull();
+    });
+  });
+
   // #729: saved_layout_instances and version_instances both hold a
   // template_id under ON DELETE RESTRICT (see migrations/0080 and 0007's
   // own comments), so a template referenced only by one of these snapshot
