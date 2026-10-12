@@ -1686,7 +1686,7 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
     await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
-      SELECT template_id, seller_id, width_m, depth_m, height_m FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
+      SELECT template_id, seller_id, width_m, depth_m, height_m, metadata_json FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
     // sellerIds (the templates' own requested sellerId values) already went
     // through assertReferencesExist above, so they're live by construction.
@@ -1755,8 +1755,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       const oldDimensionsById = new Map(existingOwnerRows.results.map((row) =>
         [row.template_id, { width: row.width_m, depth: row.depth_m, height: row.height_m }]));
+      const oldMetadataById = new Map(existingOwnerRows.results.map((row) =>
+        [row.template_id, JSON.parse(row.metadata_json || '{}')]));
       const dimensionChangeCandidates = templates
-        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId) }))
+        .map((template) => ({ template, oldDimensions: oldDimensionsById.get(template.templateId), oldMetadata: oldMetadataById.get(template.templateId) }))
         .filter(({ oldDimensions }) => oldDimensions);
       await notifyBuildersOfDimensionChangeBatch(db, dimensionChangeCandidates);
     }
@@ -2197,7 +2199,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       width: existing.width_m,
       depth: existing.depth_m,
       height: existing.height_m,
-    });
+    }, JSON.parse(existing.metadata_json || '{}'));
     // #976: same reasoning as the POST handler above -- re-select and map
     // through templateFromRow instead of the locally-constructed `template`
     // object, so imageUrl/imageEmbedding/createdAt/updatedAt come back
@@ -2428,6 +2430,40 @@ function reviewFromRow(row) {
   };
 }
 
+function dimensionsDiffer(a, b) {
+  return Math.abs(a.width - b.width) > 1e-4 ||
+    Math.abs(a.depth - b.depth) > 1e-4 ||
+    Math.abs(a.height - b.height) > 1e-4;
+}
+
+// #1734: metadata.extensible[axis].minM can tighten (or an axis's own
+// extensibility can be removed entirely) and metadata.flooring can be
+// toggled through the same PATCH/batch-upsert that resizes a template,
+// independently of width/depth/height — assertValidExtensible only
+// requires 0 < minM < the CURRENT max length, never that minM stayed the
+// same as before. Both are exactly as placement-relevant as an outright
+// dimension change: a tightened minM can leave an already-set crop below
+// the new floor (assertCropWithinTemplateBounds rejects it the next time
+// that instance is touched, per #338), and flooring changes meshDimensions'
+// own live footprint (src/main.js) for every existing placed copy. Treated
+// as its own "changed" reason, not folded into dimensionsDiffer, so the
+// notification wording below can say which actually happened.
+function extensibleMinMByAxis(metadata) {
+  const extensible = metadata?.extensible;
+  if (!extensible || typeof extensible !== 'object') return {};
+  return Object.fromEntries(Object.entries(extensible).map(([axis, entry]) => [axis, entry?.minM]));
+}
+
+function placementRelevantMetadataChanged(oldMetadata, newMetadata) {
+  const oldMinMByAxis = extensibleMinMByAxis(oldMetadata);
+  const newMinMByAxis = extensibleMinMByAxis(newMetadata);
+  const axes = new Set([...Object.keys(oldMinMByAxis), ...Object.keys(newMinMByAxis)]);
+  for (const axis of axes) {
+    if (oldMinMByAxis[axis] !== newMinMByAxis[axis]) return true;
+  }
+  return !!oldMetadata?.flooring !== !!newMetadata?.flooring;
+}
+
 // A seller changing a product's real-world size after it's already been
 // placed somewhere leaves every existing instance still looking like the
 // old size (createMeshForInstance never re-scales an already-placed
@@ -2435,12 +2471,10 @@ function reviewFromRow(row) {
 // landlet. Rather than try to auto-fix placements the seller never
 // touched, this just tells every builder who has one so they can decide
 // what to do about it themselves.
-async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
+async function notifyBuildersOfDimensionChange(db, template, oldDimensions, oldMetadata) {
   const { width, depth, height } = template.dimensions;
-  const changed = Math.abs(width - oldDimensions.width) > 1e-4 ||
-    Math.abs(depth - oldDimensions.depth) > 1e-4 ||
-    Math.abs(height - oldDimensions.height) > 1e-4;
-  if (!changed) return;
+  const dimensionsChanged = dimensionsDiffer(template.dimensions, oldDimensions);
+  if (!dimensionsChanged && !placementRelevantMetadataChanged(oldMetadata, template.metadata)) return;
 
   // #920: grouping (rather than SELECT DISTINCT) gets a real per-builder
   // count, so a builder with several placed copies of the resized template
@@ -2456,9 +2490,12 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
   if (results.length === 0) return;
 
   const fmt = (m) => `${m.toFixed(2)}m`;
+  const describeChange = dimensionsChanged
+    ? `was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)}`
+    : 'had its placement rules changed by its seller';
   await fireNotifications(db, results.map((row) => ({
     builderId: row.builderId,
-    message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+    message: `"${template.name}" ${describeChange} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
     templateId: template.templateId,
   })));
 }
@@ -2475,12 +2512,13 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions) {
 // function's own early-return) happens here, in-memory, so the grouped
 // query below only ever asks about templates genuinely worth notifying on.
 async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
-  const changed = candidates.filter(({ template, oldDimensions }) => {
-    const { width, depth, height } = template.dimensions;
-    return Math.abs(width - oldDimensions.width) > 1e-4 ||
-      Math.abs(depth - oldDimensions.depth) > 1e-4 ||
-      Math.abs(height - oldDimensions.height) > 1e-4;
-  });
+  const changed = candidates
+    .map(({ template, oldDimensions, oldMetadata }) => ({
+      template,
+      dimensionsChanged: dimensionsDiffer(template.dimensions, oldDimensions),
+      metadataChanged: placementRelevantMetadataChanged(oldMetadata, template.metadata),
+    }))
+    .filter(({ dimensionsChanged, metadataChanged }) => dimensionsChanged || metadataChanged);
   if (changed.length === 0) return;
 
   const templateIds = changed.map(({ template }) => template.templateId);
@@ -2498,14 +2536,17 @@ async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
   `).bind(...templateIds).all();
   if (results.length === 0) return;
 
-  const templateById = new Map(changed.map(({ template }) => [template.templateId, template]));
+  const changedById = new Map(changed.map((c) => [c.template.templateId, c]));
   const fmt = (m) => `${m.toFixed(2)}m`;
   await fireNotifications(db, results.map((row) => {
-    const template = templateById.get(row.templateId);
+    const { template, dimensionsChanged } = changedById.get(row.templateId);
     const { width, depth, height } = template.dimensions;
+    const describeChange = dimensionsChanged
+      ? `was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)}`
+      : 'had its placement rules changed by its seller';
     return {
       builderId: row.builderId,
-      message: `"${template.name}" was resized by its seller to ${fmt(width)} x ${fmt(depth)} x ${fmt(height)} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
+      message: `"${template.name}" ${describeChange} — you have ${row.instanceCount} placed. Check that it still fits where you put it.`,
       templateId: row.templateId,
     };
   }));

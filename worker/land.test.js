@@ -2228,6 +2228,99 @@ describe('Extensibility (crop floor)', () => {
     expect(cleared.body.template.metadata.extensible).toBeUndefined();
   });
 
+  // #1734: notifyBuildersOfDimensionChange used to only compare
+  // width/depth/height -- tightening metadata.extensible.x.minM (or
+  // removing an axis's extensibility) through this same PATCH changes what's
+  // actually safe for an already-placed, already-cropped instance just as
+  // much as an outright dimension shrink does, but fired no notification at
+  // all.
+  it('notifies hosting builders when a PATCH tightens metadata.extensible without changing dimensions', async () => {
+    const builder = await signupBuilder('extensible-notify-builder');
+    await createGreenbeltLandlet('extensible-notify-landlet');
+    await api('/landlets/extensible-notify-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'extensible-notify-template',
+        name: 'Extensible notify template',
+        color: '#111111',
+        dimensions: { width: 4, depth: 1, height: 1 },
+        metadata: { extensible: { x: { minM: 1 } } },
+      }),
+    });
+    await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'extensible-notify-instance',
+        landletId: 'extensible-notify-landlet',
+        templateId: 'extensible-notify-template',
+        x: 1, y: 1,
+      }),
+    }));
+
+    const tightened = await api('/catalog/extensible-notify-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: { extensible: { x: { minM: 2 } } } }),
+    });
+    expect(tightened.response.status).toBe(200);
+
+    const notices = await api('/notifications', builder.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('had its placement rules changed by its seller');
+    expect(notices.body.notifications[0].templateId).toBe('extensible-notify-template');
+
+    // A PATCH that doesn't touch extensible/flooring at all (just the name)
+    // is a genuinely unrelated change -- still no second notification.
+    const unrelated = await api('/catalog/extensible-notify-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Extensible notify template (renamed)' }),
+    });
+    expect(unrelated.response.status).toBe(200);
+    const noticesAfterUnrelated = await api('/notifications', builder.session());
+    expect(noticesAfterUnrelated.body.notifications).toHaveLength(1);
+  });
+
+  // #1734: same gap, for metadata.flooring -- toggling it changes
+  // meshDimensions' own live footprint for every existing placed copy
+  // (src/main.js) without touching width/depth/height at all, so the
+  // dimension-only "changed" check never fired for it either.
+  it('notifies hosting builders when a PATCH toggles metadata.flooring', async () => {
+    const builder = await signupBuilder('flooring-notify-builder');
+    await createGreenbeltLandlet('flooring-notify-landlet');
+    await api('/landlets/flooring-notify-landlet/claim', builder.session({ method: 'POST' }));
+
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'flooring-notify-template',
+        name: 'Flooring notify template',
+        color: '#111111',
+        dimensions: { width: 2, depth: 2, height: 1 },
+      }),
+    });
+    await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'flooring-notify-instance',
+        landletId: 'flooring-notify-landlet',
+        templateId: 'flooring-notify-template',
+        x: 1, y: 1,
+      }),
+    }));
+
+    const toggled = await api('/catalog/flooring-notify-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata: { flooring: true } }),
+    });
+    expect(toggled.response.status).toBe(200);
+
+    const notices = await api('/notifications', builder.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('had its placement rules changed by its seller');
+    expect(notices.body.notifications[0].templateId).toBe('flooring-notify-template');
+  });
+
   // Found via backlog audit (#338): shrinking a template's width (or
   // raising its extensible.x.minM) after an instance already has a valid
   // crop set used to brick that instance -- any later PATCH re-validated
