@@ -864,6 +864,14 @@ translateControls.addEventListener('objectChange', () => {
         mesh.position.set(start.x + offset.x, start.y + offset.y, start.z + offset.z);
       }
     }
+    // #1770: the single-item branch below clamps a flooring instance's Z to
+    // stay flush with the ground (see isFlooringTemplate) -- apply the same
+    // override here per-mesh, after the shared group offset above, so a
+    // flooring tile in a multi-select group can't be lifted into the air
+    // along with the rest of the group.
+    for (const mesh of meshes) {
+      if (isFlooringTemplate(mesh.userData.template)) mesh.position.z = FLOORING_THICKNESS_M / 2;
+    }
     // Snap the pivot itself to the actually-applied (possibly reduced)
     // offset rather than the raw gizmo position, so the displayed gizmo
     // can't visually drift ahead of where the group really stopped.
@@ -895,6 +903,22 @@ translateControls.addEventListener('objectChange', () => {
   object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
   object.position.set(resolved.x, resolved.y, resolved.z);
 });
+
+// #1770: same reasoning as window.__testTeleportShopAvatar and the other
+// window.__test* hooks elsewhere in this file -- lets a test move a multi-
+// select group's Z precisely, without needing to mouse-drag the 3D gizmo's
+// own blue arrow handle (whose screen-space position depends on camera
+// framing). Only does anything once translateControls is already attached
+// to groupMovePivot (i.e. 2+ items are selected in Move mode, the normal
+// precondition for a real group drag) -- inert otherwise.
+window.__testDragGroupMoveZ = (offsetZ) => {
+  if (translateControls.object !== groupMovePivot) return false;
+  translateControls.dispatchEvent({ type: 'dragging-changed', value: true });
+  groupMovePivot.position.z += offsetZ;
+  translateControls.dispatchEvent({ type: 'objectChange' });
+  translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  return true;
+};
 
 // Trim: shortens an extensible product (see extensibleAxes) along its
 // seller-declared axis — cutting a door or a length of lumber down to fit,
