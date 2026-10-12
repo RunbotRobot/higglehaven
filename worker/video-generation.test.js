@@ -325,6 +325,29 @@ describe('Video-to-3D job creation (#1619)', () => {
     expect(rows.results).toHaveLength(1);
   });
 
+  // #1783: the dedup path above used to charge the same real-cost rate
+  // limit this test exercises, before ever reaching reserveVideoGenerationJob
+  // -- a repeat call while a job is still in flight (the frontend's own
+  // disabled-button guard resets on a page reload) could exhaust the
+  // budget on pure no-ops, leaving no headroom for a genuinely new job
+  // once the in-flight one finished.
+  it('does not charge the real-cost rate limit on a dedup return', async () => {
+    const builder = await signupBuilder('video-gen-dedup-no-charge');
+    const first = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+
+    // 15 repeats > the 10-per-window real-cost limit the test just below
+    // this one exercises -- if the dedup path charged that same bucket,
+    // this loop alone would trip a 429 well before it finishes.
+    for (let i = 0; i < 15; i++) {
+      const repeat = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+      expect(repeat.status).toBe(200);
+      const repeatBody = await repeat.json();
+      expect(repeatBody.jobId).toBe(firstBody.jobId);
+    }
+  });
+
   it('rate-limits repeated job-creation attempts from the same builder', async () => {
     const builder = await signupBuilder('video-gen-rate-limit');
     // Each attempt must land as a distinct job (not the dedup path above),

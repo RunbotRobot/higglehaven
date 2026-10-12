@@ -7839,15 +7839,30 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     }
   }
 
-  await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
   if (!tripoConfigured(env)) {
     throw new HttpError('Video-to-3D generation is not configured on this server yet.', 503);
   }
+  // #1783: a repeat call while a job is already in flight is the common
+  // case, not the rare one -- the frontend's own disabled-button guard
+  // resets on a page reload, so a builder waiting out a ~2-minute Tripo
+  // job can easily re-trigger this several times. Checking for one here,
+  // before the real-cost rate limit below, means that never charges it --
+  // same shape as handleDiditVerificationSession's own latestDiditSession
+  // pre-check, which resolves an already-pending session via a separate,
+  // cheaper bucket before its real-cost didit-session: one is ever
+  // reached. (reserveVideoGenerationJob's own dedup branch below still
+  // exists to atomically catch a genuine concurrent-race double-submit
+  // this pre-check can't see -- same residual gap Didit's own
+  // reserveDiditSession has for the identical reason.)
+  const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
+  if (latest && latest.processed_at === null) {
+    return json({ jobId: latest.job_id, status: latest.status });
+  }
+  await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
   const { reservationId, existing } = await reserveVideoGenerationJob(db, sessionBuilder.builder_id);
   if (!reservationId) {
-    // Lost the race, or simply an ordinary repeat call while a job is
-    // already in flight -- hand back that job instead of ever calling
-    // Tripo again.
+    // Lost a genuine concurrent race against another request for this
+    // same builder -- hand back that one instead of ever calling Tripo.
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
