@@ -1730,6 +1730,104 @@ describe('Worker API', () => {
     expect((await api('/instances/instance-batch-owned-seed')).response.status).toBe(200);
   });
 
+  // #1772/#1773: unlike the test above (ownership never held at all, caught
+  // by the upfront requireOwnedLandlets check before any write runs), this
+  // covers the actual race those issues describe — ownership of one of two
+  // landlets in the SAME batch changing in the window between that upfront
+  // check and the db.batch() write that follows it. db.batch() has no
+  // atomic rollback on a WHERE-guard mismatch (same D1 semantics the
+  // single-instance PATCH handler's own #1022 comment documents), so
+  // landlet A's write must land for real even though landlet B's guard
+  // fails — the bug was reporting a blanket failure (or, for DELETE,
+  // silently losing real rows) instead of this partial outcome.
+  it('reports exactly which instances were rejected, without losing ones that landed, when a landlet in a multi-landlet batch changes owner mid-request', async () => {
+    const owner = await signupBuilder('instance-batch-race-owner');
+    const newOwner = await signupBuilder('instance-batch-race-new-owner');
+    await createGreenbeltLandlet('instance-batch-race-landlet-a', { x: 6000, y: 600 });
+    await createGreenbeltLandlet('instance-batch-race-landlet-b', { x: 6000, y: 800 });
+    expect((await api('/landlets/instance-batch-race-landlet-a/claim', owner.session({ method: 'POST' }))).response.status).toBe(200);
+    // Self-claim only ever grants one landlet at a time (the one-claimed-
+    // landlet-per-builder invariant, worker/index.js ~line 12086) -- but a
+    // builder genuinely can own two simultaneously via a second landlet
+    // won at auction (resolveAuction transfers ownership purely on a
+    // land-cap *area* check, not a landlet-count one). Granting B directly
+    // here is the same real end state, without standing up a full auction.
+    await env.DB.prepare("UPDATE landlets SET owner_builder_id = ?, status = 'claimed' WHERE landlet_id = ?")
+      .bind(owner.builderId, 'instance-batch-race-landlet-b').run();
+
+    // A pre-existing flagged instance on landlet B, so the PUT batch below
+    // also exercises the #1675 sign-cleanup-on-unflag path -- a rejected
+    // write must not trigger that cleanup, since the flag never actually
+    // changed if the write itself never landed.
+    const seeded = await api('/instances/batch', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ instances: [
+        { instanceId: 'instance-batch-race-b', landletId: 'instance-batch-race-landlet-b', templateId: 'placeholder-tree', x: 0, y: 0, isCommunitySign: true },
+      ] }),
+    }));
+    expect(seeded.response.status).toBe(201);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    env.DB.batch = async (statements) => {
+      // Simulates landlet B's ownership changing in the exact window
+      // between requireOwnedLandlets' own check (which already passed,
+      // above) and this db.batch() write.
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, 'instance-batch-race-landlet-b').run();
+      return originalBatch(statements);
+    };
+    let result;
+    try {
+      result = await api('/instances/batch', owner.session({
+        method: 'PUT',
+        body: JSON.stringify({ instances: [
+          { instanceId: 'instance-batch-race-a', landletId: 'instance-batch-race-landlet-a', templateId: 'placeholder-chair', x: 0, y: 0 },
+          { instanceId: 'instance-batch-race-b', landletId: 'instance-batch-race-landlet-b', templateId: 'placeholder-tree', x: 0, y: 0, isCommunitySign: false },
+        ] }),
+      }));
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+
+    expect(result.response.status).toBe(200);
+    expect(result.body.instances.map((instance) => instance.instanceId)).toEqual(['instance-batch-race-a']);
+    expect(result.body.rejectedInstanceIds).toEqual(['instance-batch-race-b']);
+    expect((await api('/instances/instance-batch-race-a')).response.status).toBe(200);
+    // B's write never landed -- its own row (and sign flag) must be
+    // untouched, not just "still exists".
+    const stillB = await api('/instances/instance-batch-race-b');
+    expect(stillB.response.status).toBe(200);
+    expect(stillB.body.instance.isCommunitySign).toBe(true);
+    const signRow = await env.DB.prepare('SELECT COUNT(*) AS count FROM sign_posts WHERE instance_id = ?')
+      .bind('instance-batch-race-b').first();
+    expect(signRow.count).toBe(0); // never had a post, just confirms the table wasn't touched by the skipped cleanup
+
+    // Same race, DELETE this time -- restore landlet B to owner directly
+    // (the race above left newOwner holding it) so this half starts clean.
+    await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+      .bind(owner.builderId, 'instance-batch-race-landlet-b').run();
+
+    env.DB.batch = async (statements) => {
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, 'instance-batch-race-landlet-b').run();
+      return originalBatch(statements);
+    };
+    let deleteResult;
+    try {
+      deleteResult = await api('/instances/batch', owner.session({
+        method: 'DELETE',
+        body: JSON.stringify({ instanceIds: ['instance-batch-race-a', 'instance-batch-race-b'] }),
+      }));
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(deleteResult.response.status).toBe(200);
+    expect(deleteResult.body.deletedInstanceIds).toEqual(['instance-batch-race-a']);
+    expect(deleteResult.body.rejectedInstanceIds).toEqual(['instance-batch-race-b']);
+    expect((await api('/instances/instance-batch-race-a')).response.status).toBe(404);
+    expect((await api('/instances/instance-batch-race-b')).response.status).toBe(200);
+  });
+
   it('claims an available greenbelt landlet', async () => {
     const created = await createGreenbeltLandlet('claimable-landlet', { x: 6000, y: 600 });
     expect(created.response.status).toBe(201);

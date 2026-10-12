@@ -3366,28 +3366,52 @@ Fetches one placed instance.
 ### `PUT /api/instances/batch`
 ### `DELETE /api/instances/batch`
 
-Atomically writes between 1 and 100 placed instances. Requires a session,
-and every landlet touched — each instance's target `landletId`, plus (for
-`PUT`) any existing instance's current `landletId`, since it can move an
-instance between landlets — must belong to the calling session's builder
-(`403` otherwise). Instances have no `builderId` field of their own to
-check; ownership is always resolved through the landlet they sit on, the
-same as every other instance endpoint below. The request body wraps
-normal instance-create objects under `instances`. Instance IDs must be unique
-within the request, and every referenced catalog template and landlet is
-validated with bounded set queries before insertion. `POST` is create-only and
-returns `201`; a duplicate stored ID returns `409`. `PUT` replaces stored IDs,
-creates missing IDs, and returns `200`, making bounded draft synchronization
-idempotent. An invalid reference returns `400`; any failure leaves the entire
-batch unchanged. Success returns the instances in request order.
-Returned instances are read back from D1, so database-managed `createdAt` and
-`updatedAt` timestamps are included just as they are on normal instance reads.
+Writes between 1 and 100 placed instances. Requires a session, and every
+landlet touched — each instance's target `landletId`, plus (for `PUT`) any
+existing instance's current `landletId`, since it can move an instance
+between landlets — must belong to the calling session's builder (`403`
+otherwise, checked up front before any write). Instances have no
+`builderId` field of their own to check; ownership is always resolved
+through the landlet they sit on, the same as every other instance endpoint
+below. The request body wraps normal instance-create objects under
+`instances`. Instance IDs must be unique within the request, and every
+referenced catalog template and landlet is validated with bounded set
+queries before insertion. `POST` is create-only and returns `201`; a
+duplicate stored ID returns `409`. `PUT` replaces stored IDs, creates
+missing IDs, and returns `200`, making bounded draft synchronization
+idempotent. An invalid reference, or the caller never owning a touched
+landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
+
+**Partial rejection (#1772).** The batch spans an arbitrary set of distinct
+landlets, each independently re-guarded at write time against the
+possibility that its ownership changed in the moment between the up-front
+check above and this request's own write (a landlet transfer, an auction
+resolving, landing in that exact window). Since those per-landlet guards
+are evaluated independently, one landlet's instances can fail that guard
+while another's, in the very same request, still land. When every instance
+in the batch is rejected this way, the whole request fails cleanly with
+`409` (nothing was written — safe to refetch and retry as before). When
+only *some* are, the response still succeeds (`201`/`200`) and reports
+both halves: `instances` (only the ones that actually landed, read back
+from D1 with their `createdAt`/`updatedAt`) and `rejectedInstanceIds` (the
+ones a since-changed landlet ownership rejected). A caller must treat a
+listed id as never having been written this request, same as before this
+fix existed — `src/api.js`'s `createInstancesRemote`/`upsertInstancesRemote`
+surface a non-empty `rejectedInstanceIds` as a thrown error carrying
+`succeededCount`, the same convention `#903`'s chunk-level accounting
+already uses, so a caller already handling that field needs no further
+change.
 
 `DELETE` accepts 1–100 unique IDs under `instanceIds`. Every ID is preflighted
-before deletion; a missing ID returns `404` and leaves the entire batch
-unchanged. Requires a session, and every one of the deleted instances'
-`landletId`s must belong to the calling session's builder (`403` otherwise).
-Success returns `deletedInstanceIds` in request order.
+before deletion (a missing ID returns `404` and leaves the entire batch
+unchanged), and requires a session where every one of the deleted
+instances' `landletId`s belongs to the calling session's builder (`403`
+otherwise, checked up front). Success returns `deletedInstanceIds` in
+request order, plus `rejectedInstanceIds` (**#1773**, the `DELETE` sibling
+of `#1772` just above) for any instance a since-changed landlet ownership
+protected from deletion rather than silently losing it from a blanket
+failure — `deleteInstancesRemote` treats a non-empty `rejectedInstanceIds`
+the same way, via the same `succeededCount` convention.
 
 ### `POST /api/instances`
 
