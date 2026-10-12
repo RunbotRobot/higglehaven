@@ -631,6 +631,28 @@ export async function uploadModelFile(file) {
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
 
+// #1620 (sub-issue of #1616): kicks off an async video-to-3D generation
+// job -- framesForm holds up to four view images (fields named 'front',
+// 'left', 'back', 'right') extracted client-side from the seller's video,
+// per worker/index.js's handleVideoGenerationJobCreate. A raw multipart
+// body like uploadModelFile above, not JSON.
+export async function createVideoGenerationJob(framesForm) {
+  const response = await fetch(`${API_BASE}/video-generation-jobs`, { method: 'POST', body: framesForm });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Video generation request failed with HTTP ${response.status}`);
+  }
+  return response.json(); // { jobId, status }
+}
+
+// Polled by the frontend while a video-to-3D job is in flight (the
+// backend itself reconciles against the provider directly here, the same
+// "not just reporting a possibly-stale local row" shape
+// fetchDiditVerificationStatus above already has).
+export async function fetchVideoGenerationJobStatus(jobId) {
+  return requestJson(`/video-generation-jobs/${encodeURIComponent(jobId)}`); // { jobId, status, modelUrl, error }
+}
+
 export async function createCatalogTemplate(template) {
   const { template: created } = await requestJson('/catalog', {
     method: 'POST',

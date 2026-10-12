@@ -4063,7 +4063,7 @@
               <option value="avatar-model">Avatar model</option>
             </select>
           </label>
-          <div class="field-with-tooltip">
+          <div id="upload-file-field-row" class="field-with-tooltip">
             <label id="upload-file-label">
               .glb or .fbx file
               <input id="upload-file-input" type="file" accept=".glb,model/gltf-binary,.fbx" />
@@ -4074,6 +4074,24 @@
             We'll automatically reduce its geometry and texture detail before uploading — typically shrinks it by
             80&ndash;95%. Pick anything up to 20MB; smaller starting files optimize faster. A .fbx file is converted
             to .glb right in your browser first — nothing but the converted file ever gets uploaded.
+          </div>
+          <button id="upload-mode-video-btn" type="button" class="auth-link-btn">
+            &#128249; Or generate a model from a video instead
+          </button>
+          <div id="upload-video-section" hidden>
+            <div class="field-with-tooltip">
+              <label id="upload-video-label">
+                Short video of the object
+                <input id="upload-video-input" type="file" accept="video/*" capture="environment" />
+              </label>
+              <button id="upload-video-hint-btn" class="info-tooltip-btn" type="button" aria-expanded="false" aria-controls="upload-video-hint" aria-label="More info about video generation">?</button>
+            </div>
+            <div id="upload-video-hint" class="info-tooltip-popup" hidden>
+              Works best for a single, well-lit object on its own — walk slowly all the way around it for a few
+              seconds. Cluttered or busy scenes often come out poorly. Generation runs in the background and can
+              take a couple of minutes.
+            </div>
+            <button id="upload-mode-file-btn" type="button" class="auth-link-btn">Back to manual file upload</button>
           </div>
         </div>
         <div id="upload-step-dimensions" hidden>

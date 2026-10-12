@@ -3602,7 +3602,9 @@ describe('Simulated purchases', () => {
       }
       const limited = await api(`/purchases/${purchaseIds[20]}/refund`, seller.session({ method: 'POST' }));
       expect(limited.response.status).toBe(429);
-    });
+    }, 30000); // #1656: same 21-sequential-request shape as the mark-shipped
+    // rate-limit test just below, which already carries this same override
+    // -- missed here when this test was authored "using the same technique."
   });
 
   // #732: unlike DELETE /api/builders/:builderId (which already guards a
@@ -4449,7 +4451,9 @@ describe('Simulated purchases', () => {
       const stuck = await claimOrResumeSellerPayout(env.DB, seller.sellerId);
       expect(stuck.resumed).toBe(true);
       expect(stuck.claimed.map((p) => p.purchase_id)).toEqual([stuckPurchaseId]);
-    });
+    }, 30000); // #1656: three makeRealMoneyPurchase calls, each several
+    // sequential HTTP round trips -- same CI-load timeout margin issue as
+    // the rate-limit tests above.
 
     // #969: proves the resume branch actually gets taken through the real
     // POST /sellers/me/payouts endpoint, not just the extracted primitive
@@ -4691,7 +4695,9 @@ describe('Simulated purchases', () => {
         const blocked = await api('/sellers/me/payouts', seller.session({ method: 'POST' }));
         expect(blocked.response.status).toBe(403);
         expect(blocked.body.error).toMatch(/tax-reporting/i);
-      });
+      }, 30000); // #1656: two makeRealMoneyPurchase calls plus several more
+      // API calls -- same CI-load timeout margin issue as the rate-limit
+      // tests above.
 
       // #1335: same unfiltered-`eligible` gap #1087 fixed just above for
       // eligibleGrossCents, missed in the inclusion loop itself -- a stale
