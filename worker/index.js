@@ -4548,11 +4548,23 @@ async function handleDirectMessages(request, db, route, url) {
     // writePurchaseRow's own idempotency check, keyed off message_id
     // itself the same way.
     const idempotencyKey = directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, input.idempotencyKey);
+    let existing = null;
     if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ message: directMessageFromRow(existing) });
+      existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
+      // #1750: the client only clears its cached key on a successful send
+      // (src/main.js's compose handler), so a dropped response followed by
+      // a genuinely different message to the same recipient within the
+      // 5-minute TTL reuses this same key. Returning the stale row here
+      // unconditionally would silently swallow that different message —
+      // only treat this as the retry it's meant to catch when the text
+      // actually matches.
+      if (existing && existing.text === text) return json({ message: directMessageFromRow(existing) });
     }
-    const messageId = idempotencyKey || `message-${crypto.randomUUID()}`;
+    // A key that collided with someone else's differently-texted row (the
+    // mismatch above) must not be reused as this row's own id — it already
+    // belongs to that other row. Mint a genuine fresh id instead, same as
+    // the "missing/malformed key" fallback below already does.
+    const messageId = (idempotencyKey && !existing) ? idempotencyKey : `message-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
     `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();
