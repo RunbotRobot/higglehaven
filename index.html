@@ -766,7 +766,8 @@
          it never needs separate JS bookkeeping beyond the badge
          hidden-attribute toggles refreshNotificationsBadge/friends already do. */
       #account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after,
-      #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after {
+      #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after,
+      #account-menu:has(#dm-badge:not([hidden])) #account-menu-toggle::after {
         content: '';
         position: absolute;
         top: 2px;
@@ -839,7 +840,8 @@
         opacity: 0.75;
       }
       #notifications-badge,
-      #friends-badge {
+      #friends-badge,
+      #dm-badge {
         display: inline-block;
         min-width: 15px;
         margin-left: 5px;
@@ -852,7 +854,8 @@
         text-align: center;
       }
       #notifications-badge[hidden],
-      #friends-badge[hidden] {
+      #friends-badge[hidden],
+      #dm-badge[hidden] {
         display: none;
       }
       /* The three peer top-level views — always reachable regardless of
@@ -3906,7 +3909,12 @@
         <div id="account-menu-panel">
           <button id="account-auth-btn" type="button">Log In / Sign Up</button>
           <button id="notifications-btn" type="button">Notices<span id="notifications-badge" hidden>0</span></button>
-          <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span></button>
+          <!-- #1661: dm-badge is a second, independent count (unread direct
+               messages) sharing this same button, since that's the only
+               entry point into messaging (openDmModal, reached per-friend
+               from the Friends panel) -- distinct from friends-badge's own
+               meaning (pending incoming friend requests). -->
+          <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
           <button id="my-lands-btn" type="button">My Lands</button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
