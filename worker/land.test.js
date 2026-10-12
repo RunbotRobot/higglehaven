@@ -1279,6 +1279,52 @@ describe('Community signs', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1718: a retried POST (a dropped response, not a double-click) used to
+  // create a second, fully duplicate sign_posts row for the same logical
+  // post — same "lost response looks like it never reached the server"
+  // idempotency-key protection as the calendar flow's own #1716 fix and the
+  // purchase flow's original #473 fix.
+  it('does not create a duplicate post when the same idempotencyKey is retried', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-post-idempotency-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 8,
+        y: 8,
+        isCommunitySign: true,
+      }),
+    }));
+
+    const first = await api('/instances/sign-post-idempotency-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
+    });
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/instances/sign-post-idempotency-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
+    });
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.post.postId).toBe(first.body.post.postId);
+
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM sign_posts WHERE instance_id = ?')
+      .bind('sign-post-idempotency-instance').first();
+    expect(count.n).toBe(1);
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // post, still created normally — this isn't a dedup-everything guard,
+    // only same-key retries.
+    const separate = await api('/instances/sign-post-idempotency-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'A second, different post' }),
+    });
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.post.postId).not.toBe(first.body.post.postId);
+    const countAfterSeparate = await env.DB.prepare('SELECT COUNT(*) AS n FROM sign_posts WHERE instance_id = ?')
+      .bind('sign-post-idempotency-instance').first();
+    expect(countAfterSeparate.n).toBe(2);
+  });
+
   // #827: unlike almost every other authenticated write in this file,
   // placed_instances creates/updates/deletes (single and batch alike) had no
   // checkRateLimit call at all. INSTANCE_WRITE_RATE_LIMIT_MAX is deliberately
