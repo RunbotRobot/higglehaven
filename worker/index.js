@@ -8088,6 +8088,15 @@ async function handleSellerStripeAccount(request, env, db) {
       // submission's own state instead of this one's.
       await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
       const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
+      // #1780: changes === 0 isn't always "a winner" -- this seller's own
+      // row can also just be gone (a concurrent self-delete landing before
+      // the UPDATE above, while this request was still awaiting the
+      // outbound Stripe create call). Falling through to
+      // stripeAccountStatusJson(env, undefined) would throw a TypeError
+      // dereferencing stripe_account_id, surfacing as an opaque 500
+      // instead of a clean "not found" -- the Stripe account is already
+      // cleaned up either way, so there's nothing left to do but report it.
+      if (!winner) throw new HttpError('Seller not found', 404);
       return json(stripeAccountStatusJson(env, winner));
     }
 
@@ -8149,6 +8158,9 @@ async function handleBuilderStripeAccount(request, env, db) {
     if (createdNewAccount && result.meta.changes === 0) {
       await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
       const winner = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
+      // #1780: same "a concurrent self-delete, not just a race loser" gap
+      // as the seller sibling above.
+      if (!winner) throw new HttpError('Builder not found', 404);
       return json(stripeAccountStatusJson(env, winner));
     }
 

@@ -133,6 +133,57 @@ describe('Seller Stripe Connect account', () => {
     }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #1780: createdNewAccount's own race-recovery branch assumed
+  // changes === 0 always means "another concurrent create already won" —
+  // but a concurrent self-delete landing in the same window (while this
+  // request awaits the outbound Stripe create call) produces
+  // changes === 0 too, with no row left to re-SELECT.
+  // stripeAccountStatusJson(env, undefined) used to throw, surfacing as an
+  // opaque 500 instead of a clean 404. Mocks Stripe's own API outright
+  // (same idiom worker/video-generation.test.js's own globalThis.fetch
+  // override uses for Tripo) since this suite never otherwise configures
+  // STRIPE_SECRET_KEY — scoped to this one test via try/finally so it
+  // can't leak into every other test in this file that relies on Stripe
+  // staying unconfigured. Same db.prepare monkey-patch idiom as the
+  // stripe-account-reset race tests above, injecting the concurrent
+  // self-delete right as the real request's own UPDATE is about to run.
+  it('returns a clean 404, not a 500, when the seller self-deletes while their first Stripe account creation is in flight', async () => {
+    const seller = await signupSeller('stripe-create-delete-race-seller');
+    const originalFetch = globalThis.fetch;
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE sellers') && sql.includes('stripe_account_id IS NULL')) {
+        armed = false;
+        originalPrepare('DELETE FROM sellers WHERE seller_id = ?').bind(seller.sellerId).run();
+      }
+      return originalPrepare(sql);
+    };
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_create_delete_race', requirements: { currently_due: [] } }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race' && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let result;
+    try {
+      result = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(result.response.status).toBe(404);
+    expect(result.body.error).toMatch(/Seller not found/);
+  });
 });
 
 // #624 (sub-issue of #349/#324): the same Custom-account onboarding flow
@@ -230,6 +281,44 @@ describe('Builder Stripe Connect account (#624)', () => {
       method: 'POST', body: JSON.stringify(validPayload()),
     }));
     expect(limited.response.status).toBe(429);
+  });
+
+  // #1780: same gap/fix as the seller-account sibling test above.
+  it('returns a clean 404, not a 500, when the builder self-deletes while their first Stripe account creation is in flight', async () => {
+    const builder = await signupBuilder('stripe-create-delete-race-builder');
+    const originalFetch = globalThis.fetch;
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE builders') && sql.includes('stripe_account_id IS NULL')) {
+        armed = false;
+        originalPrepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+      }
+      return originalPrepare(sql);
+    };
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_create_delete_race_builder', requirements: { currently_due: [] } }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race_builder' && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let result;
+    try {
+      result = await api('/builders/me/stripe-account', builder.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(result.response.status).toBe(404);
+    expect(result.body.error).toMatch(/Builder not found/);
   });
 });
 
