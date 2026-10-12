@@ -10095,6 +10095,15 @@ async function handleLandlets(request, db, route, url) {
     // Mirrors that sibling's constant/bucket shape now that the gap is
     // closed for real.
     await checkRateLimit(db, `landlet-claim:${builderId}`, LANDLET_CLAIM_RATE_LIMIT_MAX);
+    // #1703: this free self-claim path never checked landlet_class/area_m2
+    // against anything -- docs/SPEC.md's own "every signup can claim one
+    // free 1,000 m² lándlet... Class 2+ reachable only via auction" rule
+    // means a Class 2+ greenbelt landlet (reachable today via an admin
+    // generate-ring call using distribution: 'power-law', per SPEC's own
+    // "confirmed authoritative" size distribution) must never be grantable
+    // through this free path, regardless of the claiming builder's own
+    // land cap -- auction is the only paid route to more than the starter
+    // size, by design.
     const result = await db.prepare(`
       UPDATE landlets
       SET status = 'claimed', owner_builder_id = ?,
@@ -10104,6 +10113,7 @@ async function handleLandlets(request, db, route, url) {
         AND status = 'greenbelt'
         AND owner_builder_id IS NULL
         AND landlet_type != 'water'
+        AND landlet_class = 1
         AND NOT EXISTS (
           SELECT 1 FROM landlets AS owned
           WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
@@ -11812,13 +11822,18 @@ function candidateMaterializationStatements(db, candidates) {
 }
 
 async function explainClaimConflict(db, landletId, builderId) {
-  const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+  const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!landlet) throw new HttpError('Landlet not found', 404);
   if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
     throw new HttpError('Landlet is not available to claim', 409);
+  }
+  // #1703: a Class 2+ landlet (landlet_class > 1) is never free to claim --
+  // only an auction win grants more than the free Class 1 starter size.
+  if (landlet.landlet_class !== 1) {
+    throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
   }
 
   const owned = await db.prepare(`
