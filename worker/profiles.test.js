@@ -542,9 +542,12 @@ describe('Builders', () => {
     const deleted = await api(`/builders/${firstBidder.builderId}`, firstBidder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
 
-    // The auction itself, and the still-leading bidder, are unaffected.
+    // The auction itself, and the still-leading bidder, are unaffected —
+    // and (#1691) the deleted builder's own non-leading bid survives their
+    // self-delete too, rather than silently vanishing from the auction's
+    // public bid history for the seller/other bidders still watching it.
     const bids = await api(`/auctions/${auctionId}/bids`);
-    expect(bids.body.bids.map((b) => b.bidderBuilderId)).toEqual([secondBidder.builderId]);
+    expect(bids.body.bids.map((b) => b.bidderBuilderId)).toEqual([secondBidder.builderId, firstBidder.builderId]);
   });
 
   it('allows deleting a builder whose leading bid was on an auction that already ended', async () => {
@@ -565,6 +568,42 @@ describe('Builders', () => {
 
     const deleted = await api(`/builders/${bidder.builderId}`, bidder.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
+  });
+
+  // #1691: bidder_builder_id used to cascade on self-delete even for a
+  // losing bid on an already-resolved auction — silently shrinking the
+  // auction's own public bid history/count for the seller and every other
+  // bidder who can still see it, even though nothing about the auction's
+  // outcome changed. The test above only checked that deletion itself
+  // succeeds; this checks the bid row (and the auction's totalCount) are
+  // unaffected by it.
+  it("a losing bidder self-deleting doesn't shrink the auction's own bid history", async () => {
+    const seller = await signupBuilder('losing-bidder-delete-seller');
+    const winner = await signupBuilder('losing-bidder-delete-winner');
+    const loser = await signupBuilder('losing-bidder-delete-loser');
+    await fundHiggles(winner);
+    await fundHiggles(loser);
+    await createGreenbeltLandlet('losing-bidder-delete-landlet');
+    await api('/landlets/losing-bidder-delete-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/losing-bidder-delete-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, loser.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${auctionId}/bids`, winner.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+
+    const deleted = await api(`/builders/${loser.builderId}`, loser.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.totalCount).toBe(2);
+    expect(bids.body.bids.map((b) => b.bidderBuilderId)).toContain(loser.builderId);
   });
 
   // Backlog audit: resolveAuction's own "active" -> "ended" status flip
