@@ -750,6 +750,66 @@ describe('Community signs', () => {
     expect(list.body.posts).toHaveLength(0);
   });
 
+  // #1675: same #1022 cleanup as the single-instance test just above, but
+  // for PUT /instances/batch -- src/api.js's upsertInstancesRemote uses
+  // this endpoint for a multi-item group move or an undo/redo snapshot
+  // restore, and that sibling path never got the sign_posts/calendar_events
+  // cleanup the single-instance PATCH handler has had since #1022.
+  it('clears old sign posts when unflagged via a batch update, so a later reflag does not resurrect them', async () => {
+    await api('/instances/batch', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'sign-batch-unflag-reflag-instance',
+          landletId: signsLandlet,
+          templateId: 'placeholder-tree',
+          x: 4,
+          y: 4,
+          isCommunitySign: true,
+        }],
+      }),
+    }));
+    const posted = await api('/instances/sign-batch-unflag-reflag-instance/posts', {
+      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Batch-path post' }),
+    });
+    expect(posted.response.status).toBe(201);
+
+    const unflagged = await api('/instances/batch', signsBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'sign-batch-unflag-reflag-instance',
+          landletId: signsLandlet,
+          templateId: 'placeholder-tree',
+          x: 4,
+          y: 4,
+          isCommunitySign: false,
+        }],
+      }),
+    }));
+    expect(unflagged.response.status).toBe(200);
+    expect(unflagged.body.instances[0].isCommunitySign).toBe(false);
+
+    const reflagged = await api('/instances/batch', signsBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'sign-batch-unflag-reflag-instance',
+          landletId: signsLandlet,
+          templateId: 'placeholder-tree',
+          x: 4,
+          y: 4,
+          isCommunitySign: true,
+        }],
+      }),
+    }));
+    expect(reflagged.response.status).toBe(200);
+    expect(reflagged.body.instances[0].isCommunitySign).toBe(true);
+
+    const list = await api('/instances/sign-batch-unflag-reflag-instance/posts');
+    expect(list.body.posts).toHaveLength(0);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).
@@ -1214,6 +1274,64 @@ describe('Community calendar', () => {
     expect(reflagged.body.instance.isCommunityCalendar).toBe(true);
 
     const list = await api('/instances/calendar-unflag-reflag-instance/events');
+    expect(list.body.events).toHaveLength(0);
+  });
+
+  // #1675: same #1022 cleanup as the single-instance test just above, but
+  // for PUT /instances/batch -- see the sibling community-signs batch test
+  // above for the full reasoning.
+  it('clears old calendar events when unflagged via a batch update, so a later reflag does not resurrect them', async () => {
+    await api('/instances/batch', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'calendar-batch-unflag-reflag-instance',
+          landletId: calendarLandlet,
+          templateId: 'placeholder-tree',
+          x: 8,
+          y: 8,
+          isCommunityCalendar: true,
+        }],
+      }),
+    }));
+    const posted = await api('/instances/calendar-batch-unflag-reflag-instance/events', calendarBuilder.session({
+      method: 'POST', body: JSON.stringify({ text: 'Batch-path event' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const unflagged = await api('/instances/batch', calendarBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'calendar-batch-unflag-reflag-instance',
+          landletId: calendarLandlet,
+          templateId: 'placeholder-tree',
+          x: 8,
+          y: 8,
+          isCommunityCalendar: false,
+        }],
+      }),
+    }));
+    expect(unflagged.response.status).toBe(200);
+    expect(unflagged.body.instances[0].isCommunityCalendar).toBe(false);
+
+    const reflagged = await api('/instances/batch', calendarBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'calendar-batch-unflag-reflag-instance',
+          landletId: calendarLandlet,
+          templateId: 'placeholder-tree',
+          x: 8,
+          y: 8,
+          isCommunityCalendar: true,
+        }],
+      }),
+    }));
+    expect(reflagged.response.status).toBe(200);
+    expect(reflagged.body.instances[0].isCommunityCalendar).toBe(true);
+
+    const list = await api('/instances/calendar-batch-unflag-reflag-instance/events');
     expect(list.body.events).toHaveLength(0);
   });
 
