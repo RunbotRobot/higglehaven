@@ -392,6 +392,12 @@ export default {
     ctx.waitUntil(pruneStaleAvatarPresence(env.DB).catch((error) => {
       console.error('pruneStaleAvatarPresence failed', error);
     }));
+    // #1619: without this, a video-to-3D job stuck in 'processing' (no
+    // webhook ever arrived, polling stopped once the frontend gave up)
+    // sits there forever with no automatic timeout/expiry.
+    ctx.waitUntil(expireStaleVideoGenerationJobs(env.DB).catch((error) => {
+      console.error('expireStaleVideoGenerationJobs failed', error);
+    }));
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -7333,6 +7339,33 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       WHERE job_id = ? AND processed_at IS NULL
     `).bind(`Video generation ${task.status} — please try a different video`, jobId).run();
   }
+}
+
+// #1619: a job that never reaches a terminal status on Tripo's side
+// (provider silence, a dropped webhook with no further poll ever
+// arriving) would otherwise sit in 'processing' forever -- nothing else
+// ever revisits it once handleVideoGenerationJobCreate's own 201 response
+// has gone out. Mirrors pruneStaleAvatarPresence's own cutoff-sweep shape,
+// called from scheduled() on the existing cron. 15 minutes is a generous
+// multiple of the ~2-minute typical completion time (see
+// VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX's own comment above) -- long
+// enough that a merely-slow job never gets falsely failed, short enough
+// that a genuinely stuck one doesn't block its builder's
+// one-pending-per-builder slot (idx_video_generation_jobs_one_pending_per_builder)
+// indefinitely. Scoped to 'processing' specifically, per this issue's own
+// stated gap -- a job still 'pending' (died between the reservation and
+// ever reaching Tripo) is a different crash class, already handled by
+// handleVideoGenerationJobCreate's own catch block deleting the
+// reservation outright.
+const VIDEO_GENERATION_PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
+
+export async function expireStaleVideoGenerationJobs(db) {
+  const cutoff = new Date(Date.now() - VIDEO_GENERATION_PROCESSING_TIMEOUT_MS).toISOString();
+  await db.prepare(`
+    UPDATE video_generation_jobs
+    SET status = 'failed', error_message = 'Video generation timed out — please try again', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE status = 'processing' AND processed_at IS NULL AND created_at < ?
+  `).bind(cutoff).run();
 }
 
 // Shared by handleVideoGenerationJobStatus (poll the current job's task)
