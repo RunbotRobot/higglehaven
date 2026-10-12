@@ -2137,12 +2137,54 @@ async function handleCatalog(request, db, route, url, models, env) {
     // null seller_id" promise for that case.
     const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
     await assertUploadedModelExists(models, template.modelUrl);
+    // #1742: same lost-update race #468 already fixed for bundles -- two
+    // concurrent partial PATCHes to *different* fields (a price change and
+    // a separate dimension resize, say) each merged their write from this
+    // same stale pre-race `existing` snapshot above, so whichever UPDATE
+    // landed second silently reverted the field the first request changed,
+    // even though its own input never touched that field. `template` above
+    // is still the full merged-and-validated object (dimensions/metadata
+    // invariants need the complete picture to check), but the actual
+    // columns written below are now gated on whether `input` itself
+    // provided each one, resolved atomically against the live row via
+    // COALESCE/CASE at the SQL level instead of the stale JS merge.
+    // `category`/`color`/dimensions are never legitimately null once
+    // provided (labelValue/positiveNumber reject it), so a plain COALESCE
+    // sentinel is unambiguous there; `subcategory`/`priceCents`/`modelUrl`/
+    // `modelSizeBytes`/`skeletonSignature` can legitimately be set to null
+    // (clearing the field), so those use an explicit presence flag instead
+    // of COALESCE -- a bare null sentinel would be indistinguishable from
+    // "clear this field" and silently fail to clear it. `dimensions` is
+    // provided (or not) as one atomic group, same as validateTemplate's own
+    // all-or-nothing handling of it. `seller_id`/`metadata_json` are
+    // intentionally excluded (see this handler's own seller_id/#424
+    // comments) and keep being written unconditionally.
     const result = await db.prepare(`
       UPDATE catalog_templates
-      SET name = ?, category = ?, subcategory = ?, color = ?, width_m = ?, depth_m = ?, height_m = ?,
-          price_cents = ?, seller_id = ?, model_url = ?, model_size_bytes = ?, skeleton_signature = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      SET name = COALESCE(?, name), category = COALESCE(?, category),
+          subcategory = CASE WHEN ? = 1 THEN ? ELSE subcategory END, color = COALESCE(?, color),
+          width_m = COALESCE(?, width_m), depth_m = COALESCE(?, depth_m), height_m = COALESCE(?, height_m),
+          price_cents = CASE WHEN ? = 1 THEN ? ELSE price_cents END, seller_id = ?,
+          model_url = CASE WHEN ? = 1 THEN ? ELSE model_url END,
+          model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
+          skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
+          metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
-    `).bind(template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), route[1]).run();
+    `).bind(
+      input.name === undefined ? null : template.name,
+      input.category === undefined ? null : template.category,
+      input.subcategory === undefined ? 0 : 1, template.subcategory,
+      input.color === undefined ? null : template.color,
+      input.dimensions === undefined ? null : template.dimensions.width,
+      input.dimensions === undefined ? null : template.dimensions.depth,
+      input.dimensions === undefined ? null : template.dimensions.height,
+      input.priceCents === undefined ? 0 : 1, template.priceCents,
+      template.sellerId,
+      input.modelUrl === undefined ? 0 : 1, template.modelUrl,
+      input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
+      input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
+      JSON.stringify(template.metadata), route[1],
+    ).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships
     // PATCH), this one never checked whether its own UPDATE actually
