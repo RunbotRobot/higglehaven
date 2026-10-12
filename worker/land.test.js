@@ -480,6 +480,32 @@ describe('Landlet updates', () => {
     const limited = await api('/landlets/claim-rate-limit-landlet-final/claim', builder.session({ method: 'POST' }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #1703: the free self-claim path never checked landlet_class against
+  // anything -- docs/SPEC.md's own "one free 1,000 m² lándlet, Class 2+
+  // only via auction" rule means a Class 2+ greenbelt landlet (reachable
+  // via an admin generate-ring call using distribution: 'power-law') must
+  // never be grantable for free, regardless of the claiming builder's own
+  // land cap.
+  it('rejects claiming a Class 2+ greenbelt landlet for free', async () => {
+    const builder = await signupBuilder('class-2-claim-builder');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'class-2-claim-landlet', name: 'Test Class 2 Landlet',
+        areaM2: 5000, landClass: 2, status: 'greenbelt',
+      }),
+    }));
+
+    const attempt = await api('/landlets/class-2-claim-landlet/claim', builder.session({ method: 'POST' }));
+    expect(attempt.response.status).toBe(409);
+    expect(attempt.body.error).toMatch(/larger than the free starter size/);
+
+    const landlet = await env.DB.prepare('SELECT status, owner_builder_id FROM landlets WHERE landlet_id = ?')
+      .bind('class-2-claim-landlet').first();
+    expect(landlet.status).toBe('greenbelt');
+    expect(landlet.owner_builder_id).toBeNull();
+  });
 });
 
 // #1177: owner-requested admin tool for reassigning an already-claimed
