@@ -39,6 +39,7 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', DIGITAL_PRODUCT);
+await page.fill('#upload-price', '5');
 // #1599: the disclaimer label's `hidden` attribute was being overridden by
 // #upload-modal-content label's own `display: flex` rule (an ID selector
 // outranks the browser's default [hidden]{display:none} regardless of

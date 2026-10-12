@@ -6669,7 +6669,10 @@ center at that fixed radius, always facing the center as it goes
 (`updateShopSpawnRotation`, `SHOP_SPAWN_ORBIT_ANGULAR_SPEED_RAD_S`). The
 camera's own look direction (`shopYaw`) doubles as the orbit's angle
 throughout, since "facing the center" and "the orbit position" are the
-same angle at every point on the circle. The orbit ends the instant the
+same angle at every point on the circle. The camera's pitch is set to
+`-SHOP_MAX_PITCH` for this shot (see #1591 — the default grounded pitch,
+~7deg down, left the camera looking at the horizon/wall ring rather than
+down at the world from `SHOP_SPAWN_START_ALTITUDE_M`). The orbit ends the instant the
 shopper gives any navigation input — a joystick deflection, a vertical
 flight button, or a fly-button tap (`stopShopSpawnRotationForNavigation`,
 checked every frame in `updateShopMovement` and once directly in
@@ -7207,6 +7210,60 @@ independently exercised against a live account by this change) — worth a
 smoke test against a real `TRIPO_API_KEY` once one is configured for this
 deployment.
 
+### Frontend wiring (#1620)
+
+`index.html`'s `#upload-modal` (`POST /api/models`'s existing wizard, see
+"Custom model uploads" above) gained a second, mutually-exclusive input
+mode alongside the plain file picker: a "Or generate a model from a video
+instead" toggle (`#upload-mode-video-btn`) reveals a
+`<input type="file" accept="video/*" capture="environment">` (`capture`
+opens the device camera directly on a mobile browser rather than only a
+file picker — the mobile-friendly recording entry point the issue asked
+for, with no custom `getUserMedia`/`MediaRecorder` capture UI needed).
+
+Submitting in video mode (`src/main.js`'s `handleUploadVideoStep`) draws 4
+evenly-spaced still frames from the picked video via a hidden
+`<video>`/`<canvas>` pair (`extractVideoFrames` — this is why no
+provider-side video upload was ever needed: Cloudflare Workers has no
+video-decoding capability, so this has to happen in the browser), submits
+them as `front`/`left`/`back`/`right` to `POST /api/video-generation-jobs`,
+then polls `GET /api/video-generation-jobs/:jobId` every 3s for up to 5
+minutes (`pollVideoGenerationJob` — the same cadence/budget
+`pollDiditVerificationStatus` already uses for its own identically-shaped
+polling loop, sized within the backend's own
+`VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX`). The modal shows a progress
+message throughout rather than freezing, per the issue's own explicit ask.
+
+On completion, the job's `modelUrl` (an ordinary same-origin `/uploads/...`
+URL — confirmed in #1621 that no special routing is needed) is fetched into
+a `File` and injected into the real file `<input>` via `DataTransfer`, then
+`handleUploadFileStep` — the exact same function a manually picked file
+already goes through — runs completely unmodified: optimize, upload,
+measure, preview, and the same dimension-confirmation step. No second
+review UI was built for the video path, matching the issue's own "hand off
+into the same dimension-confirmation step" ask.
+
+On failure (a terminal `failed` status, a download error, or the poll
+deadline), the submit button re-enables and the status area shows a clear
+error with no special fallback UI needed — "Back to manual file upload"
+(`#upload-mode-file-btn`) is already visible the whole time, right below the
+video picker, letting the seller just switch modes rather than needing a
+dedicated retry flow.
+
+#### Testing note
+
+`e2e/upload-video-generation-entry-point.test.mjs` exercises the real
+browser-side pipeline end to end against a generated fixture video
+(`e2e/fixtures/test-object-video.webm`, a 2-second animated-canvas
+recording — no real-world counterpart) up through the point this suite's
+own `TRIPO_API_KEY`-unconfigured convention allows: the mode toggle, real
+frame extraction from a real video file, submitting the job, the resulting
+`503`, and the graceful failure/fallback UI. The success path (a real
+`modelUrl` flowing into `handleUploadFileStep`) isn't exercised by any
+automated test — same limitation the video-to-3D backend's own testing
+note above already documents for anything past the "is this configured"
+boundary.
+
 ### Placed-instance tilt (`rotationX` / `rotationY`)
 
 `placed_instances` (and its snapshot mirror `version_instances`, added by the
@@ -7232,12 +7289,18 @@ migration needed).
 
 ### Seller-side: setting a price
 
-The upload wizard's first step (name + `.glb` file) gains an optional
-"Price" field, right after Name. A blank field means `priceCents: null`
-("no price set"), not `0` — mirroring `priceCents`' own null-means-unset
-convention everywhere else in this file. Entered as dollars, converted to
-cents (`Math.round(dollars * 100)`) before the `POST /api/catalog` call
-that actually creates the template.
+The upload wizard's first step (name + `.glb` file) gains a "Price" field,
+right after Name. Entered as dollars, converted to cents
+(`Math.round(dollars * 100)`) before the `POST /api/catalog` call that
+actually creates the template.
+
+#1601: price is required at upload time — a free digital product is
+entered as an explicit `0`, not left blank; a blank field is rejected
+client-side with no request sent. `priceCents` itself stays nullable in
+the schema/API (a template created before this requirement, or by a
+direct API call outside this wizard, can still have `priceCents: null`),
+and the separate Edit Price panel just below keeps its own older
+null-means-unset convention for exactly that case.
 
 For a product that's already been created (uploaded before this feature
 existed, or a seller who skipped the price at upload time), each row in

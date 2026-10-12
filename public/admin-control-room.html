@@ -77,8 +77,8 @@
 
 <div class="compose">
   <div class="compose-row">
-    <input name="from" placeholder="From" value="owner" />
-    <select name="kind">
+    <input name="from" placeholder="From" value="owner" aria-label="From" />
+    <select name="kind" aria-label="Message kind">
       <option value="feedback">feedback</option>
       <option value="question">question</option>
     </select>
@@ -89,7 +89,7 @@
 
 <div class="compose">
   <div class="compose-row">
-    <input type="email" id="grantAdminEmail" placeholder="Account email to make admin" style="flex: 1 1 260px;" />
+    <input type="email" id="grantAdminEmail" placeholder="Account email to make admin" aria-label="Account email to make admin" style="flex: 1 1 260px;" />
     <button id="grantAdminBtn">Grant admin</button>
   </div>
   <p class="meta" id="grantAdminStatus" style="margin: 6px 0 0;"></p>
@@ -103,7 +103,7 @@
 </div>
 
 <div class="toolbar">
-  <input type="search" id="search" placeholder="Search title, note, session, tag…" />
+  <input type="search" id="search" placeholder="Search title, note, session, tag…" aria-label="Search title, note, session, tag" />
 </div>
 <div class="tabs" id="tabs">
   <button data-status="" class="active">All</button>

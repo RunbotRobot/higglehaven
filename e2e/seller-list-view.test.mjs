@@ -1,12 +1,7 @@
 // #541: Sell mode's new "List view" toggle — a thumbnail-first alternative
 // to the Manage rows, and tapping a card should jump back into Manage with
 // that product already expanded.
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
-
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
 
 const LABEL = 'List View Tester';
 const PRODUCT_NAME = 'List View Crate';
@@ -17,16 +12,27 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
 
-await page.click('#upload-model-btn');
-await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
-await page.fill('#upload-name', PRODUCT_NAME);
-await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
-await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #1601 made the upload wizard reject a blank price, so this test's own
+// "unpriced product" fixture (its card is specifically checked for the
+// "Not priced" text below) is created directly via the API instead of
+// through the wizard, the same way product-pricing.test.mjs's does.
+await page.evaluate(async (name) => {
+  const { seller } = await (await fetch('/api/sellers/me')).json();
+  await fetch('/api/catalog', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      color: '#999999',
+      dimensions: { width: 1, depth: 1, height: 1 },
+      sellerId: seller.sellerId,
+    }),
+  });
+}, PRODUCT_NAME);
+await page.reload();
+await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
 await page.waitForTimeout(300);
-await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
-await page.waitForTimeout(500);
 
 // Manage is the default view on open — the toggle exists and only List
 // view's button is inactive yet.

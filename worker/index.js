@@ -392,6 +392,12 @@ export default {
     ctx.waitUntil(pruneStaleAvatarPresence(env.DB).catch((error) => {
       console.error('pruneStaleAvatarPresence failed', error);
     }));
+    // #1619: without this, a video-to-3D job stuck in 'processing' (no
+    // webhook ever arrived, polling stopped once the frontend gave up)
+    // sits there forever with no automatic timeout/expiry.
+    ctx.waitUntil(expireStaleVideoGenerationJobs(env.DB).catch((error) => {
+      console.error('expireStaleVideoGenerationJobs failed', error);
+    }));
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -597,6 +603,10 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'friendships') {
     return handleFriendships(request, env.DB, route, url);
+  }
+
+  if (route[0] === 'direct-messages') {
+    return handleDirectMessages(request, env.DB, route, url);
   }
 
   if (route[0] === 'purchases') {
@@ -1349,13 +1359,20 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
     if (modelUrls.length > 0) {
       // #774: image_url (thumbnails) shares this same bucket/URL scheme as
       // model_url — checking model_url alone would target live thumbnails
-      // for deletion as "unreferenced".
+      // for deletion as "unreferenced". #1644: video_generation_jobs.
+      // model_url (migrations/0119) is a second, independent writer into
+      // this same bucket/scheme — a completed video-to-3D job's model has
+      // no catalog_templates row yet (that's only created once a human
+      // finishes the upload wizard, #1620), so without this it reads as
+      // unreferenced and gets swept within minutes of generation.
       const placeholders = modelUrls.map(() => '?').join(', ');
       const referenced = await env.DB.prepare(`
         SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
         UNION
         SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-      `).bind(...modelUrls, ...modelUrls).all();
+        UNION
+        SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
+      `).bind(...modelUrls, ...modelUrls, ...modelUrls).all();
       for (const row of referenced.results) referencedUrls.add(row.url);
     }
     let examinedWholePage = true;
@@ -1391,15 +1408,18 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   // whatever is still genuinely unreferenced.
   let toDelete = targets;
   if (targets.length > 0) {
-    // #774: same model_url-vs-image_url gap as the scan above — re-checked
-    // here too since this query is independent of it.
+    // #774/#1644: same model_url-vs-image_url-vs-video_generation_jobs gap
+    // as the scan above — re-checked here too since this query is
+    // independent of it.
     const targetUrls = targets.map((object) => `/uploads/${object.key}`);
     const placeholders = targetUrls.map(() => '?').join(', ');
     const stillReferenced = await env.DB.prepare(`
       SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
       UNION
       SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-    `).bind(...targetUrls, ...targetUrls).all();
+      UNION
+      SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
+    `).bind(...targetUrls, ...targetUrls, ...targetUrls).all();
     const rescuedUrls = new Set(stillReferenced.results.map((row) => row.url));
     toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
   }
@@ -4150,6 +4170,155 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
     otherLabel: labelsById.get(otherBuilderId) ?? null,
     direction: row.requester_builder_id === viewerBuilderId ? 'outgoing' : 'incoming',
     otherLandlet: landlet ? { landletId: landlet.landletId, name: landlet.name, center: landlet.center } : null,
+  };
+}
+
+// #1637 (resolves #1002): direct messages between two id_verified builders
+// who are already friends. A real notification fires on every send (same
+// shape as the friend-request/accept notifications above), so this needs
+// its own rate-limit bucket, same #369/#899 reasoning.
+const DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX = 20;
+const DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX = 20;
+
+// DM is gated on a stronger bar than ordinary account verification
+// (assertVerified's trust_tier !== 'none', used everywhere else) — #1002's
+// own requirement is specifically trust_tier === 'id_verified' for BOTH
+// sides, so this is its own assert rather than reusing assertVerified.
+function assertIdVerified(user, message) {
+  if (user.trust_tier !== 'id_verified') {
+    throw new HttpError(message, 403, { idVerificationRequired: true });
+  }
+}
+
+async function requireIdVerifiedSessionBuilder(request, db) {
+  const user = await requireCurrentUser(request, db);
+  assertIdVerified(user, 'ID verification is required to use direct messages.');
+  return getOrCreateBuilderForUser(db, user);
+}
+
+// No existing isFriendsWith-style helper covers a single pair×status
+// check — every other friendship need in this file is answered by the
+// generic list endpoint. Mirrors the exact unordered-pair shape
+// POST /api/friendships' own duplicate-check WHERE NOT EXISTS already uses.
+async function assertAcceptedFriendship(db, builderIdA, builderIdB) {
+  const row = await db.prepare(`
+    SELECT 1 FROM friendships
+    WHERE status = 'accepted'
+      AND ((requester_builder_id = ? AND recipient_builder_id = ?)
+        OR (requester_builder_id = ? AND recipient_builder_id = ?))
+  `).bind(builderIdA, builderIdB, builderIdB, builderIdA).first();
+  if (!row) {
+    throw new HttpError('Direct messages require an existing accepted friendship between these builders', 403);
+  }
+}
+
+async function handleDirectMessages(request, db, route, url) {
+  // Ahead of the generic list GET below, same "specific path before generic
+  // CRUD" ordering GET /api/notifications/unread-count already uses for
+  // its own sibling badge-count route.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'unread-count') {
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const count = await db.prepare(`
+      SELECT COUNT(*) AS count FROM direct_messages WHERE recipient_builder_id = ? AND read_at IS NULL
+    `).bind(sessionBuilder.builder_id).first();
+    return json({ count: count.count });
+  }
+
+  if (request.method === 'GET' && route.length === 1) {
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const withBuilderId = stringValue(url.searchParams.get('withBuilderId'), 'withBuilderId');
+    const limit = queryLimit(url.searchParams.get('limit'), 100);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    // No friendship check on read — once sent, a message stays visible in
+    // history the same way email/chat history survives an unfriend; only a
+    // NEW send (POST below) is gated on a currently-accepted friendship.
+    const conditions = [`
+      ((sender_builder_id = ? AND recipient_builder_id = ?)
+        OR (sender_builder_id = ? AND recipient_builder_id = ?))
+    `];
+    const bindings = [sessionBuilder.builder_id, withBuilderId, withBuilderId, sessionBuilder.builder_id];
+    if (cursor) {
+      conditions.push('(created_at < ? OR (created_at = ? AND message_id < ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const { results } = await db.prepare(`
+      SELECT * FROM direct_messages WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, message_id DESC LIMIT ?
+    `).bind(...bindings, limit + 1).all();
+    const hasMore = results.length > limit;
+    const page = results.slice(0, limit);
+    const last = page.at(-1);
+    return json({
+      messages: page.map(directMessageFromRow),
+      nextCursor: hasMore ? encodeCursor(last.created_at, last.message_id) : null,
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 1) {
+    // Same readJson-then-session-then-rate-limit-then-validate ordering
+    // POST /api/friendships uses just above.
+    const input = await readJson(request);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const senderBuilderId = sessionBuilder.builder_id;
+    await checkRateLimit(db, `direct-message-send:${senderBuilderId}`, DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX);
+    const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
+    if (senderBuilderId === recipientBuilderId) {
+      throw new HttpError('recipientBuilderId must be a different builder', 400);
+    }
+    const text = stringValue(input.text, 'text');
+    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // assertReferenceExists alone isn't enough here — the recipient's own
+    // trust_tier (on `users`, not `builders`) needs checking too, so this
+    // is its own query rather than assertReferenceExists + a second lookup.
+    const recipient = await db.prepare(`
+      SELECT b.builder_id, u.trust_tier FROM builders b
+      LEFT JOIN users u ON u.user_id = b.user_id
+      WHERE b.builder_id = ?
+    `).bind(recipientBuilderId).first();
+    if (!recipient) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
+    if (recipient.trust_tier !== 'id_verified') {
+      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403, { idVerificationRequired: true });
+    }
+    await assertAcceptedFriendship(db, senderBuilderId, recipientBuilderId);
+    const messageId = `message-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
+    `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();
+    // Same "no passive way to find out" gap #319 already fixed for friend
+    // requests — best-effort, after the write it's about, not batched
+    // atomically with it.
+    await fireNotification(db, recipientBuilderId, `${sessionBuilder.label} sent you a message.`);
+    const row = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(messageId).first();
+    return json({ message: directMessageFromRow(row) }, 201);
+  }
+
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'mark-read') {
+    // withBuilderId always comes from the request body here (unlike a
+    // single-row PATCH by id) since this marks a whole thread's worth of
+    // received messages read in one call, mirroring POST
+    // /api/notifications/mark-all-read's own bulk shape.
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const input = await readJson(request);
+    const withBuilderId = stringValue(input.withBuilderId, 'withBuilderId');
+    await checkRateLimit(db, `direct-message-mutate:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX);
+    await db.prepare(`
+      UPDATE direct_messages SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE recipient_builder_id = ? AND sender_builder_id = ? AND read_at IS NULL
+    `).bind(sessionBuilder.builder_id, withBuilderId).run();
+    return json({ ok: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+function directMessageFromRow(row) {
+  return {
+    messageId: row.message_id,
+    senderBuilderId: row.sender_builder_id,
+    recipientBuilderId: row.recipient_builder_id,
+    text: row.text,
+    createdAt: row.created_at,
+    readAt: row.read_at,
   };
 }
 
@@ -7170,6 +7339,33 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       WHERE job_id = ? AND processed_at IS NULL
     `).bind(`Video generation ${task.status} — please try a different video`, jobId).run();
   }
+}
+
+// #1619: a job that never reaches a terminal status on Tripo's side
+// (provider silence, a dropped webhook with no further poll ever
+// arriving) would otherwise sit in 'processing' forever -- nothing else
+// ever revisits it once handleVideoGenerationJobCreate's own 201 response
+// has gone out. Mirrors pruneStaleAvatarPresence's own cutoff-sweep shape,
+// called from scheduled() on the existing cron. 15 minutes is a generous
+// multiple of the ~2-minute typical completion time (see
+// VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX's own comment above) -- long
+// enough that a merely-slow job never gets falsely failed, short enough
+// that a genuinely stuck one doesn't block its builder's
+// one-pending-per-builder slot (idx_video_generation_jobs_one_pending_per_builder)
+// indefinitely. Scoped to 'processing' specifically, per this issue's own
+// stated gap -- a job still 'pending' (died between the reservation and
+// ever reaching Tripo) is a different crash class, already handled by
+// handleVideoGenerationJobCreate's own catch block deleting the
+// reservation outright.
+const VIDEO_GENERATION_PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
+
+export async function expireStaleVideoGenerationJobs(db) {
+  const cutoff = new Date(Date.now() - VIDEO_GENERATION_PROCESSING_TIMEOUT_MS).toISOString();
+  await db.prepare(`
+    UPDATE video_generation_jobs
+    SET status = 'failed', error_message = 'Video generation timed out — please try again', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE status = 'processing' AND processed_at IS NULL AND created_at < ?
+  `).bind(cutoff).run();
 }
 
 // Shared by handleVideoGenerationJobStatus (poll the current job's task)

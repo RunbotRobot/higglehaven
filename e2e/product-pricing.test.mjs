@@ -9,6 +9,14 @@
 // instance (#shop-product-info) isn't covered here for the same reason
 // real camera movement never is in this suite — see docs/API.md's own
 // testing note for this feature; that's verified manually instead.
+//
+// #1601: the upload wizard's own price field is required (owner wants an
+// explicit $0 for a free product, not a blank field) — only the separate
+// "Edit Price" panel keeps the older null-means-unset convention, for a
+// product that predates this requirement or was created directly through
+// the API rather than this wizard. This suite's "unpriced" fixture is
+// created that second way (a direct POST, below) specifically to keep
+// exercising that panel's own give-it-a-price-after-the-fact path.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -55,6 +63,25 @@ console.log('upload price field after blur (should be "$1,234.50"):', uploadPric
 await page.click('#upload-cancel-btn');
 await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
 
+// #1601: blank price at upload time is now rejected, not treated as "no
+// price set" — the wizard stays open on an error instead of creating the
+// product.
+await page.click('#upload-model-btn');
+await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
+await page.fill('#upload-name', 'Suite Blank-Price Rejection Crate');
+await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
+await page.click('#upload-submit-btn');
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForTimeout(300);
+await page.click('#upload-submit-btn');
+await page.waitForTimeout(500);
+const blankPriceStatus = await page.locator('#upload-status').textContent();
+const blankPriceModalStillOpen = await page.locator('#upload-modal').evaluate((el) => el.classList.contains('visible'));
+console.log('status text after submitting with a blank price (should mention price):', blankPriceStatus);
+console.log('upload modal stays open after a rejected blank-price submit (should be true):', blankPriceModalStillOpen);
+await page.click('#upload-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+
 // A priced product at upload time.
 await uploadProduct({ name: PRICED_PRODUCT, price: '12.5' });
 const pricedRow = () => page.locator('.seller-row').filter({ hasText: PRICED_PRODUCT });
@@ -82,8 +109,31 @@ await page.waitForTimeout(200);
 await pricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(200);
 
-// An unpriced product — blank price at upload time.
-await uploadProduct({ name: UNPRICED_PRODUCT });
+// An unpriced product — created directly via the API (as a product
+// created before #1601, or by a non-wizard caller, would be), since the
+// upload wizard itself no longer allows a blank price. Reuses
+// PRICED_PRODUCT's own already-uploaded model/dimensions/color so this
+// direct POST doesn't need a fresh file upload of its own.
+await page.evaluate(async ({ name, referenceName }) => {
+  const { seller } = await (await fetch('/api/sellers/me')).json();
+  const { templates } = await (await fetch('/api/catalog?limit=100')).json();
+  const reference = templates.find((t) => t.name === referenceName);
+  await fetch('/api/catalog', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      color: reference.color,
+      dimensions: reference.dimensions,
+      modelUrl: reference.modelUrl,
+      sellerId: seller.sellerId,
+    }),
+  });
+}, { name: UNPRICED_PRODUCT, referenceName: PRICED_PRODUCT });
+await page.reload();
+await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForTimeout(300);
 const unpricedRow = () => page.locator('.seller-row').filter({ hasText: UNPRICED_PRODUCT });
 await unpricedRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
@@ -125,6 +175,8 @@ const clearedRowPriceText = await unpricedRow().locator('.seller-row-price').tex
 console.log('row price text after clearing it back to blank (should be "Not priced"):', clearedRowPriceText);
 
 const pass = uploadPriceAfterBlur === '$1,234.50' &&
+  blankPriceStatus.toLowerCase().includes('price') &&
+  blankPriceModalStillOpen === true &&
   editPriceAfterBlur === '$1,234.50' &&
   pricedRowPriceText.trim() === '$12.50' &&
   unpricedRowPriceTextBefore.trim() === 'Not priced' &&

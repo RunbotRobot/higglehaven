@@ -116,5 +116,7 @@
   "0116_retained_stripe_accounts.sql",
   "0117_drop_dead_owned_item_purchase_id_indexes.sql",
   "0118_drop_dead_purchases_template_buyer_index.sql",
-  "0119_video_generation_jobs.sql"
+  "0119_video_generation_jobs.sql",
+  "0120_direct_messages.sql",
+  "0121_video_generation_jobs_builder_id_cascade.sql"
 ]

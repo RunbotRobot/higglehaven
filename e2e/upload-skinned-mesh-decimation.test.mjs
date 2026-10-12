@@ -42,6 +42,7 @@ await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 
 await page.fill('#upload-name', PRODUCT_NAME);
+await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', FIXTURE_PATH);
 await page.click('#upload-submit-btn');
 

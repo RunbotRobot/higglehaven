@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { reserveVideoGenerationJob } from './index.js';
+import { cleanupUnreferencedModels, reserveVideoGenerationJob } from './index.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -369,6 +369,31 @@ describe('Video-to-3D webhook (#1619)', () => {
     expect(updated.processed_at).not.toBeNull();
   });
 
+  // #1644: a completed job's model has no catalog_templates row of its own
+  // yet (that's only created once a human finishes the upload wizard,
+  // #1620) -- cleanupUnreferencedModels used to only check catalog_templates'
+  // model_url/image_url columns, so this real, billed R2 object looked
+  // "unreferenced" and got swept by the next cron run within minutes of
+  // generation completing. Same shape as the #774 image_url regression test
+  // above, just for this second writer into the same bucket/scheme.
+  it('treats a video-generation job\'s model_url as still referenced, not an orphan to sweep', async () => {
+    const builder = await signupBuilder('video-gen-cleanup-still-referenced');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const { jobId } = await created.json();
+    const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+
+    const webhook = await postWebhook({
+      type: 'task.completed',
+      data: { task_id: row.provider_task_id, status: 'success', output: { model_url: FAKE_MODEL_DOWNLOAD_URL } },
+    });
+    expect(webhook.status).toBe(200);
+    const { model_url: modelUrl } = await env.DB.prepare('SELECT model_url FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+
+    const cleanup = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 0 });
+    expect(cleanup.targetModelUrls).not.toContain(modelUrl);
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+  });
+
   it('applies a task.failed delivery', async () => {
     const builder = await signupBuilder('video-gen-webhook-failed');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
@@ -418,5 +443,28 @@ describe('Video-to-3D webhook (#1619)', () => {
     } finally {
       env.TRIPO_WEBHOOK_SECRET = 'test-tripo-webhook-secret';
     }
+  });
+});
+
+// #1645: migrations/0119 declared video_generation_jobs.builder_id with no
+// ON DELETE clause at all (D1/SQLite's own restrictive default), the one
+// REFERENCES builders(builder_id) FK in the whole schema still missing an
+// explicit behavior after migrations/0091 and 0093 closed every other one
+// -- DELETE /api/builders/:id threw an unhandled constraint-violation error
+// for any builder who had ever started a video-to-3D job. migrations/0120
+// rebuilt the table with ON DELETE CASCADE; mirrors
+// worker/didit-verification.test.js's own "still cascades a deleted
+// builder into its own X" regression style for the other tables that
+// migration's own sibling migrations (0091/0093) touched.
+describe('video_generation_jobs cascades on builder deletion (#1645)', () => {
+  it('cascades a deleted builder into its own video_generation_jobs', async () => {
+    const builder = await signupBuilder('video-gen-builder-delete-cascade');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const { jobId } = await created.json();
+
+    await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+
+    const { results } = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(jobId).all();
+    expect(results).toHaveLength(0);
   });
 });

@@ -35,6 +35,7 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', PRODUCT_NAME);
+await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
 await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });

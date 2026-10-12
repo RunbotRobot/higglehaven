@@ -124,6 +124,26 @@ const purchasedRowBefore = rowTextsBeforeEquip.find((t) => t.includes(PRODUCT_NA
 console.log('purchased avatar row shows a "purchased <date>" note (should be true):', purchasedRowBefore?.includes('purchased '));
 console.log('Default avatar row shows no purchase date (should be true):', !defaultRowBefore?.includes('purchased '));
 
+// #1358/#1591: the live GPU resource counts for the DEFAULT avatar's own
+// footprint, read fresh right here rather than from whatever
+// enterShopMode's own one-time reportRendererMemoryDiagnostic call wrote
+// at Shop-mode entry (window.__rendererMemory) -- that snapshot lands
+// before this same landlet's own placed instances (loaded asynchronously,
+// by proximity) have necessarily finished loading, so comparing against it
+// counts that unrelated, still-in-flight load against the avatar-swap
+// leak check below. Reading the live count here instead, right before any
+// equip action and well after the waits above, lands on the same settled
+// scene state the revert step's own snapshot further down will. The
+// default procedural body (several box/cylinder parts) and the purchased
+// "crate" avatar below (a single GLTF mesh) have genuinely different
+// geometry counts from each other -- comparing the revert step's own count
+// against *this* default-avatar baseline, rather than against the custom
+// avatar's own count, is what actually verifies "revert disposed the
+// custom avatar and landed back on the same default-avatar footprint,"
+// the comparison this test is actually meant to make.
+const memBaseline = await page.evaluate(() => window.__currentRendererMemory());
+console.log('renderer live-geometry count for the default avatar, right before equipping anything:', memBaseline);
+
 // --- Equip the purchased avatar through the real picker UI, still standing
 // in Shop mode — this is the live-swap path (refreshEquippedShopAvatar), not
 // a fresh Shop-mode entry ---
@@ -173,12 +193,13 @@ const markerAfterRevert = await page.evaluate(() => window.__noReloadMarker);
 // #1358: without disposing the outgoing custom avatar's own geometry/
 // material on this revert (the bug this test now also covers), its
 // geometries would stay tracked by the renderer forever once first drawn,
-// so this count would read *higher* than memAfterFirstEquip rather than
-// back at the same baseline. #1370: the same disposeObject3D traverse also
-// skips every avatar's own afkSprite (a THREE.Sprite, not a Mesh) unless
-// its texture-disposal gap is also fixed -- textures below covers that.
+// so this count would read *higher* than memBaseline rather than back at
+// that same default-avatar baseline. #1370: the same disposeObject3D
+// traverse also skips every avatar's own afkSprite (a THREE.Sprite, not a
+// Mesh) unless its texture-disposal gap is also fixed -- textures below
+// covers that.
 const memAfterRevert = await page.evaluate(() => window.__rendererMemory);
-console.log('renderer live-geometry/texture counts right after reverting to the default avatar (should match the counts above, not exceed them):', memAfterRevert);
+console.log('renderer live-geometry/texture counts right after reverting to the default avatar (should match the pre-equip baseline above, not exceed it):', memAfterRevert);
 
 // --- Equip the purchased avatar a second time — confirms the count stays
 // flat across a repeated swap rather than merely returning once by luck ---
@@ -203,9 +224,9 @@ const pass = purchased.status === 201 &&
   !!defaultRowAfterRevert?.includes('equipped') &&
   !purchasedRowAfterRevert?.includes('equipped') &&
   markerAfterRevert === 'still-here' &&
-  memAfterRevert?.geometries === memAfterFirstEquip?.geometries &&
+  memAfterRevert?.geometries === memBaseline?.geometries &&
   memAfterSecondEquip?.geometries === memAfterFirstEquip?.geometries &&
-  memAfterRevert?.textures === memAfterFirstEquip?.textures &&
+  memAfterRevert?.textures === memBaseline?.textures &&
   memAfterSecondEquip?.textures === memAfterFirstEquip?.textures &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Settings > Shop "My Avatars" picker equips/reverts live, without a page reload (#713), and without leaking the outgoing avatar\'s GPU resources, including its afkSprite texture (#1358, #1370)', errors });
