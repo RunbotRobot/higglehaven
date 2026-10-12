@@ -1138,6 +1138,35 @@ describe('Authentication', () => {
     expect(new Date(listed.adminGrantedAt).getTime()).toBeGreaterThan(new Date(targetCreatedAt).getTime());
   });
 
+  // #1797: both grant-type actions are reusable on an already-admin account
+  // (the "is reusable" admin-bootstrap test above) -- a later re-grant must
+  // not overwrite adminGrantedAt with its own, more recent timestamp.
+  it('reports adminGrantedAt from the first grant, not a later re-grant', async () => {
+    const admin = await signupBuilder('admin-granted-at-first-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('admin-granted-at-first-target');
+    const firstGrant = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    const targetUserId = firstGrant.body.user.userId;
+    const firstGrantedAt = (await api('/auth/admins', admin.session()))
+      .body.admins.find((a) => a.userId === targetUserId).adminGrantedAt;
+
+    // Simulate a later re-grant landing its own, newer log row (e.g. the
+    // same admin re-running grant-admin, or the target re-bootstrapping).
+    const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+    await env.DB.prepare(
+      'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(crypto.randomUUID(), adminUserId, 'grant_admin', 'user', targetUserId, '2099-01-01T00:00:00.000Z').run();
+
+    const asAdmin = await api('/auth/admins', admin.session());
+    const listed = asAdmin.body.admins.find((a) => a.userId === targetUserId);
+    expect(listed.adminGrantedAt).toBe(firstGrantedAt);
+    expect(listed.adminGrantedAt).not.toBe('2099-01-01T00:00:00.000Z');
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');

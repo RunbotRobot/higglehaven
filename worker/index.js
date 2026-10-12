@@ -9704,9 +9704,14 @@ async function handleListAdmins(request, db) {
   // of silently mislabeling a long-dormant account's later promotion as
   // "admin since" its original signup. Falls back to created_at (via
   // COALESCE/the client's `||`) for any admin whose grant predates that log.
+  // #1797: both grant-type actions are reusable/repeatable on an already-
+  // admin account (handleAdminBootstrap/handleGrantAdmin, no "already
+  // admin" guard, no uniqueness constraint on this table) -- MIN, not MAX,
+  // is the one that actually matches "the exact grant moment" above when a
+  // later re-grant lands a second, newer log row.
   const { results } = await db.prepare(`
     SELECT users.user_id, users.email, users.username, users.created_at,
-      (SELECT MAX(created_at) FROM admin_action_log
+      (SELECT MIN(created_at) FROM admin_action_log
        WHERE target_type = 'user' AND target_id = users.user_id
          AND action_type IN ('grant_admin', 'admin_bootstrap')) AS admin_granted_at
     FROM users WHERE is_admin = 1
