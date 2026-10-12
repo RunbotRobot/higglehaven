@@ -6732,6 +6732,7 @@ function renderBuildSettingsSection() {
 // seller-identity concern, not tied to any one landlet the way Build's
 // Publish/Auction sections are.
 async function renderSellSettingsSection() {
+  const myToken = settingsRenderToken;
   renderSellerIdentityField();
 
   const statusField = document.createElement('div');
@@ -6759,6 +6760,11 @@ async function renderSellSettingsSection() {
     statusNote.classList.add('error');
     return;
   }
+  // #1732: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — the real-money
+  // Payouts field below would land there instead of silently vanishing with
+  // it, same #905 guard every sibling Settings-tab renderer already has.
+  if (myToken !== settingsRenderToken) return;
 
   function describeStatus() {
     if (!account.configured) {
