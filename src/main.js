@@ -10178,6 +10178,7 @@ const dmModalEl = document.getElementById('dm-modal');
 const dmCloseBtn = document.getElementById('dm-close-btn');
 const dmModalTitleEl = document.getElementById('dm-modal-title');
 const dmStatusEl = document.getElementById('dm-status');
+const dmLoadMoreBtn = document.getElementById('dm-load-more-btn');
 const dmListEl = document.getElementById('dm-list');
 const dmEmptyEl = document.getElementById('dm-empty');
 const dmComposeForm = document.getElementById('dm-compose-form');
@@ -10191,17 +10192,40 @@ let dmOtherLabel = '';
 // (e.g. the modal reopened against a different friend in between) would
 // otherwise append that friend's messages into the wrong thread.
 let dmLoadToken = 0;
+// #1677: the cursor for whatever page of OLDER messages comes after the
+// ones currently rendered — null once there's nothing more to load. Same
+// shape as savedLayoutsNextCursor/notificationsNextCursor, just paired
+// with a "Load more" that prepends above the thread instead of appending
+// below it, since older messages belong visually above what's already shown.
+let dmNextCursor = null;
+
+function createDmRow(message) {
+  const row = document.createElement('div');
+  row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
+  const text = document.createElement('div');
+  text.textContent = message.text;
+  row.appendChild(text);
+  const time = document.createElement('div');
+  time.className = 'dm-row-time';
+  time.textContent = formatNotificationTime(message.createdAt);
+  row.appendChild(time);
+  return row;
+}
 
 async function renderDmThread() {
   const myLoadToken = ++dmLoadToken;
   dmListEl.innerHTML = '';
   dmStatusEl.textContent = '';
   dmStatusEl.classList.remove('error');
+  dmLoadMoreBtn.hidden = true;
+  dmNextCursor = null;
   if (!dmOtherBuilderId) return;
   let messages;
+  let nextCursor;
   try {
-    const { messages: page } = await fetchDirectMessages(dmOtherBuilderId);
-    messages = page;
+    const page = await fetchDirectMessages(dmOtherBuilderId);
+    messages = page.messages;
+    nextCursor = page.nextCursor;
   } catch (err) {
     if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
     dmStatusEl.textContent = err.message || 'Could not load messages.';
@@ -10213,17 +10237,10 @@ async function renderDmThread() {
   // Newest-first from the server (same shape as notifications) — reversed
   // here so the thread reads chronologically top-to-bottom, like any chat.
   for (const message of [...messages].reverse()) {
-    const row = document.createElement('div');
-    row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
-    const text = document.createElement('div');
-    text.textContent = message.text;
-    row.appendChild(text);
-    const time = document.createElement('div');
-    time.className = 'dm-row-time';
-    time.textContent = formatNotificationTime(message.createdAt);
-    row.appendChild(time);
-    dmListEl.appendChild(row);
+    dmListEl.appendChild(createDmRow(message));
   }
+  dmNextCursor = nextCursor;
+  dmLoadMoreBtn.hidden = !dmNextCursor;
   dmListEl.scrollTop = dmListEl.scrollHeight;
   // Best-effort — opening the thread is "reading" it, same as notifications'
   // own read-on-click idiom, just for the whole thread at once rather than
@@ -10238,6 +10255,34 @@ async function renderDmThread() {
     console.warn('Could not mark messages read:', err);
   }
 }
+
+dmLoadMoreBtn.addEventListener('click', async () => {
+  const myLoadToken = dmLoadToken; // this thread's current render — not a fresh reset
+  dmLoadMoreBtn.disabled = true;
+  try {
+    const page = await fetchDirectMessages(dmOtherBuilderId, { cursor: dmNextCursor });
+    if (myLoadToken !== dmLoadToken) return; // thread was closed/reopened against someone else while this page was loading
+    // Prepend above the currently-rendered messages (this page is also
+    // newest-first, so reverse it the same way the initial render does) and
+    // keep the scroll position anchored to what was already visible, rather
+    // than jumping to the newly-inserted top the way a plain append-below
+    // (saved layouts'/notifications' own idiom) never has to worry about.
+    const scrollHeightBefore = dmListEl.scrollHeight;
+    const scrollTopBefore = dmListEl.scrollTop;
+    const fragment = document.createDocumentFragment();
+    for (const message of [...page.messages].reverse()) {
+      fragment.appendChild(createDmRow(message));
+    }
+    dmListEl.insertBefore(fragment, dmListEl.firstChild);
+    dmListEl.scrollTop = scrollTopBefore + (dmListEl.scrollHeight - scrollHeightBefore);
+    dmNextCursor = page.nextCursor;
+    dmLoadMoreBtn.hidden = !dmNextCursor;
+  } catch (err) {
+    console.warn('Could not load more messages:', err);
+  } finally {
+    dmLoadMoreBtn.disabled = false;
+  }
+});
 
 function closeDmModal() {
   dmModalEl.classList.remove('visible');

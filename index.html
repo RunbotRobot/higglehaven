@@ -3305,6 +3305,21 @@
       #dm-send-btn:disabled {
         opacity: 0.5;
       }
+      /* #1677: same shape/placement as #notifications-load-more-btn and
+         #saved-layouts-load-more-btn -- this one loads older messages, so
+         it sits above #dm-list rather than below it. */
+      #dm-load-more-btn {
+        align-self: center;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #dm-load-more-btn:disabled {
+        opacity: 0.5;
+      }
       .friend-row {
         display: flex;
         align-items: flex-start;
@@ -4285,6 +4300,7 @@
         <button id="dm-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2 id="dm-modal-title">Messages</h2>
         <div id="dm-status" role="status" aria-live="polite"></div>
+        <button id="dm-load-more-btn" type="button" hidden>Load older messages</button>
         <div id="dm-list"></div>
         <div id="dm-empty">No messages yet — say hi!</div>
         <form id="dm-compose-form">
