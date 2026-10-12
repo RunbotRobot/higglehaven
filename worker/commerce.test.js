@@ -174,6 +174,28 @@ describe('Auctions', () => {
     expect(limitedResolve.response.status).toBe(429);
   });
 
+  // #1790: the list endpoint runs the same resolve-sweep as the single-item
+  // GET/POST .../resolve branches above (just batched over up to
+  // AUCTION_SWEEP_LIMIT auctions instead of one), but was missing a guard —
+  // its own separate, more generous bucket/limit (auction-list, not
+  // auction-resolve), since it's hit on every full Settings redraw while
+  // the Build tab's auction section is showing, not just a rare explicit
+  // resolve trigger.
+  it('rate-limits repeated list calls from the same IP', async () => {
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `auction-list:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 199 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/auctions', { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(200);
+
+    const limited = await api('/auctions', { headers: { 'cf-connecting-ip': ip } });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');
