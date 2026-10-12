@@ -937,6 +937,42 @@ describe('Community signs', () => {
     expect(list.body.posts).toHaveLength(0);
   });
 
+  // #1726: a dropped-response retry of this endpoint's own auto-version
+  // side effect used to mint a second, fully duplicate version snapshot
+  // one number higher than the first -- the same gap #1721 covers for the
+  // sibling POST /landlets/:id/versions endpoint, but for this one's own
+  // version_id (minted fresh via crypto.randomUUID() every call).
+  it('does not create a duplicate version when the same draft save is retried with the same idempotency key', async () => {
+    const draftBuilder = await signupBuilder('draft-version-idempotency-builder');
+    const draftLandlet = 'draft-version-idempotency-landlet';
+    await createGreenbeltLandlet(draftLandlet);
+    const claimed = await api(`/landlets/${draftLandlet}/claim`, draftBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const body = JSON.stringify({
+      instances: [{
+        instanceId: 'draft-version-idempotency-instance',
+        landletId: draftLandlet,
+        templateId: 'placeholder-tree',
+        x: 5,
+        y: 5,
+      }],
+      idempotencyKey: 'retry-attempt-1',
+    });
+    const first = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({ method: 'PUT', body }));
+    expect(first.response.status).toBe(200);
+    const retry = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({ method: 'PUT', body }));
+    expect(retry.response.status).toBe(200);
+    // Same version both times -- a genuinely new save (no key, or a
+    // different one) still gets its own version, this only collapses a
+    // byte-for-byte retry.
+    expect(retry.body.version.versionId).toBe(first.body.version.versionId);
+    expect(retry.body.version.versionNumber).toBe(first.body.version.versionNumber);
+
+    const versions = await api(`/landlets/${draftLandlet}/versions`, draftBuilder.session({}));
+    expect(versions.body.versions).toHaveLength(1);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).

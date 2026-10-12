@@ -10496,6 +10496,18 @@ async function handleLiveLandlet(db, landletId) {
   });
 }
 
+// #1726: mirrors purchaseIdempotencyKey's pattern (#473) for this
+// endpoint's own auto-version side effect — the client mints+persists a
+// key across a retry of what it considers the same save (most importantly
+// one whose response never arrived), and a missing/malformed key degrades
+// to no idempotency protection rather than failing the save outright.
+// Namespaced with landletId and the owner's builder_id so a key can never
+// collide across a different landlet or a since-transferred owner.
+function landletVersionIdempotencyKey(landletId, ownerBuilderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `landlet-draft-version:${landletId}:${ownerBuilderId}:${rawKey}`;
+}
+
 async function handleLandletDraft(request, db, landletId) {
   const landlet = await requireLandlet(db, landletId);
 
@@ -10565,7 +10577,10 @@ async function handleLandletDraft(request, db, landletId) {
     });
     await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
 
-    const versionId = crypto.randomUUID();
+    // #1726: a deterministic versionId (from the client's own idempotency
+    // key, when present and valid) lets a retry's INSERT below no-op via
+    // ON CONFLICT instead of minting a second, fully duplicate version.
+    const versionId = landletVersionIdempotencyKey(landletId, landlet.owner_builder_id, input.idempotencyKey) || crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
     const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
@@ -10636,6 +10651,9 @@ async function handleLandletDraft(request, db, landletId) {
           FROM landlet_versions WHERE landlet_id = ?
         )
         WHERE ${ownerGuard}
+        -- #1726: a retry bearing the same idempotency-derived versionId
+        -- no-ops here instead of racing a second version_number for it.
+        ON CONFLICT(version_id) DO NOTHING
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
@@ -10643,6 +10661,9 @@ async function handleLandletDraft(request, db, landletId) {
         SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
         FROM placed_instances WHERE landlet_id = ?
           AND ${ownerGuard}
+        -- #1726: same no-op-on-retry reasoning as the INSERT above — this
+        -- table's PK is (version_id, source_instance_id).
+        ON CONFLICT(version_id, source_instance_id) DO NOTHING
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (batchResults[0].meta.changes === 0) {
