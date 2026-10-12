@@ -12221,6 +12221,21 @@ const SIGN_POST_RATE_LIMIT_MAX = 20;
 // gated CRUD DELETEs (friendship-mutate, bundle-mutate).
 const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
 
+// #1718: same "a lost response looks, from here, identical to the request
+// never having reached us at all" protection as calendarEventIdempotencyKey
+// above (#1716) / the purchase flow's own purchaseIdempotencyKey (#473) — a
+// dropped POST response and the innocent manual retry it invites would
+// otherwise create a second, fully duplicate sign_posts row with the same
+// authorLabel/text. Namespaced with instanceId only, not a builder id like
+// those two siblings -- posting to a sign is anonymous (authorLabel is free
+// text, no account backs it), so there's no builder id to fold in. A
+// missing or malformed key degrades to no idempotency protection for this
+// one request rather than failing the post outright.
+function signPostIdempotencyKey(instanceId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `post:${instanceId}:${rawKey}`;
+}
+
 async function handleSignPosts(request, db, route) {
   const instanceId = route[1];
 
@@ -12256,7 +12271,15 @@ async function handleSignPosts(request, db, route) {
     const authorLabel = labelValue(input.authorLabel, 'authorLabel');
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    const postId = `post-${crypto.randomUUID()}`;
+    // #1718: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // inserting a second, fully duplicate post.
+    const idempotencyKey = signPostIdempotencyKey(instanceId, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(idempotencyKey, instanceId).first();
+      if (existing) return json({ post: signPostFromRow(existing) });
+    }
+    const postId = idempotencyKey || `post-${crypto.randomUUID()}`;
     // #1327: the is_community_sign check above is a point-in-time read, and
     // readJson is a real awaited gap after it -- without re-checking here,
     // a concurrent PATCH unflagging this instance (whose own #1022 cleanup

@@ -968,12 +968,44 @@ export async function fetchSignPosts(instanceId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`);
 }
 
+// #1718: same "a lost response looks identical to never having reached the
+// server" protection as calendarEventIdempotencyKey below (#1716) / the
+// purchase flow's own purchaseIdempotencyKey (#473) — a dropped POST
+// response and the innocent manual retry it invites would otherwise create
+// a second, fully duplicate sign_posts row. Scoped per instanceId only (no
+// builder id to namespace with here — posting is anonymous), and cleared on
+// success, so a deliberate second, distinct post to the SAME sign shortly
+// after mints its own fresh key instead of colliding with the first.
+const SIGN_POST_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function signPostIdempotencyStorageKey(instanceId) {
+  return `higglehaven-sign-post-idempotency-${instanceId}`;
+}
+
+function signPostIdempotencyKey(instanceId) {
+  const storageKey = signPostIdempotencyStorageKey(instanceId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < SIGN_POST_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+function clearSignPostIdempotencyKey(instanceId) {
+  try { localStorage.removeItem(signPostIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
+}
+
 export async function createSignPost(instanceId, { authorLabel, text }) {
   const { post } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, text }),
+    body: JSON.stringify({ authorLabel, text, idempotencyKey: signPostIdempotencyKey(instanceId) }),
   });
+  clearSignPostIdempotencyKey(instanceId);
   return post;
 }
 
