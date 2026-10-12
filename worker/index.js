@@ -73,6 +73,14 @@ const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 // GLB_MAGIC above, checked against the actual decoded bytes rather than
 // trusting the data-URL prefix's own claimed "image/png".
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+// #1713: video-generation frame uploads accept JPEG/WebP too, so this needs
+// their magic bytes as well, checked by hasValidImageSignature below.
+// JPEG: the SOI marker + first segment marker (FF D8 FF).
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
+// WebP: a RIFF container ("RIFF", then a 4-byte size this check skips over,
+// then "WEBP" at offset 8).
+const WEBP_RIFF_SIGNATURE = [0x52, 0x49, 0x46, 0x46];
+const WEBP_FORMAT_SIGNATURE = [0x57, 0x45, 0x42, 0x50];
 
 // R2's free tier is 10GB of storage per month. This is our OWN
 // application-level backstop well under that — checked live against R2's
@@ -1546,6 +1554,21 @@ function validateGlb(bytes) {
     offset = chunkEnd;
     chunkIndex += 1;
   }
+}
+
+// #1713: video-generation frame uploads (handleVideoGenerationJobCreate)
+// only checked the multipart part's own claimed Content-Type — same gap
+// #823 already closed for thumbnail uploads via decodeThumbnailDataUrl's
+// PNG_SIGNATURE check, just never applied to this sibling upload path (and
+// this one accepts JPEG/WebP too, not just PNG).
+function hasValidImageSignature(bytes, mimeType) {
+  const view = new Uint8Array(bytes);
+  const matches = (signature, offset = 0) => view.length >= offset + signature.length
+    && signature.every((byte, i) => view[offset + i] === byte);
+  if (mimeType === 'image/png') return matches(PNG_SIGNATURE);
+  if (mimeType === 'image/jpeg') return matches(JPEG_SIGNATURE);
+  if (mimeType === 'image/webp') return matches(WEBP_RIFF_SIGNATURE) && matches(WEBP_FORMAT_SIGNATURE, 8);
+  return false;
 }
 
 function formatBytes(bytes) {
@@ -7558,6 +7581,12 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     }
     if (!VIDEO_GENERATION_IMAGE_TYPES.includes(file.type)) {
       throw new HttpError('Each view image must be PNG, JPEG, or WebP', 415);
+    }
+    // #1713: file.type is only the client's claimed Content-Type for this
+    // multipart part -- check the real magic bytes before this ever reaches
+    // Tripo, same posture as validateGlb/decodeThumbnailDataUrl.
+    if (!hasValidImageSignature(await file.arrayBuffer(), file.type)) {
+      throw new HttpError('Each view image must be a real PNG, JPEG, or WebP file', 415);
     }
   }
 
