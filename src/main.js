@@ -79,6 +79,7 @@ import {
   removeFriendship,
   fetchDirectMessages,
   sendDirectMessage,
+  clearDirectMessageIdempotencyKey,
   markDirectMessagesRead,
   fetchUnreadDirectMessageCount,
   fetchLandletVersions,
@@ -10314,6 +10315,7 @@ dmComposeForm.addEventListener('submit', async (event) => {
   dmSendBtn.disabled = true;
   try {
     await sendDirectMessage(dmOtherBuilderId, text);
+    clearDirectMessageIdempotencyKey(dmOtherBuilderId);
     dmComposeInput.value = '';
     await renderDmThread();
   } catch (err) {

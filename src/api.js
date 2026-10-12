@@ -819,11 +819,45 @@ export async function fetchUnreadDirectMessageCount() {
   return count;
 }
 
+// #1719: same "mint+persist a raw key across a retry of what the client
+// considers the same attempt" pattern as purchaseIdempotencyKey above —
+// dmComposeInput's text isn't cleared on error (src/main.js's compose-form
+// handler), so a dropped response after the message already landed
+// server-side invites an innocent resubmit of the exact same text. A much
+// shorter TTL than a purchase's 30 minutes: composing a message is low-
+// friction enough that an abandoned draft retried minutes later should
+// mint a fresh key, not dedupe against a stale one.
+const DIRECT_MESSAGE_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+
+function directMessageIdempotencyStorageKey(recipientBuilderId) {
+  return `higglehaven-dm-idempotency-${recipientBuilderId}`;
+}
+
+function directMessageIdempotencyKey(recipientBuilderId) {
+  const storageKey = directMessageIdempotencyStorageKey(recipientBuilderId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < DIRECT_MESSAGE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a send to this recipient actually succeeds (see
+// src/main.js's compose-form handler) so the NEXT message mints its own
+// fresh key instead of colliding with this completed one.
+export function clearDirectMessageIdempotencyKey(recipientBuilderId) {
+  try { localStorage.removeItem(directMessageIdempotencyStorageKey(recipientBuilderId)); } catch (e) { /* ignore */ }
+}
+
 export async function sendDirectMessage(recipientBuilderId, text) {
   const { message } = await requestJson('/direct-messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ recipientBuilderId, text }),
+    body: JSON.stringify({ recipientBuilderId, text, idempotencyKey: directMessageIdempotencyKey(recipientBuilderId) }),
   });
   return message;
 }
