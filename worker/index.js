@@ -10489,6 +10489,14 @@ async function handleLandlets(request, db, route, url) {
       // preserve here; every existing test already passes exactly
       // LANDLET_AREA_M2 for this branch.
       landlet.areaM2 = LANDLET_AREA_M2;
+      // #1766: same free-Class-2+ gap #1703 fixed on the sibling
+      // POST .../claim endpoint -- areaM2 above is already forced to the
+      // free-starter constant regardless of landClass, but nothing
+      // stopped a caller from setting landClass itself to anything, self-
+      // claiming a "larger" landlet class for free with no auction.
+      if (landlet.landClass !== 1) {
+        throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
+      }
       await checkRateLimit(db, `landlet-self-claim-create:${sessionBuilder.builder_id}`, LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX);
     } else if (landlet.status === 'claimed') {
       // The same "claimed implies non-null owner" invariant PUT/PATCH

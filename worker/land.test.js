@@ -420,6 +420,29 @@ describe('Landlet updates', () => {
     expect(me.body.builder.ownedAreaM2).toBe(1000);
   });
 
+  // #1766: same free-Class-2+ gap #1703 fixed on the sibling
+  // POST .../claim endpoint -- areaM2 is already forced to the fixed
+  // free-starter constant (test just above), but nothing stopped a caller
+  // from setting landClass itself to claim a "larger" landlet class for
+  // free, with no auction at all.
+  it('rejects a self-claimed landlet with a non-Class-1 landClass via POST', async () => {
+    const builder = await signupBuilder('self-claim-class-spoof-builder');
+    const rejected = await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'self-claim-class-spoof-landlet', name: 'Should never exist', areaM2: 1000,
+        status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 9500, y: 0 }, landClass: 5,
+      }),
+    }));
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/larger than the free starter size/);
+
+    const stored = await env.DB.prepare(
+      'SELECT 1 AS found FROM landlets WHERE landlet_id = ?',
+    ).bind('self-claim-class-spoof-landlet').first();
+    expect(stored).toBeNull();
+  });
+
   // #799: unlike every other repeatable write in this file, this path
   // (fully caller-controlled, no real greenbelt/world-generation backing it)
   // had no rate limit at all — a builder could flood the table even though
