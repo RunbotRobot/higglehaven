@@ -127,6 +127,22 @@ const avatarRowTextsAfter = await myAvatarsField.locator('.version-row').allText
 const purchasedAvatarRowAfter = avatarRowTextsAfter.find((t) => t.includes(AVATAR_PRODUCT_NAME));
 console.log('purchased avatar row shows equipped after the click (should be true):', purchasedAvatarRowAfter?.includes('equipped'));
 
+// #1746: the refetch *request* firing (awaited above) and
+// renderMyAnimationsList actually finishing its re-render are two
+// different moments -- under heavy concurrent-fleet CI load, reading the
+// DOM immediately after the request fires can catch it mid-clear,
+// between the old render tearing down and the refetch's response
+// repopulating it (observed as an empty animationRowTexts). Poll for the
+// actual post-render condition before reading it, same fix shape as
+// #1200's flight-direction-tilt.test.mjs.
+await page.waitForFunction(
+  (name) => [...document.querySelectorAll('.settings-field')]
+    .some((f) => f.textContent.includes('My Animations')
+      && [...f.querySelectorAll('.version-row')].some((r) => r.textContent.includes(name))),
+  ANIMATION_PRODUCT_NAME,
+  { timeout: 10000 },
+);
+
 // My Animations' own list should still be intact and showing the purchased
 // animation -- this re-fetch is a refresh, not a crash/empty-out.
 const animationRowTexts = await myAnimationsField.locator('.version-row').allTextContents();
