@@ -31,6 +31,8 @@ import {
   upsertInstancesRemote,
   deleteInstancesRemote,
   uploadModelFile,
+  createVideoGenerationJob,
+  fetchVideoGenerationJobStatus,
   createCatalogTemplate,
   updateCatalogTemplate,
   deleteCatalogTemplate,
@@ -2903,6 +2905,13 @@ uploadPriceInput.addEventListener('blur', () => {
   }
 });
 const uploadFileInput = document.getElementById('upload-file-input');
+const uploadFileFieldRowEl = document.getElementById('upload-file-field-row');
+const uploadHintEl = document.getElementById('upload-hint');
+const uploadHintBtn = document.getElementById('upload-hint-btn');
+const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
+const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
+const uploadVideoSectionEl = document.getElementById('upload-video-section');
+const uploadVideoInput = document.getElementById('upload-video-input');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
@@ -2931,6 +2940,12 @@ let uploadModelSizeBytes = null;
 let uploadSkeletonSignature = null;
 let uploadOriginalDimensions = null;
 let uploadDimensionPreview = null;
+// #1620 (sub-issue of #1616): within step 'file', the seller picks either
+// a .glb/.fbx file (mode 'file', the original flow) or a short video to
+// generate one from (mode 'video') -- mutually exclusive input methods
+// sharing the same name/price/digital-good fields and the same eventual
+// handoff into step 'dimensions'.
+let uploadFileMode = 'file';
 
 // handleUploadFileStep runs a long async chain (optimize -> upload ->
 // measure -> showUploadDimensionPreview) before committing to the shared
@@ -2983,8 +2998,27 @@ function disposeUploadDimensionPreview() {
   uploadDimensionPreview = null;
 }
 
+// Switches step 'file' between its two mutually-exclusive input methods.
+// #1602's info-tooltip popups (upload-hint, upload-video-hint) are
+// siblings of their own field row, not nested inside it, so each one is
+// force-collapsed here rather than relying on hiding the row above it to
+// also hide the popup -- video mode's own hint lives inside
+// uploadVideoSectionEl and so is already covered by that toggle alone.
+function setUploadFileMode(mode) {
+  uploadFileMode = mode;
+  uploadFileFieldRowEl.hidden = mode !== 'file';
+  uploadHintEl.hidden = true;
+  uploadHintBtn.setAttribute('aria-expanded', 'false');
+  uploadModeVideoBtn.hidden = mode !== 'file';
+  uploadVideoSectionEl.hidden = mode !== 'video';
+  uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
+}
+uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
+uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
+
 function resetUploadModalToFileStep() {
-  uploadFlowToken++; // invalidate any in-flight handleUploadFileStep call
+  uploadFlowToken++; // invalidate any in-flight handleUploadFileStep/startVideoGeneration call
+  stopVideoGenPoll();
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
@@ -2996,7 +3030,7 @@ function resetUploadModalToFileStep() {
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
   uploadStepDimensionsEl.hidden = true;
-  uploadSubmitBtn.textContent = 'Add Product';
+  setUploadFileMode('file');
 }
 
 function openUploadModal() {
@@ -3007,6 +3041,7 @@ function openUploadModal() {
   uploadDigitalGoodDisclaimerLabel.hidden = true;
   uploadDigitalGoodDisclaimerSelect.value = 'gift-card';
   uploadFileInput.value = '';
+  uploadVideoInput.value = '';
   setUploadStatus('');
   uploadSubmitBtn.disabled = false;
   resetUploadModalToFileStep();
@@ -3335,6 +3370,172 @@ async function handleUploadFileStep() {
   }
 }
 
+// #1620 (sub-issue of #1616): the video-to-3D counterpart to
+// handleUploadFileStep above. Extracts a few frames from the seller's
+// video, kicks off an async generation job (worker/index.js's
+// handleVideoGenerationJobCreate, #1619), polls it to completion, then
+// hands the resulting model off into handleUploadFileStep's own existing
+// optimize -> upload -> measure -> preview chain unmodified -- confirmed
+// in #1621 that a generated mesh needs no special-casing there.
+const VIDEO_GEN_FRAME_COUNT = 4;
+const VIDEO_GEN_POLL_INTERVAL_MS = 3000;
+// Matches the client-cadence budget worker/index.js's own
+// VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX (120) was sized around -- the
+// same "every 3s for up to 5 minutes" shape pollDiditVerificationStatus
+// below already uses for its own identically-reasoned polling budget.
+const VIDEO_GEN_POLL_DEADLINE_MS = 5 * 60 * 1000;
+
+let videoGenPollTimer = null;
+
+function stopVideoGenPoll() {
+  if (videoGenPollTimer !== null) {
+    clearTimeout(videoGenPollTimer);
+    videoGenPollTimer = null;
+  }
+}
+
+// Draws a handful of evenly-spaced still frames from a video file --
+// no provider evaluated by #1617 accepts raw video directly, and this
+// has to happen here in the browser (Cloudflare Workers has no video-
+// decoding capability) before the video's own bytes ever go anywhere.
+async function extractVideoFrames(videoFile, frameCount) {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  const url = URL.createObjectURL(videoFile);
+  try {
+    video.src = url;
+    await new Promise((resolve, reject) => {
+      video.onloadedmetadata = resolve;
+      video.onerror = () => reject(new Error('Could not read this video file.'));
+    });
+    if (!Number.isFinite(video.duration) || video.duration <= 0) {
+      throw new Error("Could not determine this video's length.");
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    const frames = [];
+    for (let i = 0; i < frameCount; i++) {
+      // The midpoint of each equal slice, not i/frameCount itself -- skips
+      // sampling the very first/last instant, often a half-raised phone or
+      // a hand still entering/leaving frame.
+      const t = ((i + 0.5) / frameCount) * video.duration;
+      await new Promise((resolve, reject) => {
+        video.onseeked = resolve;
+        video.onerror = () => reject(new Error('Could not read this video file.'));
+        video.currentTime = t;
+      });
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+      frames.push(blob);
+    }
+    return frames;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// Once a job's modelUrl is ready it's an ordinary same-origin
+// /uploads/... URL (#1619's storeTripoModelOutput re-stores the
+// provider's output in the same R2 bucket/shape a direct upload uses,
+// confirmed in #1621 needs no special routing) -- fetching it into a
+// File and injecting it into the real file <input> (via DataTransfer,
+// since .files can't be assigned a plain array) lets
+// handleUploadFileStep run completely unmodified, the same as any
+// manually picked file.
+async function finishVideoGeneration(modelUrl) {
+  setUploadStatus('Generated! Optimizing…');
+  const response = await fetch(modelUrl);
+  if (!response.ok) throw new Error('Could not download the generated model.');
+  const bytes = await response.blob();
+  const file = new File([bytes], 'generated-model.glb', { type: 'model/gltf-binary' });
+  const dataTransfer = new DataTransfer();
+  dataTransfer.items.add(file);
+  uploadFileInput.files = dataTransfer.files;
+  await handleUploadFileStep();
+}
+
+function pollVideoGenerationJob(jobId, myFlowToken) {
+  stopVideoGenPoll();
+  const deadline = Date.now() + VIDEO_GEN_POLL_DEADLINE_MS;
+  const tick = async () => {
+    videoGenPollTimer = null;
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while waiting
+    try {
+      const { status, modelUrl, error } = await fetchVideoGenerationJobStatus(jobId);
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while checking
+      if (status === 'complete') {
+        await finishVideoGeneration(modelUrl);
+        return;
+      }
+      if (status === 'failed') {
+        setUploadStatus(error || 'Video-to-3D generation failed — try a different video, or fall back to a manual upload.', true);
+        uploadSubmitBtn.disabled = false;
+        return;
+      }
+      setUploadStatus('Generating your 3D model… this can take a couple of minutes.');
+    } catch (err) {
+      // A transient failure here shouldn't give up outright -- keep
+      // polling until the deadline, the same "best-effort background
+      // poll" spirit pollDiditVerificationStatus below already uses.
+      console.warn('Could not check video generation status:', err);
+    }
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while deciding whether to reschedule
+    if (Date.now() >= deadline) {
+      setUploadStatus('Still generating — this is taking longer than expected. Try again later, or fall back to a manual upload.', true);
+      uploadSubmitBtn.disabled = false;
+      return;
+    }
+    videoGenPollTimer = setTimeout(tick, VIDEO_GEN_POLL_INTERVAL_MS);
+  };
+  tick();
+}
+
+async function startVideoGeneration(videoFile, myFlowToken) {
+  setUploadStatus('Reading video…');
+  const frames = await extractVideoFrames(videoFile, VIDEO_GEN_FRAME_COUNT);
+  if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while extracting frames
+
+  setUploadStatus('Starting generation…');
+  const fieldNames = ['front', 'left', 'back', 'right'];
+  const form = new FormData();
+  frames.forEach((blob, i) => form.append(fieldNames[i], blob, `frame-${i}.jpg`));
+  const { jobId } = await createVideoGenerationJob(form);
+  if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while starting the job
+
+  setUploadStatus('Generating your 3D model… this can take a couple of minutes.');
+  pollVideoGenerationJob(jobId, myFlowToken);
+}
+
+async function handleUploadVideoStep() {
+  const name = uploadNameInput.value.trim();
+  if (!name) {
+    setUploadStatus('Name is required.', true);
+    return;
+  }
+  const videoFile = uploadVideoInput.files[0];
+  if (!videoFile) {
+    setUploadStatus('Choose a video first.', true);
+    return;
+  }
+  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
+    return;
+  }
+
+  const myFlowToken = ++uploadFlowToken;
+  uploadSubmitBtn.disabled = true;
+  try {
+    await startVideoGeneration(videoFile, myFlowToken);
+  } catch (err) {
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
+    console.error('Video-to-3D generation failed:', err);
+    setUploadStatus(err.message || 'Something went wrong starting video generation.', true);
+    uploadSubmitBtn.disabled = false;
+  }
+}
+
 // A seller-edited dimension only counts as a real change worth re-encoding
 // the model over — not just float noise from round-tripping through
 // display units and a fixed 2-decimal display precision.
@@ -3458,8 +3659,12 @@ async function handleUploadDimensionsStep() {
 }
 
 uploadSubmitBtn.addEventListener('click', () => {
-  if (uploadStep === 'file') handleUploadFileStep();
-  else handleUploadDimensionsStep();
+  if (uploadStep === 'file') {
+    if (uploadFileMode === 'video') handleUploadVideoStep();
+    else handleUploadFileStep();
+  } else {
+    handleUploadDimensionsStep();
+  }
 });
 
 // Seller product management: lets a seller mark their own uploaded
