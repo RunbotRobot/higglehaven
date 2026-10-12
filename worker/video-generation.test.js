@@ -16,6 +16,12 @@ let createCallCount = 0;
 let taskCounter = 0;
 let nextTaskStatus = 'success';
 const FAKE_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/model.glb';
+// #1673: a distinct, always-failing download URL for the "Tripo reports
+// success but the output URL is already expired/unreachable" case, so
+// that test doesn't depend on mutating FAKE_MODEL_DOWNLOAD_URL's own
+// response out from under any other test file sharing this isolate.
+const BROKEN_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/expired.glb';
+let nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
 const originalFetch = globalThis.fetch;
 
 function minimalGlbBytes() {
@@ -61,13 +67,16 @@ beforeAll(async () => {
       if (nextTaskStatus === 'success') {
         return new Response(JSON.stringify({
           code: 0,
-          data: { task_id: taskId, status: 'success', output: { model_url: FAKE_MODEL_DOWNLOAD_URL } },
+          data: { task_id: taskId, status: 'success', output: { model_url: nextModelDownloadUrl } },
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ code: 0, data: { task_id: taskId, status: nextTaskStatus } }), { status: 200 });
     }
     if (url === FAKE_MODEL_DOWNLOAD_URL) {
       return new Response(minimalGlbBytes(), { status: 200 });
+    }
+    if (url === BROKEN_MODEL_DOWNLOAD_URL) {
+      return new Response('Gone', { status: 404 });
     }
     return originalFetch(input, init);
   };
@@ -188,6 +197,26 @@ describe('Video-to-3D job creation (#1619)', () => {
     expect(status.body.status).toBe('failed');
     expect(status.body.error).toMatch(/banned/);
     nextTaskStatus = 'success';
+  });
+
+  it('#1673: fails the job immediately (not stuck processing) when Tripo reports success but the model download fails', async () => {
+    const builder = await signupBuilder('video-gen-broken-download');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = BROKEN_MODEL_DOWNLOAD_URL;
+    try {
+      const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(status.body.status).toBe('failed');
+      expect(status.body.error).toMatch(/retrieve the generated model/);
+
+      const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(row.status).toBe('failed');
+      expect(row.processed_at).not.toBeNull();
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
   });
 
   it('leaves a job processing on a non-terminal status like "running"', async () => {
