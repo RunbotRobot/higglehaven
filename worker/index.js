@@ -12608,12 +12608,23 @@ async function handleSignPosts(request, db, route) {
     // #1718: a retry that reuses the same (validated) client-supplied key
     // finds its own already-landed row here and returns it instead of
     // inserting a second, fully duplicate post.
+    // #1778: that dedup is only a legitimate hit when the found row's own
+    // content actually matches this request -- the key is cached
+    // client-side per instanceId (src/api.js's signPostIdempotencyKey), not
+    // per attempt, so a stale key reused for a genuinely different second
+    // note (the author typed something new into the same prompt() flow
+    // within the cache's TTL) must not silently return the FIRST post as if
+    // it were this one. On a mismatch, mint a real id instead, same as the
+    // "missing/malformed key" fallback below already does.
     const idempotencyKey = signPostIdempotencyKey(instanceId, input.idempotencyKey);
+    let existing = null;
     if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(idempotencyKey, instanceId).first();
-      if (existing) return json({ post: signPostFromRow(existing) });
+      existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(idempotencyKey, instanceId).first();
+      if (existing && existing.author_label === authorLabel && existing.text === text) {
+        return json({ post: signPostFromRow(existing) });
+      }
     }
-    const postId = idempotencyKey || `post-${crypto.randomUUID()}`;
+    const postId = (idempotencyKey && !existing) ? idempotencyKey : `post-${crypto.randomUUID()}`;
     // #1327: the is_community_sign check above is a point-in-time read, and
     // readJson is a real awaited gap after it -- without re-checking here,
     // a concurrent PATCH unflagging this instance (whose own #1022 cleanup
