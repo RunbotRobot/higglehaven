@@ -278,10 +278,6 @@ export async function fetchMyOwnedAnimations() {
 // higgles-to-cash redemption (#624, sub-issue of #349/#324) — same shape
 // as fetchSellerStripeAccount/submitSellerStripeAccount below, against
 // the builders table instead of sellers.
-export async function fetchBuilderStripeAccount() {
-  return requestJson('/builders/me/stripe-account');
-}
-
 export async function submitBuilderStripeAccount(payload) {
   return requestJson('/builders/me/stripe-account', {
     method: 'POST',
@@ -290,9 +286,9 @@ export async function submitBuilderStripeAccount(payload) {
   });
 }
 
-// Higgles-to-cash redemption (#625) — folds the same onboarding fields
-// fetchBuilderStripeAccount already returns into one call, plus this
-// builder's currently available-to-redeem balance.
+// Higgles-to-cash redemption (#625) — folds the builder's onboarding
+// fields into one call, plus this builder's currently available-to-redeem
+// balance.
 export async function fetchBuilderRedeemStatus() {
   return requestJson('/builders/me/redeem');
 }

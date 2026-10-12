@@ -65,7 +65,6 @@ import {
   submitTaxIdForm,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
-  fetchBuilderStripeAccount,
   submitBuilderStripeAccount,
   fetchBuilderRedeemStatus,
   redeemHiggles,
