@@ -7622,6 +7622,19 @@ const VIDEO_GENERATION_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 // Headroom under Tripo's own 20MB-per-image cap -- a single extracted
 // video frame has no business approaching that.
 const MAX_VIDEO_GENERATION_FRAME_BYTES = 10 * 1024 * 1024;
+// #1782: same reasoning as DIDIT_RESERVATION_TIMEOUT_MS above -- a
+// reservation left behind by a crash between reserveVideoGenerationJob's
+// own INSERT and handleVideoGenerationJobCreate either flipping it to
+// 'processing' or its catch block deleting it outright never resolves on
+// its own if that crash didn't run the catch (a CPU-limit kill, isolate
+// eviction -- not a thrown JS exception). A legitimate pending->processing
+// transition happens within the same request, well under a minute even
+// with the frame uploads ahead of it, so this stays well clear of that
+// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS -- no
+// real Didit/Tripo cost is ever in flight during this specific window
+// (the row is still 'pending', not yet billed), so there's no reason to
+// wait as long before clearing it.
+const VIDEO_GENERATION_RESERVATION_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Shared by handleVideoGenerationJobCreate (dedup an already-in-flight
 // job) and handleVideoGenerationJobStatus (poll the current one) -- both
@@ -7642,6 +7655,15 @@ async function latestVideoGenerationJob(db, builderId) {
 // both get billed. Same "claim first, only the winner calls out" idiom
 // reserveDiditSession (#1039) already uses.
 export async function reserveVideoGenerationJob(db, builderId) {
+  // #1782: same per-caller stale-placeholder cleanup as reserveDiditSession
+  // (#1039) runs first, for the identical reason -- clearing out this
+  // builder's own stuck 'pending' reservation (scoped to them, not a
+  // global sweep) lets the NOT EXISTS guard below admit a genuinely fresh
+  // reservation instead of blocking on one nothing will ever resolve.
+  await db.prepare(`
+    DELETE FROM video_generation_jobs
+    WHERE builder_id = ? AND status = 'pending' AND processed_at IS NULL AND created_at < ?
+  `).bind(builderId, new Date(Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS).toISOString()).run();
   const jobId = `job-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO video_generation_jobs (job_id, builder_id, status)
@@ -7766,11 +7788,12 @@ async function applyTripoTaskResult(db, env, jobId, task) {
 // enough that a merely-slow job never gets falsely failed, short enough
 // that a genuinely stuck one doesn't block its builder's
 // one-pending-per-builder slot (idx_video_generation_jobs_one_pending_per_builder)
-// indefinitely. Scoped to 'processing' specifically, per this issue's own
-// stated gap -- a job still 'pending' (died between the reservation and
-// ever reaching Tripo) is a different crash class, already handled by
-// handleVideoGenerationJobCreate's own catch block deleting the
-// reservation outright.
+// indefinitely. Scoped to 'processing' specifically -- a job still
+// 'pending' (died between the reservation and ever reaching Tripo) is a
+// different crash class, handled instead by reserveVideoGenerationJob's
+// own per-caller stale-placeholder cleanup (#1782) -- handleVideoGenerationJobCreate's
+// catch block alone only covers a thrown-exception crash, not a harder
+// kill (CPU limit, isolate eviction) that never reaches it.
 const VIDEO_GENERATION_PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
 export async function expireStaleVideoGenerationJobs(db) {

@@ -7351,6 +7351,16 @@ Tripo's own billed task-create call — an atomic reservation
 (`idx_video_generation_jobs_one_pending_per_builder`, migrations/0119)
 ensures only the winner calls out; the loser is simply handed back the
 winner's already-in-flight job (same `{ jobId, status }` shape, `200`).
+**Self-healing (#1782):** a reservation that never progresses past
+`status = 'pending'` within two minutes (a crash between the reservation
+landing and either Tripo's task-create call succeeding or the request's
+own catch block deleting it — a CPU-limit kill or isolate eviction, not a
+thrown exception the catch would see) is cleared automatically on the
+builder's next call, the same self-healing
+`POST /api/auth/didit-verification-session` already does for its own
+analogous reservation. Without this, the one-pending-per-builder guard
+above would otherwise block that builder from ever starting another job
+— or self-deleting their account — indefinitely.
 
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the
