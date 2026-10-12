@@ -4464,12 +4464,22 @@ async function handleDirectMessages(request, db, route, url) {
     // finds it here instead of delivering the same text twice — mirrors
     // writePurchaseRow's own idempotency check, keyed off message_id
     // itself the same way.
+    // #1747: unlike every other idempotency key in this file, this one
+    // wraps a freely-editable text field — dmComposeInput's text is
+    // deliberately left in place on error (see this handler's own comment
+    // above), so a user can edit it before retrying within the key's TTL.
+    // Returning the cached row unconditionally would silently discard the
+    // edit and report success for text that was never actually sent.
+    // Comparing text first means only a genuine same-content retry is
+    // deduped; an edited resend falls through to a normal insert below
+    // with a fresh random id, since `idempotencyKey` is already taken by
+    // the stale row and can't be reused as this new row's own id.
     const idempotencyKey = directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, input.idempotencyKey);
-    if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ message: directMessageFromRow(existing) });
-    }
-    const messageId = idempotencyKey || `message-${crypto.randomUUID()}`;
+    const existing = idempotencyKey
+      ? await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first()
+      : null;
+    if (existing && existing.text === text) return json({ message: directMessageFromRow(existing) });
+    const messageId = (idempotencyKey && !existing) ? idempotencyKey : `message-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
     `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();

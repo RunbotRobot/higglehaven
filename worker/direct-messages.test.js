@@ -239,6 +239,41 @@ describe('Direct messages (#1637)', () => {
     expect(threadAfter.body.messages).toHaveLength(2);
   });
 
+  // #1747: unlike every other idempotency key in this file, this one wraps
+  // a freely-editable text field -- dmComposeInput's text is deliberately
+  // left in place on error, so a user can edit it before retrying within
+  // the key's TTL. The dedup check must compare text, not just the key,
+  // or an edited resend would silently deliver the stale original instead.
+  it('delivers an edited retry as a new message instead of the stale cached text', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-idempotency-edited-alice');
+    const bob = await signupIdVerifiedBuilder('dm-idempotency-edited-bob');
+    await becomeFriends(alice, bob);
+
+    const first = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'call me at 555-1234', idempotencyKey: 'edited-retry-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const edited = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'ignore that, call 555-9999', idempotencyKey: 'edited-retry-key' }),
+    }));
+    expect(edited.response.status).toBe(201);
+    expect(edited.body.message.messageId).not.toBe(first.body.message.messageId);
+    expect(edited.body.message.text).toBe('ignore that, call 555-9999');
+
+    const thread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(thread.body.messages).toHaveLength(2);
+    expect(thread.body.messages.map((m) => m.text).sort()).toEqual(['call me at 555-1234', 'ignore that, call 555-9999']);
+
+    // The original text's own idempotency key is still honored for its
+    // own, unedited retry.
+    const unedited = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'call me at 555-1234', idempotencyKey: 'edited-retry-key' }),
+    }));
+    expect(unedited.response.status).toBe(200);
+    expect(unedited.body.message.messageId).toBe(first.body.message.messageId);
+  });
+
   // #974 (the purchase-flow equivalent) already fixed this same class of
   // bug for a stale localStorage-cached key reused by a second account on
   // the same browser -- directMessageIdempotencyKey folds in both builder
