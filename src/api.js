@@ -649,12 +649,49 @@ export async function fetchVideoGenerationJobStatus(jobId) {
   return requestJson(`/video-generation-jobs/${encodeURIComponent(jobId)}`); // { jobId, status, modelUrl, error }
 }
 
+// #1728: unlike purchaseIdempotencyKey above (scoped by an existing
+// instanceId), a brand-new catalog template has no pre-existing resource
+// id to scope by -- the closest stable value known before the create
+// call is the model the seller already uploaded (modelUrl). The server
+// additionally folds in the creating seller's own id (see
+// catalogTemplateIdempotencyKey in worker/index.js) the same way #974
+// folded buyerBuilderId into the purchase key above, so this only needs
+// to vary per modelUrl, not per seller, on this end.
+const CATALOG_TEMPLATE_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function catalogTemplateIdempotencyStorageKey(modelUrl) {
+  return `higglehaven-catalog-template-idempotency-${modelUrl || 'none'}`;
+}
+
+function catalogTemplateIdempotencyKey(modelUrl) {
+  const storageKey = catalogTemplateIdempotencyStorageKey(modelUrl);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < CATALOG_TEMPLATE_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+// Called once a create actually succeeds, so a later, genuinely separate
+// creation that happens to reuse the same modelUrl (e.g. the "Duplicate"
+// button in src/main.js, or two unrelated products built from the same
+// uploaded file) mints its own fresh key instead of colliding with this
+// completed one.
+export function clearCatalogTemplateIdempotencyKey(modelUrl) {
+  try { localStorage.removeItem(catalogTemplateIdempotencyStorageKey(modelUrl)); } catch (e) { /* ignore */ }
+}
+
 export async function createCatalogTemplate(template) {
   const { template: created } = await requestJson('/catalog', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(template),
+    body: JSON.stringify({ ...template, idempotencyKey: catalogTemplateIdempotencyKey(template.modelUrl) }),
   });
+  clearCatalogTemplateIdempotencyKey(template.modelUrl);
   return created;
 }
 

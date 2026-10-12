@@ -2063,7 +2063,19 @@ async function handleCatalog(request, db, route, url, models, env) {
   // seeding use.
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const template = validateTemplate(input, crypto.randomUUID());
+    // #1728: a lost response (network drop after the INSERT below already
+    // landed) looks, client-side, identical to the request never having
+    // reached us, and invites an innocent retry of what the real upload
+    // wizard considers the same submit -- previously minted a fresh
+    // crypto.randomUUID() every time, so that retry silently created a
+    // second, fully duplicate listing. See catalogTemplateIdempotencyKey
+    // just below for why this is hashed rather than used verbatim.
+    const idempotencyKey = await catalogTemplateIdempotencyKey(input.sellerId, input.modelUrl, input.idempotencyKey);
+    const template = validateTemplate(input, idempotencyKey || crypto.randomUUID());
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
+      if (existing) return json({ template: templateFromRow(existing) });
+    }
     if (template.sellerId) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
       const sessionSeller = await requireSessionSeller(request, db);
@@ -14488,6 +14500,30 @@ export function cosineSimilarity(a, b) {
   }
   const denominator = Math.sqrt(normA) * Math.sqrt(normB);
   return denominator === 0 ? 0 : dot / denominator;
+}
+
+// #1728: unlike purchases (purchaseIdempotencyKey above, namespaced by an
+// existing instanceId+buyerBuilderId) or sign posts/calendar events
+// (namespaced by an existing instanceId), a brand-new catalog template
+// has no pre-existing resource id to namespace a client-sent key by --
+// it's creating something from scratch. The closest stable value known
+// to the client before the create call is the model it already uploaded
+// (modelUrl), scoped by the creating seller so two different sellers who
+// happen to reuse the exact same model file can't collide. Unlike those
+// other namespace components, modelUrl itself contains slashes
+// (`/uploads/models/<hash>.glb`) and the result here is used as
+// template_id, which doubles as a literal URL path segment elsewhere in
+// this file (GET/PUT/PATCH/DELETE /catalog/:templateId and its
+// /thumbnail, /reviews siblings) -- so the namespaced value is hashed
+// down to a flat hex string, the same way storeTripoModelOutput already
+// content-addresses a model's own bytes in this file, rather than being
+// used as the id verbatim the way the simpler single-id namespaces above
+// can be.
+async function catalogTemplateIdempotencyKey(sellerId, modelUrl, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  const namespace = `${sellerId || 'anon'}:${modelUrl || 'none'}:${rawKey}`;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespace)));
+  return `template-${bytesToHex(digest)}`;
 }
 
 function validateTemplate(input, fallbackId) {
