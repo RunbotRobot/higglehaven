@@ -2741,8 +2741,15 @@ function renderBundlePicker() {
       deleteTileBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
         if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
+        // #1787: same bundlePickerLoadToken guard as the rename/share-toggle
+        // handlers above — without it, a slower concurrent rename/share-
+        // toggle on a different tile can resolve after this delete and
+        // overwrite myBundles/communityBundles with a refetched snapshot
+        // that still contains the bundle this handler just deleted.
+        const myLoadToken = ++bundlePickerLoadToken;
         try {
           await deleteBundle(bundle.bundleId);
+          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
           myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
           communityBundles = communityBundles.filter((b) => b.bundleId !== bundle.bundleId);
           renderBundlePicker();
