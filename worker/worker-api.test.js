@@ -3508,6 +3508,36 @@ describe('Worker API', () => {
     expect(row.claimable_at).not.toBeNull();
   });
 
+  // #1666: generation-complete's UPDATE has its own status='generating' AND
+  // generated_at IS NULL guard (the #1055 race above proves two genuinely
+  // concurrent callers can both reach it), but the admin_action_log INSERT
+  // used to be batched alongside it unconditionally -- db.batch() commits
+  // every statement regardless of an earlier one's row count, so the race's
+  // loser still logged a completion it never actually caused.
+  it('#1666: two concurrent generation-complete calls on the same landlet log exactly one completion, not two', async () => {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'race-1666-landlet', name: 'Race 1666 landlet', areaM2: 4,
+        center: { x: 30, y: 30 }, status: 'generating',
+      }),
+    }));
+
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, () => api('/landlets/race-1666-landlet/generation-complete', adminSession({ method: 'POST' }))),
+    );
+    for (const r of responses) expect(r.response.status).toBe(200);
+    const generatedAts = new Set(responses.map((r) => r.body.landlet.generatedAt));
+    // Whichever request actually won the race, every response still reflects
+    // the same, real completion -- not an error, not a distinct second one.
+    expect(generatedAts.size).toBe(1);
+
+    const logs = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = 'landlet_generation_complete' AND target_id = ?`,
+    ).bind('race-1666-landlet').first();
+    expect(logs.count).toBe(1);
+  });
+
   // #523: nothing previously stopped an admin PUT/PATCH from setting
   // radiusM below its current value, with no re-validation of
   // already-materialized land that could then sit outside the new,

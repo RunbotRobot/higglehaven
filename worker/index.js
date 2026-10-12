@@ -9871,20 +9871,28 @@ async function handleLandlets(request, db, route, url) {
     // live subquery against world_settings, evaluated inside this same
     // UPDATE, the same fix shape candidateMaterializationSweepStatements
     // already uses.
-    await db.batch([
-      db.prepare(`
-        UPDATE landlets
-        SET generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
-            claimable_at = CASE
-              WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-              ELSE claimable_at
-            END,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE landlet_id = ? AND status = 'generating' AND generated_at IS NULL
-      `).bind(route[1]),
-      adminActionLogStatement(db, admin.user_id, 'landlet_generation_complete', 'landlet', route[1]),
-    ]);
+    // #1666: the log INSERT used to be batched with this UPDATE, but the
+    // UPDATE's own status='generating' AND generated_at IS NULL guard can
+    // legitimately affect 0 rows (the #1055 test above proves two
+    // concurrent callers can both reach here) -- db.batch() commits every
+    // statement regardless of an earlier one's row count, so the race's
+    // loser still logged a completion that never happened. Same "logged
+    // only after confirmed" idiom the /admin-forms/:formId/approve handler
+    // above already uses for the identical reason (#897).
+    const result = await db.prepare(`
+      UPDATE landlets
+      SET generated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
+          claimable_at = CASE
+            WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ELSE claimable_at
+          END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE landlet_id = ? AND status = 'generating' AND generated_at IS NULL
+    `).bind(route[1]).run();
+    if (result.meta.changes > 0) {
+      await adminActionLogStatement(db, admin.user_id, 'landlet_generation_complete', 'landlet', route[1]).run();
+    }
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });
   }
