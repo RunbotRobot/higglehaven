@@ -687,6 +687,51 @@ describe('Builders', () => {
     expect(deletedAfterPayout.response.status).toBe(200);
   });
 
+  // #1704: same root cause as #1691's own "losing bidder" test above, but
+  // for the seller -- once an auction is fully resolved (not just the
+  // status/winning_bid_id flip the two tests just above manufacture, but a
+  // real POST .../resolve with its payout/land-transfer batch), the
+  // remaining self-delete guards clear and the seller is free to delete
+  // their own profile. auctions.seller_builder_id used to be a cascading
+  // FK (migrations/0045), so that self-delete destroyed the entire
+  // auctions row -- and with it, via auction_bids' own cascade off
+  // auction_id, every bid on it, including the winner's own winning bid
+  // and the loser's losing one. migrations/0124 drops that cascade.
+  it("a seller self-deleting after their auction resolves doesn't destroy the auction or anyone's bids", async () => {
+    const seller = await signupBuilder('seller-delete-after-resolve-seller');
+    const winner = await signupBuilder('seller-delete-after-resolve-winner');
+    const loser = await signupBuilder('seller-delete-after-resolve-loser');
+    await fundHiggles(winner);
+    await fundHiggles(loser);
+    await createGreenbeltLandlet('seller-delete-after-resolve-landlet');
+    await api('/landlets/seller-delete-after-resolve-landlet/claim', seller.session({ method: 'POST' }));
+    const started = await api('/landlets/seller-delete-after-resolve-landlet/auction', seller.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, loser.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+    }));
+    await api(`/auctions/${auctionId}/bids`, winner.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1000 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+    await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const auctionRow = await env.DB.prepare('SELECT seller_builder_id, status, winning_bid_id FROM auctions WHERE auction_id = ?')
+      .bind(auctionId).first();
+    expect(auctionRow).not.toBeNull();
+    expect(auctionRow.seller_builder_id).toBe(seller.builderId);
+    expect(auctionRow.status).toBe('ended');
+
+    const bids = await api(`/auctions/${auctionId}/bids`);
+    expect(bids.body.totalCount).toBe(2);
+    expect(bids.body.bids.map((b) => b.bidderBuilderId).sort()).toEqual([loser.builderId, winner.builderId].sort());
+  });
+
   // #852: handleBuilderRedeem inserts a higgles_redemptions claim row
   // before either Stripe call, with stripe_payout_id only ever set once
   // the payout call actually succeeds — same idiom as the auction-payout

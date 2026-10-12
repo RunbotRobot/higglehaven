@@ -120,5 +120,6 @@
   "0120_direct_messages.sql",
   "0121_video_generation_jobs_builder_id_cascade.sql",
   "0122_direct_messages_builder_id_not_fk.sql",
-  "0123_auction_bids_bidder_builder_id_no_cascade.sql"
+  "0123_auction_bids_bidder_builder_id_no_cascade.sql",
+  "0124_auctions_seller_builder_id_no_cascade.sql"
 ]

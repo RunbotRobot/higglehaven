@@ -514,7 +514,7 @@ describe('Didit verification webhook (#589)', () => {
       expect(results).toHaveLength(0);
     });
 
-    it('still cascades a deleted seller into their own auctions (transitively, their bids too) -- but #1691 no longer cascades a deleted bidder into their own bid rows', async () => {
+    it('no longer cascades a deleted seller OR bidder into their own auctions/bids (#1691, #1704)', async () => {
       const seller = await signupBuilder('post-0093-auctions-cascade-seller');
       const bidder = await signupBuilder('post-0093-auctions-cascade-bidder');
       const landletId = `landlet-${crypto.randomUUID()}`;
@@ -539,14 +539,16 @@ describe('Didit verification webhook (#589)', () => {
       const bidsAfterBidderDeleted = await env.DB.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).all();
       expect(bidsAfterBidderDeleted.results).toHaveLength(1);
 
-      // seller_builder_id still cascades -- deleting the seller still
-      // removes the auction itself, which transitively cascades into its
-      // own bid rows via auction_bids.auction_id (unchanged by #1691).
+      // #1704: seller_builder_id no longer cascades either -- deleting the
+      // seller directly at the DB level (bypassing DELETE /api/builders/:id's
+      // own explicit cleanup of a still-active, zero-bid auction, which this
+      // one isn't) leaves the auction and its bid(s) intact, same "survive
+      // the other party's account going away" shape as purchases.sellerId.
       await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(seller.builderId).run();
       const auctionsAfterSellerDeleted = await env.DB.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).all();
-      expect(auctionsAfterSellerDeleted.results).toHaveLength(0);
+      expect(auctionsAfterSellerDeleted.results).toHaveLength(1);
       const bidsAfterSellerDeleted = await env.DB.prepare('SELECT * FROM auction_bids WHERE bid_id = ?').bind(bidId).all();
-      expect(bidsAfterSellerDeleted.results).toHaveLength(0);
+      expect(bidsAfterSellerDeleted.results).toHaveLength(1);
     });
 
     it('still cascades a deleted builder into its own higgles_earnings_events', async () => {
