@@ -11527,15 +11527,29 @@ async function autoAuctionInactiveLandlets(db) {
       )
     RETURNING landlet_id, seller_builder_id
   `).bind(endsAt, cutoff).run();
-  await fireNotifications(db, inserted.results.map((row) => ({
-    builderId: row.seller_builder_id,
-    // Not "bid to keep it" — there's no cancel/reclaim path once this
-    // runs (a separate, already-flagged gap), and a $0 starting bid
-    // means the owner loses the land to a bidder or to greenbelt either
-    // way once it resolves (resolveAuction's own no-bid/winner branches),
-    // never back to themselves. Purely informational.
-    message: `Your land at ${row.landlet_id} has been inactive for ${INACTIVITY_AUCTION_DAYS}+ days and was automatically put up for a $0 starting-bid auction — it will go to a bidder, or revert to greenbelt, once the auction resolves.`,
-  })));
+  // #1694: fireNotifications' own plain sequential loop rethrows (and
+  // aborts) on any non-FK error, which would otherwise silently skip the
+  // notification for every builder after the failing one in this tick's
+  // RETURNING set -- the auction itself is already committed above either
+  // way, so a failed notification here is only a missed FYI, never a
+  // correctness gap, and isolating each one keeps a transient failure from
+  // cascading to the rest.
+  for (const row of inserted.results) {
+    try {
+      await fireNotification(
+        db,
+        row.seller_builder_id,
+        // Not "bid to keep it" — there's no cancel/reclaim path once this
+        // runs (a separate, already-flagged gap), and a $0 starting bid
+        // means the owner loses the land to a bidder or to greenbelt either
+        // way once it resolves (resolveAuction's own no-bid/winner branches),
+        // never back to themselves. Purely informational.
+        `Your land at ${row.landlet_id} has been inactive for ${INACTIVITY_AUCTION_DAYS}+ days and was automatically put up for a $0 starting-bid auction — it will go to a bidder, or revert to greenbelt, once the auction resolves.`,
+      );
+    } catch (err) {
+      console.error('autoAuctionInactiveLandlets: failed to notify', row.seller_builder_id, err);
+    }
+  }
 }
 
 // #783 (continued): the owner's own expansion of this issue's scope, past

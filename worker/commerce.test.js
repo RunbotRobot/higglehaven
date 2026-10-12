@@ -1,7 +1,7 @@
 import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import worker, {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
   auctionSettlementEventId, resolveFinalizeBuilderId, cosineSimilarity, selectPurchasesForPayout,
@@ -1384,6 +1384,49 @@ describe('Inactivity-triggered auctions', () => {
     expect(notifications[0].message).toContain('inactivity-landlet-a');
     expect(notifications[0].message).toContain('automatically put up for a $0 starting-bid auction');
     expect(notifications[0].message).not.toContain('bid to keep it'); // no cancel/reclaim path exists
+  });
+
+  // #1694: fireNotifications' own all-or-nothing loop used to rethrow (and
+  // abort) on any non-FK error, silently skipping the notification for
+  // every builder processed after the failing one in the same tick — the
+  // auction itself is unaffected either way (already committed by the
+  // single atomic INSERT...RETURNING above), only the FYI notification was
+  // at risk. A real FK error wouldn't exercise this at all (fireNotification
+  // already swallows those per #1122, with or without this fix), so this
+  // forces a genuine non-FK D1 write failure for one specific builder via a
+  // real SQLite trigger (same RAISE(ABORT, ...) idiom migrations/0018
+  // already uses), not an application-level mock.
+  it('one builder\'s failed notification does not block the auction itself or the next builder\'s notification', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failingOwner = await signupBuilder('notify-fails-owner');
+    const okOwner = await signupBuilder('notify-ok-owner');
+    await createGreenbeltLandlet('inactivity-landlet-fail');
+    await createGreenbeltLandlet('inactivity-landlet-ok');
+    await claim('inactivity-landlet-fail', failingOwner);
+    await claim('inactivity-landlet-ok', okOwner);
+    await backdateLastActive(failingOwner.builderId, 31);
+    await backdateLastActive(okOwner.builderId, 31);
+
+    await env.DB.prepare(`
+      CREATE TRIGGER simulate_notify_failure_1694
+      BEFORE INSERT ON notifications
+      WHEN NEW.builder_id = '${failingOwner.builderId}'
+      BEGIN SELECT RAISE(ABORT, 'simulated transient failure'); END
+    `).run();
+    try {
+      await runScheduled();
+    } finally {
+      await env.DB.prepare('DROP TRIGGER simulate_notify_failure_1694').run();
+    }
+
+    expect(await activeAuctionFor('inactivity-landlet-fail')).toBeTruthy();
+    expect(await activeAuctionFor('inactivity-landlet-ok')).toBeTruthy();
+    expect(await notificationsFor(failingOwner.builderId)).toHaveLength(0);
+    const okNotifications = await notificationsFor(okOwner.builderId);
+    expect(okNotifications).toHaveLength(1);
+    expect(okNotifications[0].message).toContain('automatically put up for a $0 starting-bid auction');
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
   });
 
   it('does not auction a landlet whose owner has been active within 30 days', async () => {
