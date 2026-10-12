@@ -6734,6 +6734,7 @@ function renderBuildSettingsSection() {
 // seller-identity concern, not tied to any one landlet the way Build's
 // Publish/Auction sections are.
 async function renderSellSettingsSection() {
+  const myToken = settingsRenderToken;
   renderSellerIdentityField();
 
   const statusField = document.createElement('div');
@@ -6761,6 +6762,11 @@ async function renderSellSettingsSection() {
     statusNote.classList.add('error');
     return;
   }
+  // #1732: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — the real-money
+  // Payouts field below would land there instead of silently vanishing with
+  // it, same #905 guard every sibling Settings-tab renderer already has.
+  if (myToken !== settingsRenderToken) return;
 
   function describeStatus() {
     if (!account.configured) {
@@ -7853,9 +7859,15 @@ function updateTrimLengthInput() {
 let currentGizmoMode = 'translate';
 function setGizmoMode(mode) {
   currentGizmoMode = mode;
+  // #1503: aria-pressed mirrors .active so the current tool is announced to
+  // a screen reader, not just styled -- same idiom as updateSellerViewToggleUI
+  // and updateModeNavUI's own toggle groups.
   modeMoveBtn.classList.toggle('active', mode === 'translate');
+  modeMoveBtn.setAttribute('aria-pressed', String(mode === 'translate'));
   modeRotateBtn.classList.toggle('active', mode === 'rotate');
+  modeRotateBtn.setAttribute('aria-pressed', String(mode === 'rotate'));
   modeTrimBtn.classList.toggle('active', mode === 'trim');
+  modeTrimBtn.setAttribute('aria-pressed', String(mode === 'trim'));
   translateControls.detach();
   rotateControls.detach();
   trimControls.detach();
@@ -8363,8 +8375,11 @@ function updateSelectionUI() {
     // turns multi-select off itself (see their handlers below) and
     // reattaches the gizmo to whatever's already selected here.
     modeMoveBtn.classList.remove('active');
+    modeMoveBtn.setAttribute('aria-pressed', 'false');
     modeRotateBtn.classList.remove('active');
+    modeRotateBtn.setAttribute('aria-pressed', 'false');
     modeTrimBtn.classList.remove('active');
+    modeTrimBtn.setAttribute('aria-pressed', 'false');
     trimLengthControlEl.classList.remove('visible');
     translateControls.detach();
     rotateControls.detach();
@@ -11398,9 +11413,13 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   const submitBtn = authDeleteAccountForm.querySelector('button[type="submit"]');
   submitBtn.disabled = true;
   setAuthStatus('Deleting your account…');
+  // #1771: set before the await, not after -- see hasVerifiedSession's own
+  // comment for why.
+  accountSessionEnding = true;
   try {
     await deleteAccount(password);
   } catch (err) {
+    accountSessionEnding = false;
     submitBtn.disabled = false;
     setAuthStatus(err.message || 'Could not delete your account.', 'error');
     return;
@@ -14130,8 +14149,16 @@ function updateShopLandletInfo() {
 // server-side (worker/index.js: age_attested_at set, trust_tier !== 'none')
 // — mirrors the existing ageAttested/trustTier idiom requireCurrentUser's
 // own caller (ensureBuilderIdentity) already uses client-side.
+// #1771: set true as the delete-account submit handler's first line, before
+// its own await -- the account is deleted server-side well before that
+// await resolves client-side (a real network round-trip, many render-loop
+// ticks), and currentAuthUser itself isn't nulled until after it resolves.
+// Without this, a presence report/poll tick firing in that window still
+// passes this guard and 401s against a session that's already gone.
+let accountSessionEnding = false;
+
 function hasVerifiedSession() {
-  return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none';
+  return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none' && !accountSessionEnding;
 }
 
 // #1100: the client-side half of #1098's own throttling split — the POST

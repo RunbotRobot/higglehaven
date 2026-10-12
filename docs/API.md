@@ -4982,7 +4982,14 @@ above), so an expired-but-not-yet-resolved auction never appears in an
 ### `GET /api/auctions/:auctionId`
 
 A single auction, resolving it first if it's due. `404` if it doesn't
-exist.
+exist. Unauthenticated, so rate-limited per IP (`429` past
+`AUCTION_RESOLVE_RATE_LIMIT_MAX`, 20 per window — #1741: resolving can
+credit a real higgles balance, transfer land ownership, and fire
+notifications to both parties the first time an ended auction is observed,
+the same risk class `POST .../resolve` below shares; repeated calls after
+that first resolution are harmless no-ops, but the endpoint itself had no
+limit at all before this). Shares its rate-limit bucket with `POST
+.../resolve` below — both ultimately call the same `resolveAuctionIfDue`.
 
 ### `GET /api/auctions/:auctionId/bids`
 
@@ -5055,7 +5062,9 @@ Resolves this auction if it's currently due (`ends_at` has passed);
 otherwise `409`. Calling it again on an already-ended auction is a
 harmless no-op — `200` with the same (unchanged) already-ended state, not
 an error, matching ordinary idempotent-action expectations rather than
-penalizing a redundant call.
+penalizing a redundant call. Unauthenticated, so rate-limited per IP the
+same way as the single-item `GET` above (`429` past
+`AUCTION_RESOLVE_RATE_LIMIT_MAX`, 20 per window, shared bucket — #1741).
 
 ### Resolution
 
@@ -5879,6 +5888,33 @@ exercisable here). The actual PaymentIntent-creation/confirmation round
 trip against Stripe's real API — including the "Orphaned real-money
 purchases" fallback above, which only runs after that round trip — is not
 covered by any automated test in this repo.
+
+**`E2E_SIMULATE_PAID_PURCHASES` test seam (#1231).** The post-purchase
+shipping/delivery-confirmation flow ("Mark purchase shipped"/"Purchase
+delivery confirmation" above) only ever applies to a purchase with a real
+`paymentIntentId` set — which, until #1231, no `e2e/*.test.mjs` purchase
+ever had, since this simulated endpoint always wrote `null` and driving an
+actual Stripe checkout isn't possible in this suite either
+(`STRIPE_SECRET_KEY` is never configured here). `POST
+/api/instances/:instanceId/purchase` accepts an additional
+`simulatePaidPurchaseForTests: true` body field that mints a synthetic
+`test-pi-...` `paymentIntentId` instead of `null`, exercising
+`writePurchaseRow`'s real-money branch (including the
+`deliveryConfirmUrl` it returns) with no Stripe call anywhere in the path.
+Gated on both this flag being `true` **and** `stripeConfigured(env)` being
+`false` — not a real secret (see `.dev.vars`/`.github/workflows/ci.yml`'s
+own comment on the `E2E_SIMULATE_PAID_PURCHASES` Worker var), and
+structurally incapable of affecting a real deployment: once the owner sets
+`STRIPE_SECRET_KEY`, a connected seller's purchases already route through
+`createPurchaseCheckout` above instead, so this branch becomes permanently
+unreachable regardless of the var's value. `e2e/purchase-shipping.test.mjs`
+uses it to cover the Sales panel's "Mark shipped" button and the
+`?confirmDelivery=` link (including a same-link revisit, which is
+idempotent — see "Purchase delivery confirmation" above) through the real
+UI; the invalid/expired-token rejection path isn't covered there for the
+same `errors.length === 0` reason "Refunds" below gives for skipping its
+own no-returns rejection path — see `worker/commerce.test.js`'s own
+mark-shipped/confirm-delivery tests instead.
 
 ### Refunds
 

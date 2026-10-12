@@ -2074,9 +2074,21 @@ async function handleCatalog(request, db, route, url, models, env) {
     // just below for why this is hashed rather than used verbatim.
     const idempotencyKey = await catalogTemplateIdempotencyKey(input.sellerId, input.modelUrl, input.idempotencyKey);
     const template = validateTemplate(input, idempotencyKey || crypto.randomUUID());
-    if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
-      if (existing) return json({ template: templateFromRow(existing) });
+    // #1758: unlike purchases/sign-posts (pinned to a fixed instance), the
+    // real upload wizard reads name/price fresh off still-editable inputs
+    // on every submit and never clears this key on failure -- a seller
+    // who edits the name/price and resubmits after a lost response would
+    // otherwise get the STALE row back as a fabricated success, silently
+    // dropping their edit. Only honor the dedup hit when the content
+    // actually matches; on a mismatch this is a genuinely new attempt, so
+    // mint a fresh id rather than reusing the idempotency-derived one,
+    // which the stale row already occupies.
+    const existing = idempotencyKey
+      ? await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first()
+      : null;
+    if (existing) {
+      if (templateContentMatches(existing, template)) return json({ template: templateFromRow(existing) });
+      template.templateId = `template-${crypto.randomUUID()}`;
     }
     if (template.sellerId) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
@@ -4548,11 +4560,23 @@ async function handleDirectMessages(request, db, route, url) {
     // writePurchaseRow's own idempotency check, keyed off message_id
     // itself the same way.
     const idempotencyKey = directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, input.idempotencyKey);
+    let existing = null;
     if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ message: directMessageFromRow(existing) });
+      existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
+      // #1750: the client only clears its cached key on a successful send
+      // (src/main.js's compose handler), so a dropped response followed by
+      // a genuinely different message to the same recipient within the
+      // 5-minute TTL reuses this same key. Returning the stale row here
+      // unconditionally would silently swallow that different message —
+      // only treat this as the retry it's meant to catch when the text
+      // actually matches.
+      if (existing && existing.text === text) return json({ message: directMessageFromRow(existing) });
     }
-    const messageId = idempotencyKey || `message-${crypto.randomUUID()}`;
+    // A key that collided with someone else's differently-texted row (the
+    // mismatch above) must not be reused as this row's own id — it already
+    // belongs to that other row. Mint a genuine fresh id instead, same as
+    // the "missing/malformed key" fallback below already does.
+    const messageId = (idempotencyKey && !existing) ? idempotencyKey : `message-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
     `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();
@@ -4824,6 +4848,16 @@ const AUCTION_START_RATE_LIMIT_MAX = 20;
 // FRIENDSHIP_MUTATE_RATE_LIMIT_MAX/BUNDLE_MUTATE_RATE_LIMIT_MAX/
 // CATALOG_PATCH_RATE_LIMIT_MAX were each already added to guard against.
 const AUCTION_BID_RATE_LIMIT_MAX = 20;
+// #1741: resolveAuctionIfDue's underlying resolveAuction can credit a real
+// higgles balance, transfer land ownership, and fire notifications to both
+// parties the first time an ended auction is observed — reachable
+// unauthenticated via both the single-item GET below and POST .../resolve.
+// Repeated hits after the first are harmless no-ops (resolveAuction's own
+// `WHERE status = 'active'` guard), but this was still the one endpoint in
+// this resolve/trigger shape without the IP-keyed rate limit its own sibling
+// (EVENT_TRIGGER_RATE_LIMIT_MAX, which explicitly calls out this endpoint by
+// name in its own comment) already has.
+const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
@@ -5412,6 +5446,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     return json({ auction: await auctionFromRow(db, resolved) });
@@ -5422,6 +5457,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'resolve') {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     if (resolved.status === 'active') {
@@ -7622,6 +7658,16 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
     throw new HttpError('Failed to download the generated model from the video-to-3D provider', 502);
   }
   const bytes = await response.arrayBuffer();
+  // #1755: every other writer into MODELS enforces this same per-file cap
+  // before trusting the bytes any further (handleModelUpload checks
+  // file.size, modelSizeBytes validation bounds itself against the same
+  // constant) -- this path never did, so a generated model could land in
+  // R2 well over the limit the rest of the app assumes every model is
+  // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
+  // budget below ever checked.
+  if (bytes.byteLength > MAX_MODEL_BYTES) {
+    throw new HttpError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 502);
+  }
   validateGlb(bytes);
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -10443,6 +10489,14 @@ async function handleLandlets(request, db, route, url) {
       // preserve here; every existing test already passes exactly
       // LANDLET_AREA_M2 for this branch.
       landlet.areaM2 = LANDLET_AREA_M2;
+      // #1766: same free-Class-2+ gap #1703 fixed on the sibling
+      // POST .../claim endpoint -- areaM2 above is already forced to the
+      // free-starter constant regardless of landClass, but nothing
+      // stopped a caller from setting landClass itself to anything, self-
+      // claiming a "larger" landlet class for free with no auction.
+      if (landlet.landClass !== 1) {
+        throw new HttpError('This landlet is larger than the free starter size -- it can only be acquired via auction', 409);
+      }
       await checkRateLimit(db, `landlet-self-claim-create:${sessionBuilder.builder_id}`, LANDLET_SELF_CLAIM_CREATE_RATE_LIMIT_MAX);
     } else if (landlet.status === 'claimed') {
       // The same "claimed implies non-null owner" invariant PUT/PATCH
@@ -12900,13 +12954,33 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
+  // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
+  // direct D1 access the way worker/commerce.test.js's own mark-shipped/
+  // confirm-delivery tests use), so it had no way to produce a purchase
+  // with a real paymentIntentId at all -- the ship button and the
+  // ?confirmDelivery= link (src/main.js) both only apply to one. Driving an
+  // actual Stripe checkout isn't an option either (STRIPE_SECRET_KEY is
+  // never configured in this suite). This seam mints a synthetic
+  // paymentIntentId so e2e can reach writePurchaseRow's real-money branch
+  // through the ordinary, already-authenticated purchase endpoint, with no
+  // Stripe call involved anywhere. Double-gated so it can never fire against
+  // a real deployment or be mistaken for an actual charge: E2E_SIMULATE_PAID_PURCHASES
+  // is never a real secret (only ever set in a throwaway .dev.vars/CI
+  // config, see that var's own comment there), AND stripeConfigured(env)
+  // must be false -- once the owner sets STRIPE_SECRET_KEY, a connected
+  // seller's purchases already route through createPurchaseCheckout above
+  // instead, making this branch permanently unreachable regardless of the
+  // env var's value.
+  const simulatedPaymentIntentId = (env.E2E_SIMULATE_PAID_PURCHASES === 'true' && !stripeConfigured(env) && input.simulatePaidPurchaseForTests === true)
+    ? `test-pi-${crypto.randomUUID()}`
+    : null;
   return writePurchaseRow(
     env, instance, template, landlet, computePurchaseAmounts(template, input, buyerBuilder.label),
     // #888: unlike the real-money checkout->finalize path, there's no time
     // gap here between reading template and writing the purchase — template
     // is already fresh in this same request, so deriving isAvatarCategory
     // from it directly (rather than a locked-in snapshot) is correct here.
-    null, false, buyerBuilder.builder_id, template.category === 'avatar',
+    simulatedPaymentIntentId, false, buyerBuilder.builder_id, template.category === 'avatar',
     // #877: the client already mints and sends this (see purchaseInstance
     // in src/api.js) for the real-money path's own idempotency needs —
     // was silently never threaded through to this simulated path's write.
@@ -14795,6 +14869,26 @@ function validateCropShape(input) {
 
 function templateParams(template) {
   return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
+}
+
+// #1758: compares an existing row (raw DB shape) against a freshly
+// validated template (camelCase shape) across every field the real
+// upload wizard's still-editable inputs could legitimately change between
+// a lost-response attempt and a resubmit -- name/category/subcategory/
+// color/dimensions/priceCents/metadata. modelUrl/sellerId are deliberately
+// excluded: they're already baked into the idempotency key's own
+// namespace (see catalogTemplateIdempotencyKey), so two rows reaching this
+// comparison under the same key already share them.
+function templateContentMatches(existingRow, template) {
+  return existingRow.name === template.name
+    && existingRow.category === template.category
+    && existingRow.subcategory === template.subcategory
+    && existingRow.color === template.color
+    && existingRow.width_m === template.dimensions.width
+    && existingRow.depth_m === template.dimensions.depth
+    && existingRow.height_m === template.dimensions.height
+    && existingRow.price_cents === template.priceCents
+    && existingRow.metadata_json === JSON.stringify(template.metadata);
 }
 
 function instanceParams(instance) {
