@@ -12371,6 +12371,23 @@ const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
 // above.
 const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
 
+// #1716: same "a lost response looks, from here, identical to the request
+// never having reached us at all" protection as the purchase flow's own
+// purchaseIdempotencyKey above (#473) — a dropped POST response and the
+// innocent manual retry it invites would otherwise create a second, fully
+// duplicate calendar_events row that independently re-fires
+// handleCalendarEventTrigger's own one-shot effect (that function is only
+// idempotent per event_id, not per logical event). Namespaced with both
+// instanceId and the calling builder id, same as purchaseIdempotencyKey's
+// own #974 fix, so a key can never collide across two different calendars
+// or (after an ownership transfer) two different owners. A missing or
+// malformed key degrades to no idempotency protection for this one request
+// rather than failing the create outright.
+function calendarEventIdempotencyKey(instanceId, builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `event:${instanceId}:${builderId}:${rawKey}`;
+}
+
 async function handleCalendarEvents(request, db, route) {
   const instanceId = route[1];
 
@@ -12407,7 +12424,15 @@ async function handleCalendarEvents(request, db, route) {
     const scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
       ? null
       : isoDateString(input.scheduledAt, 'scheduledAt');
-    const eventId = `event-${crypto.randomUUID()}`;
+    // #1716: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // inserting a second, fully duplicate event.
+    const idempotencyKey = calendarEventIdempotencyKey(instanceId, sessionBuilder.builder_id, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(idempotencyKey).first();
+      if (existing) return json({ event: calendarEventFromRow(existing) });
+    }
+    const eventId = idempotencyKey || `event-${crypto.randomUUID()}`;
     // #1327: both the is_community_calendar check and requireOwnedLandlet
     // above are point-in-time reads, with real awaited gaps (readJson,
     // checkRateLimit) after them -- without re-checking both here, a

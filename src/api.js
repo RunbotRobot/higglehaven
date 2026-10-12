@@ -992,12 +992,45 @@ export async function fetchCalendarEvents(instanceId) {
 // "builder-authored" (unlike sign posts' anonymous shopper authorLabel),
 // so the server derives it from the logged-in, landlet-owning builder's
 // own profile instead of trusting client-supplied free text.
+
+// #1716: same "a lost response looks identical to never having reached the
+// server" protection as purchaseIdempotencyKey above (#473) — a dropped
+// POST response and the innocent manual retry it invites would otherwise
+// create a second, fully duplicate calendar event that independently
+// re-fires its own one-shot trigger effect. Scoped per instanceId (not
+// globally), and cleared on success below, so a deliberate second, distinct
+// event for the SAME instance shortly after mints its own fresh key instead
+// of colliding with the first.
+const CALENDAR_EVENT_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function calendarEventIdempotencyStorageKey(instanceId) {
+  return `higglehaven-calendar-event-idempotency-${instanceId}`;
+}
+
+function calendarEventIdempotencyKey(instanceId) {
+  const storageKey = calendarEventIdempotencyStorageKey(instanceId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < CALENDAR_EVENT_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+function clearCalendarEventIdempotencyKey(instanceId) {
+  try { localStorage.removeItem(calendarEventIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
+}
+
 export async function createCalendarEvent(instanceId, { text, scheduledAt } = {}) {
   const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, scheduledAt }),
+    body: JSON.stringify({ text, scheduledAt, idempotencyKey: calendarEventIdempotencyKey(instanceId) }),
   });
+  clearCalendarEventIdempotencyKey(instanceId);
   return event;
 }
 
