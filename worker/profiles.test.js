@@ -716,6 +716,34 @@ describe('Builders', () => {
     expect(deletedAfterPayout.response.status).toBe(200);
   });
 
+  // #1702: same "real, in-flight, billed external operation" shape as the
+  // higgles-redemption guard just above, just for a video-to-3D generation
+  // job (migrations/0119) instead of a payout — processed_at IS NULL means
+  // Tripo is still working (and billing) on it right now.
+  it('rejects deleting a builder while their video-to-3D generation job is still running', async () => {
+    const builder = await signupBuilder('video-job-pending-builder');
+    await env.DB.prepare(`
+      INSERT INTO video_generation_jobs (job_id, builder_id, status)
+      VALUES ('video-job-pending-test', ?, 'processing')
+    `).bind(builder.builderId).run();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body).toEqual({
+      error: 'Cannot delete this builder while a video-to-3D generation job is still running',
+    });
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(stillThere).not.toBeNull();
+
+    // Once the job actually finishes (processed_at set), deletion is
+    // allowed again.
+    await env.DB.prepare('UPDATE video_generation_jobs SET processed_at = ? WHERE job_id = ?')
+      .bind(new Date().toISOString(), 'video-job-pending-test').run();
+    const deletedAfterComplete = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deletedAfterComplete.response.status).toBe(200);
+  });
+
   // #279's guard has to catch a bid on *any* of a seller's active auctions,
   // not just a single one — this sets up two, with the bid on only the
   // second, to prove the check isn't limited to "their one auction."
