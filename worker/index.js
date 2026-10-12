@@ -7386,7 +7386,25 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // content-addressed object, which is harmless (identical bytes,
     // identical key, env.MODELS.head's own dedup check above), rather
     // than risking only a losing caller's unused upload ever reaching R2.
-    const stored = await storeTripoModelOutput(env, task.output.model_url);
+    //
+    // #1673: storeTripoModelOutput can throw (Tripo's own output URL is
+    // third-party and time-limited -- its own comment says so -- plus any
+    // transient download failure or a GLB that fails validateGlb). Without
+    // this catch, that exception propagated straight up to the caller and
+    // the row below never got updated -- left at status='processing' until
+    // expireStaleVideoGenerationJobs' cron sweep eventually caught it (up to
+    // ~25 min later) with a misleading generic "timed out" message, instead
+    // of failing immediately with the real cause.
+    let stored;
+    try {
+      stored = await storeTripoModelOutput(env, task.output.model_url);
+    } catch (err) {
+      await db.prepare(`
+        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE job_id = ? AND processed_at IS NULL
+      `).bind('Failed to retrieve the generated model — please try again', jobId).run();
+      return;
+    }
     await db.prepare(`
       UPDATE video_generation_jobs SET status = 'complete', model_url = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE job_id = ? AND processed_at IS NULL
