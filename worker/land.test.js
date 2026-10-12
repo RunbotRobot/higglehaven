@@ -1604,6 +1604,54 @@ describe('Community calendar', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  // #1716: a retried POST (a dropped response, not a double-click) used to
+  // create a second, fully duplicate calendar_events row for the same
+  // logical event — same "lost response looks like it never reached the
+  // server" idempotency-key protection as the purchase flow's own #473 fix.
+  it('does not create a duplicate event when the same idempotencyKey is retried', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-idempotency-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 9,
+        y: 9,
+        isCommunityCalendar: true,
+      }),
+    }));
+
+    const first = await api('/instances/calendar-idempotency-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api('/instances/calendar-idempotency-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'Bonfire night, Friday 8pm!', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.event.eventId).toBe(first.body.event.eventId);
+
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM calendar_events WHERE instance_id = ?')
+      .bind('calendar-idempotency-instance').first();
+    expect(count.n).toBe(1);
+
+    // A different idempotencyKey (or none at all) is a genuinely separate
+    // event, still created normally — this isn't a dedup-everything guard,
+    // only same-key retries.
+    const separate = await api('/instances/calendar-idempotency-instance/events', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ text: 'A second, different event' }),
+    }));
+    expect(separate.response.status).toBe(201);
+    expect(separate.body.event.eventId).not.toBe(first.body.event.eventId);
+    const countAfterSeparate = await env.DB.prepare('SELECT COUNT(*) AS n FROM calendar_events WHERE instance_id = ?')
+      .bind('calendar-idempotency-instance').first();
+    expect(countAfterSeparate.n).toBe(2);
+  });
+
   it('cascades event deletion when the calendar instance itself is deleted', async () => {
     await api('/instances', calendarBuilder.session({
       method: 'POST',
