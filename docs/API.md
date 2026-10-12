@@ -7264,6 +7264,37 @@ automated test — same limitation the video-to-3D backend's own testing
 note above already documents for anything past the "is this configured"
 boundary.
 
+### Quality/timing expectations (#1622)
+
+#1622 asked for three things:
+
+- **Expectations copy before recording/uploading** — already covered by
+  #1620's own `#upload-video-hint` ("Works best for a single, well-lit
+  object on its own…").
+- **A post-generation review step, with a way to retry/re-shoot** —
+  the dimension-confirmation step every upload path shares already shows
+  a live 3D preview of the result before the seller commits to it (same
+  as a manually uploaded model), so "review before publishing" was
+  already true in practice. What was missing was a *retry* affordance
+  specific to this path: `uploadRetryVideoBtn`
+  (`#upload-retry-video-btn`, "Not quite right? Generate from a different
+  video") now shows on that step whenever the model being reviewed came
+  from video generation (`uploadModelSource === 'video'`, set right
+  before `finishVideoGeneration` hands off into `handleUploadFileStep`,
+  reset back to `'file'` the moment step 'dimensions' is left any other
+  way). Clicking it returns to step 'file' already in video mode, keeping
+  whatever name/price/digital-good state the seller already entered —
+  cheaper than closing and reopening the whole modal, which would lose
+  that typed-in state. A manually picked file has no equivalent need
+  (nothing asynchronous or variable-quality about it), so the button
+  never shows for that path.
+- **Automatic low-confidence flagging** — Tripo's V3 API (the provider
+  #1617 selected) doesn't return any quality/confidence signal on a
+  `success` status, only the output file itself (see "Video-to-3D
+  generation" above) — there is nothing to automatically flag against.
+  Left entirely to the seller's own judgment via the review step above,
+  per the issue's own stated fallback.
+
 ### Placed-instance tilt (`rotationX` / `rotationY`)
 
 `placed_instances` (and its snapshot mirror `version_instances`, added by the

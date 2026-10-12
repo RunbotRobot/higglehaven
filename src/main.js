@@ -2913,6 +2913,7 @@ const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
 const uploadVideoInput = document.getElementById('upload-video-input');
+const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
 const uploadCancelBtn = document.getElementById('upload-cancel-btn');
 const uploadSubmitBtn = document.getElementById('upload-submit-btn');
@@ -2947,6 +2948,18 @@ let uploadDimensionPreview = null;
 // sharing the same name/price/digital-good fields and the same eventual
 // handoff into step 'dimensions'.
 let uploadFileMode = 'file';
+// #1622 (sub-issue of #1616): which path produced the model currently
+// showing in step 'dimensions' -- 'video' only while finishVideoGeneration
+// is mid-handoff into handleUploadFileStep, reset to 'file' the moment
+// that step is left any other way (resetUploadModalToFileStep). Drives
+// uploadRetryVideoBtn's visibility: a seller who generated from video, but
+// isn't happy with the result once they can actually see it in the
+// dimensions-step preview, gets a one-click way back into video mode
+// without losing the name/price they already typed -- the issue's own
+// "post-generation review step... decide to retry" ask. A manually picked
+// file has no equivalent need (nothing asynchronous or variable-quality
+// about it), so this button only ever shows for the video path.
+let uploadModelSource = 'file';
 
 // handleUploadFileStep runs a long async chain (optimize -> upload ->
 // measure -> showUploadDimensionPreview) before committing to the shared
@@ -3017,7 +3030,11 @@ function setUploadFileMode(mode) {
 uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
 uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
 
-function resetUploadModalToFileStep() {
+// mode lets a caller land back on step 'file' already in video mode
+// (uploadRetryVideoBtn below) rather than always defaulting to the plain
+// file picker -- every other caller (closing/opening the modal) wants the
+// plain 'file' default.
+function resetUploadModalToFileStep(mode = 'file') {
   uploadFlowToken++; // invalidate any in-flight handleUploadFileStep/startVideoGeneration call
   stopVideoGenPoll();
   uploadStep = 'file';
@@ -3025,14 +3042,21 @@ function resetUploadModalToFileStep() {
   uploadModelSizeBytes = null;
   uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
+  uploadModelSource = 'file';
   uploadAvatarCategoryCheckbox.checked = false;
   uploadAnimationCategoryCheckbox.checked = false;
   disposeUploadDimensionPreview();
   uploadModalTitleEl.textContent = 'Upload Model';
   uploadStepFileEl.hidden = false;
   uploadStepDimensionsEl.hidden = true;
-  setUploadFileMode('file');
+  setUploadFileMode(mode);
 }
+// #1622: "Not quite right? Generate from a different video" -- visible
+// only once a video-generated model is actually showing in the dimensions
+// preview (toggled in handleUploadFileStep below). Keeps whatever
+// name/price/digital-good state the seller already entered, unlike
+// closing and reopening the whole modal.
+uploadRetryVideoBtn.addEventListener('click', () => resetUploadModalToFileStep('video'));
 
 function openUploadModal() {
   closeCatalogPicker();
@@ -3361,6 +3385,7 @@ async function handleUploadFileStep() {
     uploadStepFileEl.hidden = true;
     uploadStepDimensionsEl.hidden = false;
     uploadSubmitBtn.textContent = 'Create Product';
+    uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
     setUploadStatus('');
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
@@ -3455,6 +3480,9 @@ async function finishVideoGeneration(modelUrl) {
   const dataTransfer = new DataTransfer();
   dataTransfer.items.add(file);
   uploadFileInput.files = dataTransfer.files;
+  // Read by handleUploadFileStep once it reaches step 'dimensions', to
+  // decide whether uploadRetryVideoBtn should show (#1622).
+  uploadModelSource = 'video';
   await handleUploadFileStep();
 }
 
