@@ -11553,7 +11553,7 @@ async function autoAuctionInactiveLandlets(db) {
 // staying permanently silenced by one stale row.
 const INACTIVITY_WARNING_DAYS = 3;
 
-async function warnInactiveLandletOwners(db) {
+export async function warnInactiveLandletOwners(db) {
   const auctionCutoff = new Date(Date.now() - INACTIVITY_AUCTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const warningCutoff = new Date(
     Date.now() - (INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS) * 24 * 60 * 60 * 1000,
@@ -11574,10 +11574,32 @@ async function warnInactiveLandletOwners(db) {
       )
     RETURNING builder_id
   `).bind(warningCutoff, auctionCutoff).run();
-  await fireNotifications(db, warned.results.map((row) => ({
-    builderId: row.builder_id,
-    message: `Your land has been inactive for ${INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS} days. Log in within ${INACTIVITY_WARNING_DAYS} days or it will automatically go up for a $0 starting-bid auction.`,
-  })));
+  // #1693: the UPDATE above is this function's own idempotency guard
+  // (inactivity_warning_sent_at IS NULL) as well as the mutation — it
+  // commits for every matching builder before any notification is even
+  // attempted. fireNotifications' shared loop rethrows any non-FK error
+  // and aborts outright, which used to leave every builder after the
+  // failing one permanently un-warned (their guard was already flipped,
+  // with no retry path) and silently defeat the whole feature for them.
+  // Isolating each builder's own attempt, and re-arming just that
+  // builder's guard on failure, is the same "claim committed before the
+  // fallible step; re-arm on failure" shape #1688 fixed for the
+  // migration-drift alert, scoped per-row here instead of to a single
+  // id=1 row.
+  for (const row of warned.results) {
+    try {
+      await fireNotification(
+        db,
+        row.builder_id,
+        `Your land has been inactive for ${INACTIVITY_AUCTION_DAYS - INACTIVITY_WARNING_DAYS} days. Log in within ${INACTIVITY_WARNING_DAYS} days or it will automatically go up for a $0 starting-bid auction.`,
+      );
+    } catch (error) {
+      console.error('warnInactiveLandletOwners: failed to notify builder, re-arming for a future retry', row.builder_id, error);
+      await db.prepare(
+        'UPDATE builders SET inactivity_warning_sent_at = NULL WHERE builder_id = ?',
+      ).bind(row.builder_id).run();
+    }
+  }
 }
 
 async function generateRingAtWorldBoundary(db) {

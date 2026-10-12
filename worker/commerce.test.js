@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import worker, {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, refundIdempotencyKey,
   auctionSettlementEventId, resolveFinalizeBuilderId, cosineSimilarity, selectPurchasesForPayout,
+  warnInactiveLandletOwners,
 } from './index.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
@@ -1516,6 +1517,66 @@ describe('Inactivity-triggered auctions', () => {
       await runScheduled();
 
       expect(await notificationsFor(owner.builderId)).toHaveLength(0);
+    });
+
+    // #1693: the UPDATE claiming inactivity_warning_sent_at used to commit
+    // for every matching builder before any notification was attempted --
+    // one builder's notification failing aborted fireNotifications' shared
+    // loop outright, permanently un-warning every builder after it in that
+    // tick (their guard was already flipped, with no retry path). Calls
+    // warnInactiveLandletOwners directly (rather than through
+    // runScheduled()) with env.DB.prepare temporarily wrapped so only the
+    // notifications INSERT for one specific builder fails -- scoping the
+    // simulated failure to this one test without affecting the other
+    // scheduled() jobs runScheduled() would otherwise also invoke.
+    it('#1693: one builder\'s failed notification does not cascade to the rest, and re-arms for a retry', async () => {
+      const ownerA = await signupBuilder('notify-fail-cascade-a');
+      const ownerB = await signupBuilder('notify-fail-cascade-b');
+      await createGreenbeltLandlet('inactivity-warning-landlet-g');
+      await createGreenbeltLandlet('inactivity-warning-landlet-h');
+      await claim('inactivity-warning-landlet-g', ownerA);
+      await claim('inactivity-warning-landlet-h', ownerB);
+      await backdateLastActive(ownerA.builderId, 28);
+      await backdateLastActive(ownerB.builderId, 28);
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      env.DB.prepare = (sql) => {
+        const stmt = originalPrepare(sql);
+        if (!sql.includes('INSERT INTO notifications')) return stmt;
+        return {
+          bind: (...args) => {
+            const bound = stmt.bind(...args);
+            if (args[1] !== ownerA.builderId) return bound;
+            return new Proxy(bound, {
+              get(target, prop) {
+                if (prop === 'run') return async () => { throw new Error('simulated transient D1 failure'); };
+                const value = target[prop];
+                return typeof value === 'function' ? value.bind(target) : value;
+              },
+            });
+          },
+        };
+      };
+      try {
+        await expect(warnInactiveLandletOwners(env.DB)).resolves.toBeUndefined();
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+
+      // Owner B's notification still went out despite owner A's failure --
+      // the old code let that failure abort the whole loop.
+      expect(await notificationsFor(ownerB.builderId)).toHaveLength(1);
+
+      // Owner A's own guard was re-armed (not left permanently poisoned),
+      // so a later tick retries them rather than silently skipping them
+      // all the way to the auto-auction with no warning ever delivered.
+      const ownerARow = await env.DB.prepare(
+        'SELECT inactivity_warning_sent_at FROM builders WHERE builder_id = ?',
+      ).bind(ownerA.builderId).first();
+      expect(ownerARow.inactivity_warning_sent_at).toBeNull();
+
+      await runScheduled();
+      expect(await notificationsFor(ownerA.builderId)).toHaveLength(1);
     });
   });
 });
