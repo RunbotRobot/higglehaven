@@ -4824,6 +4824,16 @@ const AUCTION_START_RATE_LIMIT_MAX = 20;
 // FRIENDSHIP_MUTATE_RATE_LIMIT_MAX/BUNDLE_MUTATE_RATE_LIMIT_MAX/
 // CATALOG_PATCH_RATE_LIMIT_MAX were each already added to guard against.
 const AUCTION_BID_RATE_LIMIT_MAX = 20;
+// #1741: resolveAuctionIfDue's underlying resolveAuction can credit a real
+// higgles balance, transfer land ownership, and fire notifications to both
+// parties the first time an ended auction is observed — reachable
+// unauthenticated via both the single-item GET below and POST .../resolve.
+// Repeated hits after the first are harmless no-ops (resolveAuction's own
+// `WHERE status = 'active'` guard), but this was still the one endpoint in
+// this resolve/trigger shape without the IP-keyed rate limit its own sibling
+// (EVENT_TRIGGER_RATE_LIMIT_MAX, which explicitly calls out this endpoint by
+// name in its own comment) already has.
+const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 
 async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
@@ -5412,6 +5422,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     return json({ auction: await auctionFromRow(db, resolved) });
@@ -5422,6 +5433,7 @@ async function handleAuctions(request, db, route, url) {
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'resolve') {
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const auction = await requireAuction(db, route[1]);
     const resolved = await resolveAuctionIfDue(db, auction);
     if (resolved.status === 'active') {

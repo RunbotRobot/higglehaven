@@ -137,6 +137,43 @@ describe('Auctions', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1741: unlike every other write-triggering endpoint on this resource
+  // (auction-start above, bids above), the single-item GET and POST
+  // .../resolve had no rate limit at all, despite resolveAuctionIfDue being
+  // able to credit a real higgles balance, transfer land ownership, and fire
+  // notifications to both parties the first time an ended auction is
+  // observed. Both branches are unauthenticated, so this is IP-keyed (same
+  // shape as EVENT_TRIGGER_RATE_LIMIT_MAX's own bucket) rather than
+  // builder-keyed like auction-start/bids above — same pre-seeded-table
+  // approach those tests use.
+  it('rate-limits repeated single-item GET and POST .../resolve calls from the same IP', async () => {
+    const owner = await signupBuilder('auction-resolve-rate-limit-owner');
+    await createGreenbeltLandlet('auction-resolve-rate-limit-landlet');
+    await claim('auction-resolve-rate-limit-landlet', owner);
+    const started = await api('/landlets/auction-resolve-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `auction-resolve:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 19 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api(`/auctions/${auctionId}`, { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(200);
+
+    const limitedGet = await api(`/auctions/${auctionId}`, { headers: { 'cf-connecting-ip': ip } });
+    expect(limitedGet.response.status).toBe(429);
+
+    const limitedResolve = await api(`/auctions/${auctionId}/resolve`, {
+      method: 'POST', headers: { 'cf-connecting-ip': ip },
+    });
+    expect(limitedResolve.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');
