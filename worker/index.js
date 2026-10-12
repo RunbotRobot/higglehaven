@@ -545,10 +545,25 @@ async function handleUploadedAsset(request, env) {
     // #774: model_url and image_url are both content-addressed keys into
     // this same bucket (the latter written by POST .../thumbnail) — an
     // object referenced only as a thumbnail must block deletion here too.
+    // #1644/#1655/#1696: video_generation_jobs.model_url and
+    // control_room_tasks/control_room_replies.image_url are three more
+    // writers into this same bucket/scheme (same five sources
+    // cleanupUnreferencedModels already checks) — without these, this raw
+    // admin delete would succeed on an object still in use by a pending
+    // video-to-3D job or a Control Room screenshot, destroying it out from
+    // under that reference even though the automated sweep would have
+    // correctly protected it.
     const referenced = await env.DB.prepare(`
-      SELECT template_id FROM catalog_templates WHERE model_url = ? OR image_url = ? LIMIT 1
-    `).bind(modelUrl, modelUrl).first();
-    if (referenced) throw new HttpError('Uploaded model is still referenced by a catalog template', 409);
+      SELECT 1 FROM catalog_templates WHERE model_url = ? OR image_url = ?
+      UNION ALL
+      SELECT 1 FROM video_generation_jobs WHERE model_url = ?
+      UNION ALL
+      SELECT 1 FROM control_room_tasks WHERE image_url = ?
+      UNION ALL
+      SELECT 1 FROM control_room_replies WHERE image_url = ?
+      LIMIT 1
+    `).bind(modelUrl, modelUrl, modelUrl, modelUrl, modelUrl).first();
+    if (referenced) throw new HttpError('Uploaded model is still referenced', 409);
     await env.MODELS.delete(key);
     // #829: same missed-audit-trail gap as /api/models/cleanup above — this
     // single-object delete never recorded which admin ran it.
@@ -1247,31 +1262,54 @@ async function handleModelListing(request, env, url) {
   const cursor = cursorParam === null ? undefined : stringValue(cursorParam, 'cursor');
   const listing = await env.MODELS.list({ limit, cursor });
   const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
-  const references = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const templateRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const controlRoomRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   if (modelUrls.length > 0) {
     // #774: image_url (thumbnails) shares this same bucket/URL scheme as
     // model_url — checking model_url alone marked every live thumbnail
-    // "unreferenced".
+    // "unreferenced". #1644/#1655/#1696: video_generation_jobs.model_url
+    // and control_room_tasks/control_room_replies.image_url are three more
+    // writers into this same bucket/scheme (same reasoning as
+    // cleanupUnreferencedModels' own two UNION queries, which already check
+    // all five) — a model/image real-but-not-yet-template-referenced in one
+    // of these used to read back here as `deletable: true` with an empty
+    // reference list, a false "safe to delete" signal for this admin view.
     const placeholders = modelUrls.map(() => '?').join(', ');
     const referenced = await env.DB.prepare(`
-      SELECT template_id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
+      SELECT 'template' AS source, template_id AS id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
       UNION ALL
-      SELECT template_id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-      ORDER BY template_id
-    `).bind(...modelUrls, ...modelUrls).all();
-    for (const row of referenced.results) references.get(row.url).push(row.template_id);
+      SELECT 'template' AS source, template_id AS id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
+      UNION ALL
+      SELECT 'videoJob' AS source, job_id AS id, model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
+      UNION ALL
+      SELECT 'controlRoom' AS source, task_id AS id, image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
+      UNION ALL
+      SELECT 'controlRoom' AS source, reply_id AS id, image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
+      ORDER BY id
+    `).bind(...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls).all();
+    for (const row of referenced.results) {
+      if (row.source === 'template') templateRefs.get(row.url).push(row.id);
+      else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
+      else controlRoomRefs.get(row.url).push(row.id);
+    }
   }
   return json({
     models: listing.objects.map((object) => {
       const modelUrl = `/uploads/${object.key}`;
-      const referencedByTemplateIds = references.get(modelUrl);
+      const referencedByTemplateIds = templateRefs.get(modelUrl);
+      const referencedByVideoJobIds = videoJobRefs.get(modelUrl);
+      const referencedByControlRoomIds = controlRoomRefs.get(modelUrl);
       return {
         modelUrl,
         sizeBytes: object.size,
         etag: object.httpEtag,
         uploadedAt: object.uploaded?.toISOString() || null,
         referencedByTemplateIds,
-        deletable: referencedByTemplateIds.length === 0,
+        referencedByVideoJobIds,
+        referencedByControlRoomIds,
+        deletable: referencedByTemplateIds.length === 0 && referencedByVideoJobIds.length === 0
+          && referencedByControlRoomIds.length === 0,
       };
     }),
     nextCursor: listing.truncated ? listing.cursor : null,
