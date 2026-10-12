@@ -82,6 +82,33 @@ describe('Landlet updates', () => {
     expect(secondClaim.response.status).toBe(409);
   });
 
+  // #1786: same pin gap as #956's status fix just above, for areaM2/
+  // landClass instead -- an owning builder could shrink their own claimed
+  // landlet's areaM2 via PUT/PATCH, bypassing recomputeLandCap's own
+  // SUM(area_m2) land-cap accounting while keeping the same real,
+  // LANDLET_AREA_M2-sized buildable footprint.
+  it('does not let an owning builder change their own landlet\'s areaM2 or landClass via PUT/PATCH', async () => {
+    await createGreenbeltLandlet('owned-area-class-flip-landlet');
+    const owner = await signupBuilder('owned-area-class-flip-claimer');
+    const claimed = await api('/landlets/owned-area-class-flip-landlet/claim', owner.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+    const originalAreaM2 = claimed.body.landlet.areaM2;
+    const originalLandClass = claimed.body.landlet.landClass;
+
+    const hijacked = await api('/landlets/owned-area-class-flip-landlet', owner.session({
+      method: 'PATCH', body: JSON.stringify({ areaM2: 0.01, landClass: 99 }),
+    }));
+    expect(hijacked.response.status).toBe(200);
+    expect(hijacked.body.landlet.areaM2).toBe(originalAreaM2);
+    expect(hijacked.body.landlet.landClass).toBe(originalLandClass);
+
+    const stored = await env.DB.prepare(
+      'SELECT area_m2, landlet_class FROM landlets WHERE landlet_id = ?',
+    ).bind('owned-area-class-flip-landlet').first();
+    expect(stored.area_m2).toBe(originalAreaM2);
+    expect(stored.landlet_class).toBe(originalLandClass);
+  });
+
   it('does not let a concurrent claim be reverted by a racing PATCH', async () => {
     // Fired together, not awaited one at a time — PATCH's own read of the
     // still-unowned row and its later write straddle the claim's write in
