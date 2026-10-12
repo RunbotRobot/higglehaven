@@ -12645,12 +12645,23 @@ async function handleCalendarEvents(request, db, route) {
     // #1716: a retry that reuses the same (validated) client-supplied key
     // finds its own already-landed row here and returns it instead of
     // inserting a second, fully duplicate event.
+    // #1751: that dedup is only a legitimate hit when the found row's own
+    // content actually matches this request -- the key is cached client-side
+    // per instanceId (src/api.js's calendarEventIdempotencyKey), not per
+    // attempt, so a stale key reused for a genuinely different second event
+    // (the author typed something new into the same prompt() flow within
+    // the cache's TTL) must not silently return the FIRST event as if it
+    // were this one. On a mismatch, mint a real id instead, same as the
+    // "missing/malformed key" fallback below already does.
     const idempotencyKey = calendarEventIdempotencyKey(instanceId, sessionBuilder.builder_id, input.idempotencyKey);
+    let existing = null;
     if (idempotencyKey) {
-      const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ event: calendarEventFromRow(existing) });
+      existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(idempotencyKey).first();
+      if (existing && existing.text === text && existing.scheduled_at === scheduledAt) {
+        return json({ event: calendarEventFromRow(existing) });
+      }
     }
-    const eventId = idempotencyKey || `event-${crypto.randomUUID()}`;
+    const eventId = (idempotencyKey && !existing) ? idempotencyKey : `event-${crypto.randomUUID()}`;
     // #1327: both the is_community_calendar check and requireOwnedLandlet
     // above are point-in-time reads, with real awaited gaps (readJson,
     // checkRateLimit) after them -- without re-checking both here, a
