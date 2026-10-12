@@ -10272,6 +10272,12 @@ const LANDLET_OWNED_PATCH_RATE_LIMIT_MAX = 20;
 // and the same shape CATALOG_PATCH_RATE_LIMIT_MAX already covers for both
 // of its branches.
 const LANDLET_UNOWNED_PATCH_RATE_LIMIT_MAX = 20;
+// #1794: the DELETE branch below is the third anonymous, unowned-only
+// landlet mutation in this handler (alongside the create/#964 and
+// unowned-patch/#1476 branches above) and never got the same guard --
+// same "unbounded, anonymous way to flood real D1 writes" gap those two
+// fixes already closed, just not yet applied here.
+const LANDLET_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
@@ -10767,6 +10773,9 @@ async function handleLandlets(request, db, route, url) {
     if (existing.owner_builder_id !== null) {
       throw new HttpError('Cannot delete an owned landlet directly — release it via its builder instead', 409);
     }
+    // #1794: same unauthenticated-flood guard as this handler's own
+    // create/#964 and unowned-patch/#1476 branches.
+    await checkRateLimit(db, `landlet-delete:${clientIp(request)}`, LANDLET_DELETE_RATE_LIMIT_MAX);
     // Re-checked as part of the DELETE itself, not just the read above — a
     // claim landing in between would otherwise still get deleted out from
     // under its new owner, matching the same race the PUT/PATCH guard just
