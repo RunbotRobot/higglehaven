@@ -11775,6 +11775,23 @@ async function handleInstances(request, env, route, url) {
     if (batchResults.some((result) => result.meta.changes === 0)) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #1675: the single-instance PATCH handler below has its own #1022
+    // cleanup for exactly this transition -- this sibling batch endpoint
+    // (what a multi-item group move or an undo/redo snapshot restore uses)
+    // never had it, so unflagging a community sign/calendar through here
+    // left its sign_posts/calendar_events rows sitting around
+    // invisible-but-persistent, same resurrection risk #1022 fixed for the
+    // single-instance path. existingInstances (built above, before the
+    // write) already has each instance's prior flag value to diff against.
+    for (const instance of instances) {
+      const existing = existingInstances.get(instance.instanceId);
+      if (existing?.isCommunitySign && !instance.isCommunitySign) {
+        await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(instance.instanceId).run();
+      }
+      if (existing?.isCommunityCalendar && !instance.isCommunityCalendar) {
+        await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instance.instanceId).run();
+      }
+    }
     const stored = await getInstancesById(db, instanceIds);
     return json({ instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, request.method === 'POST' ? 201 : 200);
   }
