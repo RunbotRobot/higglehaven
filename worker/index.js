@@ -4533,6 +4533,20 @@ const BUNDLE_CREATE_RATE_LIMIT_MAX = 20;
 // bundle" actions, not two independently-abusable surfaces.
 const BUNDLE_MUTATE_RATE_LIMIT_MAX = 20;
 
+// #1720: same shape as purchaseIdempotencyKey (#473/#974) — the client
+// mints+persists a key across a retry of what it considers the same save
+// attempt (most commonly a dropped response after the INSERT already
+// landed), and the server dedupes on it before inserting, reusing the key
+// as the row's own primary key the same way writePurchaseRow does. Folded
+// into builderId so one builder's own stale/retried key can never collide
+// with an unrelated builder's bundle, the same cross-account guard #974
+// added for purchases. A missing or malformed key just degrades to no
+// idempotency protection for that one request, same as purchases.
+function bundleIdempotencyKey(builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `bundle:${builderId}:${rawKey}`;
+}
+
 async function handleBundles(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const limit = queryLimit(url.searchParams.get('limit'), 100);
@@ -4597,7 +4611,12 @@ async function handleBundles(request, db, route, url) {
     const items = validateBundleItems(input.items);
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
-    const bundleId = `bundle-${crypto.randomUUID()}`;
+    const idempotencyKey = bundleIdempotencyKey(builderId, input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(idempotencyKey).first();
+      if (existing) return json({ bundle: bundleFromRow(existing) });
+    }
+    const bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
