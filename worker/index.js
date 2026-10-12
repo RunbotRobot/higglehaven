@@ -3018,15 +3018,19 @@ async function handleBuilders(request, env, db, route, url) {
     await requireBuilder(db, route[1]);
     const input = await readJson(request);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    // #816 (sub-issue of #813): an admin-only real-money-equivalent
-    // top-up, batched with its own log row for the same "can never
-    // diverge" reason #814's grant-admin fix already established.
-    await db.batch([
-      db.prepare(`
-        INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
-      `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents),
-      adminActionLogStatement(db, admin.user_id, 'land_cap_grant', 'builder', route[1], { amountCents }),
-    ]);
+    // #1667: requireBuilder above is a stale read -- the builder could
+    // self-delete in the gap before this INSERT runs. Fold the same
+    // existence check into the INSERT's own WHERE EXISTS guard (same idiom
+    // handleCommunitySigns' own INSERT uses) instead of #816's original
+    // unconditional db.batch(), and only log once meta.changes confirms the
+    // grant actually landed -- same "logged only after confirmed" idiom
+    // /admin-forms/:formId/approve already uses (#897).
+    const granted = await db.prepare(`
+      INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)
+    `).bind(`admin-grant-${crypto.randomUUID()}`, route[1], amountCents, route[1]).run();
+    if (granted.meta.changes === 0) throw new HttpError('Builder not found', 404);
+    await adminActionLogStatement(db, admin.user_id, 'land_cap_grant', 'builder', route[1], { amountCents }).run();
     const { nextCap } = await recomputeLandCap(db, route[1]);
     return json({ landCapM2: nextCap }, 201);
   }
@@ -3044,13 +3048,16 @@ async function handleBuilders(request, env, db, route, url) {
     await requireBuilder(db, route[1]);
     const input = await readJson(request);
     const amountCents = nonnegativeInteger(input.amountCents, 'amountCents');
-    // #816 (sub-issue of #813): same reasoning as land-cap-grants above.
-    await db.batch([
-      db.prepare(`
-        UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
-      `).bind(amountCents, route[1]),
-      adminActionLogStatement(db, admin.user_id, 'higgles_grant', 'builder', route[1], { amountCents }),
-    ]);
+    // #1667: same fix shape as land-cap-grants just above -- the UPDATE's
+    // own WHERE already gives a real meta.changes signal (0 if the builder
+    // self-deleted since requireBuilder's stale read above), so run it
+    // standalone and only log once that's confirmed, instead of #816's
+    // original unconditional db.batch().
+    const result = await db.prepare(`
+      UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
+    `).bind(amountCents, route[1]).run();
+    if (result.meta.changes === 0) throw new HttpError('Builder not found', 404);
+    await adminActionLogStatement(db, admin.user_id, 'higgles_grant', 'builder', route[1], { amountCents }).run();
     const builder = await requireBuilder(db, route[1]);
     return json({ higglesBalanceCents: builder.higgles_balance_cents }, 201);
   }

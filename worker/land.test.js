@@ -2859,6 +2859,64 @@ describe('Land cap', () => {
     expect(JSON.parse(logRows[0].detail_json)).toEqual({ amountCents: 100000 });
     expect(JSON.parse(logRows[1].detail_json)).toEqual({ amountCents: 50000 });
   });
+
+  // #1667: both grant endpoints above used to batch their own admin_action_log
+  // INSERT unconditionally alongside the real write -- a builder self-deleting
+  // (DELETE /builders/:id, above) in the gap between the admin's requireBuilder
+  // read and that write landing could still commit a log row crediting a grant
+  // that never actually happened, since D1's db.batch() commits every statement
+  // regardless of an earlier one's row count (same root cause #897's
+  // /admin-forms/:formId/approve fix already addressed for a sibling handler).
+  // Races a genuine self-delete against each grant call, same Promise.all shape
+  // #1055's generation-complete-vs-expand race test (worker/worker-api.test.js)
+  // uses, since the race only manifests when the two writes actually interleave
+  // inside the same window -- the invariant checked below (a log row exists iff
+  // the real write landed) must hold regardless of which order actually won.
+  it('#1667: a builder self-deleting concurrently with land-cap-grants/higgles-grants never logs a grant that did not land', async () => {
+    const landCapBuilder = await signupBuilder('land-cap-grant-race-builder');
+    const [landCapGrant, landCapDelete] = await Promise.all([
+      api(`/builders/${landCapBuilder.builderId}/land-cap-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+      })),
+      api(`/builders/${landCapBuilder.builderId}`, landCapBuilder.session({ method: 'DELETE' })),
+    ]);
+    expect(landCapDelete.response.status).toBe(200);
+    expect([201, 404]).toContain(landCapGrant.response.status);
+    // Not cross-checked against higgles_earnings_events here -- that row
+    // (if the grant did land first) gets cascade-deleted by the builder
+    // delete regardless, per migrations/0093's own ON DELETE CASCADE, so
+    // it can't distinguish "never inserted" from "inserted, then cascaded
+    // away." admin_action_log.target_id carries no such FK and survives,
+    // so it's the only reliable signal of what this request itself did.
+    const landCapLogCount = (await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('land_cap_grant', landCapBuilder.builderId).first()).n;
+    if (landCapGrant.response.status === 201) {
+      expect(landCapLogCount).toBe(1);
+    } else {
+      expect(landCapGrant.body).toEqual({ error: 'Builder not found' });
+      expect(landCapLogCount).toBe(0);
+    }
+
+    const higglesBuilder = await signupBuilder('higgles-grant-race-builder');
+    const [higglesGrant, higglesDelete] = await Promise.all([
+      api(`/builders/${higglesBuilder.builderId}/higgles-grants`, adminSession({
+        method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
+      })),
+      api(`/builders/${higglesBuilder.builderId}`, higglesBuilder.session({ method: 'DELETE' })),
+    ]);
+    expect(higglesDelete.response.status).toBe(200);
+    expect([201, 404]).toContain(higglesGrant.response.status);
+    const higglesLogCount = (await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('higgles_grant', higglesBuilder.builderId).first()).n;
+    if (higglesGrant.response.status === 201) {
+      expect(higglesLogCount).toBe(1);
+    } else {
+      expect(higglesGrant.body).toEqual({ error: 'Builder not found' });
+      expect(higglesLogCount).toBe(0);
+    }
+  });
 });
 
 describe('Landlet levels', () => {
