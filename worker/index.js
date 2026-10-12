@@ -12370,7 +12370,7 @@ async function handleInstancePurchase(request, env, instanceId) {
   }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
-    throw new HttpError('This instance is not on a claimed lándlet, so there is no builder to credit', 400);
+    throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
   }
 
   // quantity/buyerLabel are both genuinely optional, and this endpoint has
