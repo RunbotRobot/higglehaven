@@ -13098,7 +13098,20 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     if (existing) return json({ purchase: purchaseFromRow(existing) });
   }
   const purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
-  const builderId = landlet.owner_builder_id;
+  // #1717: landlet.owner_builder_id was read by the caller before several
+  // more awaited round-trips ran (the seller/Stripe lookup, this function's
+  // own idempotency check) — the same staleness risk buyerBuilderId already
+  // guards against just below, but this id never got the same re-check.
+  // purchases.builder_id is a real FK (ON DELETE SET NULL only governs a
+  // *later* delete of a row that existed at insert time, not an insert
+  // against an id that was already gone), so an owner self-delete in this
+  // window used to fail the INSERT's own FK and roll back the whole batch —
+  // losing the purchase record itself, not just the credit. Same
+  // builderStillExists-gated shape as writeOrphanedPurchaseRow's own.
+  const builderStillExists = landlet.owner_builder_id
+    ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(landlet.owner_builder_id).first()
+    : null;
+  const builderId = builderStillExists ? landlet.owner_builder_id : null;
   const { tokenHash, deliveryConfirmUrl } = await buildDeliveryConfirmFields(env, paymentIntentId, isDigitalGood);
   // #680/#1112: same defensive existence check as writeOrphanedPurchaseRow's
   // own (buyerBuilderId can arrive here from Stripe metadata set at checkout
@@ -13114,7 +13127,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   const buyerBuilderStillExists = buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(buyerBuilderId).first()
     : null;
-  await db.batch([
+  const statements = [
     db.prepare(`
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
@@ -13125,19 +13138,30 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
-    db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-      .bind(builderShareCents, builderId),
-    db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-      .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
-    ...(isAvatarCategory && buyerBuilderStillExists ? ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
-    ...(isAnimationCategory && buyerBuilderStillExists ? ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId) : []),
-  ]);
+  ];
+  if (builderId) {
+    statements.push(
+      db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+        .bind(builderShareCents, builderId),
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+    );
+  }
+  if (isAvatarCategory && buyerBuilderStillExists) {
+    statements.push(...ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId));
+  }
+  if (isAnimationCategory && buyerBuilderStillExists) {
+    statements.push(...ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId));
+  }
+  await db.batch(statements);
   // #1122: fired after the batch above commits, not inside it — a landlet
   // owner who self-deletes between this function reading builderId and the
   // INSERT running would otherwise fail the notification's own FK and roll
   // back the purchase row (a real-money receipt) along with it.
-  await fireNotification(db, builderId,
-    `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
+  if (builderId) {
+    await fireNotification(db, builderId,
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
+  }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
