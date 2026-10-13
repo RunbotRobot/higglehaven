@@ -13133,10 +13133,35 @@ const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth f
 // updateShopMovement tick, so this still lands before the next proximity
 // check sees it. Always inert unless a test calls it, same convention as
 // window.__testAvatarLoadDelayMs.
-window.__testTeleportShopAvatar = (x, y) => {
+window.__testTeleportShopAvatar = (x, y, z) => {
   shopAvatarPosition.x = x;
   shopAvatarPosition.y = y;
+  // #1829: optional third arg, added so a test can land the avatar exactly
+  // on an object's own top surface (itemZMax) to reproduce the
+  // can't-walk-after-landing-on-top bug without racing real flight descent
+  // choreography. Every existing caller passes only (x, y); leaving z
+  // (and flight state) untouched when omitted keeps that behavior unchanged.
+  // shopFlightAltitudeM, not shopAvatarPosition.z, is authoritative --
+  // updateShopMovement's own per-frame sync (shopAvatarPosition.z =
+  // shopFlightAltitudeM - curvatureDropM(...), see that assignment's own
+  // comment) overwrites a bare z write here within the very next frame,
+  // snapping back to whatever stale altitude flight was last left at. Also
+  // forcing shopFlightState to 'grounded' (the state updateShopFlight
+  // itself settles into once a real landing finishes, per its own
+  // `if (landed) shopFlightState = 'grounded'`) keeps this a genuine
+  // "already landed" snapshot rather than momentarily-still-flying.
+  if (z !== undefined) {
+    shopAvatarPosition.z = z;
+    shopFlightAltitudeM = z + curvatureDropM(Math.hypot(x, y));
+    shopFlightState = 'grounded';
+  }
 };
+// #1829: read-only counterpart to the teleport hook above -- lets a test
+// confirm shopAvatarPosition actually changed (or didn't) after driving a
+// real move through moveShopAvatarWithCollision below, same "always inert
+// unless a test calls it" convention as every other window.__test* hook
+// here.
+window.__testShopAvatarPosition = () => ({ x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z });
 // #1479: forces an immediate, synchronous load/unload decision rather than
 // waiting on the next real requestAnimationFrame tick to notice a teleport
 // on its own. window.__testTeleportShopAvatar's own comment above explains
@@ -13758,7 +13783,12 @@ function shopPositionBlocked(x, y, z) {
       const { height } = meshDimensions(mesh);
       const itemZMin = mesh.position.z - height / 2;
       const itemZMax = mesh.position.z + height / 2;
-      if (z + shopAvatarHeightM() < itemZMin || z > itemZMax) continue; // no vertical overlap — e.g. flying above it
+      // #1829: landing (the clamp at #1090, just below) rests the avatar at
+      // exactly z === itemZMax -- standing on an object's own top surface,
+      // not overlapping it, so this exclusion has to be >= here too, or
+      // every subsequent horizontal move at that same z reads as blocked by
+      // the very object the avatar is standing on.
+      if (z + shopAvatarHeightM() < itemZMin || z >= itemZMax) continue; // no vertical overlap — e.g. flying above it, or standing on top of it
       if (footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) return true;
     }
   }
@@ -13810,6 +13840,11 @@ function moveShopAvatarWithCollision(dx, dy) {
     shopAvatarPosition.y += dy;
   }
 }
+// #1829: e2e-only hook for driving the exact real move the joystick
+// triggers each frame, without needing a held pointer gesture to actually
+// out-race the per-frame updateShopMovement loop. Always inert unless a
+// test calls it, same convention as window.__testForceShopProximityCheck.
+window.__testMoveShopAvatarWithCollision = (dx, dy) => moveShopAvatarWithCollision(dx, dy);
 
 function updateShopMovement(now) {
   if (shopLastFrameTime === null) {
