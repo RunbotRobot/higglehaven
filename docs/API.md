@@ -1161,11 +1161,15 @@ claimed by a builder that no longer exists. The landlet's own shape
 (`polygon`/`center`) is untouched, so it's immediately claimable again,
 not regenerated.
 
-This is deliberately more destructive than a hypothetical future
-inactivity-based reclaim should be: that case should clear the *active*
-build but keep the builder's own version history, in case they come back
-and want to recreate it on a new landlet. Deleting the builder removes the
-only place that history could live, so there's nothing left to preserve.
+This is deliberately more destructive than the real inactivity-triggered
+reclaim (#325, `autoAuctionInactiveLandlets`) is (#1257, owner-confirmed):
+that path's own $0-no-bid resolution clears the *active* build but
+archives the builder's own version history instead of deleting it (moved
+to `archived_landlet_versions`/`archived_version_instances`, keyed to the
+builder rather than the landlet — see `resolveAuction`'s own comment and
+migrations/0140), in case they come back and want to recreate it on a
+new landlet. Deleting the builder removes the only place that history
+could live, so there's nothing left to preserve here.
 
 Any `purchases` row where this builder was the hosting/earning party has
 its `builderId` set to `null` rather than being deleted along with the
@@ -5499,7 +5503,11 @@ neither has anywhere to attach to in this dev-mode backend yet:
   voluntary or not — there's no separate duration for this path.
   #783 added two owner-facing notifications around this path — a warning
   sent while there's still time to act, not just a report after the land
-  is already gone — see "Notifications" below.
+  is already gone — see "Notifications" below. `auctions.inactivity_triggered`
+  (set here, never by `POST .../auctions`) is what `resolveAuction`'s own
+  no-bid-$0 release branch checks to give this path a gentler cleanup than
+  a voluntary $0 auction's own no-bid release gets (#1257, owner-confirmed)
+  — see "Resolution" below.
 - ~~No scheduled resolution job~~ — implemented (#770): `resolveDueAuctions`
   now also runs on the same Cloudflare Cron Trigger as `autoAuctionInactiveLandlets`
   above (see `scheduled()` near the top of `worker/index.js`), so an auction
@@ -5703,6 +5711,17 @@ bids at all.
   explicit "relinquish for free" choice. (A non-empty bid list where every
   bidder failed the resolution-time check is treated the same as the
   seller keeping the land below, not greenbelt — see the next bullet.)
+  "Build cleared" means something different depending on
+  `auctions.inactivity_triggered` (#1257, owner-confirmed): a voluntary
+  `$0` auction is the seller's own deliberate choice, so `landlet_versions`
+  is wiped outright along with `placed_instances`/`landlet_levels`, same
+  as always; an inactivity-triggered release wasn't the seller's choice,
+  so their version history is archived instead — copied into
+  `archived_landlet_versions`/`archived_version_instances` (keyed to the
+  builder, not the landlet — same "outlive the source landlet" shape
+  `saved_level_layouts` already uses for #633) before the originals are
+  deleted. Either way `landlet_versions` itself ends up empty on the
+  landlet; only whether the content survives elsewhere differs.
 - **No bids, `startingBidCents` was `> 0`, or bids existed but none could
   be covered:** the landlet stays exactly as it was — the seller wanted to
   retain it if unsold (or nobody could actually pay), so nothing about
