@@ -3862,6 +3862,16 @@ function mountPreviewInto(container) {
 }
 
 function disposeAxisPreview() {
+  // #1893: bumped on every call (even when there's nothing to dispose yet),
+  // so a showAxisPreview() call still in flight at the time this runs from
+  // one of its other callers (the Sell modal closing, a row collapsing,
+  // renderSellerList() tearing down row DOM) correctly detects it's been
+  // superseded once its own model load resolves, instead of finishing and
+  // installing a WebGLRenderer/OrbitControls bound to an already-detached
+  // canvas that never gets disposed. showAxisPreview's own call to this
+  // function (its very next line) relies on this: it captures its load
+  // token right after, not before, calling this.
+  axisPreviewLoadToken++;
   sellerPreviewCanvas.remove();
   sellerPreviewHintEl.remove();
   if (!axisPreview) return;
@@ -3911,8 +3921,13 @@ function makeAxisLabelSprite(text, colorHex) {
 // X/Y/Z legend (nothing checked yet); a non-empty one turns those axes
 // bright yellow and mutes the rest to gray.
 async function showAxisPreview(template, container, highlightAxes) {
-  const myLoadToken = ++axisPreviewLoadToken;
+  // disposeAxisPreview() now bumps axisPreviewLoadToken itself (#1893), so
+  // this captures the token right after calling it, not before -- the same
+  // value either way for this call's own purposes, but capturing before
+  // would make every call see itself as already-superseded the instant
+  // disposeAxisPreview() ran.
   disposeAxisPreview();
+  const myLoadToken = axisPreviewLoadToken;
   mountPreviewInto(container);
 
   const scene = new THREE.Scene();
@@ -3921,6 +3936,12 @@ async function showAxisPreview(template, container, highlightAxes) {
   sun.position.set(2, -3, 4);
   scene.add(sun);
 
+  // #1893: lets an e2e test simulate a slow load deterministically, same
+  // reasoning as window.__testUploadPreviewLoadDelayMs (#1465). Always
+  // undefined outside of that one test.
+  if (window.__testAxisPreviewLoadDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testAxisPreviewLoadDelayMs));
+  }
   // Same instance shape addInstanceToScene builds, at the origin and with
   // no crop, so this shows the product's real full-size geometry (and, for
   // a real uploaded model, its real material/texture) exactly as it would
@@ -3937,6 +3958,9 @@ async function showAxisPreview(template, container, highlightAxes) {
     // this it leaks the exact same way #1426/#1427 did for their own
     // superseded in-flight loads.
     if (previewObject) disposeObject(previewObject);
+    // Exposed purely so an e2e test can confirm the dispose above actually
+    // ran, same reasoning as window.__supersededUploadPreviewDisposals (#1465).
+    window.__supersededAxisPreviewDisposals = (window.__supersededAxisPreviewDisposals ?? 0) + 1;
     return;
   }
   if (!previewObject) return;
