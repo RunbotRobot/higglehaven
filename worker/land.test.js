@@ -4653,6 +4653,85 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #1824: the admin dashboard's purchases-fallback panel (refund/
+  // mark-shipped for a purchase whose seller_id is dangling) had no way to
+  // find the purchases it exists for -- GET /purchases's existing
+  // builderId/templateId filters both need the caller to already know
+  // which builder/template to ask for. danglingSeller lists every
+  // purchase whose seller_id is non-null but no longer in `sellers`,
+  // admin-only since nothing here is scoped back to the caller's own
+  // session. Lives here, not alongside GET /purchases's sibling tests in
+  // worker/commerce.test.js, because that file is already at the
+  // #385/#390-established per-file test-count ceiling (vitest-pool-
+  // workers/workerd's own V8 stack limit for one isolate) -- see #1853.
+  describe('GET /purchases?danglingSeller=1 (#1824)', () => {
+    async function createGreenbeltLandletWithArea(landletId, areaM2) {
+      return api('/landlets', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2, status: 'greenbelt' }),
+      }));
+    }
+
+    async function claim(landletId, builder) {
+      return api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+    }
+
+    async function placeInstance(instanceId, landletId, templateId, builder) {
+      const placed = await api('/instances', builder.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
+      }));
+      expect(placed.response.status).toBe(201);
+      return instanceId;
+    }
+
+    it('lists purchases with a dangling seller_id, admin-only', async () => {
+      const seller = await signupSeller('purchase-dangling-seller');
+      const builder = await signupBuilder('purchase-dangling-seller-builder');
+      await createGreenbeltLandletWithArea('purchase-dangling-seller-landlet', 1000);
+      await claim('purchase-dangling-seller-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'purchase-dangling-seller-template',
+          name: 'Product whose seller later deletes their account',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 1500,
+          sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('purchase-dangling-seller-instance', 'purchase-dangling-seller-landlet', 'purchase-dangling-seller-template', builder);
+      const purchased = await api('/instances/purchase-dangling-seller-instance/purchase', builder.session({ method: 'POST' }));
+      expect(purchased.response.status).toBe(201);
+
+      // Not listed yet — this seller still exists, so this purchase's own
+      // seller_id isn't dangling.
+      const beforeDelete = await api('/purchases?danglingSeller=1', adminSession());
+      expect(beforeDelete.response.status).toBe(200);
+      expect(beforeDelete.body.purchases).not.toContainEqual(
+        expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId }),
+      );
+
+      const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(sellerDeleted.response.status).toBe(200);
+
+      const nonAdmin = await signupBuilder('purchase-dangling-seller-nonadmin');
+      const wrongSession = await api('/purchases?danglingSeller=1', nonAdmin.session());
+      expect(wrongSession.response.status).toBe(403);
+
+      const unauthenticated = await api('/purchases?danglingSeller=1');
+      expect(unauthenticated.response.status).toBe(401);
+
+      const asAdmin = await api('/purchases?danglingSeller=1', adminSession());
+      expect(asAdmin.response.status).toBe(200);
+      expect(asAdmin.body.purchases).toContainEqual(
+        expect.objectContaining({ purchaseId: purchased.body.purchase.purchaseId, sellerId: seller.sellerId }),
+      );
+    });
+  });
+
   // #729: saved_layout_instances and version_instances both hold a
   // template_id under ON DELETE RESTRICT (see migrations/0080 and 0007's
   // own comments), so a template referenced only by one of these snapshot

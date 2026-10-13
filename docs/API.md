@@ -1605,8 +1605,11 @@ either of those as an explicit open question, not yet resolved.
 
 Seller-initiated (there's no shipping-carrier integration to detect this
 automatically) — starts the 7-day payout-hold fallback clock described
-above. Requires a session logged in as this purchase's own seller (`403`
-otherwise). Returns `400` if the purchase isn't real-money
+above. Requires a session logged in as this purchase's own seller — or,
+if that seller's account has since been deleted (`seller_id` null or
+dangling), an admin session instead (same fallback "Refunds" below
+documents, and the same `sellerExists` dangling-id check). Returns `400`
+if the purchase isn't real-money
 (`paymentIntentId` unset), is a digital good (nothing to ship), is
 already marked shipped, or has been refunded. On success, notifies the
 purchase's buyer (`purchases.buyer_builder_id`) that it has shipped — same
@@ -5789,8 +5792,17 @@ instead, across every builder who happens to host an instance of it — a
 seller's own "did my product sell" view, used by the Seller modal's "Sales"
 panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
-seller-less template stays open to unauthenticated reads. Exactly one of
-the two query params is required (`400` without either).
+seller-less template stays open to unauthenticated reads.
+
+`GET /api/purchases?danglingSeller=1` requires an admin session (`403`
+otherwise); lists every purchase whose `seller_id` is non-null but no
+longer points at a live seller (the account was deleted) — the admin
+dashboard's own purchases-fallback panel uses this to find the purchases
+its refund/mark-shipped admin-override branches exist for, since
+neither of the other two filters can locate them without already
+knowing which builder/template to ask for.
+
+Exactly one of the three query params is required (`400` without any).
 
 `instance_id`/`template_id`/`seller_id` are deliberately NOT foreign keys —
 a purchase is a permanent historical receipt, not cascade-deleted if the
@@ -5997,10 +6009,13 @@ side-effect a purchase has: the builder's commission credit.
 `POST /api/purchases/:purchaseId/refund` (`migrations/0052_purchase_refunds.sql`)
 requires a session logged in as the purchase's own `sellerId`, if it has
 one (`403` otherwise). A purchase of a seller-less template (an
-admin/system-owned catalog item can still be priced) does **not** stay
-open the way the `GET` above does — unlike a read, a refund claws back
-real higgles from a builder's balance, so it falls back to requiring an
-admin session instead (`401`/`403`), never no check at all. Marks a
+admin/system-owned catalog item can still be priced), or one whose
+seller has since deleted their account (a non-null but dangling
+`sellerId` — see `GET /api/purchases?danglingSeller=1` above), does
+**not** stay open the way the `GET` above does — unlike a read, a refund
+claws back real higgles from a builder's balance, so it falls back to
+requiring an admin session instead (`401`/`403`), never no check at all.
+Marks a
 purchase refunded and
 deducts exactly `builderShareCents` (not the
 full sale total — that was never the builder's money) from
