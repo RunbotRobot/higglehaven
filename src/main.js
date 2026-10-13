@@ -132,6 +132,7 @@ import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOpt
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
 import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { sampleUniformDiskRadiusM } from './spawnLocation.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
@@ -14160,11 +14161,15 @@ function isShopLocationOnWater(worldX, worldY) {
 // candidate radius/angle until it lands outside every water landlet's
 // footprint -- same radius/angle-to-world-position formula
 // updateShopSpawnRotation itself uses for the orbit.
+//
+// #1816: the radius draw itself must be sqrt-corrected (sampleUniformDiskRadiusM),
+// not sampled directly from Math.random() -- see that function's own header
+// for why a direct draw statistically biases spawns toward the center.
 function pickShopSpawnLocation() {
   let radiusM = 0;
   let yaw = 0;
   for (let attempt = 0; attempt < SHOP_SPAWN_LOCATION_MAX_ATTEMPTS; attempt++) {
-    radiusM = Math.random() * shopMaxRadiusM();
+    radiusM = sampleUniformDiskRadiusM(shopMaxRadiusM(), Math.random());
     yaw = Math.random() * Math.PI * 2;
     const worldX = radiusM * Math.sin(yaw);
     const worldY = -radiusM * Math.cos(yaw);
