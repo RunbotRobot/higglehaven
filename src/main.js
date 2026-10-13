@@ -7450,9 +7450,14 @@ async function renderAuctionSection() {
           alert('Enter a bid amount of zero or more.');
           return;
         }
+        const amountCents = Math.round(dollars * 100);
+        if (amountCents < minCents) {
+          alert(`Enter a bid of at least ${formatHiggles(minCents)}.`);
+          return;
+        }
         bidBtn.disabled = true;
         try {
-          await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
+          await placeBid(auction.auctionId, { amountCents });
           await renderAuctionList();
           await renderStartSection();
         } catch (err) {

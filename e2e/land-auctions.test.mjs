@@ -121,14 +121,17 @@ await bidderPage.waitForFunction(
 const afterBidText = await auctionsListItems.first().textContent();
 console.log('auction after bidding (should mention high bid $15.00, 1 bid):', afterBidText);
 
-// A bid lower than the current high bid is rejected server-side; the
-// button click still fires (client only checks it's a finite number). The
-// rejection surfaces as an alert() — already auto-accepted by launchPage's
-// own dialog handler, so this just confirms the displayed high bid stays
-// at $15.00 rather than the rejected $12.00 taking effect.
+// A bid lower than the current high bid is now rejected client-side
+// (#1921) against the same minCents already used for the input's min/
+// placeholder — confirms the alert names the real minimum rather than a
+// raw server error string, and that the displayed high bid stays at
+// $15.00 rather than the rejected $12.00 taking effect.
 await bidInput.fill('12');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForTimeout(500);
+console.log('alert shown for a too-low bid (should mention "at least $15.01"):', lastAlertMessage);
+const lowBidAlertOk = lastAlertMessage === 'Enter a bid of at least $15.01.';
+lastAlertMessage = null;
 const afterRejectedBidText = await auctionsListItems.first().textContent();
 console.log('auction after a too-low bid attempt (should still say $15.00, not $12.00):', afterRejectedBidText);
 
@@ -248,6 +251,7 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   listedAuctionText.includes('$10.00') &&
   invalidBidAlertOk &&
   afterBidText.includes('$15.00') && afterBidText.includes('1 bid') &&
+  lowBidAlertOk &&
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
   bidHistoryLabelBeforeExpand.includes('View Bids (1)') &&
   bidHistoryRowText.includes('$15.00') && bidHistoryRowText.includes(BIDDER) &&
