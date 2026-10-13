@@ -5,6 +5,7 @@ import {
   isWithinAttentionRange,
   nextAttentionElapsedS,
   pickNearestInRange,
+  yawRotatedForward,
 } from './attention.js';
 
 const RANGE = { radiusM: 4, fovCos: Math.cos((20 * Math.PI) / 180) };
@@ -123,6 +124,47 @@ describe('attentionDistanceAndDot', () => {
     const trailingCameraAnchor = { x: 0, y: -4.2, z: 0 };
     const fromTrailingCamera = attentionDistanceAndDot(trailingCameraAnchor, forward, itemBehindShopper);
     expect(fromTrailingCamera.dot).toBeGreaterThan(0);
+  });
+});
+
+describe('yawRotatedForward', () => {
+  it('returns the same vector unchanged when the two yaws match', () => {
+    const forward = { x: 0.6, y: 0.8, z: 0.1 };
+    expect(yawRotatedForward(forward, 1.2, 1.2)).toEqual(forward);
+  });
+
+  it('rotates a horizontal forward vector by the angular difference between the yaws', () => {
+    const forward = { x: 0, y: 1, z: 0 };
+    const rotated = yawRotatedForward(forward, 0, Math.PI / 2);
+    expect(rotated.x).toBeCloseTo(-1, 10);
+    expect(rotated.y).toBeCloseTo(0, 10);
+    expect(rotated.z).toBeCloseTo(0, 10);
+  });
+
+  it('carries the input z component through unchanged', () => {
+    const forward = { x: 1, y: 0, z: 0.5 };
+    const rotated = yawRotatedForward(forward, 0, Math.PI);
+    expect(rotated.z).toBe(0.5);
+  });
+
+  it('regression (#1814): a body facing away from an item the camera is still looking at must not register as in view', () => {
+    const anchor = { x: 0, y: 0, z: 0 };
+    const itemAheadOfCamera = { x: 0, y: 5, z: 0 }; // 5m along the camera's own look direction
+    const cameraForward = { x: 0, y: 1, z: 0 };
+    const cameraYaw = 0;
+
+    // The old bug: gating directly on the camera's forward registers the
+    // item as in view regardless of which way the avatar's body faces.
+    const fromCamera = attentionDistanceAndDot(anchor, cameraForward, itemAheadOfCamera);
+    expect(fromCamera.dot).toBeGreaterThan(0);
+
+    // The fix: with the avatar's body turned 180 degrees away from the
+    // camera's own look direction (backed up facing away from the item),
+    // the body-facing-derived forward must report the item as behind it.
+    const avatarFacing = Math.PI;
+    const bodyForward = yawRotatedForward(cameraForward, cameraYaw, avatarFacing);
+    const fromBody = attentionDistanceAndDot(anchor, bodyForward, itemAheadOfCamera);
+    expect(fromBody.dot).toBeLessThan(0);
   });
 });
 
