@@ -99,6 +99,26 @@
   .landlets-panel h3:first-child { margin-top: 0; }
   .landlets-panel .hint { color: #5a6b52; font-size: 12px; margin: 0 0 10px; }
   .landlets-panel .edit-wrap.conflict { border-color: #e0a526; background: #fffaf0; }
+  .fixtures-panel .grant-card {
+    background: #fffaf0; border: 1px solid #f4d35e; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  .fixtures-panel .grant-card h2 { font-size: 15px; margin: 0 0 4px; }
+  .fixtures-panel .grant-card .grant-desc { color: #5a6b52; font-size: 13px; margin: 0 0 14px; }
+  .fixtures-panel .grant-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .fixtures-panel input {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px; background: #fff; color: #16240a;
+  }
+  .fixtures-panel input[name$="BuilderId"] { flex: 1 1 220px; min-width: 160px; }
+  .fixtures-panel input[name$="AmountDollars"] { flex: 0 0 120px; }
+  .fixtures-panel button {
+    font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #5a8e24; padding: 8px 14px;
+    background: #6ca42e; color: #16240a; font-weight: 600;
+  }
+  .fixtures-panel button:hover { background: #5a8e24; }
+  .fixtures-panel button:disabled { opacity: 0.6; cursor: default; }
+  .fixtures-panel .grant-result { margin: 10px 0 0; font-size: 13px; }
+  .fixtures-panel .grant-result.success { color: #3f6e1c; }
+  .fixtures-panel .grant-result.error { color: #8a2a12; }
 </style>
 </head>
 <body>
@@ -286,10 +306,32 @@
   </section>
   <section class="panel fixtures-panel" id="panel-fixtures">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <span class="fixtures-badge">Test/Ops only — not a real transaction</span>
-      <p>Coming soon — land-cap-grants/higgles-grants fixtures for setting up test scenarios. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1826" target="_blank" rel="noopener">#1826</a>.</p>
+    <span class="fixtures-badge">Test/Ops only — not a real transaction</span>
+    <div class="grant-card">
+      <h2>Land cap grant</h2>
+      <p class="grant-desc">
+        Grants land-cap headroom via a <code>higgles_earnings_events</code> row, for setting up a test
+        scenario that needs a builder to already have cap headroom — not a stand-in for real income.
+      </p>
+      <form class="grant-form" data-grant="land-cap-grants">
+        <input name="landCapBuilderId" placeholder="Builder id" aria-label="Builder id" required />
+        <input name="landCapAmountDollars" type="number" step="0.01" min="0" placeholder="Amount ($)" aria-label="Amount in dollars" required />
+        <button type="submit">Grant</button>
+      </form>
+      <p class="grant-result" data-result="land-cap-grants"></p>
+    </div>
+    <div class="grant-card">
+      <h2>Higgles balance grant</h2>
+      <p class="grant-desc">
+        Tops up <code>higgles_balance_cents</code> directly — no earnings-ledger entry, purely spendable
+        balance for setting up a test scenario (e.g. funding a test auction bid).
+      </p>
+      <form class="grant-form" data-grant="higgles-grants">
+        <input name="higglesBuilderId" placeholder="Builder id" aria-label="Builder id" required />
+        <input name="higglesAmountDollars" type="number" step="0.01" min="0" placeholder="Amount ($)" aria-label="Amount in dollars" required />
+        <button type="submit">Grant</button>
+      </form>
+      <p class="grant-result" data-result="higgles-grants"></p>
     </div>
   </section>
 </main>
@@ -312,6 +354,62 @@
     }
   }
   buttons.forEach((btn) => btn.addEventListener('click', () => activate(btn.dataset.panel)));
+
+  // #1826: the two admin-gated test/ops fixture grants. Both endpoints take
+  // { amountCents } and are additive -- the form collects a dollar amount
+  // (matching this app's existing price-input convention, e.g. src/main.js's
+  // own `Math.round(dollars * 100)`) and converts it before sending, since an
+  // admin typing a grant amount thinks in dollars, not cents.
+  const GRANTS = {
+    'land-cap-grants': {
+      builderIdField: 'landCapBuilderId',
+      amountField: 'landCapAmountDollars',
+      describeSuccess: (body) => `Granted. New land cap: ${body.landCapM2} m².`,
+    },
+    'higgles-grants': {
+      builderIdField: 'higglesBuilderId',
+      amountField: 'higglesAmountDollars',
+      describeSuccess: (body) => `Granted. New higgles balance: $${(body.higglesBalanceCents / 100).toFixed(2)}.`,
+    },
+  };
+
+  document.querySelectorAll('.fixtures-panel form[data-grant]').forEach((form) => {
+    const grantType = form.dataset.grant;
+    const config = GRANTS[grantType];
+    const resultEl = document.querySelector(`.grant-result[data-result="${grantType}"]`);
+    const submitBtn = form.querySelector('button[type="submit"]');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const builderId = form.elements[config.builderIdField].value.trim();
+      const dollars = Number(form.elements[config.amountField].value);
+      resultEl.className = 'grant-result';
+      resultEl.textContent = '';
+      if (!builderId || !Number.isFinite(dollars) || dollars < 0) {
+        resultEl.className = 'grant-result error';
+        resultEl.textContent = 'Enter a builder id and a non-negative amount.';
+        return;
+      }
+      const amountCents = Math.round(dollars * 100);
+      submitBtn.disabled = true;
+      let body;
+      try {
+        const response = await fetch(`/api/builders/${encodeURIComponent(builderId)}/${grantType}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ amountCents }),
+        });
+        try { body = await response.json(); } catch (_) { body = null; }
+        if (!response.ok) throw new Error((body && body.error) || `Request failed (${response.status})`);
+        resultEl.className = 'grant-result success';
+        resultEl.textContent = config.describeSuccess(body);
+      } catch (error) {
+        resultEl.className = 'grant-result error';
+        resultEl.textContent = error.message;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  });
 })();
 
 // #1819: roster panel -- list/grant/revoke admins. Same fetch/render/
