@@ -16328,7 +16328,6 @@ async function enterSellMode() {
     activeCatalog = FALLBACK_CATALOG;
   }
   sellerShowcasePages = computeSellerShowcasePages(myProducts());
-  await loadSellerShowcasePage(0);
 
   // Preserves today's default: Sell has always opened straight into the
   // product-management modal — the showcase array behind it (semi-
@@ -16352,6 +16351,16 @@ async function enterSellMode() {
   // permanently hidden/stale in the live app regardless of real feedback
   // on file. Found while adding e2e coverage for the seller-feedback flow.
   renderSellerFeedbackSummary(id);
+  // #1801 (owner feedback): this modal doesn't need the showcase array
+  // behind it to be loaded at all — it was sitting there blocking this
+  // whole function (and bootstrapPromise's own hideLoadingScreen with it)
+  // behind a real per-model fetch-and-load for every product, the same
+  // "unrelated 3D scene" delay closeSellerModal's own comment already
+  // reasons about. Deferred/unawaited here exactly like that same call
+  // there and the Prev/Next pager buttons above — the modal is already
+  // visible by the time this resolves, so there's nothing for a slower
+  // load here to visibly block.
+  loadSellerShowcasePage(0);
 }
 
 // The persistent Shop/Build/Sell switcher (#mode-nav). All three are real
