@@ -790,13 +790,13 @@ describe('Builders', () => {
     expect(deletedAfterComplete.response.status).toBe(200);
   });
 
-  // #1890: a still-'pending' job (reserved locally, Tripo's task-create call
-  // never actually confirmed yet) is explicitly costless per
-  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own comment ("no real Didit/
-  // Tripo cost is ever in flight during this specific window") -- the guard
-  // above used to block on the broader processed_at IS NULL, catching this
-  // state identically to a real, billed 'processing' job. It shouldn't.
-  it('allows deleting a builder whose video-to-3D job is still pending (not yet billed)', async () => {
+  // #1899: #1890/PR #1891 briefly narrowed the guard above to
+  // status = 'processing' only, on the premise that a still-'pending' job
+  // is never billed yet. False -- handleVideoGenerationJobCreate's own
+  // billed Tripo calls happen *while* the row is still 'pending', only
+  // flipping to 'processing' after Tripo has already been called. A
+  // 'pending' row needs the same protection a 'processing' one gets.
+  it('rejects deleting a builder whose video-to-3D job is still pending (may already be billed)', async () => {
     const builder = await signupBuilder('video-job-pending-builder');
     await env.DB.prepare(`
       INSERT INTO video_generation_jobs (job_id, builder_id, status)
@@ -804,7 +804,10 @@ describe('Builders', () => {
     `).bind(builder.builderId).run();
 
     const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
-    expect(deleted.response.status).toBe(200);
+    expect(deleted.response.status).toBe(409);
+    const stillThere = await env.DB.prepare('SELECT builder_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(stillThere).not.toBeNull();
   });
 
   // #279's guard has to catch a bid on *any* of a seller's active auctions,

@@ -3189,16 +3189,19 @@ async function handleBuilders(request, env, db, route, url) {
           -- in-flight request, with the eventual webhook finding nothing
           -- to apply its result to and silently no-opping.
           --
-          -- #1890: scoped to status = 'processing', not the broader
-          -- processed_at IS NULL this used to check -- a still-'pending'
-          -- row (reserved locally, Tripo never actually called yet) is
-          -- exactly the state VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own
-          -- comment already calls costless ("no real Didit/Tripo cost is
-          -- ever in flight during this specific window"), the same line
-          -- expireStaleVideoGenerationJobs already draws for this identical
-          -- table. Blocking self-delete on it protected nothing real.
+          -- #1899: #1890/PR #1891 narrowed this to status = 'processing' on
+          -- the premise that a still-'pending' row is never billed yet --
+          -- false. handleVideoGenerationJobCreate calls Tripo's real,
+          -- billed generation/multiview-to-model endpoint *while the row is
+          -- still 'pending'*, only flipping to 'processing' after that call
+          -- already succeeded. Narrowing this guard let a concurrent self-
+          -- delete cascade away a 'pending' row mid-flight, so the request's
+          -- own later UPDATE (status -> 'processing') would silently match
+          -- zero rows and the real Tripo task would go permanently
+          -- untracked -- exactly the data loss #1702 added this guard to
+          -- prevent. Reverted back to the broader processed_at IS NULL.
           AND NOT EXISTS (
-            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND status = 'processing'
+            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
           )
       `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       // #879: each of these is scoped by ${ownedLandletsSql}/its own live
@@ -3306,10 +3309,11 @@ async function handleBuilders(request, env, db, route, url) {
       if (redemptionInFlight) {
         throw new HttpError('Cannot delete this builder while a higgles redemption is still being paid out', 409);
       }
-      // #1890: same status = 'processing' scoping as the batch guard above
-      // -- a still-'pending' reservation carries no real cost to protect.
+      // #1899: same processed_at IS NULL scoping as the batch guard above --
+      // see its own comment for why status = 'processing' alone (#1890/#1891)
+      // isn't sufficient.
       const videoJobInFlight = await db.prepare(`
-        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND status = 'processing' LIMIT 1
+        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL LIMIT 1
       `).bind(route[1]).first();
       if (videoJobInFlight) {
         throw new HttpError('Cannot delete this builder while a video-to-3D generation job is still running', 409);
@@ -7766,10 +7770,17 @@ const MAX_VIDEO_GENERATION_FRAME_BYTES = 10 * 1024 * 1024;
 // eviction -- not a thrown JS exception). A legitimate pending->processing
 // transition happens within the same request, well under a minute even
 // with the frame uploads ahead of it, so this stays well clear of that
-// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS -- no
-// real Didit/Tripo cost is ever in flight during this specific window
-// (the row is still 'pending', not yet billed), so there's no reason to
-// wait as long before clearing it.
+// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS.
+// #1899/#1886: earlier wording here claimed "no real Didit/Tripo cost is
+// ever in flight during this specific window (the row is still 'pending',
+// not yet billed)" -- false. handleVideoGenerationJobCreate's own billed
+// tripoUploadFile/tripoRequest calls happen *while* the row is still
+// 'pending'; it only flips to 'processing' after Tripo has already been
+// called and billed. A crash landing in that exact sub-window (the row
+// genuinely is 'pending' with a real Tripo task already in flight) still
+// gets swept by this timeout like any other stale 'pending' row -- a real,
+// known residual gap, tracked separately at #1886 (which needs a durable
+// task_id-persistence design, not a one-line fix) rather than solved here.
 const VIDEO_GENERATION_RESERVATION_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Shared by handleVideoGenerationJobCreate (dedup an already-in-flight
