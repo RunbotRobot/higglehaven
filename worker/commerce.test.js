@@ -4327,7 +4327,10 @@ describe('Simulated purchases', () => {
       const summary = await api('/sellers/me/payouts', seller.session());
       expect(summary.body.availableCents).toBe(4900);
       expect(summary.body.heldCents).toBe(0);
-    });
+    }, 30000); // #978-style: two full purchase flows (each several sequential
+    // real HTTP requests) plus catalog/instance setup and two mark-shipped
+    // attempts -- same cumulative-D1-state-under-CI-load shape as #978/#1656,
+    // just not rate-limit-named.
 
     it('becomes available once the buyer confirms delivery via their own token link, idempotently, and notifies the seller', async () => {
       const builder = await signupBuilder('payout-confirm-builder');
@@ -4421,7 +4424,9 @@ describe('Simulated purchases', () => {
         headers: { 'cf-connecting-ip': ip },
       });
       expect(limited.response.status).toBe(429);
-    });
+    }, 30000); // #1656: same 21-sequential-request shape as the mark-shipped/
+    // refund rate-limit tests above, which already carry this same override
+    // -- missed here when this test was authored.
 
     it('becomes available via the 7-day-after-shipped fallback even with no delivery confirmation', async () => {
       const builder = await signupBuilder('payout-fallback-builder');
