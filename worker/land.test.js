@@ -768,6 +768,129 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
   });
 
+  // #1711 (owner decision, 2026-10-13): "surface the conflict to the admin
+  // at reassignment time instead of letting it resolve silently later."
+  // Without this, resolveAuction would later transfer the landlet again
+  // (or release it to greenbelt) out from under whoever the admin just
+  // handed it to, while still crediting the stale previous owner.
+  async function fundHiggles(builder, amountCents = 100_000_000) {
+    await env.DB.prepare('UPDATE builders SET higgles_balance_cents = ? WHERE builder_id = ?')
+      .bind(amountCents, builder.builderId).run();
+  }
+
+  it('blocks reassignment with a structured 409 when the landlet has an active auction with no bids', async () => {
+    const owner = await signupBuilder('reassign-auction-conflict-no-bids-owner');
+    const target = await signupBuilder('reassign-auction-conflict-no-bids-target');
+    await createGreenbeltLandlet('reassign-auction-conflict-no-bids-landlet');
+    await api('/landlets/reassign-auction-conflict-no-bids-landlet/claim', owner.session({ method: 'POST' }));
+    const started = await api('/landlets/reassign-auction-conflict-no-bids-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 500 }),
+    }));
+    expect(started.response.status).toBe(201);
+
+    const result = await api('/landlets/reassign-auction-conflict-no-bids-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+    expect(result.body.error).toMatch(/active auction/i);
+    expect(result.body.activeAuction).toMatchObject({
+      auctionId: started.body.auction.auctionId, startingBidCents: 500, highBidCents: null, bidderCount: 0,
+    });
+
+    // Nothing actually changed on a blocked attempt.
+    const stillOwner = await api('/landlets/reassign-auction-conflict-no-bids-landlet');
+    expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
+    const auction = await env.DB.prepare('SELECT status FROM auctions WHERE auction_id = ?')
+      .bind(started.body.auction.auctionId).first();
+    expect(auction.status).toBe('active');
+  });
+
+  it('reports the current high bid and bidder count in the conflict when the auction has real bids', async () => {
+    const owner = await signupBuilder('reassign-auction-conflict-bids-owner');
+    const target = await signupBuilder('reassign-auction-conflict-bids-target');
+    const bidder = await signupBuilder('reassign-auction-conflict-bids-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('reassign-auction-conflict-bids-landlet');
+    await api('/landlets/reassign-auction-conflict-bids-landlet/claim', owner.session({ method: 'POST' }));
+    const started = await api('/landlets/reassign-auction-conflict-bids-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    await api(`/auctions/${started.body.auction.auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+
+    const result = await api('/landlets/reassign-auction-conflict-bids-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+    expect(result.body.activeAuction).toMatchObject({ highBidCents: 700, bidderCount: 1 });
+  });
+
+  it('cancels the active auction and reassigns in one step when cancelActiveAuction is true', async () => {
+    const owner = await signupBuilder('reassign-auction-cancel-owner');
+    const target = await signupBuilder('reassign-auction-cancel-target');
+    const bidder = await signupBuilder('reassign-auction-cancel-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('reassign-auction-cancel-landlet');
+    await api('/landlets/reassign-auction-cancel-landlet/claim', owner.session({ method: 'POST' }));
+    const started = await api('/landlets/reassign-auction-cancel-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+
+    const result = await api('/landlets/reassign-auction-cancel-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId, cancelActiveAuction: true }),
+    }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
+
+    const auction = await env.DB.prepare('SELECT status, winning_bid_id FROM auctions WHERE auction_id = ?')
+      .bind(auctionId).first();
+    expect(auction.status).toBe('ended');
+    expect(auction.winning_bid_id).toBeNull();
+
+    // No currency was ever actually debited at bid-placement time
+    // (handleAuctionBids only holds a live-computed amount, debited for
+    // real only at resolution), so cancelling has nothing to refund --
+    // just the courtesy notification below that the bid no longer stands.
+    const { results: bidderNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(bidder.builderId).all();
+    expect(bidderNotifications.some((n) => /bid.*cancelled/i.test(n.message))).toBe(true);
+
+    const { results: ownerNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(owner.builderId).all();
+    expect(ownerNotifications.some((n) => /auction.*cancelled/i.test(n.message))).toBe(true);
+
+    const log = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('reassign_landlet_owner', 'reassign-auction-cancel-landlet').first();
+    expect(JSON.parse(log.detail_json)).toMatchObject({ cancelledAuctionId: auctionId });
+  });
+
+  it('cancelActiveAuction is a harmless no-op when there is no active auction to cancel', async () => {
+    const owner = await signupBuilder('reassign-auction-cancel-noop-owner');
+    const target = await signupBuilder('reassign-auction-cancel-noop-target');
+    await createGreenbeltLandlet('reassign-auction-cancel-noop-landlet');
+    await api('/landlets/reassign-auction-cancel-noop-landlet/claim', owner.session({ method: 'POST' }));
+
+    const result = await api('/landlets/reassign-auction-cancel-noop-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId, cancelActiveAuction: true }),
+    }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
+
+    const { results: ownerNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(owner.builderId).all();
+    // The plain "reassigned" message, not the auction-cancellation variant.
+    expect(ownerNotifications.some((n) => /reassigned to another builder by an admin\.$/.test(n.message))).toBe(true);
+  });
+
   // #1705: the guarded ownership-transfer UPDATE and the build-content
   // cleanup deletes used to be batched together in one db.batch() call --
   // D1 runs every statement in a batch regardless of an earlier one's row
@@ -3311,7 +3434,12 @@ describe('Land cap', () => {
     }));
     expect(granted.response.status).toBe(201);
     expect(granted.body.landCapM2).toBeGreaterThan(1000);
-    expect(landCapOf(await api('/builders'), builder)).toBe(granted.body.landCapM2);
+    // #717's bounded ids= lookup, not the unfiltered listing -- this
+    // file's test builders accumulate across every `it` (storage isn't
+    // reset between them), and the unfiltered list defaults to the first
+    // 100 by created_at, so a builder created late enough in this file's
+    // own run can silently fall off page 1.
+    expect(landCapOf(await api(`/builders?ids=${builder}`), builder)).toBe(granted.body.landCapM2);
 
     // It's a real earnings event, same ledger auction sales credit — not a
     // side-channel that bypasses it.
@@ -3393,7 +3521,9 @@ describe('Land cap', () => {
       'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
     ).bind(builder).all();
     expect(results).toHaveLength(0);
-    expect(landCapOf(await api('/builders'), builder)).toBe(1000);
+    // #717's bounded ids= lookup -- same reasoning as the land-cap-grants
+    // test above.
+    expect(landCapOf(await api(`/builders?ids=${builder}`), builder)).toBe(1000);
 
     const missingBuilder = await api('/builders/does-not-exist/higgles-grants', adminSession({
       method: 'POST', body: JSON.stringify({ amountCents: 100000 }),
