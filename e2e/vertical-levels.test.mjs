@@ -29,7 +29,13 @@ const removeHidden = () => page.isHidden('#level-remove-btn');
 // tucked behind #level-menu-toggle — opened once here, and it stays open
 // (doesn't auto-close on an inner click, see openLevelMenu's own comment)
 // for every interaction below until the reload partway through resets it.
+const toggleAriaExpandedBeforeOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
 await openLevelMenu(page);
+// #1843: mirrors #account-menu-toggle's own aria-expanded, which every
+// other open/close assertion in this app already relies on for a screen
+// reader to know whether the disclosure panel a toggle controls is shown.
+const toggleAriaExpandedAfterOpen = await page.getAttribute('#level-menu-toggle', 'aria-expanded');
+console.log('#level-menu-toggle aria-expanded before/after opening (should be false, then true):', toggleAriaExpandedBeforeOpen, toggleAriaExpandedAfterOpen);
 
 const initialLabel = await levelLabel();
 const removeHiddenAtGround = await removeHidden();
@@ -182,6 +188,8 @@ const labelAfterDig = await levelLabel();
 console.log('level label after digging down (should be Level -1):', labelAfterDig);
 
 const pass =
+  toggleAriaExpandedBeforeOpen === 'false' &&
+  toggleAriaExpandedAfterOpen === 'true' &&
   initialLabel === 'Ground' &&
   removeHiddenAtGround &&
   buildBtnAtGround.includes('m²') &&

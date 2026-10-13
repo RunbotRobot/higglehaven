@@ -10579,6 +10579,18 @@ async function handleLandlets(request, db, route, url) {
     // auction/reassignment landing in between can't be silently clobbered
     // or bypassed.
     //
+    // #1281 (owner decision, 2026-10-13): "land cap is a hard rule, full
+    // stop -- no admin override, ever, including via manual reassignment."
+    // Folds the same live land-cap re-derivation resolveAuction's own
+    // winner-transfer UPDATE already uses (just above, in this same file)
+    // into this UPDATE's own WHERE, for the same TOCTOU reason that
+    // comment gives: a plain read-then-compare here could let two
+    // concurrent reassignments onto the same new owner each pass against a
+    // stale snapshot. Only the landlet's own area_m2 matters, never its
+    // levels' cap_consumed_m2 -- the cleanup batch below always deletes
+    // landlet_levels for this landlet as part of the same reassignment, so
+    // by the time any level could count toward anyone's cap, it's gone.
+    //
     // #1705: this guarded UPDATE must run standalone, checked, before the
     // three deletes below -- D1's db.batch can't skip later statements
     // based on an earlier one's row count within the same call (same fact
@@ -10596,13 +10608,40 @@ async function handleLandlets(request, db, route, url) {
           WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
             AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
         )
-    `).bind(newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId).run();
+        AND (
+          SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
+        ) + ? >= (
+          ?
+          + COALESCE((
+              SELECT SUM(area_m2) FROM landlets AS owned
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
+          + COALESCE((
+              SELECT SUM(ll.cap_consumed_m2) FROM landlet_levels ll
+              JOIN landlets AS owned ON owned.landlet_id = ll.landlet_id
+              WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+                AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+            ), 0)
+        )
+    `).bind(
+      newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId,
+      newOwnerBuilderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, existing.area_m2,
+      newOwnerBuilderId, newOwnerBuilderId,
+    ).run();
     if (result.meta.changes === 0) {
       const current = await requireLandlet(db, route[1]);
       if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
         throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
       }
-      throw new HttpError('Target builder already owns a claimed landlet', 409);
+      const oneClaimedConflict = await db.prepare(`
+        SELECT 1 FROM landlets AS owned WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+          AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+      `).bind(newOwnerBuilderId).first();
+      if (oneClaimedConflict) {
+        throw new HttpError('Target builder already owns a claimed landlet', 409);
+      }
+      throw new HttpError("Target builder's land cap can't cover this landlet", 409);
     }
     // #1280: these three deletes match the ones builder-deletion
     // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
@@ -10619,13 +10658,12 @@ async function handleLandlets(request, db, route, url) {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
       }),
     ]);
-    // Non-blocking, like handleLandletLevels' own post-write calls: this
-    // only corrects the new owner's displayed land cap/owned area right
-    // away, instead of leaving it stale until some unrelated later action
-    // happens to trigger a recompute. Whether the transfer itself should be
-    // *blocked* when the inherited landlet would put the new owner over
-    // their own cap is a separate design question (#1281), deliberately
-    // left out of this admin-override path.
+    // Non-blocking, like handleLandletLevels' own post-write calls: the
+    // transfer itself is already blocked when it would put the new owner
+    // over cap (#1281, the guarded UPDATE above) -- this just corrects the
+    // new owner's displayed land cap/owned area right away, instead of
+    // leaving it stale until some unrelated later action happens to
+    // trigger a recompute.
     await recomputeLandCap(db, newOwnerBuilderId);
     // Same post-batch, outside-the-atomic-write shape as auctionWinnerNotifications'
     // own call above (#1122) -- a self-delete race on either recipient must

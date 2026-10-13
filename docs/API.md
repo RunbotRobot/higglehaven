@@ -2968,21 +2968,29 @@ Request body: `{ "ownerBuilderId": "<target builder id>" }`.
 
 The transfer is the same conditional-update idiom `POST .../claim` uses:
 it only lands if the landlet is still `status: "claimed"` and still owned
-by the builder this request read, and the target builder doesn't already
-own a claimed landlet (the same one-claimed-landlet-per-builder invariant
+by the builder this request read, the target builder doesn't already own
+a claimed landlet (the same one-claimed-landlet-per-builder invariant
 `POST .../claim` enforces — an admin can move ownership around, but not
-past this).
+past this), **and** the target builder's land cap can actually cover the
+landlet's area (`409 "Target builder's land cap can't cover this
+landlet"` otherwise). Land cap is a hard rule with no admin override,
+including here (#1281, owner decision 2026-10-13) — the same atomic
+"fold a live land-cap check into the transfer's own `WHERE`" idiom
+`resolveAuction`'s winner-transfer already uses, so two concurrent
+reassignments onto the same new owner can't both pass against a stale
+snapshot. Only the transferred landlet's own area counts against the
+cap, never any `landlet_levels.cap_consumed_m2` it had under the previous
+owner — those levels are always deleted as part of this same write (see
+below), so they never reach the new owner to begin with.
 
 Same as every other ownership-change path (see "Ownership-change cleanup"
 below), this clears the landlet's `placed_instances`, `landlet_versions`,
 and `landlet_levels` as part of the same write, so the new owner starts
 with an empty landlet rather than inheriting the previous owner's build —
 and recomputes the new owner's land cap/owned-area immediately afterward
-(non-blocking — this never rejects the transfer itself, it only keeps
-`GET /api/builders`'s own displayed numbers accurate right away). Whether
-the transfer should instead be *blocked* when the inherited landlet would
-put the new owner over their own land cap — the way a winning auction bid
-atomically is — is an open design question, not yet decided.
+(non-blocking — the transfer itself is already blocked above when it
+would put the new owner over cap; this just keeps `GET /api/builders`'s
+own displayed numbers accurate right away).
 
 Notifies both affected builders once the transfer lands (#1494) — the
 previous owner that the landlet was reassigned away from them, the new
@@ -2995,8 +3003,9 @@ Errors are:
 - `403` without an admin session.
 - `404` when the landlet or the target builder does not exist.
 - `409` when the landlet isn't currently claimed, the target already owns
-  it, the target already owns a different claimed landlet, or the landlet
-  changed concurrently since this request's own read of it.
+  it, the target already owns a different claimed landlet, the target's
+  land cap can't cover the landlet, or the landlet changed concurrently
+  since this request's own read of it.
 
 ### `POST /api/landlets/:landletId/generation-complete`
 

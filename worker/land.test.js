@@ -712,6 +712,62 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
   });
 
+  // #1281 (owner decision, 2026-10-13): "land cap is a hard rule, full
+  // stop -- no admin override, ever, including via manual reassignment."
+  // A fresh builder's default land_cap_m2 is 1000 (migrations/0050) -- a
+  // landlet bigger than that, with the target otherwise owning nothing,
+  // is the simplest way to exceed cap without also tripping the
+  // one-claimed-landlet invariant tested just above.
+  it('rejects reassigning a landlet that would put the target over their own land cap', async () => {
+    const owner = await signupBuilder('reassign-land-cap-owner');
+    const target = await signupBuilder('reassign-land-cap-target');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'reassign-land-cap-source-landlet', name: 'Test reassign-land-cap-source-landlet',
+        areaM2: 2000, status: 'greenbelt',
+      }),
+    }));
+    await api('/landlets/reassign-land-cap-source-landlet/claim', owner.session({ method: 'POST' }));
+
+    const result = await api('/landlets/reassign-land-cap-source-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(409);
+    expect(result.body.error).toMatch(/land cap/i);
+
+    // Nothing actually changed on a rejected attempt.
+    const stillOwner = await api('/landlets/reassign-land-cap-source-landlet');
+    expect(stillOwner.body.landlet.ownerBuilderId).toBe(owner.builderId);
+    const log = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('reassign_landlet_owner', 'reassign-land-cap-source-landlet').first();
+    expect(log).toBeNull();
+  });
+
+  // The reassigned landlet's own cap_consumed_m2 (from vertical construction
+  // under the *previous* owner) must never count against the new owner's
+  // cap check -- the cleanup batch always deletes landlet_levels for this
+  // landlet as part of the same write (see the cleanup tests below), so by
+  // the time anyone could be charged for those levels, they're already gone.
+  it('does not count the previous owner\'s levels on the transferred landlet against the new owner\'s cap', async () => {
+    const owner = await signupBuilder('reassign-land-cap-levels-owner');
+    const target = await signupBuilder('reassign-land-cap-levels-target');
+    await createGreenbeltLandlet('reassign-land-cap-levels-landlet');
+    await api('/landlets/reassign-land-cap-levels-landlet/claim', owner.session({ method: 'POST' }));
+    // Seeded directly rather than via POST .../levels, same reasoning the
+    // cleanup tests above give -- this isn't exercising the level-add gate.
+    await env.DB.prepare(`
+      INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+    `).bind('reassign-land-cap-levels-level', 'reassign-land-cap-levels-landlet', 1, 5000).run();
+
+    const result = await api('/landlets/reassign-land-cap-levels-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
+    }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
+  });
+
   // #1705: the guarded ownership-transfer UPDATE and the build-content
   // cleanup deletes used to be batched together in one db.batch() call --
   // D1 runs every statement in a batch regardless of an earlier one's row
