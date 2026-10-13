@@ -1002,6 +1002,13 @@
 
     let rows = [];
     let nextCursor = null;
+    // #1878: a slower, overlapping loadModelsPage call (e.g. an in-flight
+    // "Load more" overtaken by a fresh "Refresh") could otherwise have its
+    // stale response concat onto -- or overwrite -- whatever `rows` holds
+    // by the time it lands, corrupting the list with duplicate/stale/out-
+    // of-order rows. Same monotonic-token guard admin-action-log.html's
+    // load() (#1857) already uses.
+    let modelsLoadToken = 0;
     // The dry run's own target set is what "Delete now" is allowed to act
     // on -- re-running cleanup for real against a stale dry run could
     // delete something a template started referencing in the meantime
@@ -1055,16 +1062,19 @@
     }
 
     async function loadModelsPage(cursor) {
+      const myLoadToken = ++modelsLoadToken;
       clearErr(errLine);
       const params = new URLSearchParams({ limit: '100' });
       if (cursor) params.set('cursor', cursor);
       try {
         const body = await fetchJson('/api/models?' + params.toString());
+        if (myLoadToken !== modelsLoadToken) return;
         rows = cursor ? rows.concat(body.models) : body.models;
         nextCursor = body.nextCursor;
         loadMoreWrap.hidden = !nextCursor;
         renderTable();
       } catch (error) {
+        if (myLoadToken !== modelsLoadToken) return;
         showErr(errLine, error.message);
       }
     }
