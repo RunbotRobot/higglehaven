@@ -84,12 +84,50 @@ const noMatchIsEmpty = await (async () => {
 })();
 console.log('filtering by a non-existent actionType shows the empty state (actual):', noMatchIsEmpty.trim());
 
+// #1857: load() had no request-ordering guard -- a slower, overlapping
+// request (an earlier filter still in flight) could land after a faster,
+// newer one and silently overwrite the table with stale rows. Delay only
+// the land_cap_grant-filtered request so it's still in flight when a
+// second, non-matching filter is applied and resolves first.
+let delayLandCapGrantRequest = true;
+await page.route('**/api/admin-action-log*', async (route) => {
+  const url = new URL(route.request().url());
+  if (delayLandCapGrantRequest && url.searchParams.get('actionType') === 'land_cap_grant') {
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.fulfill({ response });
+    return;
+  }
+  await route.continue();
+});
+
+await page.fill('input[name="actionType"]', 'land_cap_grant');
+await page.click('#filterBtn');
+await page.waitForTimeout(300);
+await page.fill('input[name="actionType"]', 'this-action-type-does-not-exist');
+await page.click('#filterBtn');
+await page.locator('.empty').waitFor({ timeout: 10000 });
+const emptyRightAfterSecondFilter = (await page.textContent('.empty')).includes('No matching admin actions');
+console.log('empty state shown right after the second (faster) filter (should be true):', emptyRightAfterSecondFilter);
+
+// Wait out the first (delayed) response too, and confirm it didn't land
+// late and resurrect the land_cap_grant row the stale response carries.
+await page.waitForTimeout(2700);
+delayLandCapGrantRequest = false;
+const stillEmptyAfterStaleResponse = await page.locator('.empty').isVisible();
+const staleRowAppeared = await row.isVisible();
+console.log('still shows the empty state after the stale delayed response also lands (should be true, not overwritten):', stillEmptyAfterStaleResponse);
+console.log('the stale land_cap_grant row did not reappear (should be false):', staleRowAppeared);
+
 const pass = anonStatus === 401 &&
   anonSeesSignIn &&
   granted.response.status === 201 &&
   heading === 'higglehaven Admin Action Log' &&
   rowText.includes('land_cap_grant') &&
   rowText.includes(String(grantAmountCents)) &&
+  emptyRightAfterSecondFilter &&
+  stillEmptyAfterStaleResponse &&
+  !staleRowAppeared &&
   filteredRowVisible &&
   noMatchIsEmpty.includes('No matching admin actions') &&
   errors.length === 0;
