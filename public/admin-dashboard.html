@@ -589,6 +589,12 @@
   const worldRotationInput = document.getElementById('worldRotationInput');
   const worldDayCycleInput = document.getElementById('worldDayCycleInput');
   const worldMetadataInput = document.getElementById('worldMetadataInput');
+  // #1927: same monotonic-token guard loadModelsPage/loadRoster/loadRings/
+  // loadCandidates already use -- loadWorld() is called from six independent
+  // sites (Refresh, generateMosaic, generateRing, completeRing, submitBatch,
+  // initial load) that can race, and without it an earlier-sent request's
+  // stale world snapshot can land after and overwrite a fresher one.
+  let worldLoadToken = 0;
 
   function renderWorld(world) {
     const counts = world.landletCounts || {};
@@ -614,11 +620,14 @@
   }
 
   async function loadWorld() {
+    const myLoadToken = ++worldLoadToken;
     clearError();
     try {
       const body = await apiFetch('/api/world');
+      if (myLoadToken !== worldLoadToken) return;
       renderWorld(body.world);
     } catch (error) {
+      if (myLoadToken !== worldLoadToken) return;
       showError(error.message);
     }
   }
