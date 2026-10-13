@@ -2535,6 +2535,51 @@ describe('Worker API', () => {
     expect(second.body.version.versionNumber).toBe(2);
   });
 
+  // #1874: same "a client-supplied idempotency key reused for genuinely
+  // different content must not fabricate a stale success" bug class already
+  // fixed for direct messages (#1750), calendar events (#1751), and catalog
+  // templates (#1758) -- this endpoint's own version never got it.
+  it('mints a fresh version instead of deduping when a reused idempotency key carries different content', async () => {
+    const builder = await signupBuilder('version-idempotency-mismatch-builder');
+    await api('/landlets', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'version-idempotency-mismatch-landlet', name: 'Version idempotency mismatch landlet',
+        areaM2: 1000, status: 'claimed', ownerBuilderId: builder.builderId, center: { x: 5600, y: 1400 },
+      }),
+    }));
+
+    const first = await api('/landlets/version-idempotency-mismatch-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'Alpha', idempotencyKey: 'mismatch-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retriedWithDifferentName = await api('/landlets/version-idempotency-mismatch-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ name: 'Beta', idempotencyKey: 'mismatch-key' }),
+    }));
+    expect(retriedWithDifferentName.response.status).toBe(201);
+    expect(retriedWithDifferentName.body.version.versionId).not.toBe(first.body.version.versionId);
+    expect(retriedWithDifferentName.body.version.name).toBe('Beta');
+
+    // The original row is untouched -- the mismatch minted a new row
+    // rather than overwriting or being confused with the stale one.
+    const unchanged = await api(`/landlets/version-idempotency-mismatch-landlet/versions/${first.body.version.versionId}`);
+    expect(unchanged.body.version.name).toBe('Alpha');
+
+    // Omitting `name` both times is NOT a mismatch -- the DB-side default
+    // ('Version ' || version_number) must be recomputed per-row for the
+    // comparison, not compared against the literal omitted value.
+    const thirdOmitted = await api('/landlets/version-idempotency-mismatch-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'omitted-name-key' }),
+    }));
+    expect(thirdOmitted.response.status).toBe(201);
+    const retriedOmitted = await api('/landlets/version-idempotency-mismatch-landlet/versions', builder.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'omitted-name-key' }),
+    }));
+    expect(retriedOmitted.response.status).toBe(200);
+    expect(retriedOmitted.body.version.versionId).toBe(thirdOmitted.body.version.versionId);
+  });
+
   // #796: neither version-creating write path (this POST, nor the
   // auto-version side effect of PUT .../draft below) had a rate limit at
   // all, unlike every other authenticated per-owner repeatable write in
