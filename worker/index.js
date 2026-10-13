@@ -10357,6 +10357,105 @@ async function handleMe(request, db) {
 // this same shape rather than a new endpoint.
 const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 
+// #1986 (sub-issue of #1983): the `social` section of handleExportData
+// below. Most of these tables genuinely key off builder_id/user_id, but
+// two don't, and this returns the best available approximation rather
+// than silently omitting them:
+// - calendar_events has no author column at all (unlike sign_posts, which
+//   got a real user_id in #1830/migrations/0125) -- only a free-text
+//   author_label stamped from the poster's label at post time (#289). A
+//   label match against this account's CURRENT label is the best signal
+//   available; it misses events posted under a since-changed label and
+//   could, in principle, catch another account that happens to share
+//   today's label with a past poster. Flagged here rather than guessed
+//   past silently -- a real author_id column is the actual fix, tracked
+//   separately from this export feature.
+// - landlet_versions/version_instances have no author column either --
+//   only landlet_id. "Authored by this builder" is approximated as
+//   "versions of landlets this builder currently owns," since landlet
+//   ownership itself can change hands (auction, admin reassignment) and
+//   nothing records who actually created a given version.
+async function exportSocialSection(db, builderId, builderLabel, userId) {
+  const friendships = await db.prepare(`
+    SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const directMessages = await db.prepare(`
+    SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const notifications = await db.prepare(`
+    SELECT * FROM notifications WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  // product_reviews/seller_feedback are both "I am the buyer" joins --
+  // purchase_id is the real FK (#1101/#1123, closing the earlier
+  // spoofable author_label-only design), not a text match. A review/
+  // feedback row whose purchase_id is NULL (created before that FK
+  // existed, or its purchase was later deleted) can't be attributed and
+  // is correctly left out rather than guessed at.
+  const productReviews = await db.prepare(`
+    SELECT r.* FROM product_reviews r JOIN purchases p ON p.purchase_id = r.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY r.created_at ASC
+  `).bind(builderId).all();
+  const sellerFeedback = await db.prepare(`
+    SELECT f.* FROM seller_feedback f JOIN purchases p ON p.purchase_id = f.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY f.created_at ASC
+  `).bind(builderId).all();
+  const signPosts = await db.prepare(`
+    SELECT * FROM sign_posts WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const calendarEvents = await db.prepare(`
+    SELECT * FROM calendar_events WHERE author_label = ? ORDER BY created_at ASC
+  `).bind(builderLabel).all();
+  const savedLayouts = await db.prepare(`
+    SELECT * FROM saved_level_layouts WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  const savedLayoutInstances = savedLayouts.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM saved_layout_instances WHERE saved_layout_id IN (
+      SELECT saved_layout_id FROM saved_level_layouts WHERE builder_id = ?
+    )
+  `).bind(builderId).all();
+  const instancesBySavedLayoutId = new Map();
+  for (const row of savedLayoutInstances.results) {
+    const list = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+    list.push(savedLayoutInstanceFromRow(row));
+    instancesBySavedLayoutId.set(row.saved_layout_id, list);
+  }
+  const landletVersions = await db.prepare(`
+    SELECT v.* FROM landlet_versions v WHERE v.landlet_id IN (
+      SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+    ) ORDER BY v.landlet_id ASC, v.version_number ASC
+  `).bind(builderId).all();
+  const versionInstances = landletVersions.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM version_instances WHERE version_id IN (
+      SELECT v.version_id FROM landlet_versions v WHERE v.landlet_id IN (
+        SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+      )
+    )
+  `).bind(builderId).all();
+  const instancesByVersionId = new Map();
+  for (const row of versionInstances.results) {
+    const list = instancesByVersionId.get(row.version_id) ?? [];
+    list.push(versionInstanceFromRow(row));
+    instancesByVersionId.set(row.version_id, list);
+  }
+  return {
+    friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
+    directMessages: directMessages.results.map(directMessageFromRow),
+    notifications: notifications.results.map(notificationFromRow),
+    productReviews: productReviews.results.map(reviewFromRow),
+    sellerFeedback: sellerFeedback.results.map(sellerFeedbackFromRow),
+    signPosts: signPosts.results.map(signPostFromRow),
+    calendarEvents: calendarEvents.results.map(calendarEventFromRow),
+    savedLevelLayouts: savedLayouts.results.map((row) => {
+      const instances = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+      return { ...savedLayoutFromRow(row), instanceCount: instances.length, instances };
+    }),
+    landletVersions: landletVersions.results.map((row) => {
+      const instances = instancesByVersionId.get(row.version_id) ?? [];
+      return { ...versionFromRow(row), instanceCount: instances.length, instances };
+    }),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -10381,6 +10480,7 @@ async function handleExportData(request, db) {
         processedAt: row.processed_at,
       })),
     },
+    social: builderRow ? await exportSocialSection(db, builderRow.builder_id, builderRow.label, user.user_id) : null,
   });
 }
 
