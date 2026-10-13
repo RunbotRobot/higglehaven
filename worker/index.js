@@ -9597,6 +9597,7 @@ async function handleAuth(request, env, db, route, url, ctx) {
     return handleChangePassword(request, db);
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'export-data') return handleExportData(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
     return handleRequestPasswordReset(request, env, db, ctx);
@@ -10318,6 +10319,43 @@ async function handleChangePassword(request, db) {
 async function handleMe(request, db) {
   const user = await currentUser(request, db);
   return json({ user: user ? userFromRow(user) : null });
+}
+
+// #1984 (sub-issue of #1983, owner-greenlit on #1480): GDPR/CCPA "right to
+// access" companion to #1145's own "right to erasure" -- the requesting
+// account's own data as a single JSON bundle. Read-only, so unlike
+// delete-account/change-password this doesn't need the extra "re-enter
+// your password" bar, just an authenticated session (requireCurrentUser).
+// Response shape has one top-level key per data section -- `profile` here,
+// with `commerce`/`social` sections to be added by later sub-issues onto
+// this same shape rather than a new endpoint.
+const EXPORT_DATA_RATE_LIMIT_MAX = 10;
+
+async function handleExportData(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
+  const builderRow = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  const sellerRow = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+  // Status/timestamps only -- never a raw Didit payload, which is a third
+  // party's data about this account, not the account's own authored content.
+  const diditSessions = await db.prepare(`
+    SELECT session_id, status, created_at, processed_at FROM didit_verification_sessions
+    WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(user.user_id).all();
+  return json({
+    exportedAt: new Date().toISOString(),
+    profile: {
+      account: userFromRow(user),
+      builder: builderRow ? builderFromRow(builderRow) : null,
+      seller: sellerRow ? sellerFromRow(sellerRow) : null,
+      diditVerificationSessions: diditSessions.results.map((row) => ({
+        sessionId: row.session_id,
+        status: row.status,
+        createdAt: row.created_at,
+        processedAt: row.processed_at,
+      })),
+    },
+  });
 }
 
 // #1323: handleResendVerification (the token-issuing side) already
