@@ -178,6 +178,46 @@ describe('Bundles', () => {
     expect(retriedByA.body.bundle.bundleId).toBe(createdByA.body.bundle.bundleId);
   });
 
+  // #1873: the dedup check above only matches on bundle_id -- it never
+  // compared the existing row's own content against the new request.
+  // Save Bundle's prompt()/confirm() pair can legitimately produce a
+  // different `shared` answer on a same-key resubmit after a lost
+  // response (the client's own key, src/api.js's bundleIdempotencyKey,
+  // is deliberately not namespaced by `shared`) -- a resubmit asking to
+  // share must not be silently handed back the stale, unshared row.
+  it('treats a same-key resubmit with different content as a genuinely new bundle', async () => {
+    const builder = await signupBuilder('bundle-idempotency-edited');
+    const key = 'edited-retry-key';
+
+    const first = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), shared: false, idempotencyKey: key }),
+    }));
+    expect(first.response.status).toBe(201);
+    expect(first.body.bundle.shared).toBe(false);
+
+    // Same key, but this resubmit answers "yes" to sharing -- must land
+    // as a real, separate row with shared: true, not the stale
+    // shared: false row handed back as success.
+    const edited = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), shared: true, idempotencyKey: key }),
+    }));
+    expect(edited.response.status).toBe(201);
+    expect(edited.body.bundle.bundleId).not.toBe(first.body.bundle.bundleId);
+    expect(edited.body.bundle.shared).toBe(true);
+
+    const bundleCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM bundles WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(bundleCount.n).toBe(2);
+
+    // The original, unedited content's own key is still honored as a
+    // genuine retry.
+    const unedited = await api('/bundles', builder.session({
+      method: 'POST', body: JSON.stringify({ ...bundleBody(), shared: false, idempotencyKey: key }),
+    }));
+    expect(unedited.response.status).toBe(200);
+    expect(unedited.body.bundle.bundleId).toBe(first.body.bundle.bundleId);
+  });
+
   it('lists only the session builder\'s own bundles by default, defaulting builderId to the session', async () => {
     const owner = await signupBuilder('bundle-list-owner');
     const other = await signupBuilder('bundle-list-other');

@@ -4806,11 +4806,23 @@ async function handleBundles(request, db, route, url) {
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
     const idempotencyKey = bundleIdempotencyKey(builderId, input.idempotencyKey);
+    let bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
+    // #1873: unlike a purchase (pinned to a fixed instance), the Save
+    // Bundle handler's own prompt()/confirm() pair can legitimately
+    // produce a different `shared` answer on a same-key resubmit after a
+    // lost response -- the client's own key is deliberately not
+    // namespaced by `shared` (see bundleIdempotencyKey's callers). Only
+    // honor the dedup hit when the content actually matches; on a
+    // mismatch this is a genuinely new attempt, so mint a fresh id
+    // rather than reusing the idempotency-derived one, which the stale
+    // row already occupies.
     if (idempotencyKey) {
       const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ bundle: bundleFromRow(existing) });
+      if (existing) {
+        if (bundleContentMatches(existing, name, items, shared)) return json({ bundle: bundleFromRow(existing) });
+        bundleId = `bundle-${crypto.randomUUID()}`;
+      }
     }
-    const bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
@@ -4890,6 +4902,14 @@ function validateBundleItems(input) {
     crop: validateCropShape(item.crop),
     scale: validateScale(item.scale),
   }));
+}
+
+// #1873: compares an existing row (raw DB shape) against this request's
+// own name/items/shared, mirroring #1758's templateContentMatches.
+function bundleContentMatches(existingRow, name, items, shared) {
+  return existingRow.name === name
+    && existingRow.items_json === JSON.stringify(items)
+    && Boolean(existingRow.shared) === shared;
 }
 
 function bundleFromRow(row) {
