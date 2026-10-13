@@ -839,6 +839,12 @@
   let candidatesRows = [];
   let candidatesNextCursor = null;
   let editingCandidateId = null;
+  // #1910: a slower, overlapping loadCandidates call (e.g. an in-flight
+  // "Load more" overtaken by a fresh "Refresh") could otherwise have its
+  // stale response concat onto -- or overwrite -- whatever `candidatesRows`
+  // holds by the time it lands. Same monotonic-token guard loadModelsPage
+  // (#1878) and admin-action-log.html's load() (#1857) already use.
+  let candidatesLoadToken = 0;
 
   function renderCandidates() {
     if (!candidatesRows.length) {
@@ -877,6 +883,7 @@
   }
 
   async function loadCandidates(append) {
+    const myLoadToken = ++candidatesLoadToken;
     clearError();
     if (!append) {
       candidatesRows = [];
@@ -890,10 +897,12 @@
     if (append && candidatesNextCursor) params.set('cursor', candidatesNextCursor);
     try {
       const body = await apiFetch('/api/land-candidates?' + params.toString());
+      if (myLoadToken !== candidatesLoadToken) return;
       candidatesRows = append ? candidatesRows.concat(body.candidates) : body.candidates;
       candidatesNextCursor = body.nextCursor;
       renderCandidates();
     } catch (error) {
+      if (myLoadToken !== candidatesLoadToken) return;
       showError(error.message);
       if (!append) candidatesTableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
     }
