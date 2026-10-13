@@ -131,7 +131,7 @@ import {
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
 import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
-import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange } from './attention.js';
+import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange, yawRotatedForward } from './attention.js';
 import { sampleUniformDiskRadiusM } from './spawnLocation.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
@@ -14044,14 +14044,26 @@ function updateShopMovement(now) {
 // using the camera's own, further-back position here let an item sitting
 // just behind the shopper still register as "ahead" of the camera. See
 // attention.js's own attentionDistanceAndDot comment for the full math.
+//
+// #1814: the in-view direction itself must be the avatar's own body facing
+// (shopAvatarFacing), not the camera's look direction — #1592 fixed only
+// the anchor *position*, so a camera-only glance (right-stick free-look
+// without the avatar's body actually turning that way) could still trigger
+// sustained attention, and so the item-handling reach pose, while the
+// avatar's body faced some other way entirely. yawRotatedForward derives
+// the equivalent body-facing-horizontal forward from the camera's own
+// forward — see its own comment for why that's exact, not a guess.
 function updateShopAttention(dt) {
   camera.getWorldDirection(scratchAttentionForward);
+  scratchAttentionForward.z = 0;
+  if (scratchAttentionForward.lengthSq() > 1e-6) scratchAttentionForward.normalize();
+  const bodyForward = yawRotatedForward(scratchAttentionForward, shopYaw, shopAvatarFacing);
   const candidates = [];
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
       const world = mesh.getWorldPosition(scratchAttentionWorldPos);
-      const { distanceM, dot } = attentionDistanceAndDot(shopCameraAnchor, scratchAttentionForward, world);
+      const { distanceM, dot } = attentionDistanceAndDot(shopCameraAnchor, bodyForward, world);
       if (distanceM > SHOP_ATTENTION_RADIUS_M) continue;
       candidates.push({ id: mesh, distanceM, dot });
     }
