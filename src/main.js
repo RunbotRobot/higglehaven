@@ -13443,6 +13443,26 @@ function shopAvatarMaxRadiusM() {
   return shopWorldRadiusM - shopAvatarCollisionHalfM();
 }
 
+// #1840: shopAvatarMaxRadiusM above only ever bounded the avatar group's
+// own origin (its feet/hip pivot), not the mesh hanging off it -- flying
+// tips the whole group into a ~45deg forward lean
+// (SHOP_AVATAR_FLIGHT_PITCH_RAD, around that same origin), so the
+// torso/head reach forward past the clamped pivot by roughly
+// (TORSO_LENGTH + HEAD_RADIUS*2) * sin(lean angle), confirmed by the
+// owner's own report (#1828): "his feet stay inside the dome, only his
+// lean makes the rest of him go outside." #1839 closed the separate gap
+// between the flat clamps and the dome's real curved shape at altitude,
+// but left this one as a follow-up -- a leaning avatar can poke through
+// even at low altitude, where the clamp is still just the flat wall
+// radius. Reserving this extra clearance whenever airborne (the lean
+// target is always this same full angle the instant takeoff starts, see
+// targetAvatarPitch/shopAvatarPitch -- no need to track the eased
+// in-between value here, since even a partial lean reaches less than this
+// worst case, not more) keeps the whole leaning body inside the boundary,
+// not just its pivot.
+const SHOP_AVATAR_FLIGHT_LEAN_CLEARANCE_M =
+  (SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2) * Math.sin(Math.abs(SHOP_AVATAR_FLIGHT_PITCH_RAD));
+
 function clampShopRadius(position, maxRadius) {
   if (shopWorldRadiusM === null) return;
   const distance = Math.hypot(position.x, position.y);
@@ -13825,6 +13845,14 @@ function positionShopCamera() {
     domeBaseWorldZ: shopDomeMesh?.position.z ?? 0,
     domeRadiusM: shopWorldRadiusM,
     domeRiseM: shopDomeRiseM,
+    // #1840: avatarX/avatarY let a test independently reconstruct the
+    // leaning avatar mesh's own farthest world-space point (pivot + lean
+    // reach in the facing direction, from
+    // window.__shopAvatarOrientation's pitchRad/facingRad) and confirm it
+    // stays inside the wall's real radius -- not just the clamped pivot
+    // itself, which avatarRadiusM above alone can verify.
+    avatarX: shopAvatarPosition.x,
+    avatarY: shopAvatarPosition.y,
   };
 }
 
@@ -14028,7 +14056,16 @@ function updateShopMovement(now) {
       );
       shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
-    clampShopRadius(shopAvatarPosition, shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM()));
+    // #1840: the extra lean clearance (reserved whenever airborne) is
+    // folded into baseMaxRadiusM *before* shopMaxRadiusAtWorldZM (#1839)
+    // derives its own clearanceM from it, so the leaning-body margin holds
+    // consistently at every height -- both down at the flat wall (this
+    // issue's own low-altitude case) and up where the dome's real curved
+    // cross-section already narrows the radius on its own (#1839's case).
+    clampShopRadius(
+      shopAvatarPosition,
+      shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM() - (airborne ? SHOP_AVATAR_FLIGHT_LEAN_CLEARANCE_M : 0)),
+    );
   }
 
   // #1588: with the setting on, and only while the shopper isn't actively
