@@ -3549,6 +3549,53 @@
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
+      /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
+         tapped product, same modal shell/reasoning as #sign-posts-modal
+         above. Shown alongside #shop-product-info for now — the pill is
+         still removed separately, in #1813, once the later sub-issues in
+         that same tracking issue land the buy/review actions this modal
+         doesn't have yet. */
+      #shop-product-preview-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #shop-product-preview-modal.visible {
+        display: flex;
+      }
+      #shop-product-preview-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* Same sizing/background idiom as .seller-preview-canvas (Sell mode's
+         own on-demand product preview) — a fixed height rather than an
+         aspect-ratio box, since the modal's own max-width already bounds
+         the other dimension. */
+      #shop-product-preview-canvas {
+        width: 100%;
+        height: 220px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.06);
+        touch-action: none;
+      }
+      #shop-product-preview-info {
+        font-size: 14px;
+        color: var(--pill-text);
+      }
       /* #1150's "My Lands" list — same shell/reasoning as #calendar-events-modal
          and its rules just above, opened from the account-menu gear icon's
          own panel rather than a community sign/calendar flag. */
@@ -4336,6 +4383,13 @@
         <div id="calendar-events-list"></div>
         <div id="calendar-events-empty">No events on this calendar yet.</div>
         <button id="calendar-events-unflag-btn" type="button">Remove Community Calendar</button>
+      </div>
+    </div>
+    <div id="shop-product-preview-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="shop-product-preview-modal-content">
+        <button id="shop-product-preview-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <canvas id="shop-product-preview-canvas"></canvas>
+        <div id="shop-product-preview-info"></div>
       </div>
     </div>
     <div id="settings-modal" role="dialog" aria-modal="true" tabindex="-1">
