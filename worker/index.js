@@ -13858,6 +13858,19 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
 // needed updating regardless (see their own call sites), and appending
 // at the end leaves every shorter positional call (every direct test in
 // worker/avatar-ownership.test.js included) completely unaffected.
+// #1903: compares an existing row (raw DB shape) against this request's own
+// derived amounts and template, mirroring #1873's bundleContentMatches.
+// instanceId/buyerBuilderId are deliberately excluded: they're already
+// baked into the idempotency key's own namespace (see
+// purchaseIdempotencyKey), so two rows reaching this comparison under the
+// same key already share them.
+function purchaseContentMatches(existingRow, templateId, amounts) {
+  return existingRow.template_id === templateId
+    && existingRow.quantity === amounts.quantity
+    && existingRow.buyer_label === amounts.buyerLabel
+    && existingRow.total_cents === amounts.totalCents;
+}
+
 export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
@@ -13870,11 +13883,24 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // path has no Stripe-issued id to dedupe against. idempotencyKey is only
   // ever undefined/null here for a malformed or missing client key
   // (purchaseIdempotencyKey's own "degrades to no protection" behavior).
+  //
+  // #1903: unlike handlePurchaseFinalize's own dedup (keyed off Stripe's
+  // payment_intent_id, which is minted once per checkout session and can
+  // never legitimately disagree with itself on a retry), this simulated
+  // path's key is client-minted and cached in localStorage for up to 30
+  // minutes (see PURCHASE_IDEMPOTENCY_TTL_MS) -- a resubmit of the same key
+  // after a lost response can carry a genuinely different quantity. Only
+  // honor the dedup hit when the content actually matches; on a mismatch
+  // this is a new attempt, so mint a fresh id rather than reusing the
+  // idempotency-derived one, which the stale row already occupies.
+  let purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   if (idempotencyKey) {
     const existing = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(idempotencyKey).first();
-    if (existing) return json({ purchase: purchaseFromRow(existing) });
+    if (existing) {
+      if (purchaseContentMatches(existing, template.template_id, amounts)) return json({ purchase: purchaseFromRow(existing) });
+      purchaseId = `purchase-${crypto.randomUUID()}`;
+    }
   }
-  const purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   // #1717: landlet.owner_builder_id was read by the caller before several
   // more awaited round-trips ran (the seller/Stripe lookup, this function's
   // own idempotency check) — the same staleness risk buyerBuilderId already
