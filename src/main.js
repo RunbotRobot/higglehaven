@@ -4795,7 +4795,7 @@ function renderSellerList() {
         if (err.message?.includes('referenced by a saved layout')) {
           rowStatus.textContent = "Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.";
         } else if (err.message?.includes("referenced by a landlet's version history")) {
-          rowStatus.textContent = "Used in a landlet's past published version — it can't be deleted while that version history exists.";
+          rowStatus.textContent = "Used in a lándlet's past published version — it can't be deleted while that version history exists.";
         } else if (err.message?.includes('still in use')) {
           rowStatus.textContent = 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.';
         } else {
@@ -6432,7 +6432,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Reset your builder profile? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
+      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
     },
     onDeleted: () => { builderId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
@@ -6472,7 +6472,7 @@ function renderBuildSettingsSection() {
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Enter Build mode on a claimed landlet to publish or manage versions.';
+    note.textContent = 'Enter Build mode on a claimed lándlet to publish or manage versions.';
     settingsSectionEl.appendChild(note);
     return;
   }
@@ -7237,12 +7237,12 @@ async function renderAuctionSection() {
       // one owned landlet" is no longer a safe assumption (#249).
       owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
     } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your landlets.';
+      startStatus.textContent = err.message || 'Could not check your lándlets.';
       startStatus.classList.add('error');
       return;
     }
     if (owned.length === 0) {
-      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      startStatus.textContent = 'Claim a lándlet first to auction it off.';
       return;
     }
 
@@ -7259,7 +7259,7 @@ async function renderAuctionSection() {
       const pickerRow = document.createElement('div');
       pickerRow.className = 'landlet-picker';
       const pickerLabel = document.createElement('label');
-      pickerLabel.textContent = 'Landlet';
+      pickerLabel.textContent = 'Lándlet';
       const picker = document.createElement('select');
       for (const landlet of owned) {
         const option = document.createElement('option');
@@ -17319,7 +17319,7 @@ async function loadLandletMap(resolve) {
   // the brief window before the first automatic growth cycle runs.
   claimStatusEl.textContent = anyAvailable
     ? ''
-    : 'No landlets are ready to claim yet — check back again shortly.';
+    : 'No lándlets are ready to claim yet — check back again shortly.';
 }
 
 async function claimSelectedLandlet(landlet, resolve) {
