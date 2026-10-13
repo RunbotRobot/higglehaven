@@ -490,6 +490,48 @@ every single page load, regardless of whether the test has anything to do
 with auth. (This bit us for real — see this section's own Testing note.)
 Returns `{ "user": { ... } }` once actually logged in.
 
+### `GET /api/auth/export-data`
+
+Issue #1984 (sub-issue of #1983's "[Tracking] Build a user-data-export"
+issue, the feature itself owner-greenlit on #1480) — the GDPR/CCPA "right
+to access" companion to `delete-account`'s own "right to erasure." Returns
+the requesting account's own data as a single JSON bundle:
+
+```json
+{
+  "exportedAt": "2026-10-13T22:00:00.000Z",
+  "profile": {
+    "account": { "userId": "...", "email": "...", "username": "...", "...": "..." },
+    "builder": { "builderId": "...", "label": "...", "...": "..." },
+    "seller": null,
+    "diditVerificationSessions": []
+  }
+}
+```
+
+Session-gated via the plain `requireCurrentUser` bar (`401` without one) —
+unlike `delete-account`/`change-password`, this is read-only, so it doesn't
+need the extra "re-enter your password" step those destructive/sensitive
+actions require. Rate-limited per account (10 attempts per 15 minutes).
+
+`profile.account` reuses `userFromRow` — the same sanitized shape
+`GET /auth/me` returns, which already excludes `password_hash`.
+`profile.builder`/`profile.seller` reuse `builderFromRow`/`sellerFromRow`
+(`null` for `seller` if the account never created one — selling stays
+opt-in, see "Sellers" below). `profile.diditVerificationSessions` lists
+every ID-verification session this account started (`sessionId`, `status`,
+`createdAt`, `processedAt`) — status/timestamps only, deliberately never a
+raw Didit payload, since that's a third party's data about the account,
+not the account's own authored content.
+
+The response shape has one top-level key per data section — `profile`
+here. Later sub-issues of #1983 add their own top-level keys
+(`commerce`, `social`) to this same endpoint's response rather than
+introducing separate endpoints, and a "Download my data" Settings UI
+(#1987) wires a browser download up to whatever sections exist once
+built. As of this endpoint's initial ship, only `profile` exists — the
+commerce/economy and social/content sections are still open sub-issues.
+
 ### `POST /api/auth/verify-email`
 
 ```json
@@ -616,7 +658,11 @@ rate-limits (6th attempt is `429`), and the full happy path — the
 session making the change stays logged in while a second session for the
 same account is signed out, the old password stops working, and the new
 one logs in. `worker/account-deletion.test.js` (#1146) is the equivalent
-file for `delete-account`.
+file for `delete-account`. `worker/export-data.test.js` (#1984) covers
+`export-data`: requires a session, the account/builder/seller/didit
+sections populate correctly (including the no-seller-yet and
+seller-exists cases), never leaks a raw Didit payload, and rate-limits
+(11th attempt is `429`).
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
