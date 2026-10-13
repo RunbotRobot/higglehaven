@@ -53,6 +53,52 @@ await page.locator('#adminsList').filter({ hasText: '@' }).waitFor({ timeout: 10
 const adminsListText = await page.textContent('#adminsList');
 console.log('admins list shows at least the current admin session (actual):', adminsListText.trim());
 
+// #1929: loadAdmins() had no request-ordering guard -- a slower,
+// overlapping call (e.g. a manual Refresh still in flight) could land
+// after a faster, newer one (grantAdminBtn's own success-path reload) and
+// silently overwrite the list with its own stale, pre-grant snapshot.
+// Same delayed-route technique as admin-dashboard-page.test.mjs's own
+// #1877 roster regression test: capture the Refresh click's real response
+// (sent before the grant, so it's genuinely stale) and deliver it late,
+// after the grant's own fast reload has already landed.
+let delayNextAdminsGet = false;
+await page.route('**/api/auth/admins', async (route) => {
+  if (delayNextAdminsGet) {
+    delayNextAdminsGet = false;
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.fulfill({ response });
+    return;
+  }
+  await route.continue();
+});
+
+const raceGrantEmail = `e2e-admins-race-${crypto.randomUUID()}@e2e.test`;
+await fetch(`${BASE_URL}/api/auth/signup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    email: raceGrantEmail, password: 'e2e-admins-race-password-123',
+    username: `e2e-admins-race-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true,
+  }),
+});
+
+delayNextAdminsGet = true;
+await page.click('#refreshAdminsBtn'); // triggers the delayed, stale call
+await page.waitForTimeout(300); // let it actually start before granting
+await page.fill('#grantAdminEmail', raceGrantEmail);
+await page.click('#grantAdminBtn'); // triggers a second, undelayed call
+await page.locator('#adminsList', { hasText: raceGrantEmail }).waitFor({ timeout: 10000 });
+const raceGrantedAdminVisibleBeforeStaleResponse = await page.locator('#adminsList', { hasText: raceGrantEmail }).isVisible();
+console.log('granting lands before the delayed Refresh call resolves, so the list already shows it (should be true):', raceGrantedAdminVisibleBeforeStaleResponse);
+
+// Wait out the delayed Refresh response too, and confirm it didn't land
+// late and silently revert the list to its own stale (pre-grant) snapshot.
+await page.waitForTimeout(2700);
+const raceGrantedAdminStillVisibleAfterStaleResponse = await page.locator('#adminsList', { hasText: raceGrantEmail }).isVisible();
+console.log('newly granted admin still shown after the stale delayed Refresh response also lands (should be true, not overwritten):', raceGrantedAdminStillVisibleAfterStaleResponse);
+await page.unroute('**/api/auth/admins');
+
 // Owner, Control Room: the header used to read "500 tasks total" forever
 // once the board passed 500 rows, since it displayed tasks.length off the
 // same LIMIT-500 result set the page renders from rather than a real,
@@ -608,5 +654,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   doneTaskStillVisibleAfterDelay &&
   firstRepliesRaceReplyStillVisible &&
   secondRepliesRaceReplyStillVisible &&
+  raceGrantedAdminVisibleBeforeStaleResponse &&
+  raceGrantedAdminStillVisibleAfterStaleResponse &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
+await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room, loadAdmins() survives a stale overlapping reload (#1929)', errors });
