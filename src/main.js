@@ -8151,6 +8151,18 @@ function endMeasureMarkerDrag() {
 window.addEventListener('pointerup', endMeasureMarkerDrag);
 window.addEventListener('pointercancel', endMeasureMarkerDrag);
 
+// #1894: lets an e2e test force the exact "mid-drag, interrupted before
+// pointerup" state exitMeasureMode's own defensive cleanup guards against,
+// without needing to raycast a real hit on a marker's 3D hitbox (the
+// position hitTestMeasureMarkerAt needs is impractical to target reliably
+// from a test) -- same reasoning as window.__testDragGroupMoveZ and this
+// file's other window.__test* hooks elsewhere.
+window.__testStartMeasureMarkerDrag = () => {
+  draggingMeasureMarker = 'A';
+  controls.enableRotate = false;
+};
+window.__testControlsEnableRotate = () => controls.enableRotate;
+
 // Multi-Select and Move/Rotate are sibling tools that can't both be active
 // (see updateSelectionUI's multiSelectMode branch) — pressing either gizmo
 // button while multi-select is on exits multi-select first, without
@@ -8175,11 +8187,15 @@ function exitMeasureMode() {
   clearMeasurement();
   // Defensive, not expected in normal single-pointer use (releasing a drag
   // always fires pointerup first, which already restores this via
-  // endMeasureMarkerDrag) — but leaving controls disabled if this were
-  // ever reached mid-drag would strand the camera with no way to move it.
+  // endMeasureMarkerDrag) — but leaving controls.enableRotate disabled if
+  // this were ever reached mid-drag would strand one-finger camera rotate
+  // with nothing left to re-enable it (#1894: this used to reset
+  // controls.enabled, a stale leftover from the pre-#1593 approach the drag
+  // handler itself no longer uses -- dragging only ever touches enableRotate,
+  // per endMeasureMarkerDrag's own restore just above).
   if (draggingMeasureMarker) {
     draggingMeasureMarker = null;
-    controls.enabled = true;
+    controls.enableRotate = true;
   }
   updateSelectionUI();
 }
