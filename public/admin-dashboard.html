@@ -506,6 +506,7 @@
       alert('Ring generated: ' + body.candidates.length + ' candidates (' + body.innerRadiusM + 'm – ' + body.outerRadiusM + 'm).');
       loadRings();
       loadCandidates();
+      loadWorld();
     } catch (error) {
       showError(error.message);
     }
@@ -595,6 +596,7 @@
       const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId) + '/generation-complete', { method: 'POST' });
       alert('Ring ' + ringId + ' marked complete: ' + body.landlets.length + ' landlet(s) completed.');
       loadRings();
+      loadWorld();
     } catch (error) {
       // A 409 here ("All ring candidates must be materialized...") is a
       // normal, expected state while the ring is still generating, not a bug.
@@ -755,6 +757,7 @@
       alert('Batch created: ' + body.candidates.length + ' candidate(s), ' + body.landlets.length + ' materialized immediately.');
       document.getElementById('batchInput').value = '';
       loadCandidates();
+      loadWorld();
     } catch (error) {
       // Overlap-against-existing-or-each-other 409s are the server's own
       // atomic validation (the whole batch rolls back) -- surfaced as-is.

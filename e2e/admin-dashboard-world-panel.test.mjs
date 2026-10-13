@@ -97,7 +97,14 @@ await page.fill('#ringCountInput', '6');
 // world radius) would then overlap those pending mosaic candidates and
 // 409. An explicit, generous innerRadiusM clears the whole mosaic.
 await page.fill('#ringInnerRadiusInput', '1000');
-await page.click('#ringGenerateBtn');
+// #1865: generateRing() should refresh the World settings stats itself
+// (like generateMosaic() already does), not leave them stale until the
+// separate World "Refresh" button is clicked.
+const [ringWorldRefresh] = await Promise.all([
+  page.waitForResponse((resp) => resp.url().endsWith('/api/world') && resp.request().method() === 'GET', { timeout: 15000 }).catch(() => null),
+  page.click('#ringGenerateBtn'),
+]);
+console.log('generating a ring refreshes World settings stats on its own (should be true):', !!ringWorldRefresh);
 await page.click('#ringsRefreshBtn');
 await page.waitForSelector(`#ringsTableWrap td.mono:has-text("${ringPrefix}")`, { timeout: 15000 }).catch(() => {});
 const ringRow = page.locator('#ringsTableWrap tr', { has: page.locator('td.mono', { hasText: ringPrefix }) });
@@ -123,7 +130,13 @@ const farCandidateName = `E2E Far Candidate ${crypto.randomUUID().slice(0, 8)}`;
 await page.fill('#batchInput', JSON.stringify([
   { name: farCandidateName, areaM2: 1000, center: { x: 50000, y: 0 } },
 ]));
-await page.click('#batchSubmitBtn');
+// #1865: submitBatch() should refresh World settings stats too, same
+// reasoning as the ring-generate check above.
+const [batchWorldRefresh] = await Promise.all([
+  page.waitForResponse((resp) => resp.url().endsWith('/api/world') && resp.request().method() === 'GET', { timeout: 15000 }).catch(() => null),
+  page.click('#batchSubmitBtn'),
+]);
+console.log('submitting a batch refreshes World settings stats on its own (should be true):', !!batchWorldRefresh);
 await page.waitForSelector(`#candidatesTableWrap:has-text("${farCandidateName}")`, { timeout: 15000 }).catch(() => {});
 const farCandidateRow = page.locator('#candidatesTableWrap tr', { has: page.locator('td', { hasText: farCandidateName }) });
 const farCandidateVisible = await farCandidateRow.isVisible();
@@ -155,14 +168,16 @@ const pass = worldPanelVisible &&
   dayCycleAfterSave === newDayCycle &&
   expandOutcomeSurfaced &&
   mosaicCandidateVisible &&
+  !!ringWorldRefresh &&
   ringRowVisible &&
   ringDetailShowsLifecycleResult &&
   farCandidateVisible &&
+  !!batchWorldRefresh &&
   renamedCandidateVisible &&
   deletedCandidateGone &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard world & land-candidates panel (#1821): world settings view/edit, generate mosaic/ring, ring details, and candidate browse/edit/delete all work end to end',
+  label: 'Admin Dashboard world & land-candidates panel (#1821): world settings view/edit, generate mosaic/ring (incl. #1865\'s auto-refresh), ring details, and candidate browse/edit/delete all work end to end',
   errors,
 });
