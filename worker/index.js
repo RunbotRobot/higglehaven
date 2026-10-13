@@ -2443,7 +2443,16 @@ async function handleProductReviews(request, db, route) {
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
     const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (template?.seller_id && await sellerExists(db, template.seller_id)) {
+    // #1712: an admin can remove any review outright (harassment, doxxing,
+    // other policy violations) regardless of whether the template's own
+    // seller is reachable or ever acts on it -- checked first, via the
+    // non-throwing currentUser lookup, since an admin isn't necessarily
+    // that seller and shouldn't be forced through the ownership check below.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `product-review-delete:${admin.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+    } else if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
       // #990: unlike the anonymous/orphaned-template branch below (#564),
@@ -2456,6 +2465,13 @@ async function handleProductReviews(request, db, route) {
       await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
     await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+    // `admin` is only set on the admin-override branch above; an ordinary
+    // seller-initiated (or anonymous orphaned-template) delete logs nothing
+    // here, same convention as handlePurchaseRefund's/handleMarkShipped's
+    // own admin-override logging.
+    if (admin) {
+      await adminActionLogStatement(db, admin.user_id, 'delete_review_override', 'product_review', reviewId).run();
+    }
     return json({ deleted: true });
   }
 
