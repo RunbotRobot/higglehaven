@@ -13429,6 +13429,21 @@ function shopFlightSpeedMultiplier(altitudeM) {
 // tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
 const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
 const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
+// #1815: both owner-supplied PNGs bake in their own circular card/ring
+// backdrop (a separate, smaller circle than #shop-fly-btn's own 56x56
+// clip), which read as a "ring within a ring" / "hole in the ozone layer"
+// artifact. Zooming each icon in via a CSS transform (clipped back down to
+// the button's own circle by its new `overflow: hidden`, see index.html)
+// crops that inner ring out of view entirely, without touching the source
+// artwork. transform-origin doubles as the owner's requested per-icon
+// nudge: scaling pushes content *away* from the fixed origin point, so an
+// origin offset toward one corner shifts the bird toward the opposite
+// corner. Tuned directly against screenshots of the real rendered button,
+// not derived analytically — a quick visual check after any future artwork
+// swap is cheap insurance that these still land right.
+const SHOP_FLY_BTN_ICON_ZOOM = 1.6;
+const SHOP_FLY_BTN_ICON_STANDING_ORIGIN = '38% 62%'; // standing bird: shift right + up
+const SHOP_FLY_BTN_ICON_FLYING_ORIGIN = '60% 40%'; // in-flight bird: shift down + left
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
@@ -13436,6 +13451,8 @@ function setShopFlyBtnFlying(flying) {
   // state — a standing bird (press to take off) while grounded, a flying
   // bird (press to land) while flying, i.e. the inverse of `flying`.
   shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
+  shopFlyBtnIcon.style.transformOrigin = flying ? SHOP_FLY_BTN_ICON_STANDING_ORIGIN : SHOP_FLY_BTN_ICON_FLYING_ORIGIN;
+  shopFlyBtnIcon.style.transform = `scale(${SHOP_FLY_BTN_ICON_ZOOM})`;
 }
 
 // Toggling mid-transition (takingOff/landing) is ignored rather than
