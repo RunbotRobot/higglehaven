@@ -659,6 +659,13 @@
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
+        /* #1815: the icon itself is now zoomed in (see its own JS-set
+           transform/transform-origin, set per-icon in setShopFlyBtnFlying)
+           to crop out the owner-supplied artwork's own baked-in circular
+           backdrop -- without this, that zoom would spill the icon's
+           rendered box past this button's own edges instead of staying
+           clipped to it. */
+        overflow: hidden;
       }
       #shop-fly-btn-icon {
         display: block;
