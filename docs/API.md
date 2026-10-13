@@ -2614,6 +2614,10 @@ create overlapping rings after passing their application-level preflight.
 
 ### `GET /api/land-candidate-rings`
 
+Requires a session logged in as an admin (`403` otherwise; `401` with no
+session at all) — world-generation tooling, not public data, same as every
+other `/api/land-candidates*`/`/api/land-candidate-rings*` endpoint (#1867).
+
 Lists generated ring reservations in stable creation order. `limit` accepts 1
 to 100 and defaults to 100. Follow the opaque `nextCursor` to fetch subsequent
 pages without changing the page size requirements.
@@ -2629,6 +2633,9 @@ reservation rather than repeating its potentially large candidate collection;
 use the land-candidate listing to inspect individual plots.
 
 ### `GET /api/land-candidate-rings/:ringId`
+
+Requires a session logged in as an admin (`403` otherwise; `401` with no
+session at all), checked before the lookup — same as the listing above.
 
 Fetches one generated ring reservation or returns `404`. The detail response
 also includes `lifecycle` counts for stored, pending, and materialized
@@ -2664,6 +2671,12 @@ its complete landlet array.
 
 ### `GET /api/land-candidates`
 
+Requires a session logged in as an admin (`403` otherwise; `401` with no
+session at all) — same as every other `/api/land-candidates*`/
+`/api/land-candidate-rings*` endpoint (#1867). Pre-release land data (a
+candidate's exact polygon/center/area/class/metadata before it's released
+into the world as a real landlet) is not public.
+
 Lists candidates in stable creation order. `materializedAt` is null while a
 candidate is waiting and is set once its landlet begins generating.
 
@@ -2687,6 +2700,9 @@ the same `state` and `ringId` filters while following a cursor.
 ```
 
 ### `GET /api/land-candidates/:landletId`
+
+Requires a session logged in as an admin (`403` otherwise; `401` with no
+session at all), checked before the lookup — same as the listing above.
 
 Fetches one candidate or returns `404`.
 
