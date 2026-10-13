@@ -21,4 +21,10 @@ ALTER TABLE catalog_templates ADD COLUMN is_test_model INTEGER NOT NULL DEFAULT 
 -- product listing, per the owner's own statement -- no WHERE needed since
 -- every pre-existing row qualifies. Only rows created after this migration
 -- (real listings going forward) default to 0.
-UPDATE catalog_templates SET is_test_model = 1;
+--
+-- Owner correction (direct conversation, 2026-10-13, after this issue's own
+-- original filing): a test model must never carry a real price -- forced
+-- to NULL here defensively alongside the flag itself, though every
+-- pre-existing row already has one (no seed migration ever set a real
+-- price_cents on these rows).
+UPDATE catalog_templates SET is_test_model = 1, price_cents = NULL;

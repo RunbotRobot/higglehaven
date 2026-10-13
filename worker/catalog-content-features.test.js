@@ -1170,36 +1170,38 @@ describe('Test-model designation (#1946)', () => {
     expect(row.is_test_model).toBe(0);
   });
 
-  it('is excluded from GET /api/catalog for an anonymous or non-admin caller, but included for an admin session', async () => {
+  // Tried hiding these rows from GET /api/catalog for a non-admin caller
+  // in an earlier version of this change -- reverted after CI caught it
+  // breaking ordinary (non-admin) Build mode's own "Add Item" picker,
+  // which fetches this exact same endpoint with no separate code path:
+  // every pre-existing template (including core, non-commerce feature
+  // fixtures like community-sign/calendar-event/flooring templates) got
+  // backfilled to isTestModel, so every ordinary builder lost Build-mode
+  // access to them. These tests lock in the corrected, non-filtering
+  // behavior so it doesn't regress back.
+  it('does not exclude a test-model row from GET /api/catalog for any caller', async () => {
     await createTemplate('test-model-list-visibility');
     await markAsTestModel('test-model-list-visibility');
 
     const anonymous = await api('/catalog?limit=100');
     expect(anonymous.response.status).toBe(200);
-    expect(anonymous.body.templates.map((t) => t.templateId)).not.toContain('test-model-list-visibility');
+    expect(anonymous.body.templates.map((t) => t.templateId)).toContain('test-model-list-visibility');
 
     const builder = await signupBuilder('test-model-list-visibility-builder');
     const nonAdmin = await api('/catalog?limit=100', builder.session());
     expect(nonAdmin.response.status).toBe(200);
-    expect(nonAdmin.body.templates.map((t) => t.templateId)).not.toContain('test-model-list-visibility');
-
-    const admin = await api('/catalog?limit=100', adminSession());
-    expect(admin.response.status).toBe(200);
-    const adminHit = admin.body.templates.find((t) => t.templateId === 'test-model-list-visibility');
-    expect(adminHit).toBeTruthy();
-    expect(adminHit.isTestModel).toBe(true);
+    const nonAdminHit = nonAdmin.body.templates.find((t) => t.templateId === 'test-model-list-visibility');
+    expect(nonAdminHit).toBeTruthy();
+    expect(nonAdminHit.isTestModel).toBe(true);
   });
 
-  it('404s GET /api/catalog/:templateId for an anonymous caller, but succeeds for an admin session', async () => {
+  it('does not 404 GET /api/catalog/:templateId for a test-model row for any caller', async () => {
     await createTemplate('test-model-single-fetch-visibility');
     await markAsTestModel('test-model-single-fetch-visibility');
 
     const anonymous = await api('/catalog/test-model-single-fetch-visibility');
-    expect(anonymous.response.status).toBe(404);
-
-    const admin = await api('/catalog/test-model-single-fetch-visibility', adminSession());
-    expect(admin.response.status).toBe(200);
-    expect(admin.body.template.isTestModel).toBe(true);
+    expect(anonymous.response.status).toBe(200);
+    expect(anonymous.body.template.isTestModel).toBe(true);
   });
 
   it('rejects purchasing an instance backed by a test-model template', async () => {

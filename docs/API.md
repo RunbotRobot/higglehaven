@@ -1694,9 +1694,11 @@ above (that one only means "no real category was ever set"; it's an
 ordinary, freely seller-settable value). `isTestModel` is never settable
 through `POST`/`PUT`/`PATCH /api/catalog` or its batch siblings — like
 `users.is_admin`, it has no ordinary self-service write path. Every
-pre-existing row as of migration `0125` was backfilled to `true`; any row
-created afterward defaults to `false`. See `GET /api/catalog` below for
-the visibility rule this drives.
+pre-existing row as of migration `0126` was backfilled to `true`; any row
+created afterward defaults to `false`. It does **not** affect `GET
+/api/catalog`'s own visibility — see that endpoint's own note on why an
+attempt to hide these rows there was tried and reverted — only
+purchasability (see `POST /api/instances/:instanceId/purchase` below).
 
 ### `GET /api/catalog`
 
@@ -1729,13 +1731,20 @@ The response includes `nextCursor`, which is `null` after the final page. Keep
 the same filters and `sort` mode while following a cursor; cursors are specific
 to their sort mode.
 
-A row with `isTestModel: true` (#1946) is excluded from every result here
-unless the caller's own session belongs to an admin account — the same
-bypass an admin session gets on every other `requireAdmin`-gated surface in
-this file, not a separate query parameter. An unauthenticated or non-admin
-caller never sees these rows at all, including Build mode's own "Add Item"
-picker (which fetches this same endpoint) for any builder other than the
-admin account itself.
+A row with `isTestModel: true` (#1946) is listed here exactly like any
+other row — this endpoint does not filter by it. An earlier version of
+this endpoint hid those rows from a non-admin caller, but that broke
+ordinary (non-admin) Build mode's own "Add Item" picker (which fetches
+this same endpoint via `fetchCatalog()`, with no separate code path):
+every pre-existing template — including core, non-commerce feature
+fixtures like the community-sign/calendar-event/flooring/basic-furniture
+templates, none of which were ever real for-sale products — got
+backfilled to `isTestModel: true`, so every ordinary builder lost access
+to them in Build mode. There is no separate real shopper-facing
+marketplace browse surface to filter instead (Shop mode walks
+`placed_instances`, it never lists `catalog_templates` directly), so
+`isTestModel` is purchasability-only for now — see `POST
+/api/instances/:instanceId/purchase` below.
 
 Response:
 
@@ -1771,11 +1780,8 @@ Response:
 
 ### `GET /api/catalog/:templateId`
 
-Fetches one catalog template. A row with `isTestModel: true` (#1946) 404s
-the same as a nonexistent template unless the caller's session belongs to
-an admin account, matching the list endpoint's own visibility rule above —
-so a direct fetch by id can't be used to confirm a hidden test-model row
-exists.
+Fetches one catalog template. No `isTestModel` visibility rule here
+either, matching the list endpoint above.
 
 ### `POST /api/catalog/batch`
 ### `PUT /api/catalog/batch`

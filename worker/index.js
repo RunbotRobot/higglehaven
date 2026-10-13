@@ -1968,18 +1968,21 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(`%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
-    // #1946: hidden from real shopper-facing browse/search by default --
-    // but Build mode's own "Add Item" picker (buildCatalogPickerButtons in
-    // src/main.js) fetches this exact same unfiltered endpoint via
-    // fetchCatalog(), with no separate code path, so an admin session
-    // (the owner's own account) still sees test models here, same bypass
-    // shape as every other requireAdmin-gated surface in this file.
-    // currentUser (not requireAdmin) -- an anonymous/non-admin caller
-    // still gets a normal, just-filtered response, not a 401/403.
-    const requester = await currentUser(request, db);
-    if (!requester || !requester.is_admin) {
-      conditions.push('is_test_model = 0');
-    }
+    // #1946: is_test_model deliberately does NOT filter this list -- see
+    // that migration's own comment. This is the one endpoint Build mode's
+    // own "Add Item" picker (buildCatalogPickerButtons/fetchCatalog) uses
+    // for every ordinary builder, not just the owner's own account, and
+    // there's no separate real shopper-facing marketplace browse surface
+    // to filter instead (confirmed: Shop mode walks placed_instances, it
+    // never lists catalog_templates directly). Hiding here was tried and
+    // reverted after CI caught it breaking ordinary (non-admin) Build-mode
+    // placement of every pre-existing system/feature template (community
+    // signs, calendar events, flooring, basic furniture) that got
+    // backfilled to is_test_model the same as everything else -- those
+    // were never "real for-sale products" to begin with (no price, no
+    // real seller), so losing Build-mode access to them is a functional
+    // regression, not the intended effect. See handleInstancePurchase's
+    // own guard below for what is_test_model actually gates today.
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
       // below and migrations/0092's own idx_catalog_templates_name_nocase
@@ -2020,16 +2023,9 @@ async function handleCatalog(request, db, route, url, models, env) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
-    if (!row) return json({ error: 'Catalog template not found' }, 404);
-    // #1946: same admin-only visibility as the list endpoint above -- a
-    // non-admin direct fetch by id gets the identical 404 a nonexistent
-    // template would, rather than leaking that a hidden test-model row
-    // exists.
-    if (row.is_test_model) {
-      const requester = await currentUser(request, db);
-      if (!requester || !requester.is_admin) return json({ error: 'Catalog template not found' }, 404);
-    }
-    return json({ template: templateFromRow(row) });
+    // #1946: no admin-only visibility here either, same reasoning as the
+    // list endpoint above.
+    return row ? json({ template: templateFromRow(row) }) : json({ error: 'Catalog template not found' }, 404);
   }
 
   // #327: stores the flat thumbnail the client rendered from this
