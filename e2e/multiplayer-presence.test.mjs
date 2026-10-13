@@ -43,10 +43,23 @@ const errors = [...sessionA.errors, ...sessionB.errors];
 const pageA = sessionA.page;
 const pageB = sessionB.page;
 
+// #1881: under concurrent-shard CI load, fetch() inside page.evaluate can
+// throw "TypeError: Failed to fetch" outright (not an HTTP error status) --
+// the local wrangler dev server dropping/refusing a connection, not a
+// product bug. One retry after a short pause absorbs that transient
+// network-level hiccup without masking a real, repeatable failure (a
+// second genuine failure still throws).
 async function fetchJson(page, path, options) {
   return page.evaluate(async ([p, opts]) => {
-    const res = await fetch(p, opts);
-    return { status: res.status, body: await res.json() };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await fetch(p, opts);
+        return { status: res.status, body: await res.json() };
+      } catch (err) {
+        if (attempt > 0) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
   }, [path, options]);
 }
 
