@@ -79,6 +79,22 @@ const expandOutcomeSurfaced = expandResponse.status() === 200
   : expandErrorVisible;
 console.log('Expand world button surfaces a clear outcome either way (status/outcome ok):', expandResponse.status(), expandOutcomeSurfaced);
 
+// #1866: generateMosaic()/generateRing() used to silently no-op on a
+// missing required input (a bare `if (!prefix) return;`, no showError())
+// -- unlike saveWorld()/submitBatch() on this same panel, which both call
+// showError() for their own bad-input case. Confirm both now surface a
+// clear error instead of doing nothing.
+await page.fill('#mosaicPrefixInput', '');
+await page.click('#mosaicGenerateBtn');
+const mosaicMissingPrefixError = await page.textContent('#worldErr');
+console.log('Generate mosaic with a blank prefix shows an error (should mention "required"):', mosaicMissingPrefixError);
+
+await page.fill('#ringPrefixInput', '');
+await page.fill('#ringCountInput', '');
+await page.click('#ringGenerateBtn');
+const ringMissingInputError = await page.textContent('#worldErr');
+console.log('Generate ring with blank prefix/count shows an error (should mention "required"):', ringMissingInputError);
+
 // --- Generate mosaic ---
 const mosaicPrefix = `e2e-mosaic-${crypto.randomUUID().slice(0, 8)}`;
 await page.fill('#mosaicPrefixInput', mosaicPrefix);
@@ -154,6 +170,8 @@ const pass = worldPanelVisible &&
   radiusStatVisible &&
   dayCycleAfterSave === newDayCycle &&
   expandOutcomeSurfaced &&
+  mosaicMissingPrefixError.includes('required') &&
+  ringMissingInputError.includes('required') &&
   mosaicCandidateVisible &&
   ringRowVisible &&
   ringDetailShowsLifecycleResult &&

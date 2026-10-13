@@ -470,7 +470,10 @@
   async function generateMosaic() {
     clearError();
     const prefix = document.getElementById('mosaicPrefixInput').value.trim();
-    if (!prefix) return;
+    if (!prefix) {
+      showError('Prefix is required.');
+      return;
+    }
     try {
       const body = await apiFetch('/api/land-candidates/generate-mosaic', {
         method: 'POST',
@@ -488,7 +491,10 @@
     clearError();
     const prefix = document.getElementById('ringPrefixInput').value.trim();
     const count = Number(document.getElementById('ringCountInput').value);
-    if (!prefix || !count) return;
+    if (!prefix || !count) {
+      showError('Prefix and count are required.');
+      return;
+    }
     const innerRadiusRaw = document.getElementById('ringInnerRadiusInput').value.trim();
     const startAngleRaw = document.getElementById('ringStartAngleInput').value.trim();
     const distribution = document.getElementById('ringDistributionSelect').value;
