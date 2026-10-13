@@ -44,6 +44,7 @@
     font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
     background: #fff; color: #16240a;
   }
+  input { flex: 0 0 220px; }
   button { cursor: pointer; background: #6ca42e; color: #16240a; border-color: #5a8e24; font-weight: 600; }
   button:hover:not(:disabled) { background: #5a8e24; }
   button:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -85,10 +86,13 @@
 <main>
   <section class="panel active" id="panel-roster">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <p>Coming soon — list/grant/revoke admins. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1819" target="_blank" rel="noopener">#1819</a>.</p>
+    <p class="err" id="rosterErr" hidden></p>
+    <div class="toolbar">
+      <input id="grantEmailInput" placeholder="Email to grant admin" aria-label="Email to grant admin" />
+      <button id="grantBtn">Grant admin</button>
+      <button class="secondary" id="rosterRefreshBtn">Refresh</button>
     </div>
+    <div id="rosterTableWrap"><p class="empty">Loading…</p></div>
   </section>
   <section class="panel" id="panel-models">
     <p class="sub">R2 model storage — list, usage, cleanup. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
@@ -171,6 +175,115 @@
     }
   }
   buttons.forEach((btn) => btn.addEventListener('click', () => activate(btn.dataset.panel)));
+})();
+
+// #1819: roster panel -- list/grant/revoke admins. Same fetch/render/
+// escapeHtml shape as admin-action-log.html's own script (same-origin
+// fetch already carries the hh_session cookie, no explicit credentials
+// option needed).
+(function () {
+  const errLine = document.getElementById('rosterErr');
+  const tableWrap = document.getElementById('rosterTableWrap');
+  const grantEmailInput = document.getElementById('grantEmailInput');
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function clearError() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  function showError(message) {
+    errLine.hidden = false;
+    errLine.textContent = message;
+  }
+
+  async function apiFetch(path, options) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options && options.headers) },
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) { /* no body */ }
+    if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    return body;
+  }
+
+  async function loadRoster() {
+    clearError();
+    tableWrap.innerHTML = '<p class="empty">Loading…</p>';
+    let body;
+    try {
+      body = await apiFetch('/api/auth/admins');
+    } catch (error) {
+      showError(error.message);
+      tableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
+      return;
+    }
+    renderRoster(body.admins || []);
+  }
+
+  function renderRoster(admins) {
+    if (!admins.length) {
+      tableWrap.innerHTML = '<p class="empty">No admins.</p>';
+      return;
+    }
+    const rows = admins.map((admin) => `
+      <tr>
+        <td>${escapeHtml(admin.email)}</td>
+        <td>${escapeHtml(admin.username || '—')}</td>
+        <td>${escapeHtml(admin.adminGrantedAt || admin.createdAt)}</td>
+        <td><button class="secondary revoke-btn" data-email="${escapeHtml(admin.email)}">Revoke</button></td>
+      </tr>
+    `).join('');
+    tableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>Email</th><th>Username</th><th>Admin since</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    tableWrap.querySelectorAll('.revoke-btn').forEach((btn) => {
+      btn.addEventListener('click', () => revokeAdmin(btn.dataset.email));
+    });
+  }
+
+  async function revokeAdmin(email) {
+    if (!confirm('Revoke admin access for ' + email + '?')) return;
+    clearError();
+    try {
+      await apiFetch('/api/auth/revoke-admin', { method: 'POST', body: JSON.stringify({ email }) });
+    } catch (error) {
+      // #1819: the server's own "cannot revoke the last remaining admin"
+      // 409 lands here unchanged -- no separate client-side check needed.
+      showError(error.message);
+      return;
+    }
+    loadRoster();
+  }
+
+  async function grantAdmin() {
+    const email = grantEmailInput.value.trim();
+    if (!email) return;
+    clearError();
+    try {
+      await apiFetch('/api/auth/grant-admin', { method: 'POST', body: JSON.stringify({ email }) });
+    } catch (error) {
+      showError(error.message);
+      return;
+    }
+    grantEmailInput.value = '';
+    loadRoster();
+  }
+
+  document.getElementById('grantBtn').addEventListener('click', grantAdmin);
+  document.getElementById('rosterRefreshBtn').addEventListener('click', loadRoster);
+  grantEmailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') grantAdmin(); });
+
+  loadRoster();
 })();
 </script>
 <script>
