@@ -47,9 +47,14 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // renderSellSettingsSection's own Payout Account/Payouts sections already
 // use), so the button is found by its own exact text page-wide rather
 // than scoped under the label's field.
+// #1870: same timing-margin flake class as #1388 -- the status note only
+// appears after a real fetchBuilderRedeemStatus() round trip, which can
+// exceed a 10s margin under CI's concurrent-suite load. #1388 established
+// 20s as the working margin for this same kind of post-identity async
+// wait; match it here.
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
-  { timeout: 10000 },
+  { timeout: 20000 },
 );
 
 const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
@@ -65,7 +70,7 @@ const redeemFormField = page.locator('.settings-field').filter({ has: redeemBtn 
 await redeemBtn.click();
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('temporarily paused')),
-  { timeout: 10000 },
+  { timeout: 20000 },
 );
 const afterClickText = await redeemFormField.locator('.settings-empty-note').last().textContent();
 console.log('Status after clicking Redeem (should surface #653\'s real pause message):', afterClickText);
