@@ -9,7 +9,7 @@
 // links point at the two pre-existing admin pages rather than re-implementing
 // them.
 import { chromium } from 'playwright';
-import { ensureAdminSession, finish } from './helpers.mjs';
+import { createGreenbeltLandletAsAdmin, ensureAdminSession, finish } from './helpers.mjs';
 
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
@@ -91,6 +91,28 @@ console.log('roster panel hidden after switching away (should be false):', roste
 const modelsNavActive = await page.locator('button[data-panel="models"]').evaluate((el) => el.classList.contains('active'));
 console.log('models nav button marked active after click (should be true):', modelsNavActive);
 
+// --- #1822: landlet override panel actually looks up a real landlet ---
+// Deliberately not exercising the reassign/force-complete/cancel-auction
+// flows themselves here -- worker/land.test.js already covers those
+// (including the #1281 land-cap guard and #1711 auction-conflict
+// handling) in depth. This just confirms the lazy-initialized panel
+// wires up and renders a real lookup result without throwing.
+const landletLookupId = `e2e-landlets-panel-${crypto.randomUUID()}`;
+await createGreenbeltLandletAsAdmin(landletLookupId);
+await page.click('button[data-panel="landlets"]');
+await page.fill('#landletLookupInput', landletLookupId);
+await page.click('#landletLookupBtn');
+await page.waitForSelector('#landletDetailWrap:not([hidden])', { timeout: 10000 });
+const landletStatText = await page.textContent('#landletStatGrid');
+const landletLookupShowsId = landletStatText.includes(landletLookupId);
+const landletLookupShowsStatus = landletStatText.includes('greenbelt');
+console.log('landlet lookup renders the looked-up id (should be true):', landletLookupShowsId);
+console.log('landlet lookup renders its real status (should be true):', landletLookupShowsStatus);
+const forceCompleteHiddenForGreenbelt = await page.locator('#landletForceCompleteWrap').isHidden();
+const reassignHiddenForGreenbelt = await page.locator('#landletReassignWrap').isHidden();
+console.log('force-complete section hidden for a non-generating landlet (should be true):', forceCompleteHiddenForGreenbelt);
+console.log('reassign section hidden for a non-claimed landlet (should be true):', reassignHiddenForGreenbelt);
+
 // The clearly-labeled Test/Ops Fixtures panel.
 await page.click('button[data-panel="fixtures"]');
 const fixturesVisible = await page.locator('#panel-fixtures').isVisible();
@@ -115,6 +137,10 @@ const pass = anonStatus === 401 &&
   modelsVisibleAfterClick &&
   !rosterHiddenAfterClick &&
   modelsNavActive &&
+  landletLookupShowsId &&
+  landletLookupShowsStatus &&
+  forceCompleteHiddenForGreenbelt &&
+  reassignHiddenForGreenbelt &&
   fixturesVisible &&
   fixturesBadgeText.toLowerCase().includes('not a real transaction') &&
   controlRoomHref === '/admin/control-room' &&
@@ -122,6 +148,6 @@ const pass = anonStatus === 401 &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard shell (#1818) + roster panel (#1819): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
+  label: 'Admin Dashboard shell (#1818) + roster panel (#1819) + landlet override panel (#1822): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
   errors,
 });

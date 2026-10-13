@@ -82,6 +82,10 @@
   details.edit-world summary { cursor: pointer; color: #3f6e1c; font-weight: 600; margin-bottom: 10px; }
   .edit-wrap { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px 16px; margin: 10px 0 20px; }
   .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .landlets-panel h3 { font-size: 13px; margin: 20px 0 8px; }
+  .landlets-panel h3:first-child { margin-top: 0; }
+  .landlets-panel .hint { color: #5a6b52; font-size: 12px; margin: 0 0 10px; }
+  .landlets-panel .edit-wrap.conflict { border-color: #e0a526; background: #fffaf0; }
 </style>
 </head>
 <body>
@@ -216,11 +220,35 @@
     <textarea id="batchInput" placeholder='[{"name": "Generated 001", "areaM2": 1000, "center": {"x": 50, "y": 0}}]'></textarea>
     <button id="batchSubmitBtn">Submit batch</button>
   </section>
-  <section class="panel" id="panel-landlets">
-    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <p>Coming soon — landlet overrides: force-complete, reassign owner. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1822" target="_blank" rel="noopener">#1822</a>.</p>
+  <section class="panel landlets-panel" id="panel-landlets">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> / <a href="https://github.com/RunbotRobot/higglehaven/issues/1822" target="_blank" rel="noopener">#1822</a></p>
+    <p class="err" id="landletsErr" hidden></p>
+    <div class="toolbar">
+      <input id="landletLookupInput" placeholder="Landlet id" aria-label="Landlet id" />
+      <button id="landletLookupBtn">Look up</button>
+    </div>
+    <div id="landletDetailWrap" hidden>
+      <div class="stat-grid" id="landletStatGrid"></div>
+
+      <div id="landletForceCompleteWrap" hidden>
+        <h3>Force-complete generation</h3>
+        <p class="hint">Only for a landlet stuck in <code>generating</code> — immediately makes it greenbelt/claimable if the world circle already encloses it.</p>
+        <button id="landletForceCompleteBtn">Force complete generation</button>
+      </div>
+
+      <div id="landletReassignWrap" hidden>
+        <h3>Reassign owner</h3>
+        <p class="hint">Moves this claimed landlet directly to a different builder, bypassing the normal claim/auction flow.</p>
+        <div class="toolbar">
+          <input id="landletReassignTargetInput" placeholder="New owner builder id" aria-label="New owner builder id" />
+          <button id="landletReassignBtn">Reassign</button>
+        </div>
+        <div class="edit-wrap conflict" id="landletAuctionConflictWrap" hidden>
+          <p id="landletAuctionDetails"></p>
+          <button id="landletCancelAuctionReassignBtn">Cancel auction &amp; reassign</button>
+          <button class="secondary" id="landletAuctionAbortBtn">Abort</button>
+        </div>
+      </div>
     </div>
   </section>
   <section class="panel" id="panel-tax">
@@ -977,6 +1005,139 @@
 
     loadStorage();
     loadModelsPage(null);
+  };
+})();
+</script>
+<script>
+(function () {
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  // #1822: landlet override panel -- look up a landlet by id, then
+  // force-complete a stuck `generating` landlet or reassign a `claimed`
+  // one's owner by hand. The judgment calls this needed (land cap is a
+  // hard rule even here, and an active auction blocks the reassignment
+  // unless explicitly cancelled) are already enforced server-side by
+  // #1281/#1711 -- this panel is just a form over those guarded endpoints,
+  // not a reason to re-implement their checks client-side.
+  window.__adminDashboardPanels.landlets = function initLandletsPanel() {
+    const errLine = document.getElementById('landletsErr');
+    const lookupInput = document.getElementById('landletLookupInput');
+    const detailWrap = document.getElementById('landletDetailWrap');
+    const statGrid = document.getElementById('landletStatGrid');
+    const forceCompleteWrap = document.getElementById('landletForceCompleteWrap');
+    const reassignWrap = document.getElementById('landletReassignWrap');
+    const reassignTargetInput = document.getElementById('landletReassignTargetInput');
+    const auctionConflictWrap = document.getElementById('landletAuctionConflictWrap');
+    const auctionDetailsEl = document.getElementById('landletAuctionDetails');
+
+    function clearError() { errLine.hidden = true; errLine.textContent = ''; }
+    function showError(message) { errLine.hidden = false; errLine.textContent = message; }
+
+    async function apiFetch(path, options) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { 'content-type': 'application/json', ...(options && options.headers) },
+      });
+      let body = null;
+      try { body = await response.json(); } catch (_) { /* no body */ }
+      if (!response.ok) {
+        const error = new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+        // #1711's 409 response carries the active-auction conflict's own
+        // details alongside `error` -- attach it to the thrown Error so
+        // the reassign flow below can offer the cancel-and-proceed choice
+        // without a second round trip.
+        if (body && body.activeAuction) error.activeAuction = body.activeAuction;
+        throw error;
+      }
+      return body;
+    }
+
+    let currentLandlet = null;
+
+    function renderLandlet(landlet) {
+      currentLandlet = landlet;
+      statGrid.innerHTML = `
+        <div class="stat"><div class="n mono">${escapeHtml(landlet.landletId)}</div><div class="l">id</div></div>
+        <div class="stat"><div class="n">${escapeHtml(landlet.status)}</div><div class="l">status</div></div>
+        <div class="stat"><div class="n mono">${escapeHtml(landlet.ownerBuilderId || '—')}</div><div class="l">owner</div></div>
+        <div class="stat"><div class="n">${escapeHtml(landlet.areaM2)}</div><div class="l">area m²</div></div>
+        <div class="stat"><div class="n">${escapeHtml(landlet.generatedAt || '—')}</div><div class="l">generated</div></div>
+      `;
+      detailWrap.hidden = false;
+      forceCompleteWrap.hidden = landlet.status !== 'generating';
+      reassignWrap.hidden = landlet.status !== 'claimed';
+      auctionConflictWrap.hidden = true;
+      reassignTargetInput.value = '';
+    }
+
+    async function lookupLandlet() {
+      clearError();
+      const landletId = lookupInput.value.trim();
+      if (!landletId) return;
+      try {
+        const body = await apiFetch('/api/landlets/' + encodeURIComponent(landletId));
+        renderLandlet(body.landlet);
+      } catch (error) {
+        detailWrap.hidden = true;
+        showError(error.message);
+      }
+    }
+
+    async function forceComplete() {
+      if (!currentLandlet) return;
+      clearError();
+      try {
+        const body = await apiFetch(
+          '/api/landlets/' + encodeURIComponent(currentLandlet.landletId) + '/generation-complete',
+          { method: 'POST' },
+        );
+        renderLandlet(body.landlet);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function reassign(cancelActiveAuction) {
+      if (!currentLandlet) return;
+      const ownerBuilderId = reassignTargetInput.value.trim();
+      if (!ownerBuilderId) return;
+      clearError();
+      const payload = { ownerBuilderId };
+      if (cancelActiveAuction) payload.cancelActiveAuction = true;
+      try {
+        const body = await apiFetch(
+          '/api/landlets/' + encodeURIComponent(currentLandlet.landletId) + '/reassign-owner',
+          { method: 'POST', body: JSON.stringify(payload) },
+        );
+        renderLandlet(body.landlet);
+      } catch (error) {
+        if (error.activeAuction) {
+          const a = error.activeAuction;
+          auctionDetailsEl.textContent = 'Active auction ' + a.auctionId + ': starting bid '
+            + a.startingBidCents + '¢, high bid ' + (a.highBidCents == null ? 'none yet' : a.highBidCents + '¢')
+            + ', ' + a.bidderCount + ' bidder(s), ends ' + a.endsAt + '.';
+          auctionConflictWrap.hidden = false;
+          return;
+        }
+        showError(error.message);
+      }
+    }
+
+    document.getElementById('landletLookupBtn').addEventListener('click', lookupLandlet);
+    lookupInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') lookupLandlet(); });
+    document.getElementById('landletForceCompleteBtn').addEventListener('click', forceComplete);
+    document.getElementById('landletReassignBtn').addEventListener('click', () => reassign(false));
+    document.getElementById('landletCancelAuctionReassignBtn').addEventListener('click', () => {
+      if (!confirm('Cancel the active auction and reassign this landlet?')) return;
+      reassign(true);
+    });
+    document.getElementById('landletAuctionAbortBtn').addEventListener('click', () => {
+      auctionConflictWrap.hidden = true;
+    });
   };
 })();
 </script>
