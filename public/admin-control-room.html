@@ -138,6 +138,14 @@
   let searchTerm = '';
   const expanded = new Set();
   const repliesCache = new Map(); // taskId -> replies array
+  // #1908: per-taskId monotonic-token guard, same idiom as tasksLoadToken
+  // above -- loadReplies(id) is called from the toggle-expand handler, the
+  // jump-to-task handler, the reply-send flow, and the 15s poll (for every
+  // expanded card), all of which can race on the same taskId. Without this,
+  // a slow poll response for a task can land after a newer reply-send
+  // response for that same task and overwrite repliesCache with stale data,
+  // hiding a reply that was just posted.
+  const repliesLoadTokens = new Map(); // taskId -> token
   // Full re-renders happen often (polling, expanding a card, any mutation)
   // and rebuild every card's HTML from scratch — including a reply
   // textarea mid-draft. Without this, an in-flight loadReplies() finishing
@@ -504,11 +512,15 @@
   }
 
   async function loadReplies(taskId) {
+    const myLoadToken = (repliesLoadTokens.get(taskId) || 0) + 1;
+    repliesLoadTokens.set(taskId, myLoadToken);
     try {
       const data = await apiCall('/tasks/' + encodeURIComponent(taskId) + '/replies');
+      if (repliesLoadTokens.get(taskId) !== myLoadToken) return; // superseded while loading
       repliesCache.set(taskId, data.replies);
       render();
     } catch (error) {
+      if (repliesLoadTokens.get(taskId) !== myLoadToken) return; // superseded while loading
       showError('Could not load replies: ' + error.message);
     }
   }
