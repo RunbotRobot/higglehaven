@@ -14690,9 +14690,15 @@ function updateReviewFade() {
   for (const review of shopReviews) {
     const world = review.mesh.getWorldPosition(scratchSignWorldPos);
     const distance = world.distanceTo(camera.position);
-    const opacity = 1 - THREE.MathUtils.clamp(
-      (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
-    );
+    // #1800: unlike signs/calendars, a review should only be visible once its
+    // product has actually been tapped -- pure proximity (the shared
+    // SIGN_FADE_NEAR_M/FAR_M curve below) still governs *how* it fades in for
+    // the tapped product, it just no longer applies to every nearby review.
+    const opacity = review === shopTappedProduct
+      ? 1 - THREE.MathUtils.clamp(
+        (distance - SIGN_FADE_NEAR_M) / (SIGN_FADE_FAR_M - SIGN_FADE_NEAR_M), 0, 1,
+      )
+      : 0;
     for (const sprite of review.sprites) sprite.material.opacity = opacity;
     if (review === shopTappedProduct) tappedDistance = distance;
   }
