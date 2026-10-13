@@ -11408,17 +11408,17 @@ function resetLocalSessionState() {
   sellerIdentityFlowPromise = null;
 }
 
-// Build and Sell both require a real, logged-in account
+// Build, Sell, and layout-preview all require a real, logged-in account
 // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
-// on either once that account is gone would just immediately reprompt the
-// login modal over whatever was on screen (or, for Sell, strand the
-// now-stale showcase/modal with no identity behind it). A reload into Shop
-// instead is the same clean-slate escape hatch #mode-nav's own mode
-// switching already uses (see its own comment), and Shop needs no account
-// at all, so it's always a safe place to land. Returns whether it reloaded
-// (the caller's own post-logout/-deletion UI update is moot if so).
+// on any of them once that account is gone would just immediately reprompt
+// the login modal over whatever was on screen (or, for Sell/layout-preview,
+// strand the now-stale showcase/modal with no identity behind it). A reload
+// into Shop instead is the same clean-slate escape hatch #mode-nav's own
+// mode switching already uses (see its own comment), and Shop needs no
+// account at all, so it's always a safe place to land. Returns whether it
+// reloaded (the caller's own post-logout/-deletion UI update is moot if so).
 function leaveAccountScopedModeIfNeeded() {
-  if (currentMode === 'build' || currentMode === 'sell') {
+  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return true;
