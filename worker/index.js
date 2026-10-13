@@ -10348,6 +10348,35 @@ const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
     ))
 )`;
 
+// #1711 (owner decision, 2026-10-13): surfaces an active auction on a
+// landlet as a structured 409 conflict -- "current high bid, bidder
+// count, etc." -- for admin reassign-owner to report rather than silently
+// proceeding underneath it (resolveAuction would later transfer the
+// landlet again, or release it to greenbelt, out from under whoever the
+// admin just handed it to, while still crediting the stale previous
+// owner -- the exact failure this issue was filed over). Shared by
+// reassign-owner's pre-check and its race-window re-check after a 0-row
+// transfer attempt, so the two can't drift apart.
+async function activeAuctionConflict(db, landletId) {
+  const auction = await db.prepare(`
+    SELECT * FROM auctions WHERE landlet_id = ? AND status = 'active'
+  `).bind(landletId).first();
+  if (!auction) return null;
+  const bidStats = await db.prepare(`
+    SELECT MAX(amount_cents) AS highBidCents, COUNT(DISTINCT bidder_builder_id) AS bidderCount
+    FROM auction_bids WHERE auction_id = ?
+  `).bind(auction.auction_id).first();
+  return {
+    auction,
+    extra: {
+      activeAuction: {
+        auctionId: auction.auction_id, startingBidCents: auction.starting_bid_cents,
+        highBidCents: bidStats.highBidCents, bidderCount: bidStats.bidderCount, endsAt: auction.ends_at,
+      },
+    },
+  };
+}
+
 // #799: the self-owned "claimed" branch of POST /api/landlets grants the
 // exact same fully-buildable outcome as POST .../claim — so, unlike the
 // unauthenticated unowned-creation branch beside it, it needs the same two
@@ -10571,6 +10600,24 @@ async function handleLandlets(request, db, route, url) {
     if (newOwnerBuilderId === existing.owner_builder_id) {
       throw new HttpError('Landlet is already owned by this builder', 409);
     }
+    // #1711 (owner decision, 2026-10-13): "surface the conflict to the
+    // admin at reassignment time instead of letting it resolve silently
+    // later." Without cancelActiveAuction, an active auction on this
+    // landlet blocks the reassignment outright, with the conflict's own
+    // details (current high bid, bidder count) in the 409 response so an
+    // admin UI can offer the two explicit choices the owner specified --
+    // cancel-and-proceed (resubmit with cancelActiveAuction: true) or
+    // abort (leave both the auction and current ownership untouched).
+    const cancelActiveAuction = input.cancelActiveAuction === true;
+    const auctionConflict = await activeAuctionConflict(db, route[1]);
+    if (auctionConflict && !cancelActiveAuction) {
+      throw new HttpError(
+        'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+        + 'to cancel it and reassign in one step',
+        409,
+        auctionConflict.extra,
+      );
+    }
 
     // Same atomic guard+write idiom as POST .../claim just above: the
     // concurrency check (both the still-matches-what-was-just-read guard
@@ -10599,6 +10646,13 @@ async function handleLandlets(request, db, route, url) {
     // the previous owner's build content and levels. Mirrors
     // resolveAuction's own split: the guarded transfer runs and is
     // confirmed first, and only then is the cleanup batch built/sent.
+    //
+    // #1711: folds "no active auction, unless the caller already said to
+    // cancel one" into this same guarded WHERE, same TOCTOU reasoning as
+    // every other clause here -- a new auction starting in the gap
+    // between the pre-check above and this write must still block (or get
+    // cancelled, if cancelActiveAuction was set) rather than silently
+    // slip through on a stale read.
     const result = await db.prepare(`
       UPDATE landlets
       SET owner_builder_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -10624,10 +10678,14 @@ async function handleLandlets(request, db, route, url) {
                 AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
             ), 0)
         )
+        AND (? = 1 OR NOT EXISTS (
+          SELECT 1 FROM auctions WHERE landlet_id = ? AND status = 'active'
+        ))
     `).bind(
       newOwnerBuilderId, route[1], existing.owner_builder_id, newOwnerBuilderId,
       newOwnerBuilderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, existing.area_m2,
       newOwnerBuilderId, newOwnerBuilderId,
+      cancelActiveAuction ? 1 : 0, route[1],
     ).run();
     if (result.meta.changes === 0) {
       const current = await requireLandlet(db, route[1]);
@@ -10641,8 +10699,40 @@ async function handleLandlets(request, db, route, url) {
       if (oneClaimedConflict) {
         throw new HttpError('Target builder already owns a claimed landlet', 409);
       }
+      if (!cancelActiveAuction) {
+        const raceConflict = await activeAuctionConflict(db, route[1]);
+        if (raceConflict) {
+          throw new HttpError(
+            'Landlet has an active auction -- cancel it first, or pass cancelActiveAuction: true '
+            + 'to cancel it and reassign in one step',
+            409,
+            raceConflict.extra,
+          );
+        }
+      }
       throw new HttpError("Target builder's land cap can't cover this landlet", 409);
     }
+    // #1711: re-read live, now that the transfer above is confirmed,
+    // rather than reusing the pre-check's auctionConflict -- that read is
+    // from before the guarded UPDATE ran, and cancelActiveAuction bypasses
+    // the UPDATE's own auction clause, so a *new* auction that started in
+    // the race window between the pre-check and the write would otherwise
+    // go uncancelled (and its bidders un-refunded/unnotified) even though
+    // the admin explicitly asked to cancel whatever's active on this
+    // landlet.
+    const auctionToCancel = cancelActiveAuction
+      ? await db.prepare(`SELECT * FROM auctions WHERE landlet_id = ? AND status = 'active'`).bind(route[1]).first()
+      : null;
+    // Bids never actually debit a bidder's higgles_balance_cents up front
+    // (handleAuctionBids' own "held" comment -- the real debit only
+    // happens in resolveAuction, at settlement time), so there is no
+    // currency in limbo to refund here, unlike the owner's comment on
+    // #1711 anticipated as a general possibility -- just the courtesy
+    // notification below that their bid no longer stands.
+    const cancelledAuctionBidderIds = auctionToCancel
+      ? (await db.prepare('SELECT DISTINCT bidder_builder_id FROM auction_bids WHERE auction_id = ?')
+        .bind(auctionToCancel.auction_id).all()).results.map((row) => row.bidder_builder_id)
+      : [];
     // #1280: these three deletes match the ones builder-deletion
     // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
     // branches already run, closing the one ownership-change path that
@@ -10656,7 +10746,16 @@ async function handleLandlets(request, db, route, url) {
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
       adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
+        ...(auctionToCancel ? { cancelledAuctionId: auctionToCancel.auction_id } : {}),
       }),
+      // Guarded by status = 'active' like every other auction-ending
+      // write in this file (resolveAuction's own guard above) -- a no-op
+      // if this exact auction somehow already ended between the read just
+      // above and here, rather than overwriting an already-final row.
+      ...(auctionToCancel ? [db.prepare(`
+        UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE auction_id = ? AND status = 'active'
+      `).bind(auctionToCancel.auction_id)] : []),
     ]);
     // Non-blocking, like handleLandletLevels' own post-write calls: the
     // transfer itself is already blocked when it would put the new owner
@@ -10670,9 +10769,15 @@ async function handleLandlets(request, db, route, url) {
     // not roll back the ownership transfer itself.
     await fireNotifications(db, [
       { builderId: existing.owner_builder_id,
-        message: `Your lándlet ${route[1]} was reassigned to another builder by an admin.` },
+        message: auctionToCancel
+          ? `Your lándlet ${route[1]} was reassigned to another builder by an admin, and your active auction on it was cancelled.`
+          : `Your lándlet ${route[1]} was reassigned to another builder by an admin.` },
       { builderId: newOwnerBuilderId,
         message: `A lándlet (${route[1]}) was reassigned to you by an admin. It's yours to build on now.` },
+      ...cancelledAuctionBidderIds.map((bidderBuilderId) => ({
+        builderId: bidderBuilderId,
+        message: `Your bid on ${route[1]} was cancelled — the landlet was reassigned by an admin and the auction ended with no winner.`,
+      })),
     ]);
     const updated = await requireLandlet(db, route[1]);
     return json({ landlet: landletFromRow(updated) });

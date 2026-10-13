@@ -2961,7 +2961,27 @@ Admin-only (`403` without an admin session — see "Admin role" under
 "Authorization model" above). Moves a **currently claimed** landlet
 directly to a different builder, bypassing the normal claim/auction flow
 (#1177) — e.g. to correct a mistaken claim or handle a support request.
-Request body: `{ "ownerBuilderId": "<target builder id>" }`.
+Request body: `{ "ownerBuilderId": "<target builder id>", "cancelActiveAuction"?: boolean }`.
+
+An **active auction on the landlet blocks the reassignment** by default
+(#1711, owner decision 2026-10-13) — without this, `resolveAuction` could
+later transfer the landlet again (to a winning bidder) or release it to
+greenbelt (on an unsold `$0` auction), silently undoing the admin's
+reassignment hours or days later while still crediting the stale previous
+owner. The `409` response in this case carries the conflict's own details
+so a caller can decide what to do next: `{ "error": "...", "activeAuction":
+{ "auctionId", "startingBidCents", "highBidCents" (`null` with no bids),
+"bidderCount" (distinct bidders), "endsAt" } }`. Passing
+`cancelActiveAuction: true` cancels that auction (`status: "ended"`,
+`winningBidId` left `null` — the same shape as an auction that ended with
+no winner) and performs the reassignment in the same write, rather than
+requiring two separate, independently-racy calls. No bid ever actually
+debits a bidder's `higglesBalanceCents` up front (`POST /auctions/:id/bids`
+only holds a live-computed amount against their balance/land cap —
+`resolveAuction` is what actually debits, at settlement time), so there is
+no currency to refund on cancellation — bidders are only notified that
+their bid no longer stands. `cancelActiveAuction: true` is a harmless no-op
+when the landlet has no active auction.
 
 The transfer is the same conditional-update idiom `POST .../claim` uses:
 it only lands if the landlet is still `status: "claimed"` and still owned
@@ -2970,15 +2990,20 @@ a claimed landlet (the same one-claimed-landlet-per-builder invariant
 `POST .../claim` enforces — an admin can move ownership around, but not
 past this), **and** the target builder's land cap can actually cover the
 landlet's area (`409 "Target builder's land cap can't cover this
-landlet"` otherwise). Land cap is a hard rule with no admin override,
-including here (#1281, owner decision 2026-10-13) — the same atomic
-"fold a live land-cap check into the transfer's own `WHERE`" idiom
-`resolveAuction`'s winner-transfer already uses, so two concurrent
-reassignments onto the same new owner can't both pass against a stale
-snapshot. Only the transferred landlet's own area counts against the
-cap, never any `landlet_levels.cap_consumed_m2` it had under the previous
-owner — those levels are always deleted as part of this same write (see
-below), so they never reach the new owner to begin with.
+landlet"` otherwise), **and** there's no active auction on the landlet
+unless `cancelActiveAuction: true` was passed. Land cap is a hard rule
+with no admin override, including here (#1281, owner decision
+2026-10-13) — the same atomic "fold a live land-cap check into the
+transfer's own `WHERE`" idiom `resolveAuction`'s winner-transfer already
+uses, so two concurrent reassignments onto the same new owner can't both
+pass against a stale snapshot. Only the transferred landlet's own area
+counts against the cap, never any `landlet_levels.cap_consumed_m2` it had
+under the previous owner — those levels are always deleted as part of
+this same write (see below), so they never reach the new owner to begin
+with. The active-auction check is folded into the same `WHERE` for the
+same reason: a new auction starting in the gap between this request's
+own pre-check and the write must still block (or get cancelled, if
+`cancelActiveAuction` was set) rather than slip through on a stale read.
 
 Same as every other ownership-change path (see "Ownership-change cleanup"
 below), this clears the landlet's `placed_instances`, `landlet_versions`,
@@ -2990,10 +3015,12 @@ would put the new owner over cap; this just keeps `GET /api/builders`'s
 own displayed numbers accurate right away).
 
 Notifies both affected builders once the transfer lands (#1494) — the
-previous owner that the landlet was reassigned away from them, the new
-owner that it's now theirs to build on — fired via `fireNotifications`
-after the write commits, same as `resolveAuction`'s own
-`auctionWinnerNotifications` (#1122).
+previous owner that the landlet was reassigned away from them (noting the
+auction cancellation too, when one happened), the new owner that it's now
+theirs to build on — fired via `fireNotifications` after the write
+commits, same as `resolveAuction`'s own `auctionWinnerNotifications`
+(#1122). When an auction was cancelled, every distinct bidder on it is
+notified too that their bid no longer stands.
 
 Errors are:
 
@@ -3001,7 +3028,8 @@ Errors are:
 - `404` when the landlet or the target builder does not exist.
 - `409` when the landlet isn't currently claimed, the target already owns
   it, the target already owns a different claimed landlet, the target's
-  land cap can't cover the landlet, or the landlet changed concurrently
+  land cap can't cover the landlet, the landlet has an active auction and
+  `cancelActiveAuction` wasn't set, or the landlet changed concurrently
   since this request's own read of it.
 
 ### `POST /api/landlets/:landletId/generation-complete`
