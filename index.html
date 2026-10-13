@@ -554,7 +554,19 @@
         border-radius: 8px;
         color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
-        white-space: nowrap;
+        /* #1808: this started out always short ("name — price"), but a
+           digital-good/no-returns/domestic-only disclaimer (productInfoText
+           in main.js) can make it run well past a phone's width -- nowrap
+           then ran it off both screen edges instead of wrapping. Same
+           max-width idiom #catalog-picker already uses. width: max-content
+           is needed alongside it -- with the default width: auto, this
+           element's left: 50% (and no "right") makes the browser's
+           shrink-to-fit sizing treat only the *half* of the viewport past
+           that 50% mark as available, forcing even an ordinary short
+           "name — price" line to wrap well before it actually needs to. */
+        width: max-content;
+        max-width: min(90vw, 360px);
+        text-align: center;
         pointer-events: none;
       }
       /* Same treatment as #shop-sign-hint/#shop-calendar-hint/#shop-review-hint
