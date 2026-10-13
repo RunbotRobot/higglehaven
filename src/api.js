@@ -1135,8 +1135,10 @@ export async function fetchSignPosts(instanceId) {
 // server" protection as calendarEventIdempotencyKey below (#1716) / the
 // purchase flow's own purchaseIdempotencyKey (#473) — a dropped POST
 // response and the innocent manual retry it invites would otherwise create
-// a second, fully duplicate sign_posts row. Scoped per instanceId only (no
-// builder id to namespace with here — posting is anonymous), and cleared on
+// a second, fully duplicate sign_posts row. Scoped per instanceId only --
+// #1830 made posting require a session, but there's no need to additionally
+// namespace this cache key by user id the way #974 did for purchases: this
+// key only ever lives in one browser's own localStorage, cleared on
 // success, so a deliberate second, distinct post to the SAME sign shortly
 // after mints its own fresh key instead of colliding with the first.
 const SIGN_POST_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
@@ -1162,11 +1164,14 @@ function clearSignPostIdempotencyKey(instanceId) {
   try { localStorage.removeItem(signPostIdempotencyStorageKey(instanceId)); } catch (e) { /* ignore */ }
 }
 
-export async function createSignPost(instanceId, { authorLabel, text }) {
+// #1830: authorLabel is no longer a param here -- the server always
+// derives it from the posting user's own session now, so there's nothing
+// for this call to send.
+export async function createSignPost(instanceId, { text }) {
   const { post } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ authorLabel, text, idempotencyKey: signPostIdempotencyKey(instanceId) }),
+    body: JSON.stringify({ text, idempotencyKey: signPostIdempotencyKey(instanceId) }),
   });
   clearSignPostIdempotencyKey(instanceId);
   return post;
@@ -1174,6 +1179,17 @@ export async function createSignPost(instanceId, { authorLabel, text }) {
 
 export async function deleteSignPost(instanceId, postId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, { method: 'DELETE' });
+}
+
+// #1830: lets a shopper edit their own previously-posted note (gated
+// author-only server-side — see handleSignPosts' own PATCH branch).
+export async function editSignPost(instanceId, postId, { text }) {
+  const { post } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  return post;
 }
 
 // Community calendar events (see migrations/0042_community_calendar.sql) —

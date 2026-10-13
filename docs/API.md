@@ -4225,35 +4225,77 @@ Returns `{ "posts": [...], "totalCount": <number> }` where each post is:
 {
   "postId": "post-...",
   "instanceId": "placeholder-tree-...",
-  "authorLabel": "A Shopper",
+  "authorLabel": "a-real-username",
   "text": "Great little shop!",
+  "userId": "user-...",
   "createdAt": "2026-08-24T00:00:00.000Z"
 }
 ```
 
+`userId` (added by #1830) is the posting account's real id, present on
+every post created since that change — `null` for a pre-#1830 row. The
+frontend uses it to tell "my own post" apart from everyone else's (see
+"Frontend wiring — Shop mode" below); there's no reason to hide it behind
+an authenticated-only response, since `authorLabel` already names the same
+account in plain text.
+
 ### `POST /api/instances/:instanceId/posts`
 
-Body: `{ "authorLabel", "text" }`, both required, `text` capped at 280
-characters and `authorLabel` at 100 (same cap `buyerLabel`/review
-`authorLabel` share, see "Simulated purchases"/"Product reviews" below).
-`400` if the target instance isn't currently flagged `isCommunitySign` —
-a post can't outlive or predate the flag that makes it visible at all.
-`404` if the instance doesn't exist. Unauthenticated and rate-limited per
-client IP, the same as the purchase endpoint below.
+**#1830 (owner correction, 2026-10-13):** this used to be open to any
+shopper with a free-text `authorLabel` and no account behind it — true
+before #678/N44, stale since: Shop mode's own entry gate
+(`ensureShopperIdentity`, `src/main.js`) has required a real logged-in,
+verified account for a while now, and this endpoint was simply never
+updated once that changed underneath it.
+
+Requires a verified session (`requireVerifiedSession` — the same bar
+Shop mode's own entry gate already clears, so this never actually fails
+in practice once Shop mode has loaded; `401` otherwise). Body:
+`{ "text" }`, required, capped at 280 characters. `authorLabel` is no
+longer a request field at all — always the posting user's own `username`,
+derived server-side, and `userId` is stamped onto the row from that same
+session. `400` if the target instance isn't currently flagged
+`isCommunitySign` — a post can't outlive or predate the flag that makes it
+visible at all (checked before the auth requirement above, so a request
+against the wrong kind of instance still gets this specific `400` rather
+than an unrelated `401` — same ordering as the structurally identical
+`POST /api/instances/:instanceId/events` below). `404` if the instance
+doesn't exist. Rate-limited per the posting account's own id (moved from
+per-client-IP once posting started requiring a session).
+
+### `PATCH /api/instances/:instanceId/posts/:postId`
+
+**New in #1830.** Lets a post's own author edit its `text` (same 280-
+character cap as `POST`). Requires a verified session whose `userId`
+matches the post's own `userId` exactly — `403` ("Not your post")
+otherwise, including for the sign's own hosting landlet's owner: unlike
+`DELETE` below, editing has no moderation equivalent (rewriting someone
+else's words under their own name isn't the same kind of action as simply
+removing unwanted content). A pre-#1830 post with `userId: null` can never
+match here, since there's nobody on record to own it. `401` with no
+session at all. `404` if the post doesn't exist (or belongs to a different
+instance). Rate-limited per editing account, the same shape as `POST`/
+`DELETE`'s own limits.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
-Moderation — "Builder controls the sign's physical form and moderates."
-Requires a session logged in as the owner of the sign's own hosting
-landlet (`403` otherwise) — not the post's author, since `authorLabel` is
-free text with no account behind it. `404` if the post doesn't exist (or
-belongs to a different instance). Deleting the sign instance itself
-cascades to every post on it (`ON DELETE CASCADE`, migrations/0041) — no
-orphaned posts left behind.
+Two independent ways in, either sufficient on its own:
 
-`GET`/`POST` above stay open to any shopper — posting to a community sign
-is exactly the shopper-facing feature this exists for, and `authorLabel`
-is plain free text, not an authenticated identity.
+- **The post's own author**, directly — a verified session whose `userId`
+  matches the post's `userId`. Added by #1830; a pre-#1830 post with
+  `userId: null` can never match this path, so it falls through to
+  moderation below exactly as it always has.
+- **Moderation** — "Builder controls the sign's physical form and
+  moderates." A session logged in as the owner of the sign's own hosting
+  landlet (`403` otherwise), regardless of who the post's own author is.
+
+`401` with no session at all. `404` if the post doesn't exist (or belongs
+to a different instance). Deleting the sign instance itself cascades to
+every post on it (`ON DELETE CASCADE`, migrations/0041) — no orphaned
+posts left behind.
+
+`GET` above stays open to anyone — reading what's already posted needs no
+identity; writing to a sign (`POST`/`PATCH`/`DELETE`) now always does.
 
 ### Frontend wiring — Build mode
 
@@ -4313,16 +4355,27 @@ opaque) and `SIGN_FADE_FAR_M` (20m, fully transparent) — the spec's own
 sign (if any) is within the much tighter `SIGN_INTERACT_RADIUS_M` (8m),
 showing `#shop-sign-hint` ("Leave a Note") only for that one.
 
-Leaving a note is two `prompt()` calls — a name (remembered afterward in
-`localStorage` under `higglehaven.shopperLabel` so a returning or prolific
-poster isn't re-asked every time) and the note text — then
-`createSignPost` followed by an optimistic local append and
-`rebuildSignSprites`, rather than re-fetching the whole list. This is the
-one place in Shop mode that's a plain browser dialog rather than in-world
-geometry; the spec's "no flat 2D UI, ever" rule reads as being about the
-persistent *feed itself* (which this fully honors — no panel, no list, no
-scrollable UI), not about a one-shot text-entry prompt, and every other
-dev-mode naming flow in this app already uses the identical pattern.
+Leaving a note is one `prompt()` call for the note text — unlike before
+#1830, no separate name prompt: `currentAuthUser` already holds a real,
+verified identity by the time `#shop-sign-hint` can be clicked at all
+(Shop mode's own entry gate guarantees it), so there's nothing left to
+ask. `createSignPost` no longer takes an `authorLabel` param either —
+the server derives it from that same session. A successful post is
+appended to `sign.posts` and `rebuildSignSprites` runs, rather than
+re-fetching the whole list.
+
+If the shopper already has a post on *this* sign (`sign.posts.find` by
+`userId === currentAuthUser.userId`), the button instead offers to edit
+or delete it — a second `prompt()` showing the existing text and asking
+for `"edit"`/`"delete"`/blank-to-cancel, with a third `prompt()` (edit
+only) for the replacement text, calling the new `editSignPost`/
+`deleteSignPost` and updating `sign.posts` in place rather than offering
+an unrelated second slot. This is the one place in Shop mode that's a
+plain browser dialog rather than in-world geometry; the spec's "no flat
+2D UI, ever" rule reads as being about the persistent *feed itself*
+(which this fully honors — no panel, no list, no scrollable UI), not
+about a one-shot text-entry prompt, and every other dev-mode naming flow
+in this app already uses the identical pattern.
 
 Signs and their sprites are torn down alongside the rest of their
 landlet's objects in `unloadShopLandletInstances` — a sign is exactly as
@@ -4335,28 +4388,41 @@ radius.
 button (flag on, second click opens the panel), the Manage Posts panel
 itself (row count/content, deleting a post through its own × button and
 confirming that persists server-side, and un-flagging via "Remove
-Community Sign"), and the full posts API
-(create/list/delete/cascade-on-instance-delete, plus the "can't post to a
-non-sign" 400 — that last one in `worker/land.test.js` instead, not the
-browser suite, since deliberately triggering a non-2xx `fetch` there logs
-a console error the suite's own errors-must-be-empty convention would
-misread as a real bug) end to end through the browser. The
-Shop-mode camera-distance fade and the `prompt()`-driven "Leave a Note"
-flow are **not** covered by the automated suite, for the same reason raw
-TransformControls drags aren't (see "Frontend-only alignment assist"
-above) — real camera movement and native browser dialogs are exactly the
-kind of interaction this project's e2e suite has consistently avoided
-automating, in favor of an equivalent non-drag write path where one exists
-(here, the same `POST .../posts` the button itself calls). Verified
-manually instead: a temporary `window.__debugAlign.camera` hook (removed
-before committing) let a script set the shopper's position directly,
-confirming sprite opacity reads ~0 far away and ~1 up close, `#shop-sign-
-hint` shows/hides exactly at `SIGN_INTERACT_RADIUS_M`, posts fetch and
-render correctly, and clicking through both prompts appends a real post
-and a matching new sprite. That same manual pass caught a real bug before
-it shipped: `#shop-sign-hint`'s first CSS placement (`bottom: 68px`,
-centered) directly overlapped `#shop-vertical-controls` (`bottom: 78px`,
-also centered) — the up/down flight buttons' own invisible-when-inactive
+Community Sign"), and the full posts API end to end through the browser,
+including the now-required session on every write (posting carries the
+builder's own already-logged-in session automatically, the same way the
+real `#shop-sign-hint` flow would).
+
+`worker/land.test.js`'s own "Community signs" describe block covers the
+API in much more depth, including cases deliberately not exercised
+through the browser suite (triggering a non-2xx `fetch` there logs a
+console error the browser suite's own errors-must-be-empty convention
+would misread as a real bug): create/list/edit/delete/cascade-on-
+instance-delete, the "can't post to a non-sign" `400`, every rate limit
+(`POST`/`PATCH`/`DELETE` each have their own), both idempotency-key fixes
+(#1718/#1778), and #1830's own new surface specifically — a post's own
+author deleting or editing it directly without owning the hosting
+landlet, that same author-only `PATCH` rejecting both the landlet's owner
+and an unrelated third account (no moderation equivalent for edits), and
+an unauthenticated `POST`/`PATCH` each getting a `401`.
+
+The Shop-mode camera-distance fade and the `prompt()`-driven "Leave a
+Note"/edit/delete flow are **not** covered by the automated suite, for
+the same reason raw TransformControls drags aren't (see "Frontend-only
+alignment assist" above) — real camera movement and native browser
+dialogs are exactly the kind of interaction this project's e2e suite has
+consistently avoided automating, in favor of an equivalent non-drag write
+path where one exists (here, the same `POST`/`PATCH`/`DELETE .../posts`
+calls the buttons themselves make). Verified manually instead (pre-#1830
+pass, still accurate for the fade/hint-visibility mechanics #1830 didn't
+touch): a temporary `window.__debugAlign.camera` hook (removed before
+committing) let a script set the shopper's position directly, confirming
+sprite opacity reads ~0 far away and ~1 up close, `#shop-sign-hint` shows/
+hides exactly at `SIGN_INTERACT_RADIUS_M`, and posts fetch and render
+correctly. That same manual pass caught a real bug before it shipped:
+`#shop-sign-hint`'s first CSS placement (`bottom: 68px`, centered)
+directly overlapped `#shop-vertical-controls` (`bottom: 78px`, also
+centered) — the up/down flight buttons' own invisible-when-inactive
 hit area silently ate every tap intended for the note button. Fixed by
 moving it to `bottom: 180px`, clear of that column entirely.
 
@@ -4398,15 +4464,18 @@ deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
 15-minute window, `429` past that, `#944`) — the same bucket shape as
 other per-account mutation limits in this file.
 
-**`POST` is not open the way sign posts' is.** Requires a session logged
-in as the hosting landlet's own owning builder (`401`/`403` otherwise, via
-`requireSessionBuilder` + `requireOwnedLandlet` — the same ownership gate
-`DELETE` on either endpoint already uses) — the client no longer sends
-`authorLabel` at all; it's derived server-side from that builder's own
-`label`. Without this, any shopper could post an event under an
-arbitrary/spoofed `authorLabel` — including a real builder's own name —
-directly contradicting docs/SPEC.md §6's "builder-authored" distinction
-from sign posts' genuinely anonymous, shopper-authored `authorLabel`.
+**`POST` requires a real session either way (since #1830, sign posts too)
+— the distinction is *whose*.** This endpoint requires a session logged
+in as the hosting landlet's own owning builder specifically (`401`/`403`
+otherwise, via `requireSessionBuilder` + `requireOwnedLandlet` — the same
+ownership gate `DELETE` on either endpoint already uses), not just any
+verified shopper the way sign posts' `POST` accepts — the client no
+longer sends `authorLabel` at all; it's derived server-side from that
+builder's own `label`. Without this landlet-owner restriction, any
+shopper could post an event under an arbitrary/spoofed `authorLabel` —
+including a real builder's own name — directly contradicting
+docs/SPEC.md §6's "builder-authored" distinction from sign posts' own
+shopper-authored `authorLabel`.
 
 ### Frontend wiring
 

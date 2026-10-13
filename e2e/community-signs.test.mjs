@@ -67,17 +67,23 @@ const { instances } = (await fetchJson(`/api/instances?landletId=${myLandlet.lan
 const signInstance = instances.find((i) => i.templateId === 'placeholder-tree');
 console.log('isCommunitySign persisted after toggling on (should be true):', signInstance.isCommunitySign);
 
-// Leave a couple of posts via the same API the in-world "Leave a Note"
-// button calls (createSignPost in src/api.js), then list them back.
+// #1830: posting now requires a session -- these fetch() calls run inside
+// the page itself, so they automatically carry this same already-logged-in
+// builder's own session cookie. That also means authorLabel is no longer
+// client-supplied at all (the server derives it from that session), so
+// both posts below land under the SAME real username -- distinguished
+// below by their own text, not by a fabricated per-post author name the
+// server would ignore anyway.
+const { builder: myBuilder } = (await fetchJson('/api/builders/me')).body;
 await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Love this place!' }),
+  body: JSON.stringify({ text: 'Love this place!' }),
 });
 await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ authorLabel: 'Another Shopper', text: 'Great selection.' }),
+  body: JSON.stringify({ text: 'Great selection.' }),
 });
 const { posts } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
 console.log('posts on the sign (should be 2, oldest first):', posts.map((p) => `${p.authorLabel}: ${p.text}`));
@@ -90,17 +96,19 @@ await page.waitForTimeout(300);
 const rowCountInPanel = await page.locator('.sign-post-row').count();
 const firstRowText = await page.locator('.sign-post-row').first().textContent();
 console.log('rows shown in the panel (should be 2):', rowCountInPanel);
-console.log('first row mentions author+text (should mention "A Shopper" and "Love this place!"):', firstRowText);
+console.log(`first row mentions author+text (should mention "${myBuilder.label}" and "Love this place!"):`, firstRowText);
 
 // Delete the second post via its row's own × button (not the API directly)
-// — this is the actual moderation path a builder would use.
-await page.locator('.sign-post-row').filter({ hasText: 'Another Shopper' }).locator('.sign-post-row-delete').click();
+// — this is the actual moderation path a builder would use. Both posts
+// share the same real authorLabel now (#1830), so the row is picked out
+// by its own text instead.
+await page.locator('.sign-post-row').filter({ hasText: 'Great selection.' }).locator('.sign-post-row-delete').click();
 await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, { timeout: 5000 });
 const rowCountAfterDelete = await page.locator('.sign-post-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 
 const { posts: postsAfterDelete } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
-console.log('posts persisted server-side after the panel delete (should be 1, the surviving one authored by "A Shopper"):', postsAfterDelete.map((p) => p.authorLabel));
+console.log(`posts persisted server-side after the panel delete (should be 1, the surviving one authored by "${myBuilder.label}"):`, postsAfterDelete.map((p) => p.authorLabel));
 
 // "Remove Community Sign," inside the panel, un-flags and closes it.
 await page.click('#sign-posts-unflag-btn');
@@ -124,10 +132,11 @@ const pass = labelBefore.trim() === 'Community Sign' &&
   signInstance.isCommunitySign === true &&
   posts.length === 2 &&
   posts[0].text === 'Love this place!' &&
+  posts.every((p) => p.authorLabel === myBuilder.label) &&
   rowCountInPanel === 2 &&
-  firstRowText.includes('A Shopper') && firstRowText.includes('Love this place!') &&
+  firstRowText.includes(myBuilder.label) && firstRowText.includes('Love this place!') &&
   rowCountAfterDelete === 1 &&
-  postsAfterDelete.length === 1 && postsAfterDelete[0].authorLabel === 'A Shopper' &&
+  postsAfterDelete.length === 1 && postsAfterDelete[0].authorLabel === myBuilder.label &&
   modalHiddenAfterUnflag &&
   labelAfterOff.trim() === 'Community Sign' &&
   signInstanceAfterOff.isCommunitySign === false &&

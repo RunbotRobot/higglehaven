@@ -12918,21 +12918,36 @@ async function handleInstances(request, env, route, url) {
 // Posts on a "community sign" instance (docs/SPEC.md §6, migrations/0041) —
 // nested under /instances/:id/posts rather than a top-level /sign-posts
 // collection since a post never exists independent of the sign it's on,
-// the same reasoning /landlets/:id/versions already follows. POST itself
-// stays open to any shopper (authorLabel is free text, no account backs
-// it) but DELETE (moderation) is gated to the sign's own hosting landlet's
-// owner — see that branch's own comment.
+// the same reasoning /landlets/:id/versions already follows.
+//
+// #1830 (owner correction, 2026-10-13): POST used to be open to any
+// shopper with a free-text authorLabel and "no account to check against
+// anyway" — true before #678/N44, stale since: Shop mode's own entry gate
+// (ensureShopperIdentity, src/main.js) has required a real logged-in,
+// verified account for a while now, this handler was just never updated
+// once that changed underneath it. authorLabel is now always derived
+// server-side from the posting user's own username, and sign_posts.user_id
+// (migrations/0125) records who actually posted — which both the DELETE
+// branch (moderation OR the post's own author now) and the new PATCH
+// branch (the post's own author only) check against.
 // Found via backlog audit (#337): unlike every other public, repeatable
 // mutation in this file (signup, password-reset, model-upload, purchase),
 // posting to a community sign requires no session and had no
 // checkRateLimit call at all — an anonymous caller could post an
 // unlimited number of times per second, unboundedly growing sign_posts.
+// Now that posting requires a session, bucketed by the user's own id
+// rather than clientIp, matching CALENDAR_EVENT_RATE_LIMIT_MAX's own
+// reasoning for an action gated on a real account instead of anonymous
+// requests.
 const SIGN_POST_RATE_LIMIT_MAX = 20;
 // #944: the DELETE branch below is an authenticated, owner-gated,
 // repeatable mutation with no rate limit at all -- unlike its own POST
 // sibling above (SIGN_POST_RATE_LIMIT_MAX) and this file's other owner-
 // gated CRUD DELETEs (friendship-mutate, bundle-mutate).
 const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
+// #1830: same missing-rate-limit gap as SIGN_POST_DELETE_RATE_LIMIT_MAX,
+// for the new author-only edit branch below.
+const SIGN_POST_EDIT_RATE_LIMIT_MAX = 20;
 
 // #1718: same "a lost response looks, from here, identical to the request
 // never having reached us at all" protection as calendarEventIdempotencyKey
@@ -12940,10 +12955,13 @@ const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
 // dropped POST response and the innocent manual retry it invites would
 // otherwise create a second, fully duplicate sign_posts row with the same
 // authorLabel/text. Namespaced with instanceId only, not a builder id like
-// those two siblings -- posting to a sign is anonymous (authorLabel is free
-// text, no account backs it), so there's no builder id to fold in. A
-// missing or malformed key degrades to no idempotency protection for this
-// one request rather than failing the post outright.
+// those two siblings — #1830 made posting require a session, but the
+// client's own cached key (src/api.js's signPostIdempotencyKey) was never
+// namespaced per-poster to begin with, and the POST branch's own
+// content-match check below already covers a key reused across two
+// different sessions the same way it covers one reused for a genuinely
+// different note. A missing or malformed key degrades to no idempotency
+// protection for this one request rather than failing the post outright.
 function signPostIdempotencyKey(instanceId, rawKey) {
   if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
   return `post:${instanceId}:${rawKey}`;
@@ -12974,14 +12992,24 @@ async function handleSignPosts(request, db, route) {
   }
 
   if (request.method === 'POST' && route.length === 3) {
-    await checkRateLimit(db, `sign-post:${clientIp(request)}`, SIGN_POST_RATE_LIMIT_MAX);
     const instance = await db.prepare('SELECT instance_id, is_community_sign FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     if (!instance.is_community_sign) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
+    // #1830: see this function's own top-of-section comment -- Shop mode's
+    // entry gate already requires exactly this (requireVerifiedSession, not
+    // just requireCurrentUser), so posting here can never happen without
+    // having already cleared it. Checked after the instance/flag checks
+    // above, same ordering as handleCalendarEvents' own structurally
+    // identical POST branch, so a request against the wrong kind of
+    // instance still gets that specific 400 rather than an unrelated 401.
+    const user = await requireVerifiedSession(request, db);
+    await checkRateLimit(db, `sign-post:${user.user_id}`, SIGN_POST_RATE_LIMIT_MAX);
     const input = await readJson(request);
-    const authorLabel = labelValue(input.authorLabel, 'authorLabel');
+    // #1830: no longer client-supplied -- always the posting user's own
+    // username, so nobody can post under a name that isn't theirs.
+    const authorLabel = user.username;
     const text = stringValue(input.text, 'text');
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // #1718: a retry that reuses the same (validated) client-supplied key
@@ -13012,11 +13040,11 @@ async function handleSignPosts(request, db, route) {
     // afterward, resurrecting exactly what that cleanup exists to prevent.
     // Same #929/#960 idiom as this handler's own DELETE sibling below.
     const inserted = await db.prepare(`
-      INSERT INTO sign_posts (post_id, instance_id, author_label, text)
-      SELECT ?, ?, ?, ? WHERE EXISTS (
+      INSERT INTO sign_posts (post_id, instance_id, author_label, text, user_id)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM placed_instances WHERE instance_id = ? AND is_community_sign = 1
       )
-    `).bind(postId, instanceId, authorLabel, text, instanceId).run();
+    `).bind(postId, instanceId, authorLabel, text, user.user_id, instanceId).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
@@ -13024,17 +13052,66 @@ async function handleSignPosts(request, db, route) {
     return json({ post: signPostFromRow(row) }, 201);
   }
 
+  if (request.method === 'PATCH' && route.length === 4) {
+    const postId = route[3];
+    const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
+    if (!existing) return json({ error: 'Post not found' }, 404);
+    // #1830: editing is author-only -- there's no moderation equivalent for
+    // PATCH the way DELETE has one (a builder moderating unwanted content
+    // removes it; rewriting someone else's words under their own name isn't
+    // the same kind of action). A pre-#1830 post with no user_id at all
+    // (user_id IS NULL) can never match here, same as DELETE's own
+    // author-path below -- there's nobody on record to own it.
+    const user = await requireVerifiedSession(request, db);
+    if (existing.user_id === null || existing.user_id !== user.user_id) {
+      throw new HttpError('Not your post', 403);
+    }
+    await checkRateLimit(db, `sign-post-edit:${user.user_id}`, SIGN_POST_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const text = stringValue(input.text, 'text');
+    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // Same #929/#960 idiom as this handler's own DELETE/POST siblings --
+    // the existence/ownership check above is a point-in-time read, and
+    // checkRateLimit/readJson are real awaited gaps after it.
+    const updated = await db.prepare('UPDATE sign_posts SET text = ? WHERE post_id = ? AND user_id = ?')
+      .bind(text, postId, user.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Post changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    return json({ post: signPostFromRow(row) });
+  }
+
   if (request.method === 'DELETE' && route.length === 4) {
     const postId = route[3];
     const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
     if (!existing) return json({ error: 'Post not found' }, 404);
-    // Moderation is gated to the sign's own hosting landlet's owner, not the
-    // post's author (there's no author account to check against anyway —
-    // authorLabel is free text) — matches "the frontend only shows a delete
-    // control to the sign's own landlet's builder."
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #1830: requireSessionBuilder (not requireVerifiedSession) so this one
+    // call resolves both the real user_id a post's own author needs below,
+    // and the builder_id the moderation fallback below that already needs
+    // -- every account is automatically a builder (getOrCreateBuilderForUser),
+    // so this never fails for a session that already passed the login the
+    // GET-side /instances fetch itself already required to reach this page.
     const sessionBuilder = await requireSessionBuilder(request, db);
+    // The post's own author can remove it directly now that a post records
+    // who made it, alongside the existing moderation path below -- either
+    // should be able to remove a post: the author directly, or the sign's
+    // own hosting landlet's builder for moderation. A pre-#1830 post with
+    // no user_id at all (user_id IS NULL) can never match here, so it falls
+    // through to the moderation path exactly as it always has.
+    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
+      await checkRateLimit(db, `sign-post-delete:${sessionBuilder.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+      const deletedByAuthor = await db.prepare('DELETE FROM sign_posts WHERE post_id = ? AND user_id = ?')
+        .bind(postId, sessionBuilder.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Post changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
+    // Moderation: gated to the sign's own hosting landlet's owner, same as
+    // always.
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `sign-post-delete:${sessionBuilder.builder_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
     // #960: requireOwnedLandlet above is a point-in-time check, and
@@ -13065,6 +13142,7 @@ function signPostFromRow(row) {
     instanceId: row.instance_id,
     authorLabel: row.author_label,
     text: row.text,
+    userId: row.user_id,
     createdAt: row.created_at,
   };
 }

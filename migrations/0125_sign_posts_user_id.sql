@@ -1,0 +1,16 @@
+-- #1830 (owner correction, 2026-10-13): sign-post composing was modeled as
+-- fully anonymous (free-text authorLabel, "no account to check against
+-- anyway") back when a shopper genuinely had none -- but Shop mode's own
+-- entry gate (ensureShopperIdentity, src/main.js) has required a real
+-- logged-in, verified account since #678/N44, and handleSignPosts' POST
+-- branch was simply never updated once that changed underneath it. This
+-- column lets a post record who actually made it, so a later edit/delete
+-- can check real ownership instead of having no identity to check at all.
+--
+-- ON DELETE SET NULL, not CASCADE: a user row is never hard-deleted (see
+-- migrations/0102's own comment -- account deletion revokes login
+-- credentials and sets deleted_at, keeping the row itself), so this only
+-- governs the already-accounted-for case of a pre-existing row referencing
+-- a user_id that predates this column. Matches purchases.buyer_builder_id's
+-- own reasoning for the same shape.
+ALTER TABLE sign_posts ADD COLUMN user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL;
