@@ -12495,6 +12495,7 @@ let shopLastReportedLandletId; // undefined until the first report ever goes out
 // the latest poll landed, for timing the lerp against) }.
 const shopOtherAvatars = new Map();
 let shopLastPresencePollAt = 0;
+let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
 // posts, sprites }. Populated/torn down alongside its landlet's own
@@ -14514,12 +14515,20 @@ async function pollNearbyPresenceIfNeeded(now) {
     despawnOtherShopAvatars();
     return;
   }
+  // #1911: called unawaited every frame, with no AbortController -- a
+  // slower, earlier-issued fetch landing after a faster, newer one would
+  // otherwise overwrite shopOtherAvatars with stale positions/headings and
+  // wrongly despawn avatars only missing from the stale response. Same
+  // monotonic-load-token guard every other async render/poll path in this
+  // file already uses (friendsLoadToken, dmLoadToken, etc.).
+  const myPresencePollToken = ++presencePollToken;
   let avatars;
   try {
     avatars = await fetchNearbyPresence(landletId);
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
+  if (myPresencePollToken !== presencePollToken) return; // a newer poll already landed
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
