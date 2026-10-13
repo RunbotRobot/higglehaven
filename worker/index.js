@@ -2464,12 +2464,17 @@ async function handleProductReviews(request, db, route) {
     } else {
       await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
-    await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+    const result = await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     // `admin` is only set on the admin-override branch above; an ordinary
     // seller-initiated (or anonymous orphaned-template) delete logs nothing
     // here, same convention as handlePurchaseRefund's/handleMarkShipped's
-    // own admin-override logging.
-    if (admin) {
+    // own admin-override logging. Logged only after the delete is confirmed
+    // to have actually happened -- the existence check above and this DELETE
+    // aren't atomic, so a concurrent delete (another admin, or the owning
+    // seller's own moderation path) can win the race first; a log row for a
+    // deletion that didn't happen would misattribute it to this admin, same
+    // "logged only after confirmed" idiom delete_land_candidate already uses.
+    if (admin && result.meta.changes === 1) {
       await adminActionLogStatement(db, admin.user_id, 'delete_review_override', 'product_review', reviewId).run();
     }
     return json({ deleted: true });
