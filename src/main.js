@@ -7160,6 +7160,7 @@ async function renderAuctionSection() {
     const durationInput = document.createElement('input');
     durationInput.type = 'number';
     durationInput.min = '1';
+    durationInput.max = '8760';
     durationInput.step = '1';
     durationInput.value = '24';
     durationLabel.appendChild(durationInput);
@@ -7178,6 +7179,15 @@ async function renderAuctionSection() {
       }
       if (!Number.isFinite(hours) || hours < 1) {
         startStatus.textContent = 'Duration must be at least 1 hour.';
+        startStatus.classList.add('error');
+        return;
+      }
+      // #1922: mirrors the server's own cap (worker/index.js's handleAuctions
+      // POST, "durationHours must be 8760 (one year) or fewer") -- without
+      // this, an unusually large value passes client validation and
+      // surfaces that raw server message instead of a friendly one.
+      if (hours > 8760) {
+        startStatus.textContent = 'Duration must be 8760 hours (one year) or fewer.';
         startStatus.classList.add('error');
         return;
       }
