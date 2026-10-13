@@ -14920,13 +14920,26 @@ async function assertReferenceExists(db, table, column, value, field) {
   if (!row) throw new HttpError(`${field} "${value}" does not exist`, 400);
 }
 
-async function assertReferencesExist(db, table, column, values, field) {
+// #1978: D1 caps a single query at 100 bound parameters
+// (developers.cloudflare.com/d1/platform/limits) -- a deduplicated value
+// set past that limit (e.g. GET /api/sellers?ids=... allows up to 200
+// distinct ids) would otherwise throw a raw D1 error here instead of this
+// function's own clean "does not exist" message. Chunking fixes every
+// caller at the source rather than needing each one capped to this limit
+// individually.
+const D1_MAX_BOUND_PARAMETERS = 100;
+
+export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];
-  const placeholders = uniqueValues.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
-  ).bind(...uniqueValues).all();
-  const found = new Set(results.map((row) => row.value));
+  const found = new Set();
+  for (let i = 0; i < uniqueValues.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueValues.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) found.add(row.value);
+  }
   const missing = uniqueValues.find((value) => !found.has(value));
   if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
 }
