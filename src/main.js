@@ -6331,6 +6331,17 @@ async function renderRedeemHigglesField() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: dobDay's own max (31) never accounted for which month was
+  // entered -- keep it in sync so the browser's own number-input
+  // clamping/invalid-state catches Feb 30 etc. before submit does.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -6893,6 +6904,15 @@ async function renderSellSettingsSection() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: same dobDay/dobMonth sync as the sibling seller-payout form.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -7000,6 +7020,14 @@ async function renderSellSettingsSection() {
 
     await refreshPayouts();
   }
+}
+
+// #1940: the Stripe-onboarding dobDay input's own max was a fixed 31
+// regardless of dobMonth -- Feb 30, Apr 31, etc. passed client validation.
+// new Date(Date.UTC(year, month, 0)) is day 0 of the following month, i.e.
+// the last real day of `month` (1-indexed, matching dobMonth's own values).
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 // #1492: used to build the string manually via a template literal, which
