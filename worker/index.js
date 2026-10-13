@@ -4961,8 +4961,17 @@ function validateBundleItems(input) {
   if (!Array.isArray(input) || input.length === 0) {
     throw new HttpError('items must be a non-empty array', 400);
   }
-  if (input.length > 250) {
-    throw new HttpError('items cannot exceed 250 entries', 400);
+  // #1974 (owner report): 250 was blocking legitimate large builds (a
+  // 32-foot brick wall with a door, saved as one bundle) -- there's no
+  // per-item batch insert here to worry about (the whole thing is stored
+  // as one items_json blob below, a single row write), so the real ceiling
+  // is D1's own documented max string/BLOB/row size (2,000,000 bytes).
+  // Each item's JSON is on the order of a couple hundred bytes, so 2000
+  // items lands around half a megabyte -- comfortably inside that limit
+  // with room to spare, while still being a real sanity bound against a
+  // genuinely pathological payload.
+  if (input.length > 2000) {
+    throw new HttpError('items cannot exceed 2000 entries', 400);
   }
   return input.map((item, index) => ({
     templateId: stringValue(item.templateId, `items[${index}].templateId`),
