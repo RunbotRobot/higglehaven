@@ -14212,6 +14212,10 @@ async function handlePurchases(request, env, route, url) {
     return handleSellerFeedbackCreate(request, env, route[1]);
   }
 
+  if (request.method === 'DELETE' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackDelete(request, env, route[1]);
+  }
+
   // Unauthenticated on purpose — see buildDeliveryConfirmFields' own
   // comment: there is no buyer account here to authenticate against, so
   // the unguessable token itself (hashed before ever reaching the DB) is
@@ -14406,6 +14410,30 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
   }
   const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+// #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
+// conduct on a transaction, not a product -- unlike product_reviews' own
+// DELETE branch, which lets the reviewed template's seller self-delete,
+// self-delete here would let a seller scrub legitimate negative feedback
+// about their own conduct. Admin-only removal is the deliberate, owner-
+// confirmed bar, not a placeholder pending a seller-facing path; whether
+// sellers also get their own appeal/self-delete path is a separate,
+// explicitly-still-open question per the issue's own comment thread.
+// Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
+// own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
+// the same shape POST .../feedback above already uses.
+const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
+
+async function handleSellerFeedbackDelete(request, env, purchaseId) {
+  const db = env.DB;
+  const existing = await db.prepare('SELECT * FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!existing) return json({ error: 'Feedback not found' }, 404);
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+  await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
+  await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+  return json({ deleted: true });
 }
 
 async function handleSellerFeedbackList(db, sellerId) {

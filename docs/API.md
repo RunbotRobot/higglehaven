@@ -4829,7 +4829,7 @@ spoofing gap here: anyone who knew a `purchaseId` and the buyer's public
 display label, neither requiring a session or an account, could `POST`
 feedback as if they were that buyer.
 
-### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`
+### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
 
 ```json
 POST /api/purchases/:purchaseId/feedback
@@ -4849,12 +4849,24 @@ reviews. `GET` is intentionally public/unauthenticated, same as
 `GET .../reviews` — a rating is meant to be seen, not gated to the seller
 themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
-itself needing to restrict who can ask. There is no `DELETE` — unlike
-product reviews, where the product's own seller has a legitimate stake in
-moderating what's said about their listing, letting a seller delete
-feedback about their *own service* would defeat the purpose entirely;
-moderation of this is deliberately left unbuilt rather than handed to the
-one party with a conflict of interest in it.
+itself needing to restrict who can ask.
+
+`DELETE` (#1738, owner-confirmed) is **admin-only** (`401` with no
+session, `403` for anyone else — including the rated seller themself,
+`404` for a purchase with no feedback) — deliberately different from
+product reviews' own `DELETE`, where the product's own seller has a
+legitimate stake in moderating what's said about their listing: letting a
+seller delete feedback about their *own conduct* would let them scrub
+legitimate negative feedback, a materially different risk than scrubbing
+a product review. Keyed by `purchaseId` rather than a separate
+`feedbackId`, since `migrations/0098_seller_feedback.sql`'s own `UNIQUE`
+constraint on `purchase_id` already makes it a 1-to-1 resource — the same
+path `POST` uses. Rate-limited (20 per 15-minute window, `429` past that)
+per admin user (`seller-feedback-delete:<adminUserId>`), and logs
+`delete_seller_feedback` to `admin_action_log` (target type
+`seller_feedback`, target id the feedback's own `feedbackId`). Whether
+sellers should also get a self-delete/appeal path of their own is a
+separate, explicitly still-open question — not resolved by this.
 
 ### Frontend wiring
 
