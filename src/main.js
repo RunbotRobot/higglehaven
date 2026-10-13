@@ -2450,7 +2450,10 @@ catalogSearchInputEl.addEventListener('input', updateCatalogSearchPanel);
 for (const btn of searchScopeButtons) {
   btn.addEventListener('click', () => {
     catalogSearchScope = btn.dataset.searchScope;
-    for (const b of searchScopeButtons) b.classList.toggle('active', b === btn);
+    for (const b of searchScopeButtons) {
+      b.classList.toggle('active', b === btn);
+      b.setAttribute('aria-pressed', String(b === btn));
+    }
     updateCatalogSearchPanel();
   });
 }
@@ -2629,6 +2632,7 @@ function renderBundlePicker() {
 
   for (const btn of bundleTabButtons) {
     btn.classList.toggle('active', btn.dataset.bundleTab === activeBundleTab);
+    btn.setAttribute('aria-pressed', String(btn.dataset.bundleTab === activeBundleTab));
   }
 
   const bundles = currentBundleTabList();
@@ -2820,7 +2824,10 @@ addItemBtn.addEventListener('click', () => {
   // with no query typed to explain why.
   catalogSearchInputEl.value = '';
   catalogSearchScope = 'both';
-  for (const b of searchScopeButtons) b.classList.toggle('active', b.dataset.searchScope === 'both');
+  for (const b of searchScopeButtons) {
+    b.classList.toggle('active', b.dataset.searchScope === 'both');
+    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'both'));
+  }
   updateCatalogSearchPanel();
   openModalA11y(catalogPickerEl, closeCatalogPicker);
 });
@@ -5538,6 +5545,7 @@ function renderSettingsSection() {
   settingsSectionEl.innerHTML = '';
   for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
     btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
+    btn.setAttribute('aria-pressed', String(btn.dataset.section === activeSettingsTab));
   }
 
   if (activeSettingsTab === 'general') {
@@ -11003,7 +11011,10 @@ const AUTH_VIEW_TITLES = {
 // never something a user taps into on their own.
 function showAuthView(view) {
   for (const [name, form] of Object.entries(authForms)) form.hidden = name !== view;
-  for (const btn of authTabBtns) btn.classList.toggle('active', btn.dataset.authView === view);
+  for (const btn of authTabBtns) {
+    btn.classList.toggle('active', btn.dataset.authView === view);
+    btn.setAttribute('aria-pressed', String(btn.dataset.authView === view));
+  }
   authModalTitle.textContent = AUTH_VIEW_TITLES[view];
   setAuthStatus('');
   // Back to masked every time this view is (re)entered — form.reset()
