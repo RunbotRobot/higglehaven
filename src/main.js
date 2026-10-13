@@ -15273,6 +15273,16 @@ shopSignHintEl.addEventListener('click', async () => {
   if (!authorLabel) return;
   const text = prompt('Your note (up to 280 characters):', '');
   if (!text || !text.trim()) return;
+  // #1920: prompt() shows no live character count, and unlike the DM
+  // compose field (a real <input maxlength="280">), nothing here stops an
+  // over-length submission from reaching the server's own 280-char check
+  // (worker/index.js) -- which then throws, and prompt() isn't reopened
+  // with the text prefilled, so the whole note has to be retyped from
+  // scratch. Catch it client-side instead.
+  if (text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   shopSignHintEl.disabled = true;
   try {
     const post = await createSignPost(sign.instanceId, { authorLabel, text: text.trim() });
@@ -15302,6 +15312,13 @@ shopCalendarHintEl.addEventListener('click', async () => {
   if (!builder) return;
   const text = prompt('Event details (up to 280 characters):', '');
   if (!text || !text.trim()) return;
+  // #1920: same missing client-side check as the sign-post prompt above --
+  // see its own comment for why this matters (prompt() gives no live
+  // count, and loses the whole typed text on a server-side rejection).
+  if (text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   // Optional third step — most events are just a plain announcement (the
   // two prompts above already cover that), a real scheduled moment (the
   // spec's own "creative-tool support like a scheduled confetti-cannon
