@@ -372,6 +372,70 @@ describe('Video-to-3D job creation (#1619)', () => {
       env.TRIPO_API_KEY = 'test-tripo-api-key';
     }
   });
+
+  // #1935: Tripo's real, billed multiview-to-model call already returned a
+  // task_id by the time the UPDATE below is simulated to throw -- the
+  // reservation still gets discarded (unchanged behavior), but the lost
+  // task_id must now be durably logged rather than silently vanishing
+  // (see #1886, which flagged the un-logged version of this as silent).
+  it('#1886: durably logs a lost task_id when persisting it fails after Tripo already billed the call', async () => {
+    const builder = await signupBuilder('video-gen-lost-task-id');
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      if (sql.includes("SET provider_task_id")) {
+        throw new Error('simulated D1 write failure after Tripo billed the call');
+      }
+      return originalPrepare(sql);
+    };
+    let failed;
+    try {
+      failed = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(failed.status).toBe(500);
+
+    // The reservation itself is still discarded -- same observable
+    // behavior as before this fix, just no longer silent.
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(0);
+
+    const logRow = await env.DB.prepare(
+      "SELECT * FROM admin_action_log WHERE action_type = 'video_generation_task_id_lost' AND target_type = 'video_generation_job'",
+    ).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBeNull();
+    const detail = JSON.parse(logRow.detail_json);
+    expect(detail.builderId).toBe(builder.builderId);
+    expect(detail.taskId).toMatch(/^task-/);
+  });
+
+  it('does not log a lost task_id for an ordinary never-billed failure', async () => {
+    const builder = await signupBuilder('video-gen-not-billed-failure');
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      if (sql.includes('INSERT INTO video_generation_jobs')) {
+        // Leaves the reservation row in place (unlike a real crash before
+        // the real tripoRequest call), but exercising "the real call never
+        // happened" is the point here, not reproducing every detail of
+        // that earlier crash shape.
+        throw new Error('simulated failure before Tripo was ever called');
+      }
+      return originalPrepare(sql);
+    };
+    try {
+      await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    const logRow = await env.DB.prepare(
+      "SELECT * FROM admin_action_log WHERE action_type = 'video_generation_task_id_lost' AND target_id = ?",
+    ).bind(builder.builderId).first();
+    expect(logRow).toBeNull();
+  });
 });
 
 describe('reserveVideoGenerationJob (#1619)', () => {

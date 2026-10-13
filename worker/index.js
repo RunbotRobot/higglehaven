@@ -7807,10 +7807,32 @@ export async function reserveVideoGenerationJob(db, builderId) {
   // builder's own stuck 'pending' reservation (scoped to them, not a
   // global sweep) lets the NOT EXISTS guard below admit a genuinely fresh
   // reservation instead of blocking on one nothing will ever resolve.
-  await db.prepare(`
-    DELETE FROM video_generation_jobs
+  // #1935: a 'pending' row only exists while a POST .../video-generation-
+  // jobs request is actively running (the INSERT and the flip to
+  // 'processing' both happen inside that same request's synchronous
+  // chain) -- one surviving past VIDEO_GENERATION_RESERVATION_TIMEOUT_MS
+  // always means that earlier request died mid-flight, possibly after
+  // Tripo's billed call already succeeded (see handleVideoGenerationJob-
+  // Create's own #1886 comment). Telling that apart from a never-billed
+  // crash needs the full reconciliation #1886 still leaves as an open
+  // policy question -- logging every clearance here, rather than guessing
+  // which ones were billed, is what makes the ambiguity itself queryable
+  // instead of silent.
+  const stale = await db.prepare(`
+    SELECT job_id, created_at FROM video_generation_jobs
     WHERE builder_id = ? AND status = 'pending' AND processed_at IS NULL AND created_at < ?
-  `).bind(builderId, new Date(Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS).toISOString()).run();
+  `).bind(builderId, new Date(Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS).toISOString()).all();
+  if (stale.results.length) {
+    await db.batch([
+      ...stale.results.map((row) => adminActionLogStatement(
+        db, null, 'video_generation_stale_reservation_cleared', 'video_generation_job', row.job_id,
+        { builderId, createdAt: row.created_at },
+      )),
+      db.prepare(
+        `DELETE FROM video_generation_jobs WHERE job_id IN (${stale.results.map(() => '?').join(', ')})`,
+      ).bind(...stale.results.map((row) => row.job_id)),
+    ]);
+  }
   const jobId = `job-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO video_generation_jobs (job_id, builder_id, status)
@@ -8036,6 +8058,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
+  let task;
   try {
     const inputs = [];
     for (const [view, file] of views) {
@@ -8043,7 +8066,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
       const fileToken = await tripoUploadFile(env, bytes, file.name || `${view}.png`, file.type);
       inputs.push({ [view]: fileToken });
     }
-    const task = await tripoRequest(env, 'POST', 'generation/multiview-to-model', {
+    task = await tripoRequest(env, 'POST', 'generation/multiview-to-model', {
       inputs,
       model: TRIPO_MODEL_VERSION,
     });
@@ -8059,7 +8082,27 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // after an earlier one succeeded) -- release the reservation so it
     // doesn't permanently block this builder from ever starting a video-
     // to-3D job again.
-    await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
+    // #1935: task.task_id truthy here means Tripo's real, billed call
+    // already succeeded before whatever failed next (almost always the
+    // UPDATE above) -- durably log that, batched atomically with the
+    // delete, before discarding the reservation, so a lost billed task_id
+    // is queryable/alertable rather than only reconstructable by reading
+    // code (see #1886, which flagged this as silent). The ordinary
+    // "never billed" path (the upload/tripoRequest call itself threw, or
+    // the !task?.task_id 502 above) leaves task_id falsy and logs nothing,
+    // matching this function's own original reasoning that discarding an
+    // un-billed reservation is always safe.
+    if (task?.task_id) {
+      await db.batch([
+        adminActionLogStatement(
+          db, null, 'video_generation_task_id_lost', 'video_generation_job', reservationId,
+          { builderId: sessionBuilder.builder_id, taskId: task.task_id },
+        ),
+        db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId),
+      ]);
+    } else {
+      await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
+    }
     throw err;
   }
 }
