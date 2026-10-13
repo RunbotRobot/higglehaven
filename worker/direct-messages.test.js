@@ -167,6 +167,42 @@ describe('Direct messages (#1637)', () => {
     expect(rejected.response.status).toBe(403);
   });
 
+  // #1802: assertAcceptedFriendship's own point-in-time check and the
+  // later INSERT are two separate round trips -- a concurrent unfriend
+  // landing in that gap used to still let the message through. Same
+  // db.prepare monkey-patch race-injection idiom worker/stripe-connect.test.js
+  // uses, injecting the unfriend right as the real request's own INSERT is
+  // about to run (after the eager check has already passed).
+  it('rejects a send when the recipient unfriends the sender in the gap between the eager check and the write', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-race-alice');
+    const bob = await signupIdVerifiedBuilder('dm-race-bob');
+    await becomeFriends(alice, bob);
+    const friendships = await api('/friendships', alice.session());
+    const friendshipId = friendships.body.friendships[0].friendshipId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO direct_messages')) {
+        armed = false;
+        originalPrepare('DELETE FROM friendships WHERE friendship_id = ?').bind(friendshipId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let result;
+    try {
+      result = await api('/direct-messages', alice.session({
+        method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'raced message' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(result.response.status).toBe(403);
+
+    const thread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(thread.body.messages).toHaveLength(0);
+  });
+
   // #1690: sender_builder_id/recipient_builder_id used to be a real FK with
   // ON DELETE CASCADE (migrations/0120) -- DELETE /api/builders/:id
   // ("Reset your builder profile", an ordinary self-service action, not

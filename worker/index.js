@@ -4587,9 +4587,29 @@ async function handleDirectMessages(request, db, route, url) {
     // belongs to that other row. Mint a genuine fresh id instead, same as
     // the "missing/malformed key" fallback below already does.
     const messageId = (idempotencyKey && !existing) ? idempotencyKey : `message-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text) VALUES (?, ?, ?, ?)
-    `).bind(messageId, senderBuilderId, recipientBuilderId, text).run();
+    // #1802: assertAcceptedFriendship above is a point-in-time check — a
+    // concurrent unfriend (the recipient's own DELETE /api/friendships/:id)
+    // landing between that check and this write would otherwise still let
+    // the message through, undermining the one guarantee this gate exists
+    // for. Same atomic-fold idiom handleMyAvatar/handleInstances etc. already
+    // use for this exact race shape (#801/#929/#1327/#960/#456/#1772/#1773):
+    // the eager assert above stays for the common-case clean 403, and this
+    // WHERE EXISTS on the INSERT itself is the real race guard.
+    const insertResult = await db.prepare(`
+      INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text)
+      SELECT ?, ?, ?, ? WHERE EXISTS (
+        SELECT 1 FROM friendships
+        WHERE status = 'accepted'
+          AND ((requester_builder_id = ? AND recipient_builder_id = ?)
+            OR (requester_builder_id = ? AND recipient_builder_id = ?))
+      )
+    `).bind(
+      messageId, senderBuilderId, recipientBuilderId, text,
+      senderBuilderId, recipientBuilderId, recipientBuilderId, senderBuilderId,
+    ).run();
+    if (insertResult.meta.changes === 0) {
+      throw new HttpError('Direct messages require an existing accepted friendship between these builders', 403);
+    }
     // Same "no passive way to find out" gap #319 already fixed for friend
     // requests — best-effort, after the write it's about, not batched
     // atomically with it.
